@@ -18,6 +18,45 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun transportGateRejectionDoesNotPersistAPhantomPendingEntryForEitherDirection() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(journal) {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", exchange.client,
+                    beforeExposureTransport = { error("Private stream lost during entry preflight") })
+            }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.getBoolean("safe_rejection"))
+            assertFalse(result.getBoolean("order_mutation_attempted"))
+            val intents = JSONArray(journal.readState("futures_campaign_intents_v2"))
+            assertEquals("REJECTED", intents.getJSONObject(0).getString("order_status"))
+            assertEquals("CLOSED_OR_STOPPED", intents.getJSONObject(0).getString("campaign_status"))
+            assertFalse(exchange.requests.any { it.method == "POST" &&
+                it.url.encodedPath in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") })
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun slowReconciliationPublishesOriginalObservationAgeSeparatelyFromCompletion() {
+        var now = System.currentTimeMillis()
+        val started = now
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.beforeRequest = { request, _ ->
+            if (request.url.encodedPath == "/fapi/v3/positionRisk") now += 95_000L
+        }
+        val coordinator = NativeFuturesCampaignCoordinator(Journal(), clock = { now }) { exchange.adapter() }
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
+        assertEquals(started, result.getLong("exchange_snapshot_started_at_ms"))
+        assertTrue(result.getLong("exchange_snapshot_completed_at_ms") >= started + 95_000L)
+        assertFalse(signedFuturesReconciliationFresh(result.getLong("exchange_snapshot_started_at_ms"), now))
+    }
+
     @Test fun terminalBnbExitIsSeparatedWithoutChangingLedgerOrCallingBinance() {
         val journal = Journal()
         val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")

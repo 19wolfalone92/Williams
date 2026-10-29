@@ -27,6 +27,10 @@ internal class FuturesHttpException(
 internal class FuturesProtectionNotSubmittedException(cause: Exception) :
     IOException("Protective STOP was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
 
+/** The final local entry gate rejected BEFORE the order transport was entered. */
+internal class FuturesExposureNotSubmittedException(cause: Exception) :
+    IOException("Futures entry was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
+
 /**
  * Native USDⓈ-M Futures Testnet transport.
  *
@@ -96,7 +100,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .writeTimeout(15, TimeUnit.SECONDS)
         .build(),
     private val rateGuard: BinanceRateGuard? = null,
-    private val beforeExposureMutation: () -> Unit = {}
+    private val beforeExposureMutation: () -> Unit = {},
+    private val beforeExposureTransport: () -> Unit = {}
 ) {
     // Application-level retry rules must also govern OkHttp's transparent retries
     // and redirects. A replayed POST can create duplicate exposure after a lost reply.
@@ -835,8 +840,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         // P0: the exposure-gate preflight used to run AFTER signing. If it
         // waited behind reconciliation the signed timestamp could expire
         // BEFORE the HTTP request left the device. Run it first.
-        if (method == "POST" && path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
-            params["reduceOnly"] != "true" && params["closePosition"] != "true") {
+        val increasesExposure = method == "POST" &&
+            path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
+            params["reduceOnly"] != "true" && params["closePosition"] != "true"
+        if (increasesExposure) {
             beforeExposureMutation()
         }
         // Rate limit admission may sleep: also finish it BEFORE signing.
@@ -868,6 +875,17 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
         beforeNetwork?.invoke()
+        // Rate admission and clock probes above can block while a disconnect,
+        // fill or operator pause invalidates entry authority. This second gate
+        // must be local/nonblocking and runs immediately before the transport.
+        // It is deliberately absent from reduce-only exits and protective STOPs.
+        if (increasesExposure) {
+            try {
+                beforeExposureTransport()
+            } catch (failure: Exception) {
+                throw FuturesExposureNotSubmittedException(failure)
+            }
+        }
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
             val text = response.body?.string().orEmpty()

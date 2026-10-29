@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import okhttp3.OkHttpClient
+import okhttp3.Call
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
@@ -9,6 +10,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString
 import org.json.JSONObject
+import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -42,8 +44,21 @@ class BinanceUserDataStream(
     private val apiKeyProvider: () -> String,
     private val onConnection: (Boolean, String?) -> Unit,
     private val onEvent: (JSONObject) -> Unit,
-    private val webSocketFactory: (Request, WebSocketListener) -> WebSocket = http::newWebSocket
+    private val webSocketFactory: (Request, WebSocketListener) -> WebSocket = http::newWebSocket,
+    private val handshakeTimeoutMs: Long = 25_000L
 ) {
+    // Listen-key REST has a finite total deadline independently of the long-lived
+    // WebSocket client. Mobile radio loss must not strand stop/start recovery.
+    private val listenKeyHttp = http.newBuilder()
+        .callTimeout(25L, TimeUnit.SECONDS)
+        .connectTimeout(10L, TimeUnit.SECONDS)
+        .readTimeout(15L, TimeUnit.SECONDS)
+        .writeTimeout(15L, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+    @Volatile private var activeListenKeyCall: Call? = null
     @Volatile private var socket: WebSocket? = null
     @Volatile private var worker: Thread? = null
     @Volatile private var connected = false
@@ -104,7 +119,8 @@ class BinanceUserDataStream(
         connected = false
         val activeSocket = socket
         socket = null
-        activeSocket?.close(1000, "Williams stopped")
+        activeSocket?.cancel()
+        activeListenKeyCall?.cancel()
         worker?.interrupt()
         // Keep the thread reference until its finally block confirms termination.
         // start() will queue a restart if teardown is still in progress.
@@ -120,15 +136,11 @@ class BinanceUserDataStream(
             // close callback and finally-block. A generic "reconnecting"
             // status must not erase a real TLS/REST/authentication error.
             val reconnectCause = AtomicReference<String?>(null)
-            val apiKey = apiKeyProvider().trim()
-            if (apiKey.isBlank()) {
-                onConnection(false, "credentials_not_configured")
-                sleepBackoff(delayMs)
-                delayMs = (delayMs * 2L).coerceAtMost(30_000L)
-                continue
-            }
-
             try {
+                // Keystore access can fail transiently during recovery. Keep it
+                // inside the guarded loop so the sole stream worker survives.
+                val apiKey = apiKeyProvider().trim()
+                if (apiKey.isBlank()) throw IOException("credentials_not_configured")
                 val listenKey = createListenKey(apiKey)
                 if (!acceptsCallback(generation)) break
                 check(!endpoint.contains("?")) {
@@ -139,6 +151,7 @@ class BinanceUserDataStream(
                     "&events=" + EVENT_TYPES
                 val request = Request.Builder().url(streamUrl).build()
 
+                val handshakeStartedNs = System.nanoTime()
                 socket = webSocketFactory(
                     request,
                     object : WebSocketListener() {
@@ -154,7 +167,16 @@ class BinanceUserDataStream(
 
                         override fun onMessage(webSocket: WebSocket, text: String) {
                             if (!acceptsCallback(generation)) return
-                            val message = runCatching { JSONObject(text) }.getOrNull() ?: return
+                            val message = runCatching { JSONObject(text) }.getOrNull()
+                            if (message == null) {
+                                connected = false
+                                val detail = "malformed_private_event; signed REST resync required"
+                                reconnectCause.compareAndSet(null, detail)
+                                onConnection(false, detail)
+                                webSocket.cancel()
+                                closed.countDown()
+                                return
+                            }
                             val event = message.optJSONObject("data") ?: message
                             if (event.has("e")) {
                                 runCatching { onEvent(event) }
@@ -234,10 +256,14 @@ class BinanceUserDataStream(
                 )
 
                 // Futures listenKeys expire after 60 minutes; renew at 50 minutes.
-                val renewAt = System.currentTimeMillis() + 50L * 60L * 1000L
+                val renewAtNs = System.nanoTime() + TimeUnit.MINUTES.toNanos(50L)
                 while (!stopping.get()) {
-                    if (closed.await(30L, TimeUnit.SECONDS)) break
-                    if (System.currentTimeMillis() >= renewAt) {
+                    if (closed.await(1L, TimeUnit.SECONDS)) break
+                    if (!connected && System.nanoTime() - handshakeStartedNs >=
+                        TimeUnit.MILLISECONDS.toNanos(handshakeTimeoutMs)) {
+                        throw IOException("private_websocket_handshake_timeout; signed REST resync required")
+                    }
+                    if (System.nanoTime() >= renewAtNs) {
                         renewListenKey(apiKey)
                         break
                     }
@@ -254,7 +280,9 @@ class BinanceUserDataStream(
                 // Invalidate callbacks before closing. Old onClosed/onFailure events
                 // must not overwrite a later socket's readiness or deliver stale fills.
                 connectionGeneration.compareAndSet(generation, generation + 1L)
-                socket?.close(1000, "Futures user stream reconnect")
+                // A peer may never finish a close handshake. The obsolete socket
+                // must release its transport before opening another generation.
+                socket?.cancel()
                 socket = null
                 connected = false
                 if (!stopping.get()) onConnection(false,
@@ -273,14 +301,8 @@ class BinanceUserDataStream(
             .header("X-MBX-APIKEY", apiKey)
             .post(ByteArray(0).toRequestBody(FORM_MEDIA_TYPE))
             .build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            check(response.isSuccessful) {
-                "Futures listenKey creation failed (HTTP " + response.code + "): " + body.take(240)
-            }
-            return JSONObject(body).optString("listenKey").also {
-                check(it.isNotBlank()) { "Futures listenKey response is empty" }
-            }
+        return JSONObject(executeListenKeyRequest(request)).optString("listenKey").also {
+            check(it.isNotBlank()) { "Futures listenKey response is empty" }
         }
     }
 
@@ -290,11 +312,23 @@ class BinanceUserDataStream(
             .header("X-MBX-APIKEY", apiKey)
             .put(ByteArray(0).toRequestBody(FORM_MEDIA_TYPE))
             .build()
-        http.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            check(response.isSuccessful) {
-                "Futures listenKey renewal failed (HTTP " + response.code + "): " + body.take(240)
+        executeListenKeyRequest(request)
+    }
+
+    private fun executeListenKeyRequest(request: Request): String {
+        val call = listenKeyHttp.newCall(request)
+        activeListenKeyCall = call
+        try {
+            if (stopping.get()) call.cancel()
+            return call.execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                check(response.isSuccessful) {
+                    "Futures listenKey request failed (HTTP " + response.code + "): " + body.take(240)
+                }
+                body
             }
+        } finally {
+            if (activeListenKeyCall === call) activeListenKeyCall = null
         }
     }
 

@@ -12,6 +12,7 @@ on:
       - '.github/workflows/**'
       - 'ci_release_gate.py'
       - 'test_android_remote_only.py'
+      - 'tools/android_emulator_smoke.py'
   pull_request:
     paths:
       - 'app/**'
@@ -22,6 +23,7 @@ on:
       - '.github/workflows/**'
       - 'ci_release_gate.py'
       - 'test_android_remote_only.py'
+      - 'tools/android_emulator_smoke.py'
   workflow_dispatch:
 
 permissions:
@@ -216,3 +218,45 @@ jobs:
             echo '- Installable debug APK: `app-debug.apk`'
             echo '- Release APK: `app-release-unsigned.apk`'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  emulator-smoke:
+    name: APK UI and lifecycle (API ${{ matrix.api }})
+    needs: build-apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [35, 36]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: williams-bot-debug-apk-${{ github.run_number }}
+          path: smoke-apk
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Exercise the exact built APK without trading credentials
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-boot-timeout: 300
+          script: python3 tools/android_emulator_smoke.py --apk smoke-apk/app-debug.apk --output build/emulator-smoke
+      - name: Upload UI assertions, screenshots and crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-ui-lifecycle-api-${{ matrix.api }}
+          path: build/emulator-smoke/
+          if-no-files-found: warn
+          retention-days: 14

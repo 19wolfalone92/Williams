@@ -2701,6 +2701,8 @@ internal class NativeFuturesCampaignCoordinator(
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
                 .put("exchange_snapshot_complete", true)
+                .put("exchange_snapshot_started_at_ms", reconciliationStartedAtMs)
+                .put("exchange_snapshot_completed_at_ms", clock())
                 .put("external_open_orders",JSONArray(externalOrderObservationsJson))
                 .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
                 .put("verified_external_stop_management_symbols",
@@ -3391,7 +3393,7 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("all_in_risk_pct", riskCheck.estimatedAllInRiskPct)
                     .put("initial_margin_usdt", riskCheck.initialMarginUsdt))
         } catch (failure: Exception) {
-            if (!orderSubmissionAttempted) {
+            if (!orderSubmissionAttempted || failure is FuturesExposureNotSubmittedException) {
                 // Account configuration can fail or time out, but no entry was
                 // sent. Do not reserve a phantom SUBMISSION_UNKNOWN order.
                 intent.put("exchange_status", "REJECTED")

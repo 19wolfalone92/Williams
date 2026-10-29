@@ -1458,6 +1458,14 @@ private class NativeEngine(
                 beforeExposureMutation = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
+                },
+                beforeExposureTransport = {
+                    executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
+                    futuresExposureTransportBlocker(
+                        RuntimeServiceState.active, RuntimeServiceState.monitorHeartbeatStale,
+                        userStreamConnected, userStreamSyncRequired,
+                        lastRestReconcileMs, System.currentTimeMillis()
+                    )?.let { error(it) }
                 })
         }.also { coordinator ->
             coordinator.requireM15FractalForAutomatedEntries = false
@@ -4712,7 +4720,9 @@ private class NativeEngine(
             // Explicit credential reset and acknowledged stop replacement still
             // clear or invalidate the cache through their own separate paths.
             if (result.optBoolean("ok", false)) {
-                lastRestReconcileMs = System.currentTimeMillis()
+                // Completion time must not make an old account/position snapshot
+                // look fresh after slow history queries or STOP maintenance.
+                lastRestReconcileMs = result.optLong("exchange_snapshot_started_at_ms", 0L)
                 lastReconciliationResult = "SUCCESS"
             } else {
                 lastReconciliationResult = "BLOCKED: " +
@@ -7874,12 +7884,10 @@ private class NativeEngine(
                             // This attempt may finish just as the socket changes. Never let
                             // an old-session REST snapshot clear the current session's latch.
                             userStreamSyncRequired = true
-                            futuresStreamReconcileRunning = false
                             false
                         } else {
                             userStreamSyncRequired = false
                             lastUserStreamSyncAtMs = System.currentTimeMillis()
-                            futuresStreamReconcileRunning = false
                             false
                         }
                     }
@@ -7910,7 +7918,29 @@ private class NativeEngine(
     }
 
     private fun handleUserEvent(event: JSONObject) {
-        tradingEventLoop.post { handleUserEventSerialized(event) }
+        // Invalidate entry authority on receipt, before a busy serialized actor
+        // can delay applying a real fill/account update. Callback delivery itself
+        // must never be mistaken for a successful durable event application.
+        if (event.optString("e") in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+                "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT", "listenKeyExpired", "serverShutdown")) {
+            synchronized(this) {
+                userStreamSyncRequired = true
+                lastUserStreamSyncAtMs = 0L
+                if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
+            }
+        }
+        tradingEventLoop.post {
+            try {
+                handleUserEventSerialized(event)
+            } catch (failure: Exception) {
+                val reason = "Private Futures event application failed: " +
+                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+                userStreamSyncRequired = true
+                lastUserStreamSyncAtMs = 0L
+                userStreamLastError = reason
+                setReconcileRequired(reason)
+            }
+        }
     }
 
     private fun handleUserEventSerialized(event: JSONObject) {
