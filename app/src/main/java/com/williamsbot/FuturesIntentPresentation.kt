@@ -16,6 +16,25 @@ internal fun isTerminalFuturesExitIntent(intent: JSONObject): Boolean =
             "CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"
         )
 
+/** A journalled NEW STOP entry is not proof of a CURRENT Binance order.
+ * Display may label it confirmed only while the last exact-ID reconciliation
+ * remains fresh. Stale/unknown receipts stay in the immutable audit history
+ * and still block unsafe retry; this predicate never cancels an exchange order.
+ */
+internal fun futuresPendingEntryReceiptFresh(
+    intent: JSONObject,
+    nowMs: Long,
+    ttlMs: Long = 30_000L
+): Boolean {
+    val status = intent.optString("order_status").uppercase(Locale.US)
+    if (futuresIntentRole(intent) != "ENTRY" ||
+        intent.optString("campaign_status") != "ENTRY_PENDING" ||
+        status !in setOf("NEW", "WORKING", "ACCEPTED") ||
+        nowMs <= 0L || ttlMs <= 0L) return false
+    val verifiedAt = intent.optLong("last_reconciled_ms", 0L)
+    return verifiedAt > 0L && nowMs >= verifiedAt && nowMs - verifiedAt <= ttlMs
+}
+
 internal data class FuturesIntentPresentation(
     val active: JSONArray, val exitReconciliation: JSONArray
 )
