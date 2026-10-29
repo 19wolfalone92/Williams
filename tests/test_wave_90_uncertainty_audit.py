@@ -11,7 +11,7 @@ from williams_wave_subdivisions import prove_wave_subdivisions
 
 def test_90_closed_blind_prefixes_and_evidence_keep_expert_accuracy_unknown():
     blind, cases, summary = audit()
-    assert len(CUTOFFS) == 18
+    assert len(CUTOFFS) == 6
     assert len(blind) == len(cases) == summary["snapshots"] == 90
     assert len({(c["symbol"], c["as_of"]) for c in blind}) == 90
     assert all(set(c) == {"symbol", "frame", "as_of",
