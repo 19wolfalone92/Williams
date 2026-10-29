@@ -89,3 +89,28 @@ def test_dual_rater_90_frozen_cases_have_no_synthetic_human_certification(tmp_pa
     assert not result["can_place_orders"] and not result["can_close"]
     with pytest.raises(ValueError,match="EXPECTED_ALL_FROZEN_ANNOTATIONS"):
         dual.compare_reviews(a,b,compared_at=TIME)
+
+
+def test_same_positive_label_different_pivots_are_not_expert_consensus(tmp_path):
+    def positive(row, shift):
+        if row["symbol"]=="BTCUSDT":
+            row["expert_label"]="MOTIVE_FIVE"
+            row["degree"]="H1"
+            row["direction"]="UP"
+            row["pivot_times_utc"]=datetime.fromtimestamp(
+                (int(row["as_of"])-(12+shift)*3_600_000)/1000,
+                timezone.utc).isoformat()
+    first=filled_csv(tmp_path,"human-unknown-1",
+                     alter=lambda x:positive(x,0))
+    second=filled_csv(tmp_path,"human-unknown-2",
+                      alter=lambda x:positive(x,1))
+    result=dual.compare_reviews(first,second,compared_at=TIME)
+    assert result["label_only_agreement_count"]==30
+    assert result["agreement_count"]==24
+    assert result["consensus_cases"]==24
+    assert result["disagreement_count"]==6
+    assert all(r["reason"]=="SAME_LABEL_DIFFERENT_DEGREE_DIRECTION_OR_PIVOTS"
+               for r in result["consensus_conflicts"])
+    assert result["cohen_kappa"]==1.0
+    assert result["structural_count_agreement"]==24/30
+    assert not result["human_elliott_accuracy_certified"]
