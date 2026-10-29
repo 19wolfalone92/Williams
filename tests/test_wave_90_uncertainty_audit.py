@@ -1,6 +1,10 @@
 """Regression gates: explain unknown wave counts without laundering accuracy."""
 from dataclasses import replace
 
+import pytest
+
+from tools.wave_h4_causal_research import complete_h4_from_closed_h1, h4_research_context
+
 from tools.audit_wave_90_uncertainty import (
     CUTOFFS, HOUR, audit, phase_evidence,
 )
@@ -25,6 +29,10 @@ def test_90_closed_blind_prefixes_and_evidence_keep_expert_accuracy_unknown():
     assert all(c["extended_closed_h1_count"] >= 160
                and not c["extended_history_phase_evidence"]["can_place_orders"]
                for c in cases)
+    assert all("reconstructed_closed_h4_context" in c and
+               not c["reconstructed_closed_h4_context"]["can_place_orders"]
+               for c in cases)
+    assert not summary["native_binance_h4_klines_used"]
     assert summary["human_expert_annotations"] == 0
     assert summary["accuracy_vs_human"] is None
     assert not summary["human_elliott_accuracy_certified"]
@@ -84,3 +92,39 @@ def test_failed_later_subdivision_retains_only_previous_causal_evidence():
         assert partial.reason == "INTERNAL_IMPULSE_GEOMETRY_FAILED"
         assert partial.observed == (5, 3, 5)
         assert partial.leg_patterns == full.leg_patterns[:2]
+
+
+def test_complete_utc_h4_requires_four_genuine_closed_hours_and_never_future():
+    h=HOUR
+    rows=[
+        [0,100,105,98,102,10],
+        [h,102,106,99,104,11],
+        [2*h,104,107,101,103,12],
+        [3*h,103,108,100,106,13],
+    ]
+    h4=complete_h4_from_closed_h1(rows,4*h)
+    assert len(h4)==1
+    assert (h4[0].t,h4[0].o,h4[0].h,h4[0].l,h4[0].c,h4[0].v)==(
+        0,100,108,98,106,46)
+    # A fresh (unclosed) or otherwise future hour cannot mutate H4.
+    future=[4*h,999,1000,990,998,2]
+    assert complete_h4_from_closed_h1(rows+[future],4*h)==h4
+    assert complete_h4_from_closed_h1(rows[:3],3*h)==[]
+    with pytest.raises(ValueError,match="GAPPED_OR_UNORDERED_SOURCE_H1"):
+        complete_h4_from_closed_h1(rows[:2]+rows[3:],4*h)
+
+
+def test_reconstructed_h4_is_causal_context_not_independent_native_h4():
+    rows,_=load_source("BTCUSDT")
+    as_of=int(CUTOFFS[3].timestamp()*1000)
+    prefix=[row for row in rows if row[0]+HOUR<=as_of][-160:]
+    report=h4_research_context(prefix,as_of)
+    assert report["closed_h4_bars"]==40
+    assert report["source"]=="UTC_H4_EXACTLY_FOUR_FROZEN_BINANCE_CLOSED_H1_NOT_NATIVE_H4"
+    assert report["status"]=="PRICE_CONTEXT_ONLY_NO_NATIVE_H4_PROOF"
+    assert not report["degree_of_h4_verified_by_expert"]
+    assert not report["can_place_orders"] and not report["can_close"] and not report["can_reverse"]
+    extra=[list(x) for x in rows if x[0]+HOUR>as_of]
+    for x in extra:
+        x[1:5]=["1","999999","1","1"]
+    assert h4_research_context(prefix+extra,as_of)==report
