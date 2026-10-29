@@ -50,6 +50,11 @@ Outputs:
 - `wave_90_summary.json`: true model abstentions, descriptive phase counts
   and specific evidence blockers. Descriptive phase coverage is **not**
   Elliott-label classification coverage.
+- For **each same cutoff**, separately re-evaluate using **all genuinely closed
+  earlier H1 candles** (not just the last 160): record the changed classifier
+  output, backward-history length, and the number of changed labels. This is
+  a controlled lookback-sensitivity experiment, **not** future hindsight or
+  human wave truth; senior H4/D1 candles are not invented.
 
 **Limits that software alone cannot remove:** no two independently verified
 expert Elliott count labels have been provided for these candles; no verified
