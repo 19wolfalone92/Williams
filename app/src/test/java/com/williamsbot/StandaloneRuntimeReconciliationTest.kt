@@ -130,6 +130,21 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun webSocketConnectivityNeverAuthorizesEntriesFromExpiredSignedRestProof() {
+        val now = 1_800_000_000_000L
+        assertFalse(signedFuturesReconciliationFresh(0L, now))
+        assertFalse(signedFuturesReconciliationFresh(now + 1L, now))
+        assertTrue(signedFuturesReconciliationFresh(now - 45_000L, now))
+        assertTrue(signedFuturesReconciliationFresh(now - 90_000L, now))
+        assertFalse(signedFuturesReconciliationFresh(now - 90_001L, now))
+        assertFalse(signedFuturesReconciliationFresh(now - 1L, now, 0L))
+        // A permanently connected socket without new signed proof is not a
+        // substitute for a current position/order/STOP snapshot.
+        assertTrue(userStreamSyncIsFresh(true, false, now - 3_600_000L, now))
+        assertFalse(signedFuturesReconciliationFresh(now - 3_600_000L, now))
+    }
+
+    @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
         assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 500_000L))
         assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_000L))
