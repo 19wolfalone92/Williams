@@ -243,15 +243,33 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+      - name: Set up official Android SDK tools
+        uses: android-actions/setup-android@v4
+      - name: Install and start disposable Google emulator
+        env:
+          SMOKE_ANDROID_API: ${{ matrix.api }}
+        run: |
+          set -euo pipefail
+          sdkmanager "emulator" "platform-tools" "system-images;android-${SMOKE_ANDROID_API};google_apis;x86_64"
+          echo no | avdmanager create avd --force --name williams-smoke --package "system-images;android-${SMOKE_ANDROID_API};google_apis;x86_64" --device pixel
+          mkdir -p build/emulator-smoke
+          "$ANDROID_HOME/emulator/emulator" -avd williams-smoke -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect > build/emulator-smoke/emulator.log 2>&1 &
+          timeout 180 adb wait-for-device
+          booted=false
+          for attempt in $(seq 1 90); do
+            if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ]; then
+              booted=true
+              break
+            fi
+            sleep 2
+          done
+          test "$booted" = true
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell wm dismiss-keyguard
       - name: Exercise the exact built APK without trading credentials
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: ${{ matrix.api }}
-          arch: x86_64
-          target: google_apis
-          disable-animations: true
-          emulator-boot-timeout: 300
-          script: python3 tools/android_emulator_smoke.py --apk smoke-apk/app-debug.apk --output build/emulator-smoke
+        run: python3 tools/android_emulator_smoke.py --apk smoke-apk/app-debug.apk --output build/emulator-smoke
       - name: Upload UI assertions, screenshots and crash evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -260,3 +278,6 @@ jobs:
           path: build/emulator-smoke/
           if-no-files-found: warn
           retention-days: 14
+      - name: Stop disposable emulator
+        if: always()
+        run: adb emu kill || true

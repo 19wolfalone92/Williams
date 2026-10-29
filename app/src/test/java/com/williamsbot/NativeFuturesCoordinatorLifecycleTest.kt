@@ -19,11 +19,12 @@ import java.util.concurrent.atomic.AtomicReference
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
     @Test fun transportGateRejectionDoesNotPersistAPhantomPendingEntryForEitherDirection() {
-        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (earlyGate in listOf(false, true)) {
             val journal = Journal()
             val exchange = Exchange(direction)
             val coordinator = NativeFuturesCampaignCoordinator(journal) {
                 BinanceUsdMFuturesTestnetAdapter("key", "secret", exchange.client,
+                    beforeExposureMutation = { if (earlyGate) error("Runtime paused before entry") },
                     beforeExposureTransport = { error("Private stream lost during entry preflight") })
             }
             assertTrue(coordinator.reconcile().getBoolean("ok"))

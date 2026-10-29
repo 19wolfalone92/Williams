@@ -844,7 +844,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
             params["reduceOnly"] != "true" && params["closePosition"] != "true"
         if (increasesExposure) {
-            beforeExposureMutation()
+            try {
+                beforeExposureMutation()
+            } catch (failure: Exception) {
+                throw FuturesExposureNotSubmittedException(failure)
+            }
         }
         // Rate limit admission may sleep: also finish it BEFORE signing.
         rateGuard?.beforeRequest(isOrder = orderMutation)
