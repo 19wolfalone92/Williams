@@ -577,6 +577,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
     @Test fun boundedSlowClockAllowsSignedRecoveryReadsButNeverMutation() {
         var clockGets = 0
         var accountGets = 0
+        var timeFromSlowResponse = 0L
         var mutationPosts = 0
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
@@ -584,11 +585,14 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 "/fapi/v1/time" -> {
                     clockGets++
                     Thread.sleep(3_200L)
-                    """{"serverTime":${System.currentTimeMillis()}}"""
+                    timeFromSlowResponse = System.currentTimeMillis()
+                    """{"serverTime":$timeFromSlowResponse}"""
                 }
                 "/fapi/v3/account" -> {
                     accountGets++
-                    assertTrue(request.url.queryParameter("timestamp") != null)
+                    val stamp = request.url.queryParameter("timestamp")!!.toLong()
+                    assertTrue("Slow probe must not timestamp >1000ms into exchange future",
+                        stamp <= timeFromSlowResponse + 1_000L)
                     "{}"
                 }
                 else -> {
