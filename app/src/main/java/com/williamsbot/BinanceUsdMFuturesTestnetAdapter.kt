@@ -101,6 +101,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     // Application-level retry rules must also govern OkHttp's transparent retries
     // and redirects. A replayed POST can create duplicate exposure after a lost reply.
     private val http = http.newBuilder()
+        // Android runtime shares a 45s read timeout with long-lived WebSockets.
+        // The financial REST adapter must NOT inherit an unbounded total call
+        // deadline: a dead radio/DNS route previously stalled reconciliation and
+        // Android's worker heartbeat. POST/DELETE timeouts remain ambiguous and
+        // are never transparently retried.
+        .callTimeout(25, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)
