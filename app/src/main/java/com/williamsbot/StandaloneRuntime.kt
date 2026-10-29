@@ -394,6 +394,16 @@ internal fun userStreamSyncIsFresh(
     connected && !syncRequired && lastSuccessfulSyncMs > 0L &&
         nowMs >= lastSuccessfulSyncMs
 
+/** A connected private WebSocket is not sufficient to submit NEW exposure. The
+ * periodic signed account/position/STOP reconciliation must also have succeeded
+ * recently. A stalled worker or a deferred lock must not indefinitely reuse
+ * a once-valid REST snapshot. This fence does NOT prevent safety management.
+ */
+internal fun signedFuturesReconciliationFresh(
+    lastSuccessfulAtMs: Long, nowMs: Long, maximumAgeMs: Long = 90_000L
+): Boolean = lastSuccessfulAtMs > 0L && nowMs >= lastSuccessfulAtMs &&
+    maximumAgeMs > 0L && nowMs - lastSuccessfulAtMs <= maximumAgeMs
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -1973,6 +1983,7 @@ private class NativeEngine(
             publicWebSocketFresh() &&
             userStreamConnected &&
             !userStreamSyncRequired &&
+            signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()) &&
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
@@ -2001,6 +2012,8 @@ private class NativeEngine(
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
             if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
+            if (!signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()))
+                add("signed_futures_account_position_stop_reconciliation_stale_or_unknown")
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
@@ -11332,6 +11345,13 @@ private class NativeEngine(
             if (secureKeysPresent) "Binance credentials stored in encrypted app-private storage"
             else "Binance credentials unavailable in this Android package; changing debug/release variant or reinstalling does not migrate keys")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
+        val signedReconcileNowMs = System.currentTimeMillis()
+        val signedReconcileFresh = signedFuturesReconciliationFresh(lastRestReconcileMs, signedReconcileNowMs)
+        test("signed_futures_reconciliation_freshness", "execution", signedReconcileFresh, "WARNING",
+            "last_successful_at_ms=$lastRestReconcileMs; max_age_ms=90000; " +
+                "age_ms=" + (if (lastRestReconcileMs > 0L && signedReconcileNowMs >= lastRestReconcileMs)
+                    (signedReconcileNowMs-lastRestReconcileMs).toString() else "UNKNOWN") +
+                "; stale evidence blocks new entries but does not block protective reconciliation")
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
