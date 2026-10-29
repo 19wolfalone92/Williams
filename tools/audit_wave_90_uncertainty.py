@@ -24,6 +24,7 @@ from tools.benchmark_blind_30_h1_wave_cases import (  # noqa: E402
 from williams_wave_hierarchy import (  # noqa: E402
     WaveBar, build_wave_hierarchy,
 )
+from tools.wave_h4_causal_research import h4_research_context  # noqa: E402
 
 HOUR = 3_600_000
 # Exact pre-existing 15-pair x 6-date benchmark selection. Do not create
@@ -132,6 +133,7 @@ def audit():
                 "extended_history_model_label": long_label,
                 "extended_history_model_evidence": long_evidence,
                 "extended_history_phase_evidence": phase_evidence(closed, as_of),
+                "reconstructed_closed_h4_context": h4_research_context(prefix, as_of),
                 "expert_label": None, "expert_label_origin": "NOT_SUPPLIED",
                 "human_accuracy_verified": False,
                 "can_place_orders": False,
@@ -144,6 +146,13 @@ def audit():
                                 for c in cases)
     reasons = Counter(reason for c in cases for reason in c["phase_evidence"]["blockers"])
     phases = Counter(c["phase_evidence"]["phase"] for c in cases)
+    h4 = Counter(c["reconstructed_closed_h4_context"]["status"] for c in cases)
+    h4_links = sum(c["reconstructed_closed_h4_context"]["nested_h4_h1_links"]
+                   for c in cases)
+    h4_linked_cases = sum(
+        c["reconstructed_closed_h4_context"]["nested_h4_h1_links"] > 0
+        for c in cases
+    )
     summary = {
         "schema": "WILLIAMS_WAVE_90_OBSERVATION_AUDIT_V1",
         "status": "NO_INDEPENDENT_EXPERT_WAVE_LABELS",
@@ -157,6 +166,11 @@ def audit():
         "extended_history_is_closed_h1_only": True,
         "extended_history_is_not_human_accuracy": True,
         "descriptive_phase_counts": dict(sorted(phases.items())),
+        "h4_reconstructed_from_closed_h1_status_counts": dict(sorted(h4.items())),
+        "h4_h1_parental_links_total": h4_links,
+        "snapshots_with_h4_h1_parental_price_links": h4_linked_cases,
+        "native_binance_h4_klines_used": False,
+        "h4_context_is_not_human_wave_truth": True,
         "evidence_blocker_counts": dict(sorted(reasons.items())),
         "human_expert_annotations": 0,
         "accuracy_vs_human": None,
