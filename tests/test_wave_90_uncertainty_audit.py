@@ -18,6 +18,13 @@ def test_90_closed_blind_prefixes_and_evidence_keep_expert_accuracy_unknown():
                           "source_window_sha256", "prefix_sha256"} for c in blind)
     assert summary["classifier_abstentions"] == sum(
         c["model_label"] == "UNRESOLVED" for c in cases)
+    assert summary["extended_history_classifier_abstentions"] == sum(
+        c["extended_history_model_label"] == "UNRESOLVED" for c in cases)
+    assert summary["history_lookback_label_disagreements"] == sum(
+        c["extended_history_model_label"] != c["model_label"] for c in cases)
+    assert all(c["extended_closed_h1_count"] >= 160
+               and not c["extended_history_phase_evidence"]["can_place_orders"]
+               for c in cases)
     assert summary["human_expert_annotations"] == 0
     assert summary["accuracy_vs_human"] is None
     assert not summary["human_elliott_accuracy_certified"]
