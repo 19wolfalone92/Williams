@@ -14,6 +14,27 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class FuturesFinalTransportGateTest {
+    @Test fun exchangeCooldownRejectionBeforePostHasADefiniteNotSubmittedOutcome() {
+        var posts = 0
+        val guard = BinanceRateGuard()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val r = chain.request()
+            if (r.method == "POST") posts++
+            response(r, if (r.url.encodedPath == "/fapi/v1/time")
+                """{"serverTime":${System.currentTimeMillis()}}""" else """{"dualSidePosition":false}""")
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client, guard,
+            beforeExposureMutation = { guard.observe(Headers.headersOf("Retry-After", "120"), 429) })
+        try {
+            adapter.newOrder("BTCUSDT", "BUY", "1", false, "W2E_COOLDOWN")
+            fail("Long cooldown must fail before POST")
+        } catch (expected: FuturesExposureNotSubmittedException) {
+            assertTrue(expected.message.orEmpty().contains("cooldown retained"))
+        }
+        assertEquals(0, posts)
+        assertTrue(guard.snapshot().getLong("cooldown_ms") > 110_000L)
+    }
+
     private fun response(request: Request, body: String, code: Int = 200): Response =
         Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
             .code(code).message("test").body(body.toResponseBody()).build()

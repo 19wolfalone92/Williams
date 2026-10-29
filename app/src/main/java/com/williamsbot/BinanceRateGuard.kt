@@ -38,12 +38,16 @@ class BinanceRateGuard {
         private set
     @Volatile var totalWaitMs: Long = 0L
         private set
+    @Volatile var boundedWaitRejectedCount: Long = 0L
+        private set
 
     private val lock = Any()
     private var nextRequestAtMs = 0L
     private val minGapMs = 50L
 
-    fun beforeRequest(isOrder: Boolean = false) {
+    fun beforeRequest(isOrder: Boolean = false, maximumWaitMs: Long = 5_000L) {
+        require(maximumWaitMs in 1L..60_000L) { "Invalid Binance governor wait budget" }
+        val waitStartedNs = System.nanoTime()
         val waitStartedAtMs = System.currentTimeMillis()
         if (Thread.currentThread().isInterrupted) {
             throw IllegalStateException(
@@ -101,6 +105,19 @@ class BinanceRateGuard {
                     totalWaitMs += waited
                 }
                 return
+            }
+            val remainingMs = maximumWaitMs -
+                (System.nanoTime() - waitStartedNs) / 1_000_000L
+            if (remainingMs <= 0L || waitMs > remainingMs) {
+                // Preserve the exchange cooldown. Fail BEFORE transport instead
+                // of holding the account/position worker asleep for minutes.
+                // The next monitoring tick may try admission again, never send
+                // early and never bypass a Binance 418/429 restriction.
+                synchronized(lock) { boundedWaitRejectedCount += 1L }
+                throw IllegalStateException(
+                    "Binance REST governor wait exceeds ${maximumWaitMs}ms budget; " +
+                        "cooldown retained; request was not sent"
+                )
             }
             try {
                 Thread.sleep(waitMs.coerceAtMost(5000L))
@@ -192,6 +209,7 @@ class BinanceRateGuard {
             .put("rate_limit_response_count", rateLimitResponseCount)
             .put("last_wait_ms", lastWaitMs)
             .put("total_wait_ms", totalWaitMs)
+            .put("bounded_wait_rejected_count", boundedWaitRejectedCount)
             .put(
                 "cooldown_ms",
                 (cooldownUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)

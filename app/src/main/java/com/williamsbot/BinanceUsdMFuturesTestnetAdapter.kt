@@ -851,7 +851,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             }
         }
         // Rate limit admission may sleep: also finish it BEFORE signing.
-        rateGuard?.beforeRequest(isOrder = orderMutation)
+        try {
+            rateGuard?.beforeRequest(isOrder = orderMutation)
+        } catch (failure: Exception) {
+            if (increasesExposure) throw FuturesExposureNotSubmittedException(failure)
+            throw failure
+        }
         val all = LinkedHashMap(params)
         if (signed) {
             all["timestamp"] = ensureFreshServerClock(readOnly = method == "GET").toString()
