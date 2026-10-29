@@ -42,4 +42,40 @@ class FuturesSignedTradeForensicsTest {
         assertFalse(result.getBoolean("window_usdt_commission_known"))
         assertTrue(result.isNull("window_usdt_commission"))
     }
+    @Test fun historicalForensicsNeverDropFlatBnbOrLtc() {
+        val symbols=FuturesSignedTradeForensics.auditSymbols(listOf("ETHUSDT","BTCUSDT","BNBUSDT"),8)
+        assertEquals(listOf("BNBUSDT","LTCUSDT","ETHUSDT","BTCUSDT"),symbols)
+        assertEquals(2,FuturesSignedTradeForensics.auditSymbols(emptyList(),2).size)
+    }
+
+    @Test fun signedFundingIsSeparateFromCampaignPnl() {
+        val start=now-86_400_000L
+        val income=JSONObject().put("symbol","LTCUSDT")
+            .put("incomeType","FUNDING_FEE").put("income","-0.15")
+            .put("asset","USDT").put("time",now-1000)
+            .put("tranId","90021")
+        val out=FuturesSignedTradeForensics.summarizeFunding("LTCUSDT",listOf(income),start,now)
+        assertEquals("WINDOW_FUNDING_OBSERVED_NOT_CAMPAIGN_BOUND",out.getString("status"))
+        assertEquals("-0.15",out.getString("funding_usdt"))
+        assertFalse(out.getBoolean("full_campaign_pnl_verified"))
+        assertFalse(out.getBoolean("can_submit_order"))
+        assertFalse(out.getBoolean("can_change_stop"))
+        assertTrue(out.getInt("funding_events")==1)
+    }
+
+    @Test fun missingMalformedAndDuplicateFundingFailClosed() {
+        val start=now-86_400_000L
+        val row=JSONObject().put("symbol","BNBUSDT")
+            .put("incomeType","FUNDING_FEE").put("income","0.07")
+            .put("asset","USDT").put("time",now-1000).put("tranId","21")
+        assertEquals("SIGNED_FUNDING_READ_INCOMPLETE",
+            FuturesSignedTradeForensics.summarizeFunding("BNBUSDT",null,start,now).getString("status"))
+        assertEquals("SIGNED_FUNDING_SHAPE_UNVERIFIED",
+            FuturesSignedTradeForensics.summarizeFunding("BNBUSDT",listOf(row,row),start,now).getString("status"))
+        val other=JSONObject(row.toString()).put("asset","BNB")
+        val malformed=FuturesSignedTradeForensics.summarizeFunding("BNBUSDT",listOf(other),start,now)
+        assertTrue(malformed.isNull("funding_usdt"))
+        assertEquals("SIGNED_FUNDING_SHAPE_UNVERIFIED",malformed.getString("status"))
+    }
+
 }
