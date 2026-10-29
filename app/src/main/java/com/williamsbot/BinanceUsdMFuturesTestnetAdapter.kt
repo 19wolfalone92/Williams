@@ -138,6 +138,10 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                     sentWallMs = System.currentTimeMillis()
                 }
             } catch (failure: IOException) {
+                // Explicit exchange rejection is preserved for callers and
+                // must not be disguised as a transport-clock outage.
+                if (failure is FuturesHttpException &&
+                    !isRetryableSafeReadFailure(failure.message.orEmpty())) throw failure
                 if (attempt == 1 || !isRetryableSafeReadFailure(failure.message.orEmpty())) {
                     throw FuturesClockSyncException(
                         "Futures server clock probe failed; signed request blocked", failure
