@@ -120,10 +120,18 @@ def audit():
                    "prefix_sha256": digest(prefix)}
             blind.append(key)
             label, label_evidence = model_label(prefix, as_of)
+            # Extend only backwards with REAL bars already closed by as_of.
+            # This distinguishes a 160-bar lookback artifact from genuinely
+            # undecidable price geometry; do not call it expert truth.
+            long_label, long_evidence = model_label(closed, as_of)
             # This output is strictly AFTER constructing the blind selection.
             cases.append(key | {
                 "model_label": label, "model_evidence": label_evidence,
                 "phase_evidence": phase_evidence(prefix, as_of),
+                "extended_closed_h1_count": len(closed),
+                "extended_history_model_label": long_label,
+                "extended_history_model_evidence": long_evidence,
+                "extended_history_phase_evidence": phase_evidence(closed, as_of),
                 "expert_label": None, "expert_label_origin": "NOT_SUPPLIED",
                 "human_accuracy_verified": False,
                 "can_place_orders": False,
@@ -131,6 +139,9 @@ def audit():
     if len(blind) != 90 or len({(x["symbol"], x["as_of"]) for x in blind}) != 90:
         raise ValueError("BLIND_SELECTION_NOT_EXACTLY_90_UNIQUE_SNAPSHOTS")
     counts = Counter(c["model_label"] for c in cases)
+    extended_counts = Counter(c["extended_history_model_label"] for c in cases)
+    lookback_disagreements = sum(c["model_label"] != c["extended_history_model_label"]
+                                for c in cases)
     reasons = Counter(reason for c in cases for reason in c["phase_evidence"]["blockers"])
     phases = Counter(c["phase_evidence"]["phase"] for c in cases)
     summary = {
@@ -140,6 +151,11 @@ def audit():
         "snapshots": 90, "symbols": list(SYMBOLS),
         "classifier_counts": dict(sorted(counts.items())),
         "classifier_abstentions": counts["UNRESOLVED"],
+        "extended_history_classifier_counts": dict(sorted(extended_counts.items())),
+        "extended_history_classifier_abstentions": extended_counts["UNRESOLVED"],
+        "history_lookback_label_disagreements": lookback_disagreements,
+        "extended_history_is_closed_h1_only": True,
+        "extended_history_is_not_human_accuracy": True,
         "descriptive_phase_counts": dict(sorted(phases.items())),
         "evidence_blocker_counts": dict(sorted(reasons.items())),
         "human_expert_annotations": 0,
