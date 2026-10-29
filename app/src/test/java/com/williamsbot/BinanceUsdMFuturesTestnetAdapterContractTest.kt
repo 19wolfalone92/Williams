@@ -611,4 +611,27 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(0, signedCalls)
     }
 
+
+    @Test fun clockTransportFailureDoesNotCascadeIntoRepeatedSignedGetRetries() {
+        var probes = 0
+        var signedCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") {
+                probes++
+                throw java.io.IOException("Injected network outage on read-only clock probe")
+            }
+            signedCalls++
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("{}".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            fail("Signing must fail when both clock probes cannot reach Binance")
+        } catch (_: FuturesClockSyncException) { }
+        assertEquals("An outer signed GET must not cause 8 nested time probes", 2, probes)
+        assertEquals(0, signedCalls)
+    }
+
 }
