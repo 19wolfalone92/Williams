@@ -22,6 +22,7 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -7572,8 +7573,9 @@ private class NativeEngine(
             (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
         }
         val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val completedScans = ExecutorCompletionService<BaseAnalysis?>(scanExecutor)
         val futures = scanSymbols.map { symbol ->
-            scanExecutor.submit(Callable {
+            completedScans.submit(Callable<BaseAnalysis?> {
                 var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
                     // The validated H1 startup history has 150 closed bars.
@@ -7591,27 +7593,20 @@ private class NativeEngine(
                 }
             })
         }
-        val ranked = mutableListOf<BaseAnalysis>()
-        // Bound the whole symbol fan-out, not each Future independently. A per-symbol
-        // 30s timeout multiplied by 10 contracts could leave the cockpit showing
-        // RUNNING for five minutes when one or more REST requests stall.
-        val scanDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
-        for ((index, future) in futures.withIndex()) {
-            val remainingNanos = scanDeadlineNanos - System.nanoTime()
-            if (remainingNanos <= 0L) {
-                futures.drop(index).forEach { it.cancel(true) }
-                scannerError = scannerError ?: "Futures H1 scan exceeded 60s total deadline; remaining symbols were not completed"
-                break
-            }
-            runCatching {
-                future.get(remainingNanos, TimeUnit.NANOSECONDS)
-            }.getOrElse {
-                future.cancel(true)
-                scannerError = scannerError ?: "Futures H1 scanner timeout within 60s total deadline: " +
-                    (it.message ?: it.javaClass.simpleName)
-                null
-            }?.let { if (it is BaseAnalysis) ranked.add(it) }
-        }
+        // A sequential Future.get waited on an unlucky slow symbol FIRST,
+        // hiding other finished results for the full 60-second deadline.
+        // Consume actual task completions: deterministic ranking below is
+        // unchanged; no unfinished candle can ever become a signal.
+        val completed = collectReadOnlyScannerCompletions(
+            completedScans, futures, System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
+        )
+        val ranked = completed.values.toMutableList()
+        if (completed.timedOut) scannerError = scannerError
+            ?: "Futures H1 scan exceeded its shared 60s deadline; " +
+                (futures.size - completed.completedCount) + " symbol tasks unfinished"
+        if (completed.failedCount > 0) scannerError = scannerError
+            ?: "Futures H1 scan had " + completed.failedCount + " failed analysis tasks"
+
         candidates = JSONArray().apply {
             ranked.sortedWith(compareByDescending<BaseAnalysis> { it.campaignReady }
                 .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }.thenBy { it.spreadPct })
@@ -7643,7 +7638,16 @@ private class NativeEngine(
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
-        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }
+        // Avoid an eleventh SQLite/REST H1 read when the primary symbol's
+        // validated closed candles already came back from this very scan.
+        // Revalidate the last closed-bar boundary to preserve correctness
+        // if an hourly close occurred during the 60-second fan-out.
+        runCatching {
+            val primary = ranked.firstOrNull { it.symbol == primarySymbol }?.candles
+            primaryCandles = if (primary != null &&
+                candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs())
+            ) primary else fetchCandles(primarySymbol, "1h", 150)
+        }
 
         // Never overwrite a safety blocker with READY merely because market data was
         // scanned. Market-analysis success and permission to execute are separate facts.
