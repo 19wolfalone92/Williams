@@ -10977,6 +10977,15 @@ private class NativeEngine(
             .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
+            // Status(fast=true) is what the downloadable diagnostics ZIP uses.
+            // The separate runtime-health JSON already contained these keys,
+            // so failing to mirror them here made the incident phase UNKNOWN.
+            .put("user_stream_reconcile_phase", userStreamReconcilePhase)
+            .put("user_stream_reconcile_diagnostic_state", privateStreamReconcileDiagnosticState(
+                userStreamConnected,userStreamSyncRequired,futuresStreamReconcileRunning,
+                userStreamReconcileStartedAtMs,lastUserStreamSyncAtMs,System.currentTimeMillis()))
+            .put("user_stream_signed_account_snapshot_at_ms",lastRestReconcileMs)
+            .put("user_stream_reconcile_pending_events",futuresStreamReconcilePending)
             .put("history_ready", historyReady)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
