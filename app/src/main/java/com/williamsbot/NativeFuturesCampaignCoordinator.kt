@@ -2532,18 +2532,18 @@ internal class NativeFuturesCampaignCoordinator(
             // attribution. Profile this replay separately: repeated signed
             // orphan-STOP lookups can dominate an otherwise flat sync.
             noteReconciliationPhase("SETTLING_HISTORICAL_FLAT_CAMPAIGNS")
+            // All historical owners in this pass see the same durable EXIT
+            // ledger. Index it ONCE (O(n)) rather than re-scanning every exit
+            // for every closed campaign (O(n^2)). A malformed row still vetoes
+            // finalization globally, exactly as the previous conservative rule.
+            val unresolvedExitIndex = buildWilliamsUnresolvedExitIndex(persisted)
             // Once Binance reports the symbol flat, prior position intents are terminal.
             for (i in 0 until persisted.length()) {
                 val intent = persisted.optJSONObject(i) ?: continue
                 if (intent.optString("intent_role", "ENTRY") != "ENTRY") continue
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
                 val status = campaignLifecycleStatus(intent)
-                val unresolvedExitForSymbol = (0 until persisted.length()).any { j ->
-                    val exit = persisted.optJSONObject(j) ?: return@any true
-                    exit.optString("intent_role") == "EXIT" &&
-                        exit.optString("symbol").equals(symbol, true) &&
-                        exit.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED"
-                }
+                val unresolvedExitForSymbol = unresolvedExitIndex.mayHaveUnresolvedExit(symbol)
                 val nowMs = clock()
                 val firstFlatAfterFill = intent.optLong("flat_after_fill_first_seen_at_ms", 0L)
                 val filledCampaignCanNowClose = shouldFinalizeFilledFlatCampaign(
