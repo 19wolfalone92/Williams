@@ -7645,7 +7645,8 @@ private class NativeEngine(
         runCatching {
             val primary = ranked.firstOrNull { it.symbol == primarySymbol }?.candles
             primaryCandles = if (primary != null &&
-                candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs())
+                runCatching { candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs()) }
+                    .getOrDefault(false)
             ) primary else fetchCandles(primarySymbol, "1h", 150)
         }
 
