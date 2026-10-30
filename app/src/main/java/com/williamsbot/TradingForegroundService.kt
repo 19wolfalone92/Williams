@@ -20,6 +20,7 @@ class TradingForegroundService : Service() {
     private val starting=AtomicBoolean(false)
     private val staleRecoveryQueued=AtomicBoolean(false)
     @Volatile private var nextStaleRecoveryElapsedMs=0L
+    @Volatile private var firstStaleObservedElapsedMs=0L
     @Volatile private var startElapsed=0L
     @Volatile private var nextAttemptElapsed=0L
     @Volatile private var initializationRetryNeeded=false
@@ -107,6 +108,11 @@ class TradingForegroundService : Service() {
                 val now=SystemClock.elapsedRealtime()
                 RuntimeServiceState.lastWorkerLoopElapsedMs=snapshot.lastWorkerLoopElapsedMs
                 val stale=BackgroundRuntimePolicy.monitorStale(snapshot,now)
+                // On first wake from Doze the guard may outrun the worker. Require
+                // another full guard interval with no heartbeat before interrupting.
+                if (stale && firstStaleObservedElapsedMs==0L)
+                    firstStaleObservedElapsedMs=now
+                else if (!stale) firstStaleObservedElapsedMs=0L
                 if(RuntimeServiceState.monitorHeartbeatStale!=stale) {
                     RuntimeServiceState.monitorHeartbeatStale=stale
                     // Do not claim that the worker recovered just because it
@@ -126,6 +132,8 @@ class TradingForegroundService : Service() {
                 // financial mutations, request a cooperative exit on the
                 // lifecycle executor; NEVER start a parallel worker.
                 if (stale && !destroyed && !stopping &&
+                    firstStaleObservedElapsedMs>0L &&
+                    now-firstStaleObservedElapsedMs>=BackgroundRuntimePolicy.CHECK_MS &&
                     now>=nextStaleRecoveryElapsedMs &&
                     staleRecoveryQueued.compareAndSet(false,true)) {
                     nextStaleRecoveryElapsedMs=now+120_000L
