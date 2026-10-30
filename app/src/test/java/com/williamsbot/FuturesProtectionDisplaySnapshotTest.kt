@@ -20,6 +20,7 @@ class FuturesProtectionDisplaySnapshotTest {
             .put("workingType", "MARK_PRICE").put("closePosition", true)
             .put("triggerPrice", if (direction == "LONG") "742.67" else "760.00")
         var orders = JSONArray().put(order)
+        var symbolScopedReads = 0
         val proof = JSONObject().put("symbol", "BNBUSDT").put("direction", direction)
             .put("quantity", position.getString("positionAmt"))
             .put("stop", order.getString("triggerPrice"))
@@ -38,7 +39,11 @@ class FuturesProtectionDisplaySnapshotTest {
         var standardOrders = JSONArray()
         fun read(): FuturesProtectionDisplaySnapshot = readFuturesProtectionDisplaySnapshot(
             readPositions = { positionReads++; JSONArray().put(JSONObject(position.toString())) },
-            readOpenAlgos = { JSONArray(orders.toString()).also { afterOrders() } },
+            readOpenAlgosForSymbol = { symbol ->
+                assertEquals("BNBUSDT", symbol)
+                symbolScopedReads++
+                JSONArray(orders.toString()).also { afterOrders() }
+            },
             contractPrice = { contractReads++; contract },
             trustedObservations = JSONArray().put(proof), intents = JSONArray().put(owner), clock = { now },
             supervisions = supervisions, readOpenOrders = { standardOrders }
@@ -57,6 +62,38 @@ class FuturesProtectionDisplaySnapshotTest {
             assertEquals("OWNED_STOP_SEEN", proof.getString("stop_proof"))
             assertTrue(proof.getBoolean("strategy_ownership_verified"))
             assertEquals(old, f.proof.toString()) // execution evidence is never republished
+        }
+    }
+
+    @Test fun onlyLiveSymbolStopsAreSignedAndFailureCauseIsExplicit() {
+        val f=Fixture()
+        val verified=f.read().observations.getJSONObject(0)
+        assertEquals(1,f.symbolScopedReads)
+        assertEquals(1,verified.getInt("signed_algo_orders_seen"))
+        assertEquals(1,verified.getInt("signed_full_stops_seen"))
+        assertTrue(verified.isNull("stop_proof_rejection"))
+
+        f.orders=JSONArray()
+        val missing=f.read().observations.getJSONObject(0)
+        assertEquals("STOP_UNCONFIRMED",missing.getString("stop_proof"))
+        assertEquals("NO_OPEN_ALGO_ORDERS_RETURNED_FOR_SYMBOL",
+            missing.getString("stop_proof_rejection"))
+        assertEquals(0,missing.getInt("signed_algo_orders_seen"))
+        assertFalse(missing.getBoolean("automatic_trailing_authorized"))
+
+        f.orders=JSONArray().put(JSONObject(f.order.toString()).put("algoStatus","CANCELED"))
+        val canceled=f.read().observations.getJSONObject(0)
+        assertEquals("SIGNED_ALGOS_PRESENT_BUT_NOT_FULL_POSITION_PROTECTIVE_STOP",
+            canceled.getString("stop_proof_rejection"))
+        assertEquals("STOP_UNCONFIRMED",canceled.getString("stop_proof"))
+    }
+
+    @Test fun malformedOrForeignSymbolSignedAlgoMustNeverVerifyStop() {
+        val f=Fixture()
+        f.orders=JSONArray().put(JSONObject(f.order.toString()).put("symbol","BTCUSDT"))
+        try { f.read(); fail("Foreign symbol accepted") }
+        catch (expected:IllegalStateException) {
+            assertTrue(expected.message.orEmpty().contains("foreign/missing symbol"))
         }
     }
 
