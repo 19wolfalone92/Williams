@@ -194,6 +194,21 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun completedSignedRestReconciliationThatTook353SecondsMustNotBeReportedAsNormal() {
+        val started=1_793_358_855_979L
+        val finished=1_793_359_209_230L
+        assertEquals(353_251L, finished-started)
+        assertTrue(completedFuturesReconciliationTooSlow(false,started,finished))
+        // Previous code incorrectly considered every completed worker healthy.
+        assertTrue(reconciliationTaskLifecycleHealthy(false,started,finished))
+        assertFalse(completedFuturesReconciliationTooSlow(true,started,finished))
+        assertFalse(completedFuturesReconciliationTooSlow(false,started,started+300_000L))
+        assertFalse(completedFuturesReconciliationTooSlow(false,0L,finished))
+        assertFalse(completedFuturesReconciliationTooSlow(false,finished,started))
+        assertFalse(completedFuturesReconciliationTooSlow(false,started,finished,0L))
+    }
+
+    @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
         assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 500_000L))
         assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_000L))
