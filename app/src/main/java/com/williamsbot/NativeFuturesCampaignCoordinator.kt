@@ -873,7 +873,7 @@ internal class NativeFuturesCampaignCoordinator(
         val adapter = adapterFactory()
         return readFuturesProtectionDisplaySnapshot(
             readPositions = adapter::positions,
-            readOpenAlgos = adapter::allOpenAlgoOrders,
+            readOpenAlgosForSymbol = adapter::openAlgoOrders,
             contractPrice = adapter::contractPrice,
             trustedObservations = JSONArray(externalProtectionObservationsJson),
             intents = intentsSnapshot(),
