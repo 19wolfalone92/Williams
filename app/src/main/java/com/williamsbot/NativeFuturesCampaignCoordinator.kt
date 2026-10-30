@@ -800,6 +800,14 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var reconciliationRunning = false
     @Volatile private var reconciliationStartedAtMs = 0L
     @Volatile private var reconciliationFinishedAtMs = 0L
+    // Read-only coarse phase telemetry; never used to grant entry/STOP authority.
+    // Exposes which expensive signed operation a slow coordinator is waiting for.
+    @Volatile private var reconciliationPhase = "NOT_STARTED"
+    @Volatile private var reconciliationPhaseStartedAtMs = 0L
+    private fun noteReconciliationPhase(phase: String) {
+        reconciliationPhase = phase
+        reconciliationPhaseStartedAtMs = clock()
+    }
     @Volatile private var verifiedRiskCapManagementAtMs = 0L
     /** Signed exchange observations; never infer strategy ownership from an order prefix. */
     @Volatile private var externalOrderObservationsJson = "[]"
@@ -977,6 +985,7 @@ internal class NativeFuturesCampaignCoordinator(
         externalStopManagementVerifiedAtMs = 0L
         reconciliationRunning = true
         reconciliationStartedAtMs = clock()
+        noteReconciliationPhase("SIGNED_ACCOUNT_BASELINE")
         verifiedRiskCapManagementAtMs = 0L
         state = State.RECONCILE_REQUIRED
         lastBlocker = "exchange_reconciliation_in_progress"
@@ -990,6 +999,7 @@ internal class NativeFuturesCampaignCoordinator(
             adapter.requireOneWayMode()
             adapter.account() // verifies authenticated Futures account access
             val exchangePositions = adapter.positions()
+            noteReconciliationPhase("SIGNED_POSITIONS_RETURNED")
             val openBySymbol = linkedMapOf<String, JSONObject>()
             val seenPositionSymbols = mutableSetOf<String>()
             for (i in 0 until exchangePositions.length()) {
@@ -1164,6 +1174,7 @@ internal class NativeFuturesCampaignCoordinator(
             // so previously hid protection of the OTHER live symbols as well.
             // Unknown orders still block new entries and are NEVER auto-adopted.
             val externalOrders = JSONArray()
+            noteReconciliationPhase("READING_OPEN_STANDARD_ORDERS")
             val allOpenOrders = adapter.allOpenOrders()
             for (i in 0 until allOpenOrders.length()) {
                 val order = allOpenOrders.optJSONObject(i)
@@ -1182,6 +1193,7 @@ internal class NativeFuturesCampaignCoordinator(
                 
                 }
             }
+            noteReconciliationPhase("READING_OPEN_ALGO_ORDERS")
             val allOpenAlgoOrders = adapter.allOpenAlgoOrders()
             // Upgrade/restart recovery: a legacy W2PS stop can lose only its
             // local protection binding even though the ENTRY ledger survives.
@@ -2632,6 +2644,7 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                 }
             }
+            noteReconciliationPhase("COURSE_FILL_AND_FLAT_HANDOFF_REPLAY")
             recordCourseStageFills(persisted,entryExecutions,openBySymbol,adapter)
             recordCourseFlatHandoffs(persisted,adapter)
             saveIntents(persisted)
@@ -2722,6 +2735,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("active_pending_exit", hasPendingExit)
                 .put("blocker", lastBlocker ?: JSONObject.NULL)
         } catch (failure: Exception) {
+            noteReconciliationPhase("SIGNED_RECONCILIATION_FAILED")
             state = State.RECONCILE_REQUIRED
             lastBlocker = failure.message ?: failure.javaClass.simpleName
             JSONObject()
@@ -2732,6 +2746,8 @@ internal class NativeFuturesCampaignCoordinator(
         } finally {
             reconciliationFinishedAtMs = clock()
             reconciliationRunning = false
+            if (reconciliationPhase != "SIGNED_RECONCILIATION_FAILED")
+                noteReconciliationPhase("SIGNED_RECONCILIATION_FINISHED")
         }
     }
 
@@ -4446,6 +4462,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_running", reconciliationActive)
             .put("reconciliation_started_at_ms", reconciliationStartedAtMs)
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
+            .put("reconciliation_phase",reconciliationPhase)
+            .put("reconciliation_phase_started_at_ms",reconciliationPhaseStartedAtMs)
             .put("external_open_orders",JSONArray(externalOrderObservationsJson))
             .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
             .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
