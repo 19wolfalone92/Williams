@@ -68,7 +68,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("intent_role", "ENTRY")
                 .put("client_id", "W2H_HISTORICAL_$n")
                 .put("order_status", "CANCELED")
-                .put("exchange_status", "CANCELED")
+                .put("exchange_status", if (n == 0) "CLOSED_OR_STOPPED" else "CANCELED")
                 // The first record also exercises legacy status migration.
                 .apply { if (n != 0) put("campaign_status", "CLOSED_OR_STOPPED") })
         }
