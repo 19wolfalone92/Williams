@@ -393,6 +393,26 @@ internal fun completedFuturesReconciliationTooSlow(
 ): Boolean = !running && startedAtMs > 0L && finishedAtMs >= startedAtMs &&
     maxDurationMs > 0L && finishedAtMs - startedAtMs > maxDurationMs
 
+/** The WS remains UNSYNCED and execution remains blocked while signed REST
+ * reconciliation is in progress. Distinguish a pending healthy worker (WARN)
+ * from an absent, disconnected, failed, or >300s stalled reconciliation (FAIL).
+ * This helper classifies diagnostic severity ONLY, never entry eligibility. */
+internal fun privateUserStreamSyncFailureSeverity(
+    connected: Boolean,
+    syncRequired: Boolean,
+    reconciliationRunning: Boolean,
+    reconciliationStartedAtMs: Long,
+    nowMs: Long,
+    lastFailure: String?
+): String {
+    if (connected && syncRequired && reconciliationRunning &&
+        lastFailure.isNullOrBlank() &&
+        reconciliationTaskLifecycleHealthy(true, reconciliationStartedAtMs, nowMs))
+        return "WARNING"
+    return "FAIL"
+}
+
+
 /** Independent authenticated display evidence is permitted to VETO new risk,
  * never to grant it. Requires a working full-position STOP for every signed
  * live row; a stored campaign's PROTECTED label does not qualify.
@@ -11470,9 +11490,19 @@ private class NativeEngine(
             lastSuccessfulSyncMs = lastUserStreamSyncAtMs,
             nowMs = userNowMs
         )
+        val userSyncFailureSeverity = privateUserStreamSyncFailureSeverity(
+            connected = userStreamConnected,
+            syncRequired = userStreamSyncRequired,
+            reconciliationRunning = futuresStreamReconcileRunning,
+            reconciliationStartedAtMs = userStreamReconcileStartedAtMs,
+            nowMs = userNowMs,
+            lastFailure = userStreamReconcileFailure
+        )
         test(
-            "user_stream_freshness", "websocket", userStreamFresh, "FAIL",
+            "user_stream_freshness", "websocket", userStreamFresh, userSyncFailureSeverity,
             "connected=" + userStreamConnected +
+                "; diagnostic_failure_severity=" + (if(userStreamFresh) "PASS" else userSyncFailureSeverity) +
+                "; new_entries_must_remain_blocked_until_current_socket_has_signed_REST_sync=true;" +
                 "; sync_required=" + userStreamSyncRequired +
                 "; last_successful_rest_sync_ms=" + lastUserStreamSyncAtMs +
                 "; sync_age_ms=" + (if (userSyncAgeMs == Long.MAX_VALUE) "UNKNOWN" else userSyncAgeMs.toString()) +
@@ -11501,12 +11531,15 @@ private class NativeEngine(
                 "; pending_private_events=" + statusSnapshot.optBoolean("user_stream_reconcile_pending_events", false) +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
         )
+        val streamHasCompletedProof = !streamReconcileRunning && streamReconcileStartedAtMs > 0L &&
+            streamReconcileFinishedAtMs >= streamReconcileStartedAtMs
         val streamCompletedTooSlow = completedFuturesReconciliationTooSlow(
             streamReconcileRunning, streamReconcileStartedAtMs, streamReconcileFinishedAtMs
         )
         test(
-            "user_stream_last_completed_signed_rest_duration", "runtime", !streamCompletedTooSlow,
-            "WARN",
+            "user_stream_last_completed_signed_rest_duration", "runtime",
+            streamHasCompletedProof && !streamCompletedTooSlow,
+            if(streamHasCompletedProof) "WARNING" else "NOT_VERIFIED",
             "last_duration_ms=" + (if (!streamReconcileRunning &&
                 streamReconcileStartedAtMs > 0L &&
                 streamReconcileFinishedAtMs >= streamReconcileStartedAtMs)
