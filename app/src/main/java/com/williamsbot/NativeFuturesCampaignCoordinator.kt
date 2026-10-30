@@ -2528,6 +2528,10 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
 
+            // Historical terminal intents may still carry STOP identity for
+            // attribution. Profile this replay separately: repeated signed
+            // orphan-STOP lookups can dominate an otherwise flat sync.
+            noteReconciliationPhase("SETTLING_HISTORICAL_FLAT_CAMPAIGNS")
             // Once Binance reports the symbol flat, prior position intents are terminal.
             for (i in 0 until persisted.length()) {
                 val intent = persisted.optJSONObject(i) ?: continue
