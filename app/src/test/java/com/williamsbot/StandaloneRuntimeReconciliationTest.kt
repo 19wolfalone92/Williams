@@ -8,6 +8,28 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class StandaloneRuntimeReconciliationTest {
+
+    @Test
+    fun privateUserSocketWaitingForSignedRESTReportsWarningUntilTimeoutButNeverReady() {
+        val started=1_793_369_787_491L
+        val snapshotAt=started+5_671L
+        assertEquals("WARNING", privateUserStreamSyncFailureSeverity(
+            true, true, true, started, snapshotAt, null))
+        assertFalse(userStreamSyncIsFresh(true, true, 0L, snapshotAt))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            true, true, true, started, started+300_001L, null))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            false, true, true, started, snapshotAt, null))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            true, true, false, started, snapshotAt, null))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            true, true, true, started, snapshotAt,"Signed REST rejected"))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            true, true, true, 0L, snapshotAt,null))
+        assertEquals("FAIL",privateUserStreamSyncFailureSeverity(
+            true, true, true, snapshotAt+1L, snapshotAt,null))
+    }
+
     @Test
     fun signedExchangeStopMismatchVetoesNewRiskWithoutAssumingStopsCanceled() {
         fun row(stopStatus:String,stop:Any) = JSONObject()
