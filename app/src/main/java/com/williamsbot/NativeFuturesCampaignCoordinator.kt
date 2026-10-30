@@ -3856,14 +3856,15 @@ internal class NativeFuturesCampaignCoordinator(
 
     private fun recordCourseFlatHandoffs(rows:JSONArray,adapter:BinanceUsdMFuturesTestnetAdapter) {
         val all=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+        // Preserve the last durable candidate per (campaign,symbol), but avoid
+        // scanning ALL EXIT intents separately for every historical owner.
+        // Exact signed order, position and STOP proof below is unchanged.
+        val terminalExits=indexWilliamsCourseTerminalExits(rows)
         for(owner in all.filter { it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("strategy_profile")==williamsCourseProfile &&
             campaignLifecycleStatus(it)=="CLOSED_OR_STOPPED" && it.optJSONObject("edition_management")?.has("course_flat_handoff")!=true }) {
             runCatching {
                 val id=owner.getString("client_id");val symbol=owner.getString("symbol")
-                val exit=all.lastOrNull { it.optString("intent_role")=="EXIT" && it.optString("entry_client_id")==id &&
-                    it.optString("symbol")==symbol && it.optString("reason")=="COURSE_W5_TERMINAL_CONFIRMED" &&
-                    !it.optBoolean("partial_reduction",false) && it.optString("exchange_status")=="EXIT_CONFIRMED" && it.optString("order_status")=="FILLED" }
-                    ?: return@runCatching
+                val exit=terminalExits[id to symbol] ?: return@runCatching
                 val order=adapter.order(symbol,exit.getString("client_id"))
                 val expected=exit.getString("quantity").toBigDecimal()
                 check(order.optString("symbol")==symbol && order.optString("clientOrderId")==exit.getString("client_id") &&
