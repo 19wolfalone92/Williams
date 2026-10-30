@@ -384,6 +384,15 @@ internal fun reconciliationTaskLifecycleHealthy(
     return nowMs - startedAtMs <= maximumDurationMs
 }
 
+/** A finished signed REST reconcile may be logically valid but far too slow
+ * for a 90-second entry-freshness fence. Report its duration independently of
+ * the in-flight watchdog; do NOT invalidate Binance proof or relaunch orders. */
+internal fun completedFuturesReconciliationTooSlow(
+    running: Boolean, startedAtMs: Long, finishedAtMs: Long,
+    maxDurationMs: Long = 300_000L
+): Boolean = !running && startedAtMs > 0L && finishedAtMs >= startedAtMs &&
+    maxDurationMs > 0L && finishedAtMs - startedAtMs > maxDurationMs
+
 /** Independent authenticated display evidence is permitted to VETO new risk,
  * never to grant it. Requires a working full-position STOP for every signed
  * live row; a stored campaign's PROTECTED label does not qualify.
@@ -11491,6 +11500,20 @@ private class NativeEngine(
                 "; signed_account_snapshot_at_ms=" + statusSnapshot.optLong("user_stream_signed_account_snapshot_at_ms", 0L) +
                 "; pending_private_events=" + statusSnapshot.optBoolean("user_stream_reconcile_pending_events", false) +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
+        )
+        val streamCompletedTooSlow = completedFuturesReconciliationTooSlow(
+            streamReconcileRunning, streamReconcileStartedAtMs, streamReconcileFinishedAtMs
+        )
+        test(
+            "user_stream_last_completed_signed_rest_duration", "runtime", !streamCompletedTooSlow,
+            "WARN",
+            "last_duration_ms=" + (if (!streamReconcileRunning &&
+                streamReconcileStartedAtMs > 0L &&
+                streamReconcileFinishedAtMs >= streamReconcileStartedAtMs)
+                (streamReconcileFinishedAtMs-streamReconcileStartedAtMs).toString() else "UNKNOWN") +
+                "; diagnostic_threshold_ms=300000" +
+                "; finished_sync_does_not_guarantee_signed_account_snapshot_is_younger_than_90000ms" +
+                "; last_completed_phase=" + statusSnapshot.optString("user_stream_reconcile_phase","UNKNOWN")
         )
         val coordinatorTaskHealthy = reconciliationTaskLifecycleHealthy(
             coordinatorSnapshot.optBoolean("reconciliation_running", false),
