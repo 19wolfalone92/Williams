@@ -53,6 +53,24 @@ class RuntimeServiceLifecycleAssessmentTest {
         assertFalse(result.getBoolean("continuous_24h_monitoring_verified"))
     }
 
+    @Test fun stalledRecoveryEvidenceDistinguishesRequestedFromDeferredAndNoWorkerProof() {
+        val events=JSONArray()
+            .put(event("WORKER_HEARTBEAT_STALE",10_000))
+            .put(event("STALE_WORKER_RECOVERY_DEFERRED",9_000))
+            .put(event("STALE_WORKER_INTERRUPT_REQUESTED",8_000))
+            .put(event("WORKER_HEARTBEAT_LOST",7_500))
+            .put(event("WORKER_HEARTBEAT_RECOVERED",7_000))
+        val result=RuntimeServiceLifecycleAssessment.summarize(continuity(events),now)
+        assertEquals(1,result.getInt("stale_worker_interrupt_requested_count"))
+        assertEquals(1,result.getInt("stale_worker_recovery_deferred_count"))
+        assertEquals(0,result.getInt("stale_worker_recovery_not_ready_count"))
+        assertEquals(1,result.getInt("worker_heartbeat_stale_count"))
+        assertEquals(1,result.getInt("worker_heartbeat_recovered_count"))
+        assertEquals(1,result.getInt("worker_heartbeat_lost_count"))
+        assertEquals("FAULT_OBSERVED",result.getString("assessment"))
+        assertFalse(result.getBoolean("continuous_24h_monitoring_verified"))
+    }
+
     @Test fun failureOfAutostartIsNotHiddenByLaterGoodHeartbeat() {
         val events=JSONArray().put(event("SERVICE_AUTOSTART_FAILED",20_000))
             .put(event("SERVICE_RUNTIME_OBSERVED",5_000))

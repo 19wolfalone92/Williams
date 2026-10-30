@@ -2571,18 +2571,27 @@ internal class NativeFuturesCampaignCoordinator(
                         intent.put("campaign_status", "CLOSED_OR_STOPPED")
                             .put("closed_observed_at_ms", nowMs)
                     }
-                    // Commit terminal campaign ownership before the first network
-                    // cleanup call. If the process dies or cancellation is ambiguous,
-                    // recovery will never revive this old campaign as a live one.
-                    saveIntents(persisted)
-                    // A stop-triggered or manually closed position must not leave a
-                    // closePosition algo armed to affect a future campaign on this symbol.
+                    // A closed historical campaign with NO remembered native STOP
+                    // cannot trigger exchange cleanup. It must not rewrite the
+                    // entire SQLite intent journal for every old row (quadratic
+                    // serialized I/O and observer work). The final commit below
+                    // persists benign migrations/metadata in one batch.
+                    //
+                    // Preserve the strict write-before-network rule for every
+                    // newly finalized owner and any owner with a known STOP ID.
                     val tx = intent.optJSONObject("native_stop_replacement")
                     val knownProtectionIds = listOf(
                         intent.optString("protection_client_id"), intent.optString("previous_protection_client_id"),
                         tx?.optString("old_id").orEmpty(), tx?.optString("new_id").orEmpty(),
                         tx?.optString("bridge_id").orEmpty()
                     ).filter { it.isNotBlank() }.toSet()
+                    if (status != "CLOSED_OR_STOPPED" || knownProtectionIds.isNotEmpty()) {
+                        // Crash/ambiguous cancellation must never resurrect an
+                        // owner; write terminal state BEFORE any signed cleanup.
+                        saveIntents(persisted)
+                    }
+                    // A stop-triggered or manually closed position must not leave a
+                    // closePosition algo armed to affect a future campaign on this symbol.
                     if (knownProtectionIds.isNotEmpty()) {
                         val algos = adapter.openAlgoOrders(symbol)
                         for (j in 0 until algos.length()) {

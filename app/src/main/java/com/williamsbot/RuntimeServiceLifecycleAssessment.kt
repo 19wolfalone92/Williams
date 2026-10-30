@@ -60,6 +60,13 @@ internal object RuntimeServiceLifecycleAssessment {
             .put("service_autostart_failure_count",eventCounts["SERVICE_AUTOSTART_FAILED"] ?: 0)
             .put("worker_heartbeat_stale_count",eventCounts["WORKER_HEARTBEAT_STALE"] ?: 0)
             .put("worker_heartbeat_recovered_count",eventCounts["WORKER_HEARTBEAT_RECOVERED"] ?: 0)
+            .put("worker_heartbeat_lost_count",eventCounts["WORKER_HEARTBEAT_LOST"] ?: 0)
+            .put("stale_worker_interrupt_requested_count",
+                eventCounts["STALE_WORKER_INTERRUPT_REQUESTED"] ?: 0)
+            .put("stale_worker_recovery_deferred_count",
+                eventCounts["STALE_WORKER_RECOVERY_DEFERRED"] ?: 0)
+            .put("stale_worker_recovery_not_ready_count",
+                eventCounts["STALE_WORKER_RECOVERY_NOT_READY"] ?: 0)
             .put("observed_process_exit_count",observedExits)
             .put("abnormal_process_exit_count",abnormal)
             .put("exit_followed_by_foreground_creation_count",exitThenForegroundCreated)

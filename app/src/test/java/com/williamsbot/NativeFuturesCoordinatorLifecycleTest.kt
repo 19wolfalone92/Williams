@@ -58,6 +58,38 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertFalse(signedFuturesReconciliationFresh(result.getLong("exchange_snapshot_started_at_ms"), now))
     }
 
+    @Test fun archivedFlatOwnersWithoutStopIdsDoNotCauseQuadraticJournalCommits() {
+        val journal = Journal()
+        val archived = JSONArray()
+        repeat(80) { n ->
+            archived.put(JSONObject()
+                .put("symbol", "BTCUSDT")
+                .put("direction", "LONG")
+                .put("intent_role", "ENTRY")
+                .put("client_id", "W2H_HISTORICAL_$n")
+                .put("order_status", "CANCELED")
+                .put("exchange_status", if (n == 0) "CLOSED_OR_STOPPED" else "CANCELED")
+                // The first record also exercises legacy status migration.
+                .apply { if (n != 0) put("campaign_status", "CLOSED_OR_STOPPED") })
+        }
+        journal.writeState("futures_campaign_intents_v2", archived.toString())
+        val before = journal.intentsWriteCount
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
+        val after = JSONArray(journal.readState("futures_campaign_intents_v2"))
+        assertEquals(80, after.length())
+        // One final durable batch commit preserves legacy migrations, but
+        // must not rewrite the entire ledger for every already-flat owner.
+        assertTrue("Archived owners caused redundant full-journal writes: " +
+            (journal.intentsWriteCount - before),
+            journal.intentsWriteCount - before <= 8)
+        assertEquals("CLOSED_OR_STOPPED", after.getJSONObject(0).getString("campaign_status"))
+        assertFalse(exchange.requests.any { it.method != "GET" })
+        assertTrue(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
     @Test fun terminalBnbExitIsSeparatedWithoutChangingLedgerOrCallingBinance() {
         val journal = Journal()
         val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")
@@ -86,11 +118,13 @@ class NativeFuturesCoordinatorLifecycleTest {
         private val values = mutableMapOf<String, String>()
         var rejectWrites = false
         var rejectDecisionWrites = false
+        var intentsWriteCount = 0
         var afterWrite: ((String, String) -> Unit)? = null
         @Synchronized override fun readState(key: String): String? = values[key]
         @Synchronized override fun writeState(key: String, value: String): Boolean {
             if (rejectWrites || rejectDecisionWrites && key.startsWith("decision_execution_")) return false
             values[key] = value
+            if (key == "futures_campaign_intents_v2") intentsWriteCount++
             afterWrite?.invoke(key, value)
             return true
         }
