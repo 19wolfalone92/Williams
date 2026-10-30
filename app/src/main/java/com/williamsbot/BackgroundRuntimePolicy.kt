@@ -21,6 +21,22 @@ internal object BackgroundRuntimePolicy {
             snapshot.lastWorkerLoopElapsedMs>0L &&
             now>=snapshot.lastWorkerLoopElapsedMs &&
             now-snapshot.lastWorkerLoopElapsedMs>=MONITOR_STALE_MS
+    /**
+     * Cooperative recovery is ONLY permitted for a truly stale, still-alive
+     * monitoring thread when the opt-in remains enabled. Never interrupt a
+     * Binance mutation, signed reconciliation or position-management pass.
+     * A second worker is never started here; the old thread must EXIT first.
+     */
+    fun mayInterruptStaleWorker(
+        snapshot:BackgroundRuntimeSnapshot, now:Long,
+        mutationInFlight:Boolean, reconciliationInFlight:Boolean,
+        managementInFlight:Boolean, signalledForGeneration:Boolean
+    ):Boolean =
+        snapshot.autoRunRequested &&
+            monitorStale(snapshot,now) &&
+            !mutationInFlight && !reconciliationInFlight &&
+            !managementInFlight && !signalledForGeneration
+
     // Nonblocking cold-start snapshots cannot read encrypted opt-in until
     // the service's lifecycle worker initializes the secure runtime.
     // Once it does, a claimed successful auto-start must have a LIVE worker.
