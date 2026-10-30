@@ -41,7 +41,7 @@ internal fun williamsWaveInterpretation(hierarchy:JSONObject):JSONObject {
             val kind=if((i%2==0)==(direction=="UP")) "LOW" else "HIGH"
             if(listOf("extreme_at","known_at","price").any { !number(a.opt(it)) } ||
                 a.optDouble("price",Double.NaN)<=0.0 || t<0L || a.optString("kind")!=kind ||
-                known<t+duration || known>asOf || i>0 && t<=anchors[i-1].optLong("extreme_at")) return false
+                known<t+3*duration || known>asOf || i>0 && t<=anchors[i-1].optLong("extreme_at")) return false
         }
         val low=s.optDouble("leg_low",Double.NaN);val high=s.optDouble("leg_high",Double.NaN)
         return listOf("leg_low","leg_high","invalidation").all { number(s.opt(it)) && s.optDouble(it)>0.0 } &&

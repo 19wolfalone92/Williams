@@ -67,7 +67,7 @@ This source router does not certify whole-book compliance.
 TC2 English PDF pages: 139-152 WM1; 154-162 WM2; 165-173 WM3; 175-186 campaigns,
 allocation and exits. Page numbers differ in the 224-page Russian registry source.
 
-## Separate observation profiles
+## Independent source profiles
 
 - NTD_FIVE_DIMENSIONS: first external fractal, AO Saucer/Zero Cross/Twin Peaks,
   AC, Zone and Balance Line keep their own admission and management rules.
@@ -78,8 +78,85 @@ allocation and exits. Page numbers differ in the 224-page Russian registry sourc
 - TC1: fractal start/signal/leverage, tick-volume/MFI and wave/psychological material
   is not a completed independent live profile. Base-asset volume is a labelled proxy.
 
-NTD and Course remain OBSERVE for new exposure. Selected passing fixtures do not
-permit enabling an unverified live strategy.
+Since 4.60, TC2 and NTD have independent execution paths. An NTD cycle starts
+only on a freshly revalidated external fractal, or an authenticated profitable
+closed NTD cycle may authorize a single reentry. Other dimensions add only to
+the same protected owner. Legacy NTD records without cycle evidence remain
+protected without new additions. New risk, exchange fills, monotone protection
+and duplicate prevention are independent gates, not signal votes.
+
+NTD zone events are bounded MARKET orders within 90 seconds of the H1 close;
+0.15% deviation and adverse quote bounds are explicit project limits. All
+additions require a profitable owned position. Teeth/Lips exits use a close
+AFTER entry; five-zone trailing persists. Book exits are revalidated at the
+exchange door. An opposite-signal exit also retains the user's positive
+profit-after-cost-reserve constraint. D1/H4 do not replace NTD's own Alligator. Unhit AO formations survive later
+same-colour candles within the explicit project age window; opposite/unknown
+colour or an observed breakout cancels them permanently. Optional blue-light
+price reanchoring is not implied by preserving the original level.
+
+Since 4.61, Course price-location observations distinguish illustrative contract
+stages from active wave labels: W1/W3 retracements use 50-62%, W5 uses 38-50%
+of W3, and the 110% W3 extension is measured from W2. Numerical zones expose
+their still-required source evidence; they cannot authorize new exposure.
+The 3/1/6/10/3/(6 or 8)/0 example uses contract units, not risk weights.
+Automatic Course W2/W4 reductions no longer accept a wave label alone. A
+confirmed initial unit, pinned H1 origin, unique matching contained terminal
+five-leg count, causal t+2 pivots, four terminal proxy signs and an end after
+entry are required. W3 reduction also recomputes its stronger 5/34 peak from
+contiguous real H1 bars. No particular junior timeframe is mandatory.
+The exact reduction and a positive mark after the project cost reserve are
+rechecked before any cancellation and before POST; missing or changing proof
+keeps exchange protection. Existing submitted reductions still reconcile by
+their client id. These are numerical/proxy guards, not independent wave truth.
+
+Since 4.62, every automatic full Course exit uses a closed whitelist and fresh
+source verification before mutations and before POST. A generic correction
+range break is advisory, not a Course market-exit permission. Full W5/C
+terminal candidates require the pinned original count and a uniquely matched
+contained five-leg terminal subdivision, all causal and after entry. The four
+terminal volume/oscillator flags remain explicitly provisional/proxy evidence.
+Course PDF80-84 failed-count rules distinguish a young W3 reaching W1's length
+and retreating through W1 before 110% expansion, W3-of-W5 retreating through
+W1-of-W5, and the original motive extreme invalidating its separate correction.
+Current CONTRACT_PRICE proves these source boundaries; MARK remains risk and
+profit evidence. A current invalidation of an otherwise valid historical count
+does not erase its earlier confirmed pivots. Failure exits do not expire just
+because the old peak is more than five hours old; terminal proposal age is
+still an explicit project policy. Opposite/terminal profit-taking retains the
+positive mark after the project cost reserve.
+
+Only an exact signed FILLED exit, signed FLAT and clean old orders publish a
+durable Course motive-to-correction handoff. Partial exits, unknown replies
+without filled-order proof, and orphan orders cannot grant it. Recovery keeps
+the original Course close reason and can publish the same handoff once; it
+does not repeat the financial POST. Any later corrective owner must consume
+that handoff durably and still pass new source/risk/precision/protection gates.
+Publishing the handoff does not enable Course entries or place a reverse order.
+
+Course remains OBSERVE for new exposure. Transport-model tests do not certify
+all book figures, subjective chart angles or physical Android/Futures Demo
+acceptance; whole-book certification remains false.
+
+Since 4.63, established Course contract units, targets and deltas use exact
+decimal arithmetic on the common LOT_SIZE/MARKET_LOT_SIZE grid. An initial
+three-unit allocation may be rounded DOWN as a whole before submission; after
+its complete signed fill the unit cannot be resized. A risk or margin cap
+rejects an entire later tranche instead of silently clipping five units into
+a smaller order. W3's optional expansion, W5's six/eight totals and the separate
+corrective 3/1/4/0 sequence retain their own sequential quantities.
+
+Stage authority requires an attributed, fully FILLED matching-engine order,
+exact submitted/executed quantity, exact remaining one-way position and verified
+protection. Native conditional parent/actual-child association is checked before
+the receipt is accepted. Python recovery rereads the original signed identity
+if receipt observation failed. An ACK, cancelled partial fill or target-shaped
+position cannot mint an initial unit or complete an addition on restart. Real
+partial exposure remains protected; it cannot authorize the next book stage.
+New Course entries cannot borrow a late active H1 W3/W5 label as the illustrated
+first-wave genesis. Complete independent parent/child genesis remains open,
+and Course new-risk execution remains OBSERVE. Exact quantity tests are not
+independent wave truth or physical Futures Demo acceptance.
 
 ## Common evidence and execution boundaries
 

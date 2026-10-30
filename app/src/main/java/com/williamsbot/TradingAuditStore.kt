@@ -8,6 +8,95 @@ import org.json.JSONObject
 import org.json.JSONArray
 
 /**
+ * Full, machine-readable TC2 decision event. Keep it OUTSIDE the bounded
+ * COCKPIT_* projection: lossless forensic evidence must survive UI rotation.
+ * A pre-mutation receipt is mandatory for discretionary STOP tightening.
+ */
+internal fun stopTrailDecisionAuditEvent(
+    symbol: String, direction: String, campaignId: String, phase: String,
+    evidence: JSONObject, exchangeOutcome: JSONObject? = null,
+    recordedAtMs: Long = System.currentTimeMillis()
+): JSONObject {
+    require(symbol.isNotBlank() && campaignId.isNotBlank() && recordedAtMs > 0L)
+    require(direction == "LONG" || direction == "SHORT")
+    require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
+        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED"))
+    require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
+    require(evidence.optString("direction") == direction)
+    if (phase == "REVIEW_DEFERRED")
+        require(evidence.optString("decision") == "DEFER" &&
+            evidence.optString("blocker").isNotBlank()) {
+            "Deferred audit must preserve its actual refusal reason"
+        }
+    if (phase == "PROPOSED_BEFORE_MUTATION" || phase == "EXCHANGE_RESPONSE_OK" ||
+        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED") {
+        require(evidence.optString("decision") == "PROPOSE_TIGHTEN_ONLY" &&
+            evidence.optString("proposed_binance_protection_client_id").isNotBlank()) {
+            "Stop mutation audit requires a traceable actual proposal and client ID"
+        }
+    }
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED") {
+        require(exchangeOutcome != null && exchangeOutcome.optBoolean("ok") ==
+            (phase == "EXCHANGE_RESPONSE_OK")) {
+            "Exchange status must agree with the signed coordinator response"
+        }
+    }
+    if (phase == "EXCHANGE_RESPONSE_OK") {
+        val proposedId=evidence.getString("proposed_binance_protection_client_id")
+        // Compare exact decimal strings submitted to Binance, not unrounded
+        // IEEE-754 proposal doubles (e.g. DOGE 0.07687000000000001).
+        val proposedStop=evidence.optString("submitted_stop_price")
+            .ifBlank { evidence.getDouble("candidate_stop").toString() }.toBigDecimal()
+        val stop=exchangeOutcome?.opt("stop")
+        val observedPrice=when(stop) {
+            is JSONObject -> stop.optString("triggerPrice").ifBlank { stop.optString("stopPrice") }
+            is String, is Number -> stop.toString()
+            else -> ""
+        }.toBigDecimalOrNull()
+        val observedId=when(stop) {
+            is JSONObject -> stop.optString("clientAlgoId")
+            else -> exchangeOutcome?.optString("protection_client_id").orEmpty()
+        }
+        require(observedPrice!=null && observedPrice.compareTo(proposedStop)==0 &&
+            observedId==proposedId && (stop !is JSONObject ||
+                stop.optString("algoStatus",stop.optString("status")) in setOf("NEW","WORKING","ACCEPTED"))) {
+            "An accepted receipt must reference the exact confirmed Binance stop ID and trigger"
+        }
+    }
+    if (phase == "EXCHANGE_EXCEPTION_UNVERIFIED")
+        require(exchangeOutcome?.optBoolean("retry_authorized",true)==false) {
+            "Unknown stop exchange outcome is never authorization to retry"
+        }
+    return JSONObject().put("e", "WILLIAMS_STOP_TRAIL_DECISION_V1")
+        .put("E", recordedAtMs).put("schema", "WILLIAMS_STOP_TRAIL_DECISION_V1")
+        .put("symbol", symbol).put("direction", direction)
+        .put("campaign_id", campaignId).put("phase", phase)
+        .put("source_revision", BuildConfig.SOURCE_REVISION)
+        .put("app_version", BuildConfig.VERSION_NAME)
+        .put("evidence_untruncated", true)
+        .put("decision_evidence", JSONObject(evidence.toString()))
+        .put("exchange_outcome", exchangeOutcome?.let { JSONObject(it.toString()) } ?: JSONObject.NULL)
+}
+
+/** Repeated deferrals on the same closed H1 candle are one market decision.
+ * A change in reason, candidate or established stop starts a new observation.
+ * Never deduplicate attempted/confirmed Binance mutations. */
+internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject):String {
+    val lastH1=evidence.optJSONArray("h1_last_twelve_closed")
+    val lastH4=evidence.optJSONArray("h4_last_twelve_closed")
+    fun lastClose(rows:JSONArray?):Long =
+        rows?.optJSONObject((rows.length()-1).coerceAtLeast(0))
+            ?.optLong("open_time_ms",0L) ?: 0L
+    val h1At=lastClose(lastH1)
+    val noClosedBarsBucket=if(h1At>0L) 0L else evidence.optLong("as_of_ms") / 3_600_000L
+    return listOf(campaignId,evidence.optString("direction"),
+        evidence.optString("blocker"),evidence.optString("source_rule"),
+        evidence.optString("old_stop"),evidence.optString("candidate_stop"),
+        h1At.toString(),lastClose(lastH4).toString(),noClosedBarsBucket.toString())
+        .joinToString("|")
+}
+
+/**
  * Persistent exchange/order/execution/state audit trail.
  *
  * The raw event JSON is kept so a later reconciliation can reconstruct what
@@ -17,6 +106,7 @@ class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
+    private val lastDeferredStopTrailFingerprint = linkedMapOf<String, String>()
     // Reduce repeating successful reconciliation messages in a bounded UI
     // event window. Failures and recovery transitions are NEVER compacted.
     // All exchange/order/position snapshots remain durable in their own stores.
@@ -62,6 +152,72 @@ class TradingAuditStore(context: Context) :
             .put("detail", safeDiagnosticText(detail))
         recordRawEvent(event, requireDurable = true)
         writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+    }
+
+    /** The events table retains every non-COCKPIT decision, with no 1600-char
+     * truncation, no bounded UI eviction and no silent failed inserts. */
+    @Synchronized
+    fun recordStopTrailDecision(
+        symbol: String, direction: String, campaignId: String, phase: String,
+        evidence: JSONObject, exchangeOutcome: JSONObject? = null
+    ): Long {
+        // Guard against constant background scans exhausting phone storage.
+        // The FIRST refusal and each new closed H1 / reason are still persisted.
+        val deferredKey=if(phase=="REVIEW_DEFERRED") "$symbol|$campaignId|$direction" else null
+        val deferredFingerprint=deferredKey?.let {
+            stopTrailDeferredFingerprint(campaignId,evidence)
+        }
+        if(deferredKey!=null && lastDeferredStopTrailFingerprint[deferredKey]==deferredFingerprint)
+            return 0L // Explicitly coalesced, never a fake successful insert ID.
+        val event = stopTrailDecisionAuditEvent(
+            symbol, direction, campaignId, phase, evidence, exchangeOutcome)
+        val row = ContentValues().apply {
+            put("event_type", event.getString("e"))
+            put("event_time", event.getLong("E"))
+            put("received_at", System.currentTimeMillis())
+            put("raw_json", event.toString())
+        }
+        val eventId=writableDatabase.insertOrThrow("events", null, row)
+        if(deferredKey!=null && deferredFingerprint!=null) {
+            if(lastDeferredStopTrailFingerprint.size>=64 &&
+                !lastDeferredStopTrailFingerprint.containsKey(deferredKey))
+                lastDeferredStopTrailFingerprint.clear()
+            lastDeferredStopTrailFingerprint[deferredKey]=deferredFingerprint
+        }
+        return eventId
+    }
+
+    /** Read a campaign's full chronological decision chain from durable SQLite,
+     * not the capped recentCockpitEvents projection. */
+    @Synchronized
+    fun recentStopTrailDecisions(campaignId: String, limit: Int = 100): JSONArray {
+        require(campaignId.isNotBlank())
+        val results = JSONArray()
+        readableDatabase.query("events", arrayOf("id", "raw_json"),
+            "event_type = ?", arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1"),
+            null, null, "id DESC").use { cursor ->
+            while (cursor.moveToNext() && results.length() < limit.coerceIn(1, 2000)) {
+                val row = JSONObject(cursor.getString(1))
+                if (row.optString("campaign_id") == campaignId)
+                    results.put(row.put("audit_event_id", cursor.getLong(0)))
+            }
+        }
+        return results
+    }
+
+    /** Export a bounded number of WHOLE recent events; SQLite itself remains
+     * authoritative and is not compacted by the diagnostics export limit. */
+    @Synchronized
+    fun recentStopTrailDecisionEvents(limit: Int = 300): JSONArray {
+        val result = JSONArray()
+        readableDatabase.query("events", arrayOf("id", "raw_json"),
+            "event_type = ?", arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1"),
+            null, null, "id DESC", limit.coerceIn(1, 2000).toString()).use { cursor ->
+            while (cursor.moveToNext())
+                result.put(JSONObject(cursor.getString(1))
+                    .put("audit_event_id", cursor.getLong(0)))
+        }
+        return result
     }
 
     @Synchronized

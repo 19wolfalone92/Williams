@@ -1,32 +1,42 @@
 """Release execution policy, separate from book signal detection.
 
-TC2 owns new risk. NTD/Course are independent observations, never votes or
-order intents. Previously filled campaigns retain their original exit policy.
+Only TC2 may create NEW exchange exposure. NTD and Course remain independent
+read-only signal observers. Previously filled NTD/Course campaigns retain
+their original source and source-authenticated risk-reducing management:
+the new-exposure restriction must never remove protective stops or prevent
+authorized risk reduction.
 """
 from williams_edition_rules import TC2, NTD, COURSE
+from williams_course_exit import BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS
 
 EXECUTION_PROFILE = TC2
+EXECUTION_PROFILES = (TC2,)
+# Existing NTD-owned campaigns still require source-specific price, profit and
+# protective-stop checks even while NEW NTD orders are never admitted.
+# Do not use this tuple for new-risk authorization.
+OWNED_LIFECYCLE_PROFILES = (TC2, NTD)
 OBSERVER_PROFILES = (NTD, COURSE)
-EXECUTION_POLICY = "TC2_LIVE_EDITIONS_OBSERVE_V1"
+EXECUTION_POLICY = "TC2_ONLY_NEW_EXPOSURE_V3"
 
 
 def new_exposure_blocker(source):
-    return None if source == EXECUTION_PROFILE else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
+    return None if source in EXECUTION_PROFILES else "WILLIAMS_SOURCE_OBSERVATION_ONLY"
 
 
 def execution_policy_snapshot():
     return {"mode": EXECUTION_POLICY, "execution_profile": EXECUTION_PROFILE,
+            "execution_profiles": list(EXECUTION_PROFILES),
             "observer_profiles": list(OBSERVER_PROFILES), "one_campaign_per_symbol": True,
-            "legacy_management": "PINNED_SOURCE_NO_NEW_EXPOSURE"}
+            "legacy_management": "PINNED_SOURCE_VALIDATED_CYCLE_REQUIRED_FOR_ADDITIONS"}
 
 
 def structural_fractal(signal_type, source=TC2):
     family = getattr(signal_type, "value", signal_type)
-    return source == TC2 and str(family).removeprefix("SHORT_").removeprefix("LONG_") == "FRACTAL"
+    return source in {TC2, NTD} and str(family).removeprefix("SHORT_").removeprefix("LONG_") == "FRACTAL"
 
 
 def h1_signal_expiry(signal_at, signal_type, source=TC2):
-    """TC2 ch11 PDF149: unbroken fractal, until replacement, not a 5h TTL.
+    """TC2 PDF149 / NTD PDF43: fractal until trigger or replacement, no age TTL.
 
 Zero means structural validity, NOT permission to use stale market data.
 Other families retain the explicit project age policy pending source proof.
@@ -78,7 +88,7 @@ def tc2_opposite_exit_profit_blocker(side, entry_price, current_mark,
             else "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE")
 
 
-def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, *, live_mark=None):
+def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, *, live_contract=None):
     """Final reason+evidence fence, prior to any mutation/entry cancellation.
 
     Trading Chaos 2 ch11-12: only a causally triggered opposite Wise-Man
@@ -92,7 +102,7 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, 
         opened = int(proof.get("opened_at_ms", 0))
         known = int((proof.get("event") or {}).get("known_at_ms", 0))
         trigger = float(proof.get("trigger", 0))
-        mark = float(proof.get("mark", 0))
+        contract = float(proof.get("contract_price", 0))
         checked_now = int(now)
         direction = str(proof.get("direction", ""))
         signal_id = str(proof.get("signal_id", ""))
@@ -100,7 +110,8 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, 
         return "TC2_EXIT_BOOK_EVIDENCE_MALFORMED"
     from math import isfinite
     last = (tags or {}).get("last_opposition_evidence") or {}
-    if (proof.get("reason") != reason
+    if (proof.get("trigger_price_basis") != "CONTRACT_PRICE"
+            or proof.get("reason") != reason
             or proof.get("symbol") != symbol
             or last.get("signal_id") != signal_id
             or (last.get("event") or {}) != (proof.get("event") or {})
@@ -110,24 +121,21 @@ def tc2_opposite_exit_evidence_blocker(tags, reason, now, current_side, symbol, 
             or observed < known or checked_now < observed
             or checked_now-observed > 120_000
             or not isfinite(trigger) or trigger <= 0
-            or not isfinite(mark) or mark <= 0
-            or not ((current_side == "BUY" and direction == "SHORT" and mark <= trigger)
-                or (current_side == "SELL" and direction == "LONG" and mark >= trigger))):
+            or not isfinite(contract) or contract <= 0
+            or not ((current_side == "BUY" and direction == "SHORT" and contract <= trigger)
+                or (current_side == "SELL" and direction == "LONG" and contract >= trigger))):
         return "TC2_EXIT_BOOK_OPPOSITE_TRIGGER_UNVERIFIED"
-    # Trading signals are detected from CONTRACT candle extrema, while the
-    # broker's protective STOP_MARKET is MARK_PRICE-based. The initial signal
-    # mark is only an observation. Just before admitting a reduce-only exit,
-    # require a fresh Binance Futures MARK still beyond the opposite trigger.
-    # A failed/malformed mark read is UNKNOWN, never authority to flatten.
+    # H1 candles and book breakouts share CONTRACT_PRICE. MARK_PRICE belongs
+    # to protective stops and the separate profitability/risk check.
     try:
-        actual_mark = float(live_mark) if live_mark is not None else mark
+        actual_contract = float(live_contract) if live_contract is not None else contract
     except (TypeError, ValueError, OverflowError):
-        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
-    if not isfinite(actual_mark) or actual_mark <= 0:
-        return "TC2_EXIT_LIVE_MARK_UNVERIFIED"
-    if not ((current_side == "BUY" and direction == "SHORT" and actual_mark <= trigger)
-            or (current_side == "SELL" and direction == "LONG" and actual_mark >= trigger)):
-        return "TC2_EXIT_LIVE_MARK_NO_LONGER_TRIGGERED"
+        return "TC2_EXIT_LIVE_CONTRACT_UNVERIFIED"
+    if not isfinite(actual_contract) or actual_contract <= 0:
+        return "TC2_EXIT_LIVE_CONTRACT_UNVERIFIED"
+    if not ((current_side == "BUY" and direction == "SHORT" and actual_contract <= trigger)
+            or (current_side == "SELL" and direction == "LONG" and actual_contract >= trigger)):
+        return "TC2_EXIT_LIVE_CONTRACT_NO_LONGER_TRIGGERED"
     return None
 
 
@@ -144,4 +152,12 @@ def market_exit_blocker(source, reason, *, risk_emergency=False):
             "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
             "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
         } else "TC2_EXIT_REQUIRES_BOOK_OPPOSITE_TRIGGER")
-    return None if source in (NTD, COURSE) else "EXIT_STRATEGY_OWNER_UNVERIFIED"
+    if source == NTD:
+        return None if reason in {
+            "TEETH_CLOSE_EXIT", "LIPS_CLOSE_EXIT", "NTD_FIVE_ZONE_PROTECTION_CROSSED",
+            "NTD_OPPOSITE_SIGNAL_TRIGGERED", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+            "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION",
+        } else "NTD_EXIT_REQUIRES_OWN_BOOK_RULE"
+    if source == COURSE:
+        return None if reason in COURSE_BOOK_EXIT_REASONS else "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
+    return "EXIT_STRATEGY_OWNER_UNVERIFIED"

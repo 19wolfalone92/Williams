@@ -18,12 +18,38 @@ import java.util.concurrent.TimeUnit
 
 class BinanceUserDataStreamTest {
     private class TestSocket(private val original: Request) : WebSocket {
+        @Volatile var cancelled = false
         override fun request(): Request = original
         override fun queueSize(): Long = 0L
         override fun send(text: String): Boolean = true
         override fun send(bytes: ByteString): Boolean = true
         override fun close(code: Int, reason: String?): Boolean = true
-        override fun cancel() = Unit
+        override fun cancel() { cancelled = true }
+    }
+
+
+    @Test
+    fun failingPrivateListenKeyPreservesRealNetworkErrorInReconnectingHealth() {
+        val disconnects = LinkedBlockingQueue<String>()
+        val http = OkHttpClient.Builder().addInterceptor {
+            throw java.io.IOException("demo-fapi private transport unreachable")
+        }.build()
+        val stream = BinanceUserDataStream(
+            http, "wss://demo-fstream.binance.com/private/ws", { "test-key" },
+            { connected, reason -> if (!connected && reason != null) disconnects.put(reason) },
+            { }
+        )
+        try {
+            stream.start()
+            val initialFailure = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
+            val reconnectStatus = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
+            assertTrue(initialFailure.contains("demo-fapi private transport unreachable"))
+            assertTrue(reconnectStatus.contains("demo-fapi private transport unreachable"))
+            assertFalse(reconnectStatus == "reconnecting")
+            assertFalse(stream.isConnected())
+        } finally {
+            stream.stop()
+        }
     }
 
     @Test
@@ -49,6 +75,38 @@ class BinanceUserDataStreamTest {
             assertFalse(stream.isConnected())
             assertFalse(connections.any { it })
             assertTrue(events.isEmpty())
+        } finally {
+            stream.stop()
+        }
+    }
+
+    @Test
+    fun closingHandshakeWithoutOnClosedStillReconnectsWithNewListenKey() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"listenKey":"test"}""".toResponseBody()).build()
+        }.build()
+        val stream = BinanceUserDataStream(
+            http, "wss://demo-fstream.binance.com/private/ws", { "test-key" },
+            { _, _ -> }, { },
+            { request, listener -> TestSocket(request).also { sessions.put(it to listener) } }
+        )
+        try {
+            stream.start()
+            val (oldSocket, oldListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            oldListener.onOpen(oldSocket, socketResponse(oldSocket.request()))
+            assertTrue(stream.isConnected())
+            // Mobile peer initiated a close, but transport never delivers onClosed.
+            oldListener.onClosing(oldSocket, 1001, "server going away")
+            assertFalse(stream.isConnected())
+            val (newSocket, newListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            newListener.onOpen(newSocket, socketResponse(newSocket.request()))
+            assertTrue(stream.isConnected())
+            // The old WebSocket cannot reset a later session.
+            oldListener.onClosed(oldSocket, 1001, "late old session close")
+            assertTrue(stream.isConnected())
         } finally {
             stream.stop()
         }
@@ -107,4 +165,101 @@ class BinanceUserDataStreamTest {
         assertTrue(FUTURES_USER_STREAM_EVENT_FILTER.contains("ACCOUNT_UPDATE/ALGO_UPDATE"))
         assertFalse(FUTURES_USER_STREAM_EVENT_FILTER.contains(","))
     }
+
+    @Test fun transientCredentialReadFailureCannotKillTheOnlyPrivateStreamWorker() {
+        val attempts = java.util.concurrent.atomic.AtomicInteger()
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val http = listenKeyClient()
+        val stream = BinanceUserDataStream(http, "wss://demo-fstream.binance.com/private/ws",
+            { if (attempts.incrementAndGet() == 1) error("Keystore temporarily unavailable") else "key" },
+            { _, _ -> }, { },
+            { r, listener -> TestSocket(r).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (socket, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(socket, socketResponse(socket.request()))
+            assertTrue(stream.isConnected())
+            assertTrue(attempts.get() >= 2)
+        } finally { stream.stop() }
+    }
+
+    @Test fun malformedPrivateMessageInvalidatesSessionInsteadOfSilentlyDroppingAFill() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val events = Collections.synchronizedList(mutableListOf<JSONObject>())
+        val stream = BinanceUserDataStream(listenKeyClient(), "wss://demo-fstream.binance.com/private/ws",
+            { "key" }, { _, _ -> }, { events += it },
+            { r, listener -> TestSocket(r).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(old, socketResponse(old.request()))
+            listener.onMessage(old, "{broken private payload")
+            assertFalse(stream.isConnected())
+            assertTrue(old.cancelled)
+            val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            nextListener.onOpen(next, socketResponse(next.request()))
+            listener.onMessage(old, """{"e":"ORDER_TRADE_UPDATE"}""")
+            assertTrue(stream.isConnected())
+            assertTrue(events.isEmpty())
+        } finally { stream.stop() }
+    }
+
+    @Test fun missingHandshakeCallbackIsBoundedAndObsoleteSocketIsCancelled() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val stream = BinanceUserDataStream(listenKeyClient(), "wss://demo-fstream.binance.com/private/ws",
+            { "key" }, { _, _ -> }, { },
+            { r, listener -> TestSocket(r).also { sessions.put(it to listener) } },
+            handshakeTimeoutMs = 100L)
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            // No onOpen/onFailure/onClosed: the old implementation waited 50 minutes.
+            val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            assertTrue(old.cancelled)
+            nextListener.onOpen(next, socketResponse(next.request()))
+            listener.onOpen(old, socketResponse(old.request()))
+            assertTrue(stream.isConnected())
+        } finally { stream.stop() }
+    }
+
+    @Test fun stoppingCancelsBlockedListenKeyAndQueuedStartCreatesOneReplacementWorker() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val cancelled = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val http = OkHttpClient.Builder().callTimeout(0L, TimeUnit.MILLISECONDS)
+            .addInterceptor { chain ->
+                org.junit.Assert.assertEquals(TimeUnit.SECONDS.toNanos(25L), chain.call().timeout().timeoutNanos())
+                if (calls.incrementAndGet() == 1) {
+                    entered.countDown()
+                    while (!chain.call().isCanceled()) {
+                        try { Thread.sleep(5L) } catch (_: InterruptedException) { }
+                    }
+                    cancelled.countDown()
+                    throw java.io.IOException("cancelled listen-key transport")
+                }
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("OK").body("""{"listenKey":"replacement"}""".toResponseBody()).build()
+            }.build()
+        val stream = BinanceUserDataStream(http, "wss://demo-fstream.binance.com/private/ws",
+            { "key" }, { _, _ -> }, { },
+            { r, listener -> TestSocket(r).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            stream.stop()
+            stream.start()
+            assertTrue(cancelled.await(5, TimeUnit.SECONDS))
+            val (next, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+            assertTrue(sessions.isEmpty())
+            org.junit.Assert.assertEquals(2, calls.get())
+        } finally { stream.stop() }
+    }
+
+    private fun listenKeyClient(): OkHttpClient = OkHttpClient.Builder().addInterceptor { chain ->
+        Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+            .code(200).message("OK").body("""{"listenKey":"test"}""".toResponseBody()).build()
+    }.build()
 }

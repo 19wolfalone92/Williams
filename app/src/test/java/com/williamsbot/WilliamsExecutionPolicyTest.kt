@@ -7,11 +7,40 @@ import org.junit.Test
 
 class WilliamsExecutionPolicyTest {
     private val h=3_600_000L
-    @Test fun onlyTc2MayCreateNewRisk() {
+    @Test fun legacyFixedTc2SelectionMigratesWhileExplicitNewPolicySelectionsSurviveRestart() {
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsTc2Profile,null))
+        assertEquals(williamsUnifiedProfile,williamsRestoredExecutionSelection(williamsCourseProfile,WILLIAMS_EXECUTION_POLICY))
+        for(profile in williamsExecutionProfiles+williamsUnifiedProfile)
+            assertEquals(profile,williamsRestoredExecutionSelection(profile,WILLIAMS_EXECUTION_POLICY))
+    }
+    @Test fun tc2AloneOwnsNewRiskAndNtdCourseObserveOnly() {
+        assertEquals(listOf(williamsTc2Profile),williamsExecutionProfiles)
+        assertEquals(listOf(williamsNtdProfile,williamsCourseProfile),williamsObserverProfiles)
+        assertEquals("TC2_ONLY_NEW_EXPOSURE_V3",WILLIAMS_EXECUTION_POLICY)
         assertNull(williamsNewExposureBlocker(williamsTc2Profile))
         for(source in listOf(williamsNtdProfile,williamsCourseProfile,williamsUnifiedProfile,""))
             assertEquals("WILLIAMS_SOURCE_OBSERVATION_ONLY",williamsNewExposureBlocker(source))
+        assertEquals(williamsUnifiedProfile,
+            williamsRestoredExecutionSelection(williamsNtdProfile,"TC2_NTD_OWNED_LIFECYCLES_V2"))
+        assertEquals(williamsUnifiedProfile,
+            williamsRestoredExecutionSelection(williamsNtdProfile,WILLIAMS_EXECUTION_POLICY))
     }
+    @Test fun optionalTc2ExitRequiresProfitAtExecutableBidOrAskNotOnlyMark() {
+        assertNull(williamsOppositeExitBidAskBlocker("LONG",100.0,100.5,100.6))
+        assertNull(williamsOppositeExitBidAskBlocker("SHORT",100.0,99.4,99.5))
+        val noNet="WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK"
+        // A profitable MARK does not prove profitable execution at the spread.
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("LONG",100.0,100.2,100.6))
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("SHORT",100.0,99.4,99.8))
+        assertEquals(noNet,williamsOppositeExitBidAskBlocker("LONG",100.0,100.35,100.5))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("LONG",100.0,101.0,100.0))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("SHORT",100.0,Double.NaN,99.0))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_BID_ASK_UNVERIFIED",
+            williamsOppositeExitBidAskBlocker("UNKNOWN",100.0,101.0,101.1))
+    }
+
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
         val at=480000L*h;val now=at+105*h
         for((direction,type,entry,stop) in listOf(
@@ -22,7 +51,7 @@ class WilliamsExecutionPolicyTest {
                 direction,"f",type,williamsTc2Profile,entry.toDouble(),stop.toDouble(),now))
         }
         assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsTc2Profile,now))
-        assertFalse(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
+        assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }
         assertNull(williamsClosedH1HistoryBlocker(bars,at+45*h+1000))
         assertEquals("H1_SNAPSHOT_STALE",williamsClosedH1HistoryBlocker(bars,at+46*h+1000))
@@ -105,11 +134,11 @@ class WilliamsExecutionPolicyTest {
     }
 
     @Test fun legacyOtherEditionsAreNotGrantedTc2InitialEntryException() {
-        assertEquals(0,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+        assertEquals(1,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
             false,true,false,true))
         assertEquals(0,williamsBookInitialContextRank(williamsCourseProfile,"COURSE_THUMB",
             false,true,false,true))
-        assertEquals(2,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
+        assertEquals(1,williamsBookInitialContextRank(williamsNtdProfile,"FRACTAL",
             false,true,false,true,validatedCorrection=true))
         assertEquals(0,williamsBookInitialContextRank(williamsTc2Profile,"BROKEN_UNKNOWN_SIGNAL",
             false,false,false,false))

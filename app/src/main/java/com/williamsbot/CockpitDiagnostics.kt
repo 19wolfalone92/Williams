@@ -49,6 +49,8 @@ internal object CockpitDiagnostics {
         val unprotected = positions.filter { p ->
             !positionProtectionProven(p, coordinator, now)
         }
+        val protectionRefreshPending = unprotected.isNotEmpty() &&
+            unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
         val unmanaged=positions.filter { p ->
             intents.none { i -> matchesPosition(i,p) && protectionProven(i,now) } &&
                 !operatorManagementProven(p,coordinator,now)
@@ -65,11 +67,19 @@ internal object CockpitDiagnostics {
             baselineReady=!dailyBaselineMissing,
             pendingEntries=pendingCount
         )
+        val unresolvedBookOrders=rows(coordinator.optJSONArray("external_open_orders"))
+            .filter { it.optString("client_id").startsWith("W2H_") }
+        val unresolvedSymbols=unresolvedBookOrders.map { it.optString("symbol") }
+            .filter { it.isNotBlank() }.distinct().joinToString(", ")
         val reason = when {
             !status.optBoolean("running") -> "Движок остановлен"
             status.optBoolean("kill_switch_latched") -> "Аварийная блокировка новых операций"
             dailyBaselineMissing -> "Не подтверждена суточная база риска Binance. " + resetExplanation
             status.optBoolean("paused") -> "Новые входы приостановлены; сопровождение продолжается"
+            unresolvedBookOrders.isNotEmpty() -> "Найдена неподтверждённая Binance H1-заявка" +
+                (if(unresolvedSymbols.isBlank()) "" else " по $unresolvedSymbols") +
+                ". Новые входы заблокированы: проверьте действующие заявки в Binance, " +
+                "не отменяйте стоп открытой позиции. Автоматическая отмена запрещена."
             !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
                 "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
@@ -99,6 +109,7 @@ internal object CockpitDiagnostics {
                 unprotected.isEmpty() && unmanaged.isEmpty())
             .put("positions_snapshot_fresh", snapshotFresh)
             .put("unprotected_positions", JSONArray(unprotected))
+            .put("stop_proof_refresh_in_progress",protectionRefreshPending)
             .put("unmanaged_positions",JSONArray(unmanaged))
             .put("pending_orders", intents.count { it.optString("campaign_status") in
                 setOf("ENTRY_PENDING", "FILL_CONFIRMATION_PENDING", "EXIT_PENDING") })
@@ -110,6 +121,7 @@ internal object CockpitDiagnostics {
             .put("protection_state", when {
                 !snapshotFresh -> "NOT_VERIFIED"
                 positions.isEmpty() -> "NO_OPEN_POSITIONS"
+                unprotected.isNotEmpty() && protectionRefreshPending -> "NOT_VERIFIED"
                 unprotected.isNotEmpty() -> "FAIL"
                 else -> "PASS"
             })
@@ -127,7 +139,9 @@ internal object CockpitDiagnostics {
             intent.optString("protection_client_id_suffix").isNotBlank() &&
             fresh(intent.optLong("last_reconciled_ms"), now, 120_000L)
 
-    private fun matchingProtectionObservation(position:JSONObject, coordinator:JSONObject, now:Long):JSONObject? {
+    private fun matchingProtectionObservation(
+        position:JSONObject, coordinator:JSONObject, now:Long, ttlMs:Long=POSITION_TTL_MS
+    ):JSONObject? {
         val quantity=position.optString("qty",position.optString("positionAmt"))
             .toBigDecimalOrNull()?.abs()?.takeIf { it.signum()>0 } ?: return null
         val stop=position.optString("stop").toBigDecimalOrNull()?.takeIf { it.signum()>0 } ?: return null
@@ -139,9 +153,23 @@ internal object CockpitDiagnostics {
                 o.optString("protection_client_id").isNotBlank() &&
                 o.optString("quantity").toBigDecimalOrNull()?.abs()?.compareTo(quantity)==0 &&
                 o.optString("stop").toBigDecimalOrNull()?.compareTo(stop)==0 &&
-                fresh(o.optLong("observed_at_ms"),now,POSITION_TTL_MS)
+                fresh(o.optLong("observed_at_ms"),now,ttlMs)
         }
     }
+
+    /** A stale *previous* signed STOP seen while REST is actively refreshing is
+     * unknown, not a proven absent stop. No trading or management permission
+     * is granted until strict 15-second independent exchange evidence returns.
+     * A missing/mismatched proof or any stopped reconciliation remains FAIL.
+     */
+    private fun protectionAwaitingExchangeRefresh(
+        position:JSONObject, coordinator:JSONObject, now:Long
+    ):Boolean =
+        coordinator.optBoolean("reconciliation_running") &&
+            coordinator.optString("blocker")=="exchange_reconciliation_in_progress" &&
+            position.optString("stop_verification_status") in
+                setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN") &&
+            matchingProtectionObservation(position,coordinator,now,120_000L)!=null
 
     private fun positionProtectionProven(
         position:JSONObject,coordinator:JSONObject,now:Long
@@ -155,7 +183,8 @@ internal object CockpitDiagnostics {
     private fun operatorManagementProven(position:JSONObject,coordinator:JSONObject,now:Long):Boolean {
         val observation=matchingProtectionObservation(position,coordinator,now) ?: return false
         if(!observation.optBoolean("automatic_trailing_authorized") ||
-            observation.optString("management_mode")!="OPERATOR_APPROVED_STOP_ONLY") return false
+            observation.optString("management_mode") !in
+                setOf("OPERATOR_APPROVED_STOP_ONLY","AUTO_VERIFIED_STOP_ONLY")) return false
         return rows(coordinator.optJSONArray("operator_supervised_positions")).any { r ->
             r.optString("symbol")==position.optString("symbol") &&
                 r.optString("state")=="ACTIVE" &&
@@ -250,12 +279,12 @@ internal object CockpitDiagnostics {
         val signals = candidates.flatMap { rows(it.optJSONArray("campaign_signals")) }
         // The profiles are NOT interchangeable: TC1 Zero Point/stop-and-reverse,
         // NTD dimension sequencing and TC2 Wise Men use different management
-        // contracts. NTD/Course remain observers, not sources of new exposure.
+        // contracts. Course remains an observer, never a source of new exposure.
         val unauthorizedNewExposure = rows(coordinator.optJSONArray("pending_intent_details"))
             .filter { it.optString("role", "ENTRY") in setOf("ENTRY", "ADD_ON") &&
                 it.optString("campaign_status") in setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING") &&
-                it.optString("strategy_profile") != williamsTc2Profile }
-        check("STR-10", "strategy", "Отсутствие новых NTD/Course ордеров", when {
+                !williamsVerifiedNewRiskSource(it.optString("strategy_profile")) }
+        check("STR-10", "strategy", "Запрет ордеров неподтверждённых источников", when {
             unauthorizedNewExposure.isNotEmpty() -> "FAIL"
             coordinator.optJSONArray("pending_intent_details") == null ||
                 coordinator.optString("engine") !in setOf("USD_M_FUTURES_TESTNET", "USD_M_FUTURES") ->
@@ -263,7 +292,7 @@ internal object CockpitDiagnostics {
             else -> "PASS"
         }, "Запрещённых активных новых заявок=${unauthorizedNewExposure.size}; " +
             "подтверждённая область координатора=${coordinator.optString("engine")}; " +
-            "TC2 исполняет, NTD и Course наблюдают; прежние владельцы не меняются.")
+            "Новые входы разрешены только TC2; NTD и Course наблюдают. Уже открытые чужие кампании сохраняют собственное подтверждённое защитное управление.")
         val causalTraces = candidates.flatMap { candidate ->
             rows(candidate.optJSONObject("decision_trace")?.optJSONArray("signals"))
                 .map { candidate.optString("symbol") to it }
@@ -326,13 +355,34 @@ internal object CockpitDiagnostics {
                     else -> true
                 }
         }
+        // Journal NEW means a conditional order, NOT a filled position or
+        // proof that an old exchange observation is still current. Diagnostic
+        // (3) legitimately had two confirmed pending STOP entries and FLAT
+        // signed positions. Only a FRESH completed reconciliation can label
+        // their pending order state as observed; partial fills are addressed
+        // separately by EXE-02 and never get a green pending-order badge.
+        val stalePending=pending.filter {
+            !fresh(it.optLong("last_reconciled_ms"),now,60_000L)
+        }
+        val ambiguousPending=pending.filter {
+            it.optString("order_status") !in setOf("NEW","WORKING","ACCEPTED","TRIGGERED","PARTIALLY_FILLED")
+        }
+        val partiallyFilled=pending.filter { it.optString("order_status")=="PARTIALLY_FILLED" }
         check("EXE-01", "execution", "Ожидающие входные заявки", when {
             pending.isEmpty() -> "NOT_VERIFIED"
             invalidEntries.isNotEmpty() -> "FAIL"
-            pending.any { it.optString("order_status") !in setOf("NEW", "WORKING", "ACCEPTED", "TRIGGERED", "PARTIALLY_FILLED") } -> "WARNING"
+            ambiguousPending.isNotEmpty() -> "WARNING"
+            stalePending.isNotEmpty() || coordinator.optBoolean("reconciliation_running") -> "NOT_VERIFIED"
+            partiallyFilled.isNotEmpty() -> "WARNING"
+            !status.optBoolean("running") || status.optBoolean("paused") -> "WARNING"
             else -> "PASS"
-        }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}. " +
-            "До исполнения отсутствие защитного ордера допустимо.")
+        }, "Ожидающих входов: ${pending.size}; некорректных уровней: ${invalidEntries.size}; " +
+            "сверка старше 60с/неизвестна: ${stalePending.size}; " +
+            "неоднозначный статус: ${ambiguousPending.size}; частичных исполнений: ${partiallyFilled.size}. " +
+            "PASS означает только свежую проверку состояния ОЖИДАЮЩЕЙ заявки; " +
+            "это не исполненная позиция и не подтверждение защитного SL. " +
+            "Движок работает=${status.optBoolean("running")}; пауза=${status.optBoolean("paused")}. " +
+            "При выключенном телефоне биржевая условная заявка может исполниться.")
         val partial = entries.filter { it.optString("order_status") == "PARTIALLY_FILLED" }
         check("EXE-02", "execution", "Частичное исполнение", when {
             partial.isEmpty() -> "NOT_VERIFIED"
@@ -341,17 +391,109 @@ internal object CockpitDiagnostics {
         }, "Частично исполненных: ${partial.size}. Любая исполненная часть требует подтверждённой защиты.")
         val positions = rows(status.optJSONArray("futures_positions"))
         val unprotected = positions.filter { p -> !positionProtectionProven(p,coordinator,now) }
-        val filledUnprotected = entries.filter {
-            (it.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
-                it.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) && !protectionProven(it, now)
+        val rawSignedStops=rows(coordinator.optJSONArray("exchange_protection_observations"))
+        val signedPerSymbol=positions.map { p ->
+            val symbol=p.optString("symbol")
+            val side=p.optString("direction")
+            val candidates=rawSignedStops.filter { it.optString("symbol")==symbol &&
+                it.optString("direction")==side }
+            val proof=candidates.singleOrNull()
+            val age=proof?.optLong("observed_at_ms",0L)?.let { at ->
+                if(at>0L && now>=at) now-at else -1L
+            } ?: -1L
+            val exact=matchingProtectionObservation(p,coordinator,now)
+            val assessment=when {
+                exact!=null -> "SIGNED_STOP_FRESH"
+                candidates.isEmpty() -> "SIGNED_STOP_NOT_OBSERVED"
+                proof==null -> "AMBIGUOUS_SIGNED_STOP_PROOFS"
+                age<0L -> "INVALID_SIGNED_STOP_TIME"
+                age>POSITION_TTL_MS -> "STALE_SIGNED_STOP_PROOF"
+                else -> "SIGNED_STOP_IDENTITY_OR_COVERAGE_MISMATCH"
+            }
+            Triple(symbol,assessment,age)
+        }
+        check("EXE-13","execution","Актуальная Binance STOP-защита по каждой позиции",when {
+            !positionsFresh(status,now) || coordinator.optJSONArray("exchange_protection_observations")==null -> "NOT_VERIFIED"
+            signedPerSymbol.isEmpty() -> "NOT_VERIFIED"
+            signedPerSymbol.any { it.second in setOf(
+                "AMBIGUOUS_SIGNED_STOP_PROOFS",
+                "SIGNED_STOP_IDENTITY_OR_COVERAGE_MISMATCH"
+            ) } -> "FAIL"
+            signedPerSymbol.all { it.second=="SIGNED_STOP_FRESH" } -> "PASS"
+            // Staleness or absence of a signed proof is NOT an exchange-corroborated
+            // missing STOP; it cannot be upgraded to PASS nor asserted absent.
+            else -> "NOT_VERIFIED"
+        }, "Только текущие подписанные Binance STOP (срок 15 секунд), без принятия strategy ownership: " +
+            signedPerSymbol.joinToString("; ") { (symbol,state,age) ->
+                "$symbol=$state (${if(age>=0) age.toString()+"мс" else "время неизвестно"})"
+            }.ifEmpty { "открытых позиций не наблюдается" } +
+            ". Устаревший или недоступный proof НЕ означает отмену стопа, но не разрешает перенос SL или новые входы.")
+
+        val exchangeStopRefreshPending=unprotected.isNotEmpty() &&
+            unprotected.all { protectionAwaitingExchangeRefresh(it,coordinator,now) }
+        // Recovered Binance exposure is not proof of a filled Williams order.
+        // A placeholder entry can have a stale/different structural STOP in
+        // SQLite while Binance has already signed an external STOP. Do NOT
+        // call this a *definitively unprotected strategy campaign*. The signed
+        // live-position STOP check below remains authoritative and fail-closed.
+        fun isUnownedRecovery(intent:JSONObject):Boolean =
+            intent.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+                !intent.optBoolean("strategy_ownership_verified",false)
+        val filledUnprotected = entries.filter { intent ->
+            !isUnownedRecovery(intent) &&
+                (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
+                    intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
+                !protectionProven(intent, now)
         }
         // While a new exchange snapshot is loading, a persisted POSITION_OPEN
         // plus PROTECTED journal is *not* independent evidence that Binance
         // rejected protection. Mark it NOT_VERIFIED, never PASS. Explicitly
         // unprotected filled exposure must still FAIL even before the next read.
+        // Diagnostics (8): Binance can report working full-position stops for
+        // recovered/orphan exposure while the original strategy-owned entry
+        // ledger is unavailable. A STOP reduces risk; it does NOT grant a right
+        // to trail, add, reverse, close or create a new position. Surface this
+        // as a separate management failure rather than mislabelling every
+        // emergency-protected position as a definitively missing stop.
+        val unownedRecoveredPositions = entries.filter { intent ->
+            intent.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+                !intent.optBoolean("strategy_ownership_verified", false) &&
+                intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED", "REPLACEMENT_UNRESOLVED")
+        }
+        // Diagnostics (9): all SIX exchange-protected SHORTs exist in the
+        // signed positions snapshot while pending_intent_details is EMPTY.
+        // The old EXE-12 counted only recovered local journal intents and
+        // misleadingly printed "0" even though every position explicitly
+        // says ownership_verified=false. Never turn a missing local journal
+        // into evidence that all exchange positions belong to Williams.
+        val unownedSignedPositions = positions.filter { position ->
+            position.has("strategy_ownership_verified") &&
+                !position.optBoolean("strategy_ownership_verified", false)
+        }
+        val unownedSymbols=(unownedRecoveredPositions.map { it.optString("symbol") } +
+            unownedSignedPositions.map { it.optString("symbol") })
+            .filter { it.isNotBlank() }.distinct()
+        val signedOwnershipObserved=positions.all { it.has("strategy_ownership_verified") }
+        check("EXE-12", "execution", "Восстановленные позиции без подтверждённого владельца стратегии", when {
+            !positionsFresh(status,now) || coordinator.optBoolean("reconciliation_running") ->
+                "NOT_VERIFIED"
+            unownedSymbols.isNotEmpty() -> "FAIL"
+            coordinator.optJSONArray("pending_intent_details") == null ||
+                status.optJSONArray("futures_positions") == null || !signedOwnershipObserved ->
+                "NOT_VERIFIED"
+            else -> "PASS"
+        }, "Позиции без доказанного исходного ENTRY по последнему снимку: " +
+            "${unownedSymbols.size}; из signed positions=${unownedSignedPositions.size}; " +
+            "из восстановленных журналов=${unownedRecoveredPositions.size}; символы=" +
+            unownedSymbols.joinToString(", ").ifBlank { "нет" } +
+            ". Защитный STOP может существовать, но это не разрешение автоматического переноса SL. " +
+            "НЕ создавать повторный вход, не считать такие позиции управляемыми; " +
+            "требуется проверка точных исполнений/клиентских ID на Binance. " +
+            "Проверка диагностическая: ни одна биржевая заявка не изменяется.")
         val explicitlyUnprotected = entries.any { intent ->
-            (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
-                intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
+            !isUnownedRecovery(intent) &&
+                (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
+                    intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
                 (intent.optString("protection_status") != "PROTECTED" ||
                     intent.optString("actual_risk_audit_status") == "BLOCKED")
         }
@@ -359,13 +501,17 @@ internal object CockpitDiagnostics {
             explicitlyUnprotected -> "FAIL"
             !positionsFresh(status, now) -> "NOT_VERIFIED"
             filledUnprotected.isNotEmpty() -> "FAIL"
+            unprotected.isNotEmpty() && exchangeStopRefreshPending -> "NOT_VERIFIED"
             unprotected.isNotEmpty() -> "FAIL"
             positions.isEmpty() -> "NOT_VERIFIED"
             else -> "PASS"
         }
         check("EXE-03", "execution", "Защита исполненной позиции", protectionSeverity,
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
-                "исполненных кампаний без защиты=${filledUnprotected.size}.")
+                "стратегических исполненных кампаний без защиты=${filledUnprotected.size}; " +
+                "восстановленных без доказанного ENTRY=${unownedRecoveredPositions.size}; " +
+                "сверка свежего STOP Binance выполняется=$exchangeStopRefreshPending. " +
+                "NOT_VERIFIED не означает защищённость и не разрешает новую сделку.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
             "Проверяются свежая биржевая защита, символ, направление, количество и уровень SL. " +
                 "Принадлежность стратегии и разрешение сопровождения проверяются отдельно; цена стопа сама по себе не доказывает защиту.")
@@ -379,6 +525,19 @@ internal object CockpitDiagnostics {
         }, "Наблюдаемых подтверждённых переносов=${trailed.size}; проверяется текущая защита и отсутствие неразрешённого предшественника.")
         val livePositions = rows(status.optJSONArray("futures_positions"))
         val observedProofs = rows(coordinator.optJSONArray("exchange_protection_observations"))
+        // A later SIGNED exchange observation is not contradictory to an
+        // older 15-second dashboard snapshot. Diagnostics (26): ETH had the
+        // same symbol/side/qty/STOP, but the signed REST proof was ~8 seconds
+        // newer than the UI, which incorrectly created EXE-08=FAIL. Never
+        // rewrite timestamps, retroactively trust a journal, or call it PASS:
+        // record the UI race as WARNING until a dashboard refresh catches up.
+        val displayAt=status.optLong("positions_snapshot_at_ms")
+        fun proofAheadOfDisplay(p:JSONObject,proof:JSONObject):Boolean {
+            val observed=proof.optLong("observed_at_ms")
+            val cachedConfirmed=p.optLong("stop_confirmed_at_ms")
+            return displayAt>0L && displayAt<observed &&
+                cachedConfirmed>0L && cachedConfirmed<observed
+        }
         val currentProofConflicts = livePositions.filter { p ->
             val matching = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
             val owner = entries.lastOrNull { intent ->
@@ -387,13 +546,19 @@ internal object CockpitDiagnostics {
                     intent.isNull("native_stop_replacement")
             }
             val expectedSuffix = owner?.optString("protection_client_id_suffix").orEmpty()
-            (expectedSuffix.isNotBlank() &&
-                !matching.optString("protection_client_id").endsWith(expectedSuffix)) ||
+            val ownedIdentityMismatch=expectedSuffix.isNotBlank() &&
+                !matching.optString("protection_client_id").endsWith(expectedSuffix)
+            val staleUI=proofAheadOfDisplay(p,matching)
+            ownedIdentityMismatch || (!staleUI && (
                 (p.has("stop_verification_status") &&
                     p.optString("stop_verification_status") != matching.optString("stop_proof")) ||
                 (p.has("stop_confirmed_at_ms") && !p.isNull("stop_confirmed_at_ms") &&
-                    p.optLong("stop_confirmed_at_ms") != matching.optLong("observed_at_ms"))
+                    p.optLong("stop_confirmed_at_ms") != matching.optLong("observed_at_ms"))))
         }
+        val newerSignedStopThanUI=livePositions.filter { p ->
+            val matching=matchingProtectionObservation(p,coordinator,now) ?: return@filter false
+            proofAheadOfDisplay(p,matching)
+        }.map { it.optString("symbol") }
         val duplicateProofs = observedProofs.groupBy { it.optString("symbol") }
             .filter { (symbol, items) ->
                 symbol.isNotBlank() && items.count {
@@ -407,9 +572,35 @@ internal object CockpitDiagnostics {
             livePositions.isEmpty() || livePositions.any {
                 matchingProtectionObservation(it,coordinator,now) == null
             } -> "NOT_VERIFIED"
+            newerSignedStopThanUI.isNotEmpty() -> "WARNING"
             else -> "PASS"
-        }, "Несовпадений идентификатора/уровня/времени=${currentProofConflicts.size}; " +
-            "дублированных подтверждений=${duplicateProofs.size}; сравнение ТОЛЬКО с подписанным Binance proof.")
+        }, "Подтверждённых конфликтов=${currentProofConflicts.size}; " +
+            "новых signed SL относительно UI=${newerSignedStopThanUI.joinToString().ifBlank { "нет" }}; " +
+            "дублированных подтверждений=${duplicateProofs.size}; " +
+            "новый Binance proof НЕ подтверждает свежесть более старого экрана.")
+
+        // Diagnostics (26): a W2H_* Binance conditional order can survive
+        // locally missing campaign journals. Even when ENTRY_PENDING=0,
+        // a live app-originated orphan may fill and create exposure while
+        // execution_enabled=false. Treat it as unresolved exchange risk,
+        // never assume it is cancelled; do not mutate or delete it here.
+        val openAlgoOrders=rows(coordinator.optJSONArray("external_open_orders"))
+        // The coordinator's EXTERNAL_ALGO_ORDER set ALREADY excludes all
+        // currently verified owned order identities. A historical CLOSED
+        // intent with the same clientId cannot legitimize a live Binance
+        // order that survived its durable campaign.
+        val orphanBookH1Orders=openAlgoOrders.filter { order ->
+            order.optString("client_id").startsWith("W2H_")
+        }
+        check("EXE-11","execution","Биржевые условные заявки без подтверждённого владельца",when {
+            coordinator.optJSONArray("external_open_orders")==null -> "NOT_VERIFIED"
+            orphanBookH1Orders.isNotEmpty() -> "FAIL"
+            !positionsFresh(status,now) -> "NOT_VERIFIED"
+            else -> "PASS"
+        },"Открытых H1-ордеров W2H_* без действующей записи кампании=" +
+            "${orphanBookH1Orders.size}; символы=" +
+            orphanBookH1Orders.map { it.optString("symbol") }.distinct().joinToString().ifBlank { "нет" } +
+            "; проверять в Binance вручную; диагностике ЗАПРЕЩЕНО автоматически отменять ордера.")
 
         val wrongSideStops = livePositions.filter { p ->
             val proof = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
@@ -442,8 +633,9 @@ internal object CockpitDiagnostics {
         }, "Текущее состояние сверки; это не результат принудительного теста разрыва связи.")
         check("RISK-01", "risk", "Фактический риск позиции", when {
             !positionsFresh(status, now) || positions.isEmpty() -> "NOT_VERIFIED"
-            unprotected.isNotEmpty() -> "FAIL"
             positions.any { p -> entries.any { matchesPosition(it, p) && it.optString("actual_risk_audit_status") == "BLOCKED" } } -> "FAIL"
+            unprotected.isNotEmpty() && exchangeStopRefreshPending -> "NOT_VERIFIED"
+            unprotected.isNotEmpty() -> "FAIL"
             positions.any { p -> entries.none { matchesPosition(it, p) &&
                 it.optString("actual_risk_audit_status") in setOf("PASS", "PASS_RESERVATION_ADJUSTED") &&
                 it.optDouble("actual_all_in_risk_pct").let { risk -> risk.isFinite() && risk >= 0 && risk <= 0.0025 + 1e-9 } &&
@@ -476,10 +668,87 @@ internal object CockpitDiagnostics {
         check("AND-01", "runtime", "Работа в фоне", when {
             android == null -> "NOT_VERIFIED"
             !android.optBoolean("foreground_service_active") || android.optBoolean("background_restricted") || !android.optBoolean("battery_optimization_ignored") -> "WARNING"
+            status.optBoolean("running") && (!android.optBoolean("cpu_wake_lock_held") ||
+                android.optLong("service_guard_age_ms",Long.MAX_VALUE)>90_000L) -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
+            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
+        val bootWitness=if(android!=null)
+            AndroidRebootRecoveryEvidence.assess(android.optJSONObject("continuity") ?: JSONObject(),
+                android,status,now) else null
+        check("AND-02", "runtime", "Восстановление после перезагрузки Android", when {
+            bootWitness==null || !bootWitness.optBoolean("reboot_observed") -> "NOT_VERIFIED"
+            bootWitness.optBoolean("recovery_technical_proven") -> "PASS"
+            bootWitness.optLong("opt_in_verified_at_ms")<=0L -> "NOT_VERIFIED"
+            now-bootWitness.optLong("boot_at_ms")>120_000L -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "Последняя наблюдаемая перезагрузка: ${bootWitness?.optLong("boot_at_ms")}; " +
+            "opt-in: ${bootWitness?.optLong("opt_in_verified_at_ms")}; " +
+            "FGS: ${bootWitness?.optLong("fgs_created_at_ms")}; " +
+            "worker: ${bootWitness?.optBoolean("worker_live_now")}; " +
+            "post-boot signed REST sync: ${bootWitness?.optBoolean("signed_sync_after_boot")}; " +
+            "код: ${bootWitness?.optString("status")}. PASS доказывает только последовательность boot->FGS->worker->signed sync, " +
+            "но НЕ непрерывный 24-часовой фон, полноту защиты STOP или готовность к новым входам.")
+        val lifecycle=android?.optJSONObject("lifecycle_evidence")
+        check("AND-04", "runtime", "Остановки Android, перезапуски и запросы запуска", when {
+            lifecycle == null -> "NOT_VERIFIED"
+            lifecycle.optInt("abnormal_process_exit_count")>0 ||
+                lifecycle.optInt("service_autostart_failure_count")>0 ||
+                lifecycle.optInt("worker_heartbeat_stale_count")>0 -> "WARNING"
+            // Normal Android service destruction or a system exit without a
+            // known reason warrants review but is not proof of lost protection.
+            lifecycle.optInt("observed_process_exit_count")>0 ||
+                lifecycle.optInt("service_destroyed_count")>0 -> "WARNING"
+            else -> "NOT_VERIFIED"
+        }, "FGS создан: ${lifecycle?.optInt("foreground_service_created_count",-1)}; " +
+            "реальные завершения процесса из истории Android: ${lifecycle?.optInt("observed_process_exit_count",-1)}; " +
+            "аномальные завершения: ${lifecycle?.optInt("abnormal_process_exit_count",-1)}; " +
+            "уничтожения сервиса: ${lifecycle?.optInt("service_destroyed_count",-1)}; " +
+            "ошибки автозапуска: ${lifecycle?.optInt("service_autostart_failure_count",-1)}; " +
+            "зависания heartbeat: ${lifecycle?.optInt("worker_heartbeat_stale_count",-1)}; " +
+            "старые SERVICE_START_ATTEMPT: ${lifecycle?.optInt("service_start_attempt_count",-1)} " +
+            "(это НЕ перезапуски); статус истории ОС=${lifecycle?.optString("system_exit_history_status")}. " +
+            "Показана только сохранённая часть последних 24 часов; отсутствие событий НЕ доказывает 24-часовой фон.")
+        // Diagnostics (9): full Binance signed fills are an independent GET-only
+        // forensic source. An observed BNB BUY is not an automatic proof that
+        // the old SHORT campaign closed or that all commission/funding is known.
+        val fillAudit=status.optJSONObject("signed_exchange_fill_forensics")
+        val fillAuditRows=rows(fillAudit?.optJSONArray("symbols"))
+        val bnbFillAudit=fillAuditRows.singleOrNull { it.optString("symbol")=="BNBUSDT" }
+        val bnbFillStatus=bnbFillAudit?.optString("status") ?: "NOT_REQUESTED"
+        check("HIST-02","database","Подписанные исполнения Binance для закрытия BNB",when {
+            fillAudit?.optString("state")=="SIGNED_GET_FAILED" -> "WARNING"
+            bnbFillStatus=="SIGNED_TRADE_SHAPE_UNVERIFIED" -> "WARNING"
+            bnbFillStatus=="RECENT_SIGNED_FILLS_NO_CAMPAIGN_BINDING" -> "WARNING"
+            else -> "NOT_VERIFIED"
+        },"Состояние GET-only: ${fillAudit?.optString("state") ?: "NOT_REQUESTED"}; " +
+            "BNB: $bnbFillStatus; BUY qty=${bnbFillAudit?.optString("buy_qty")}; " +
+            "SELL qty=${bnbFillAudit?.optString("sell_qty")}; " +
+            "биржевые orderIds=${bnbFillAudit?.optInt("exchange_order_count")}; " +
+            "источник подписан, но запись закрытия BNB с доказанным исходным ENTRY пока НЕ получена. " +
+            "Это не разрешение нового входа и не подтверждение полного PnL.")
+        val closedTradeRows=rows(status.optJSONArray("trade_observations"))
+        val unverifiedCloses=closedTradeRows.filter { it.optString("status")=="CLOSED_UNVERIFIED" ||
+            it.optString("outcome")=="CLOSED_UNVERIFIED" }
+        val observedClosures=closedTradeRows.filter {
+            it.optString("status").startsWith("CLOSED") || it.optLong("closed_at_ms")>0L
+        }
+        val missingPnl=observedClosures.filter { !it.optBoolean("pnl_complete",false) }
+        // Two audit rows can legitimately describe ONE exchange position (native
+        // recovery plus operator stop supervision). Do not silently erase either
+        // source, infer an exit price, or double-count them as two completed trades.
+        val uncertainSymbols=unverifiedCloses.map { it.optString("symbol") }.filter { it.isNotBlank() }.distinct()
+        check("HIST-01", "database", "Восстановление закрытий, комиссий и PnL", when {
+            !status.has("trade_observations") -> "NOT_VERIFIED"
+            unverifiedCloses.isNotEmpty() || missingPnl.isNotEmpty() -> "WARNING"
+            observedClosures.isEmpty() -> "NOT_VERIFIED"
             else -> "PASS"
-        }, "Проверяются ограничения Android; длительный тест на устройстве отмечается отдельно.")
-        check("AND-02", "runtime", "Восстановление после перезапуска", "NOT_VERIFIED",
-            "Проверка требует фактического перезапуска процесса и сверки с Binance; наличие recovery-кода не считается PASS.")
+        }, "Подтверждённых записей закрытия в снимке: ${observedClosures.size}; " +
+            "неподтверждённых записей закрытия: ${unverifiedCloses.size}; " +
+            "записи без полного PnL: ${missingPnl.size}; " +
+            "уникальные пары с неподтверждённым закрытием: ${uncertainSymbols.joinToString(",").ifEmpty { "нет" }}. " +
+            "Несколько источников одной позиции НЕ означают несколько сделок; " +
+            "пока Binance не подтвердил исполнения, комиссии и funding, не рассчитывать прибыль по цене SL.")
         check("AND-03", "ui", "Согласованность интерфейса", if (positionsFresh(status, now)) "PASS" else "WARNING",
             "Экраны используют общий снимок; at_ms=$now; позиции свежие=${positionsFresh(status, now)}; " +
                 "сканер=${status.optString("scanner_state")}; допуск новых входов=${ready.optBoolean("new_entries_allowed")}. " + ready.optString("new_entries_reason"))

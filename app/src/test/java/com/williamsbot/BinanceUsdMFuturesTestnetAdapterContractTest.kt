@@ -11,6 +11,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -300,7 +302,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals("BUY", longParams["side"])
         assertEquals("STOP_MARKET", longParams["type"])
         assertEquals("101", longParams["triggerPrice"])
-        assertEquals("MARK_PRICE", longParams["workingType"])
+        assertEquals("CONTRACT_PRICE", longParams["workingType"])
         assertEquals("TEST_LONG_ENTRY", longParams["clientAlgoId"])
         assertTrue(!longParams.containsKey("reduceOnly"))
         assertTrue(!longParams.containsKey("closePosition"))
@@ -376,14 +378,52 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(3L, guard.orderCount10s)
     }
 
-    private fun testAdapter(captured: MutableList<Request>): BinanceUsdMFuturesTestnetAdapter {
+    @Test fun bookEntriesUseContractBreakoutsWhenMarkDivergesInEitherDirection() {
+        for(side in listOf("LONG","SHORT")) for(kind in listOf("STOP","TAKE_PROFIT")) {
+            val above=(side=="LONG")== (kind=="STOP")
+            val trigger=if(above) "101" else "99"
+            val requests=mutableListOf<Request>()
+            // MARK already crossed; the trade-price H1 breakout has NOT.
+            testAdapter(requests,mark=if(above) 103.0 else 97.0)
+                .placeConditionalEntry("BTCUSDT",side,kind,"0.01",trigger,"BASIS_${side}_$kind")
+            val submitted=formParams(requests.single { it.method=="POST" && it.url.encodedPath=="/fapi/v1/algoOrder" })
+            assertEquals("CONTRACT_PRICE",submitted["workingType"])
+            assertFalse(requests.any { it.url.encodedPath=="/fapi/v1/premiumIndex" })
+
+            val consumed=mutableListOf<Request>()
+            val quote="""{"symbol":"BTCUSDT","price":"${if(above) 102 else 98}"}"""
+            try {
+                testAdapter(consumed,contractJson=quote)
+                    .placeConditionalEntry("BTCUSDT",side,kind,"0.01",trigger,"CONSUMED_${side}_$kind")
+                fail("A consumed CONTRACT trigger must not reach Binance POST")
+            } catch(_:IllegalArgumentException) { }
+            assertFalse(consumed.any { it.method=="POST" })
+        }
+    }
+
+    @Test fun missingInvalidOrForeignContractQuotesCannotAuthorizeAnEntry() {
+        for(quote in listOf("{}", """{"symbol":"ETHUSDT","price":"100"}""",
+            """{"symbol":"BTCUSDT","price":"NaN"}""", """{"symbol":"BTCUSDT","price":"0"}""")) {
+            val requests=mutableListOf<Request>()
+            try {
+                testAdapter(requests,contractJson=quote)
+                    .placeConditionalEntry("BTCUSDT","LONG","STOP","0.01","101","INVALID_BASIS")
+                fail("Unverified contract quote must not reach POST")
+            } catch(_:Exception) { }
+            assertFalse(requests.any { it.method=="POST" })
+        }
+    }
+
+    private fun testAdapter(captured: MutableList<Request>, mark:Double=100.0,
+        contractJson:String="""{"symbol":"BTCUSDT","price":"100"}"""): BinanceUsdMFuturesTestnetAdapter {
         val client = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
             val request = chain.request()
             captured += request
             val body = when (request.url.encodedPath) {
                 "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
                 "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
-                "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"100"}"""
+                "/fapi/v1/premiumIndex" -> """{"symbol":"BTCUSDT","markPrice":"$mark"}"""
+                "/fapi/v2/ticker/price" -> contractJson
                 "/fapi/v1/algoOrder" -> """{"algoId":1,"algoStatus":"NEW","orderType":"STOP_MARKET"}"""
                 else -> "{}"
             }
@@ -509,4 +549,172 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(2,posts)
         assertEquals(2,syncs)
     }
+
+    @Test fun invalidClockProbeIsRetriedAsIndependentReadBeforeAnySignedAccountGet() {
+        var timeCalls = 0
+        var accountCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = if (request.url.encodedPath == "/fapi/v1/time") {
+                timeCalls++
+                if (timeCalls == 1) """{"serverTime":0}"""
+                else """{"serverTime":${System.currentTimeMillis()}}"""
+            } else {
+                accountCalls++
+                assertTrue("Only a signed GET can follow a verified clock probe",
+                    request.url.queryParameter("timestamp") != null)
+                "{}"
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+        assertEquals(2, timeCalls)
+        assertEquals(1, accountCalls)
+    }
+
+    @Test fun boundedSlowClockAllowsSignedRecoveryReadsButNeverMutation() {
+        var clockGets = 0
+        var accountGets = 0
+        var timeFromSlowResponse = 0L
+        var mutationPosts = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    clockGets++
+                    Thread.sleep(3_200L)
+                    timeFromSlowResponse = System.currentTimeMillis()
+                    """{"serverTime":$timeFromSlowResponse}"""
+                }
+                "/fapi/v3/account" -> {
+                    accountGets++
+                    val stamp = request.url.queryParameter("timestamp")!!.toLong()
+                    assertTrue("Slow probe must not timestamp >1000ms into exchange future",
+                        stamp <= timeFromSlowResponse + 1_000L)
+                    "{}"
+                }
+                else -> {
+                    mutationPosts++
+                    "{}"
+                }
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        adapter.account()
+        assertEquals(1, clockGets)
+        assertEquals(1, accountGets)
+        try {
+            adapter.setLeverage("BTCUSDT", 10)
+            fail("A read-only clock sample with >3s RTT cannot authorize a signed POST")
+        } catch (_: FuturesClockSyncException) { }
+        assertEquals(0, mutationPosts)
+        assertEquals("Only an independent unsigned clock re-probe is permitted before a blocked write", 2, clockGets)
+    }
+
+    @Test fun slowReadOnlyClockMayBeReplacedByFastClockBeforeFinancialWrite() {
+        var probes=0
+        var posts=0
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val r=chain.request()
+            val response=when (r.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    probes++
+                    if (probes==1) Thread.sleep(3_200L)
+                    """{"serverTime":${System.currentTimeMillis()}}"""
+                }
+                "/fapi/v3/account" -> "{}"
+                "/fapi/v1/leverage" -> {
+                    posts++
+                    val params=formParams(r)
+                    assertTrue(params["timestamp"]?.toLongOrNull()!=null)
+                    assertEquals("10",params["leverage"])
+                    """{"symbol":"BTCUSDT","leverage":10,"maxNotionalValue":"1000000"}"""
+                }
+                else -> throw AssertionError("Unexpected exchange endpoint: ${r.url}")
+            }
+            Response.Builder().request(r).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
+        adapter.account()
+        assertEquals(1,probes)
+        assertEquals(10,adapter.setLeverage("BTCUSDT",10).getInt("leverage"))
+        assertEquals(2,probes)
+        assertEquals("Only one signed financial request is permitted after the verified fast probe",1,posts)
+    }
+
+    @Test fun independentClockSampleValidationRejectsDeviceSuspendAndSlowGet() {
+        assertTrue(futuresClockProbeUsableForSignedRead(1L, 4_000L, 4_000L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 8_001L, 8_001L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 4_000L, 6_100L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(0L, 2_000L, 2_000L, 1_800_000_000_000L))
+        assertTrue(!futuresClockProbeUsableForSignedRead(1L, 2_000L, 2_000L, 0L))
+    }
+
+    @Test fun slowClockResponseCannotContaminateNextIndependentSample() {
+        var timeCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") {
+                timeCalls++
+                if (timeCalls == 1) Thread.sleep(8_100L)
+            }
+            val response = """{"serverTime":${System.currentTimeMillis()}}"""
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        assertTrue(adapter.serverTime().getLong("serverTime") > 0L)
+        assertEquals("The slow first GET must not be used for signing", 2, timeCalls)
+    }
+
+    @Test fun twoInvalidTimeSamplesFailClosedWithoutAnySignedRequest() {
+        var timeCalls = 0
+        var signedCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") timeCalls++
+            else signedCalls++
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("""{"serverTime":0}""".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            fail("Unverified exchange clock must never authorize signed requests")
+        } catch (_: java.io.IOException) { }
+        assertEquals(2, timeCalls)
+        assertEquals(0, signedCalls)
+    }
+
+
+    @Test fun clockTransportFailureDoesNotCascadeIntoRepeatedSignedGetRetries() {
+        var probes = 0
+        var signedCalls = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            if (request.url.encodedPath == "/fapi/v1/time") {
+                probes++
+                throw java.io.IOException("Injected network outage on read-only clock probe")
+            }
+            signedCalls++
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body("{}".toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            fail("Signing must fail when both clock probes cannot reach Binance")
+        } catch (_: FuturesClockSyncException) { }
+        assertEquals("An outer signed GET must not cause 8 nested time probes", 2, probes)
+        assertEquals(0, signedCalls)
+    }
+
 }

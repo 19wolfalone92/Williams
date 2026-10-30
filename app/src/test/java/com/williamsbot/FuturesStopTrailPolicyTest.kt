@@ -215,6 +215,24 @@ class FuturesStopTrailPolicyTest {
         }
     }
 
+    @Test fun invalidH1TimingCannotCauseEitherSideToReplaceAStop() {
+        val history=bars(
+            highs=listOf(110.0,109.0,108.0,107.0,106.0,105.0),
+            lows=listOf(99.0,98.0,97.0,96.0,95.0,94.0)
+        )
+        for(side in listOf("LONG","SHORT")) {
+            val old=if(side=="LONG") 80.0 else 120.0
+            val mark=if(side=="LONG") 130.0 else 70.0
+            assertNotNull(planWilliamsCampaignStop(side,old,100.0,null,mark,.1,1L,history))
+            val shifted=history.map {it.copy(openTimeMs=it.openTimeMs+900_000L)}
+            val negative=history.mapIndexed {i,b->if(i==0) b.copy(openTimeMs=-3_600_000L) else b}
+            for(invalid in listOf(shifted,negative)) {
+                assertNull(planWilliamsCampaignStop(side,old,100.0,null,mark,.1,1L,invalid))
+                assertNull(planFuturesStopTrail(side,old,100.0,old,mark,.1,1L,invalid))
+            }
+        }
+    }
+
     @Test fun tc2CampaignNeverTrailsOnlyBecauseOneRWasReachedLongOrShort() {
         // Neither series has a post-entry fractal, and its five-bar stop
         // would not tighten the existing exchange-confirmed protection.
@@ -249,5 +267,58 @@ class FuturesStopTrailPolicyTest {
         assertEquals(91.9,long!!.stop,1e-7)
         assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
         assertEquals(108.1,short!!.stop,1e-7)
+    }
+
+    @Test fun tc2BookStopUsesExactlyOneDecimalTickWithoutFloatQuotient() {
+        // TC2 chapter 12 PDF pp.156,165: structural stops immediately
+        // beyond the source high/low; 27-Oct book/source parity regression.
+        assertEquals(79524.7, tc2ExactStructuralStop("LONG",79524.8,.1)!!,0.0)
+        assertEquals(79524.9, tc2ExactStructuralStop("SHORT",79524.8,.1)!!,0.0)
+        assertEquals(2296.99, tc2ExactStructuralStop("LONG",2297.0,.01)!!,0.0)
+        assertEquals(2297.01, tc2ExactStructuralStop("SHORT",2297.0,.01)!!,0.0)
+        assertEquals(.0135, tc2ExactStructuralStop("LONG",.0136,.0001)!!,0.0)
+        assertNull(tc2ExactStructuralStop("SHORT",99.005,.01))
+        assertNull(tc2ExactStructuralStop("LONG",Double.NaN,.01))
+        assertNull(tc2ExactStructuralStop("LONG",100.0,0.0))
+    }
+
+    @Test fun tc2FiveClosedBarTrailPreservesExactBookTickForLongAndShort() {
+        val longBars=bars(
+            highs=listOf(79529.0,79530.0,79531.0,79532.0,79533.0),
+            lows=listOf(79524.8,79525.0,79526.0,79527.0,79528.0)
+        )
+        val long=planWilliamsCampaignStop(
+            "LONG",79500.0,79510.0,79500.0,79550.0,.1,1L,longBars
+        )
+        assertEquals("TC2_LAST_5_CLOSED_BARS",long?.reason)
+        assertEquals(79524.7,long!!.stop,0.0)
+        val shortBars=bars(
+            highs=listOf(2297.0,2296.0,2295.0,2294.0,2293.0),
+            lows=listOf(2292.0,2291.0,2290.0,2289.0,2288.0)
+        )
+        val short=planWilliamsCampaignStop(
+            "SHORT",2305.0,2300.0,2305.0,2280.0,.01,1L,shortBars
+        )
+        assertEquals("TC2_LAST_5_CLOSED_BARS",short?.reason)
+        assertEquals(2297.01,short!!.stop,0.0)
+    }
+
+    @Test fun tc2ConfirmedFractalTrailUsesExactSourceTickAfterTwoRightH1Closes() {
+        val longLows=listOf(79530.0,79529.0,79528.0,79524.8,79526.0,79527.0,79528.0)
+        val long=planFuturesStopTrail(
+            "LONG",79500.0,79510.0,79500.0,79550.0,.1,2*3_600_000L,
+            bars(longLows.map {it+5.0},longLows)
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL",long?.reason)
+        assertEquals(79524.7,long!!.stop,0.0)
+        assertEquals(3*3_600_000L,long.fractalAtMs)
+        val shortHighs=listOf(2290.0,2291.0,2292.0,2297.0,2294.0,2293.0,2292.0)
+        val short=planFuturesStopTrail(
+            "SHORT",2305.0,2300.0,2305.0,2260.0,.01,2*3_600_000L,
+            bars(shortHighs,shortHighs.map {it-5.0})
+        )
+        assertEquals("CONFIRMED_H1_FRACTAL",short?.reason)
+        assertEquals(2297.01,short!!.stop,0.0)
+        assertEquals(3*3_600_000L,short.fractalAtMs)
     }
 }

@@ -1,8 +1,26 @@
 package com.williamsbot
 
-import kotlin.math.ceil
-import kotlin.math.floor
+import java.math.BigDecimal
 import kotlin.math.max
+
+/**
+ * Exactly one native Binance tick beyond a CLOSED bar's source extreme.
+ * Do not divide, floor or ceil a floating-point (price +/- tick) expression:
+ * 79524.8 + 0.1, for example, can round above the exact decimal and move the
+ * submitted stop by a whole extra tick. Off-grid source data cannot authorize
+ * a discretionary STOP replacement. Initial exchange-confirmed protection is
+ * left untouched when the source cannot be validated.
+ * TC2 chapter 12, PDF pp.156,165: three/five-bar and fractal stop placement.
+ */
+internal fun tc2ExactStructuralStop(direction: String, extreme: Double, tick: Double): Double? {
+    if (direction !in setOf("LONG", "SHORT") ||
+        !extreme.isFinite() || extreme <= 0.0 || !tick.isFinite() || tick <= 0.0) return null
+    val price = BigDecimal.valueOf(extreme)
+    val step = BigDecimal.valueOf(tick)
+    if (price.remainder(step).signum() != 0) return null
+    val result = price.add(if (direction == "LONG") step.negate() else step).toDouble()
+    return result.takeIf { it.isFinite() && it > 0.0 }
+}
 
 /**
  * Futures trailing policy. Only exchange-confirmed OPEN_PROTECTED campaigns may
@@ -41,10 +59,9 @@ internal fun planFuturesStopTrail(
     if (direction != "LONG" && direction != "SHORT") return null
     if (!oldStop.isFinite() || !markPrice.isFinite() || !tickSize.isFinite() ||
         oldStop <= 0.0 || markPrice <= 0.0 || tickSize <= 0.0) return null
-    if (bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
+    if (bars.any { it.openTimeMs<0L || it.openTimeMs%WILLIAMS_H1_MS!=0L } ||
+        bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
 
-    fun floorTick(price: Double): Double = floor(price / tickSize + 1e-12) * tickSize
-    fun ceilTick(price: Double): Double = ceil(price / tickSize - 1e-12) * tickSize
     // Avoid sending Binance a replacement which can immediately trigger or
     // be rejected due to a mark-price tick during the REST round trip.
     val minimumMarkGap = max(2.0 * tickSize, markPrice * 0.00025)
@@ -80,9 +97,8 @@ internal fun planFuturesStopTrail(
             }
             if(count<2 || bars[start].openTimeMs<openedObservedAtMs ||
                 !onProtectiveSide(i+1) || !onProtectiveSide(i+2)) continue
-            val price = if (direction == "LONG") floorTick(extreme - tickSize)
-                else ceilTick(extreme + tickSize)
-            if (usable(price)) {
+            val price = tc2ExactStructuralStop(direction, extreme, tickSize)
+            if (price != null && usable(price)) {
                 // The most recent *usable* confirmed post-entry pivot is the
                 // appropriate candidate. A more recent pivot may produce a
                 // stop already crossed by mark price; do not let it mask an
@@ -116,7 +132,8 @@ internal fun planWilliamsCampaignStop(
     if (openedObservedAtMs<=0L) return null
     if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
-        bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low } ||
+        bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low ||
+            it.openTimeMs<0L || it.openTimeMs%WILLIAMS_H1_MS!=0L } ||
         bars.zipWithNext().any { (a,b) -> b.openTimeMs-a.openTimeMs != WILLIAMS_H1_MS }) return null
     val proposals = mutableListOf<FuturesStopTrailProposal>()
     // Legacy signature retained for existing call sites. Break-even and its
@@ -124,11 +141,11 @@ internal fun planWilliamsCampaignStop(
     planFuturesStopTrail(direction,oldStop,actualEntry,initialStop ?: Double.NaN,markPrice,tickSize,
         openedObservedAtMs,bars,breakEvenEnabled=false)?.let { proposals += it }
     if (bars.size >= window && bars.last().openTimeMs+3_600_000L > openedObservedAtMs) {
-        val price = if (direction == "LONG") {
-            floor((bars.takeLast(window).minOf { it.low }-tickSize)/tickSize+1e-12)*tickSize
-        } else ceil((bars.takeLast(window).maxOf { it.high }+tickSize)/tickSize-1e-12)*tickSize
+        val sourceExtreme = if (direction == "LONG") bars.takeLast(window).minOf { it.low }
+            else bars.takeLast(window).maxOf { it.high }
+        val price = tc2ExactStructuralStop(direction, sourceExtreme, tickSize)
         val gap = max(2*tickSize,markPrice*.00025)
-        if (price > 0 && if (direction == "LONG") price > oldStop+tickSize*.5 && price+gap < markPrice
+        if (price != null && if (direction == "LONG") price > oldStop+tickSize*.5 && price+gap < markPrice
             else price < oldStop-tickSize*.5 && price-gap > markPrice) {
             proposals += FuturesStopTrailProposal(price,"TC2_LAST_${window}_CLOSED_BARS")
         }

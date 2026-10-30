@@ -1400,7 +1400,7 @@
           "label": "W4",
           "direction": "DOWN",
           "status": "INVALIDATED",
-          "w4_zero": "MINIMUM_ONLY",
+          "w4_zero": "AMBIGUOUS_W3_MOMENTUM_PEAK",
           "scale_bars": 106
         },
         {
@@ -2811,7 +2811,7 @@
           "label": "W4",
           "direction": "UP",
           "status": "INVALIDATED",
-          "w4_zero": "MINIMUM_ONLY",
+          "w4_zero": "AMBIGUOUS_W3_MOMENTUM_PEAK",
           "scale_bars": 106
         },
         {

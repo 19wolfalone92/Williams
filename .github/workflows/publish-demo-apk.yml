@@ -10,8 +10,12 @@ permissions:
 
 jobs:
   publish-demo-apk:
-    # Never publish artifacts from pull requests, forks, failed builds or non-main.
+    # Build success is NOT authenticated Demo/physical Android acceptance.
+    # Production of a downloadable APK remains disabled until an explicit
+    # operator-controlled repository release authorization is present.
+    # Never publish artifacts from PRs, forks, failed builds or non-main.
     if: >-
+      vars.WILLIAMS_DEMO_RELEASE_APPROVED == 'true' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main' &&

@@ -48,19 +48,19 @@ internal fun FuturesLeverageSettingsCard(status: Status, onSave: (JSONObject) ->
         FuturesLeverageSettings(
             parseFuturesLeverage(defaultText),
             overrides.filterValues { it.isNotBlank() }.mapValues { parseFuturesLeverage(it.value) }
-        ).toJson().put("strategy_profile",williamsExecutionProfile).put("entry_time_policy",requireNotNull(timePolicy).toJson())
+        ).toJson().put("strategy_profile",williamsUnifiedProfile).put("entry_time_policy",requireNotNull(timePolicy).toJson())
     }.getOrNull()
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Стратегия и плечо Futures", style = MaterialTheme.typography.titleMedium)
             Text("Общее плечо и отдельное для каждой пары • LONG и SHORT • ISOLATED",
                 style = MaterialTheme.typography.bodySmall)
-            Text("Плечо фиксируется при подготовке входа. Binance подтвердит его перед ордером; лимит биржи, маржа и структурный стоп могут заблокировать вход.",
+            Text("Плечо выбираешь сам: 1–125×, в том числе 5× и 10×. Доступность проверяется отдельно для каждой пары: Binance может ограничить плечо, а маржа и структурный STOP могут запретить рискованный вход. Плечо не увеличивает расчётный бюджет убытка, но повышает риск ликвидации и проскальзывания.",
                 style = MaterialTheme.typography.bodySmall)
-            Text("TC2 · торговля по трём Мудрецам",style=MaterialTheme.typography.titleSmall)
-            Text("Новые входы и добавления — TC2. NTD и Course независимо анализируют H1 в режиме наблюдения.",
+            Text("TC2 и NTD · независимые торговые системы",style=MaterialTheme.typography.titleSmall)
+            Text("TC2 торгует по трём Мудрецам, NTD — по пяти измерениям. У каждого источника свои входы и сопровождение. Course анализирует H1 в режиме наблюдения.",
                 style=MaterialTheme.typography.bodySmall)
-            Text("Одна активная кампания на пару. Открытые кампании прежних источников сохраняют своё сопровождение; новые добавления этих источников отключены.",
+            Text("Одна активная кампания на пару. Её источник управляет добавлениями и выходами; сигналы другого источника не меняют её правила.",
                 style=MaterialTheme.typography.bodySmall)
             Text("Время новых входов",style=MaterialTheme.typography.titleSmall)
             androidx.compose.foundation.layout.Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {

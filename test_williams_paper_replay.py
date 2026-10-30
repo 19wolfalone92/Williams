@@ -33,12 +33,12 @@ def test_opposite_formation_must_trigger_on_a_later_bar_under_the_owned_source(s
     from dataclasses import replace
     frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
         (101.2,102.5,101,102),(102,104,101.8,103.5),
-        (103.5,105,100.6 if crossed else 101.7,101 if crossed else 104.8)])
+        (103.5,105,100.6 if crossed else 101.9,101 if crossed else 104.8)])
     if short:
         frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
                             "low":220-frame.high,"close":220-frame.close},index=frame.index)
     initial=signal("SELL" if short else "BUY",trigger=119 if short else 101,stop=122 if short else 98)
-    opposite=signal("BUY" if short else "SELL",trigger=119.3 if short else 100.7,stop=110,ts=2)
+    opposite=signal("BUY" if short else "SELL",trigger=118.25 if short else 101.75,stop=110,ts=2)
     _,trades,_=run_williams_paper_replay(frame,{0:[initial],2:[opposite]})
     assert len(trades)==1
     assert trades.iloc[0].exit_reason==("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED" if crossed else "END_OF_DATA")
@@ -47,6 +47,73 @@ def test_opposite_formation_must_trigger_on_a_later_bar_under_the_owned_source(s
     _,trades,_=run_williams_paper_replay(frame,{0:[initial],2:[other]})
     assert trades.iloc[0].exit_reason=="END_OF_DATA"
 
+
+
+@pytest.mark.parametrize("short",[False,True])
+@pytest.mark.parametrize("unfavorable_gap",[False,True])
+def test_tc2_opposite_signal_never_forces_a_discretionary_loss(short,unfavorable_gap):
+    # The trade's structural STOP remains active. A counter-WM trigger can
+    # justify a voluntary close only if post-fill profit exceeds project costs.
+    frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
+        (101.2,102.5,101,102),(102,104,101.8,103.5),
+        ((100.3 if unfavorable_gap else 103.5),104.0,
+         (100.0 if unfavorable_gap else 100.6),101.0)])
+    if short:
+        frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
+                            "low":220-frame.high,"close":220-frame.close},index=frame.index)
+    initial=signal("SELL" if short else "BUY",trigger=119 if short else 101,
+                   stop=122 if short else 98)
+    opposite=signal("BUY" if short else "SELL",
+                    trigger=(118.4 if unfavorable_gap else 119.3) if short
+                            else (101.6 if unfavorable_gap else 100.7),
+                    stop=110,ts=2)
+    _,trades,metrics=run_williams_paper_replay(frame,{0:[initial],2:[opposite]})
+    assert len(trades)==1
+    assert trades.iloc[0].exit_reason=="END_OF_DATA"
+    assert metrics["opposite_exits_blocked_by_profit_reserve"]==1
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_opposite_profit_gate_requires_real_net_after_high_costs(short):
+    frame=candles([(100,100.5,99.5,100),(100.2,101.5,100.1,101.2),
+        (101.2,102.5,101,102),(102,104,101.8,103.5),
+        (103.5,104.0,100.6,101.0)])
+    if short:
+        frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
+                            "low":220-frame.high,"close":220-frame.close},index=frame.index)
+    initial=signal("SELL" if short else "BUY",trigger=119 if short else 101,
+                   stop=122 if short else 98)
+    opposite=signal("BUY" if short else "SELL",trigger=118.4 if short else 101.6,
+                    stop=110,ts=2)
+    _,trades,metrics=run_williams_paper_replay(frame,{0:[initial],2:[opposite]},
+        PaperReplayConfig(fee_rate_per_side=.02))
+    assert trades.iloc[0].exit_reason=="END_OF_DATA"
+    assert metrics["opposite_exits_blocked_by_profit_reserve"]==1
+
+
+def test_h1_replay_rejects_nonfinite_ohlc_and_missing_time_periods():
+    frame=candles([(100,101,99,100),(100,102,99,101),(101,102,100,101)])
+    bad=frame.astype(float).copy()
+    bad.loc[bad.index[1],"high"]=float("inf")
+    with pytest.raises(ValueError,match="invalid OHLC"):
+        run_williams_paper_replay(bad,{})
+    with pytest.raises(ValueError,match="continuous ordered"):
+        run_williams_paper_replay(frame.drop(frame.index[1]),{})
+    with pytest.raises(ValueError,match="continuous ordered"):
+        run_williams_paper_replay(frame.iloc[::-1],{})
+
+
+def test_expiring_wm1_pending_stop_cannot_fill_after_its_lifetime():
+    frame=candles([(100,100.5,99.5,100),(100,100.5,99.5,100),
+        (100,100.5,99.5,100),(100,102,99.5,101)])
+    from dataclasses import replace
+    # Valid signal known on bar 0 close, but expired at bar 3 OPEN.
+    expiry=int(frame.index[3].timestamp()*1000)
+    s=replace(signal(trigger=101,stop=98,ts=int(frame.index[0].timestamp()*1000)),
+              expires_at_ms=expiry)
+    _,trades,metrics=run_williams_paper_replay(frame,{0:[s]})
+    assert trades.empty
+    assert metrics["expired_pending_entries"]==1
 
 def test_long_paper_campaign_uses_conditional_entry_structural_stop_and_real_costs():
     frame = candles([
@@ -135,3 +202,21 @@ def test_paper_replay_rejects_risk_above_entry_cap_and_bad_candles():
         )
     with pytest.raises(ValueError, match="invalid OHLC"):
         run_williams_paper_replay(candles([(100, 99, 101, 100)]), {})
+
+@pytest.mark.parametrize("short",[False,True])
+def test_future_dated_wise_man_cannot_trade_on_past_closed_h1(short):
+    from dataclasses import replace
+    frame=candles([(100,100.5,99.5,100),(100,101.5,98.5,100.5),
+        (100.5,105,97.0,101.0),(101,106,97.0,102.0)])
+    if short:
+        frame=pd.DataFrame({"open":220-frame.open,"high":220-frame.low,
+            "low":220-frame.high,"close":220-frame.close},index=frame.index)
+    side="SELL" if short else "BUY"
+    future=signal(side,trigger=119 if short else 101,
+        stop=122 if short else 98,ts=int(frame.index[3].timestamp()*1000))
+    _,unearned,_=run_williams_paper_replay(frame,{0:[future]})
+    assert unearned.empty
+    genuine=replace(future,signal_bar_time_ms=int(frame.index[0].timestamp()*1000))
+    _,actual,_=run_williams_paper_replay(frame,{0:[genuine]})
+    assert len(actual)==1
+    assert actual.iloc[0].entry_time>=frame.index[1]

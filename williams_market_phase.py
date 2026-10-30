@@ -3,6 +3,8 @@ from williams_wave_hierarchy import FRAME_MS, REQUIRED_FRAMES, build_wave_hierar
 from williams_market_reading import market_reading
 from williams_wave_interpretation import wave_interpretation
 from williams_tc1_terminal_evidence import tc1_five_bullet_evidence
+from williams_course_correction import correction_policy_snapshot
+from williams_course_location import course_four_sign_evidence, course_stage_locations
 
 OBSERVED_MARKET_FRAMES=("1d","6h","4h","1h","15m")
 
@@ -34,7 +36,7 @@ def market_phase_context(hierarchy):
     frames=[]
     for frame in ("1d","6h","4h","1h","15m"):
         usable=[h for h in hierarchy.get("scenarios",[]) if h.get("frame")==frame
-            and h.get("status")=="PROVISIONAL" and 0<h.get("observed_at",0)<=as_of
+            and h.get("status")=="PROVISIONAL" and h.get("observed_at")==as_of
             and len(h.get("anchors",[]))>=2
             and all(0<a.get("known_at",0)<=as_of for a in h["anchors"])
             and h.get("active_direction") in {"UP","DOWN"}
@@ -42,6 +44,15 @@ def market_phase_context(hierarchy):
         if frame in errors:
             usable=[]
         phases={(h["active_label"],h["active_direction"]) for h in usable}
+        # Equal labels/directions do not prove equal wave degree or origin.
+        # Compare real pivot geometry and invalidation, not scenario ids.
+        def structural_signature(h):
+            return (h.get("active_label"),h.get("active_direction"),h.get("direction"),
+                    h.get("invalidation"),
+                    tuple((a.get("kind"),a.get("extreme_at"),a.get("price"))
+                          for a in h.get("anchors",[])))
+        structures={structural_signature(h) for h in usable}
+        competing=len(structures)>1
         hypotheses=[{"scenario_id":h.get("scenario_id",""),
             "last_confirmed_leg":h.get("last_confirmed_leg",h.get("label","")),
             "active_label":h["active_label"],"active_direction":h["active_direction"],
@@ -49,19 +60,25 @@ def market_phase_context(hierarchy):
             "w4_zero":h.get("w4_zero",""),"scale_frame":h.get("scale_frame",""),
             "third_momentum":h.get("third_momentum"),
             "tc1_five_bullets":tc1_five_bullet_evidence(h),
+            "course_four_signs":course_four_sign_evidence(h,as_of),
+            "course_stage_locations":course_stage_locations(h,as_of),
             "scale_bars":h.get("scale_bars",0),"signs":[name for key,name in signs.items() if h.get(key,False)]}
             for h in usable]
         state=("NOT_ANALYSED" if as_of<=0 else "UNAVAILABLE" if frame in errors or (frame=="4h" and frame not in counts and not usable)
             else "UNRESOLVED" if not phases
-            else "ALTERNATIVES" if len(phases)>1 else "PHASE_CANDIDATE")
+            else "ALTERNATIVES" if competing else "PHASE_CANDIDATE")
         frames.append({"frame":frame,"state":state,"history_error":"WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors.get(frame) or None,
             "reason":("WAVE_ANALYSIS_NOT_RUN" if as_of<=0 else errors[frame] if frame in errors else
-                "NO_UNAMBIGUOUS_CAUSAL_WAVE_COUNT" if not phases else "COMPETING_WAVE_COUNTS" if len(phases)>1 else "PROVISIONAL_COUNT_NOT_CERTAINTY"),
+                "NO_UNAMBIGUOUS_CAUSAL_WAVE_COUNT" if not phases else "COMPETING_WAVE_COUNTS" if competing else "PROVISIONAL_COUNT_NOT_CERTAINTY"),
             "closed_bar_count":counts.get(frame,0),
             "examined_scenarios":sum(h.get("frame")==frame for h in hierarchy.get("scenarios",[])),
             "market_reading":next((r for r in hierarchy.get("frame_readings",[]) if r["frame"]==frame),None),
             "hypotheses":hypotheses,"history_candle_count":counts.get(frame),
-            "hypothesis_count":len(hypotheses),"wave_degree_confirmed":False,
+            "hypothesis_count":len(hypotheses),"distinct_structural_hypotheses":len(structures),
+            "wave_count_ambiguous":competing,
+            "ambiguity_reason":("SAME_LABEL_DIFFERENT_PIVOTS_OR_INVALIDATION" if competing and len(phases)==1
+                else "DIFFERENT_WAVE_LABELS_OR_DIRECTIONS" if competing else "NONE"),
+            "wave_degree_confirmed":False,
             "probability_calibrated":False,"can_place_orders":False,"can_close":False,
             "exhaustion_warning":any(h.get("divergence") or h.get("momentum_shift") for h in usable)})
     def warns(frame):
@@ -87,6 +104,7 @@ def market_phase_context(hierarchy):
         if len(recursive)>=16:
             break
     return {"schema":"WILLIAMS_MARKET_PHASE_V1","as_of":as_of,"frames":frames,"warning_scope":scope,
+        "course_correction_policy":correction_policy_snapshot(),
         "recursive_degree_evidence":recursive,
         "wave_interpretation":wave_interpretation(hierarchy),
         "wave_genealogy_confirmed":False,"probability_calibrated":False,

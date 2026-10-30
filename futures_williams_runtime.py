@@ -42,8 +42,16 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILE,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
-from williams_course_campaign import course_active_context,course_next_stage,course_target,TARGETS as COURSE_TARGETS
+from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
+from williams_course_campaign import course_active_context,course_next_stage,course_target
+from williams_course_quantity import (course_initial_quantity,course_stage_quantity,
+    course_owned_quantity_blocker,course_fill_blocker)
+from williams_course_location import course_trim_proof
+from williams_course_exit import (BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS,
+    OPPOSITE_REASONS as COURSE_OPPOSITE_REASONS, TERMINAL_REASONS as COURSE_TERMINAL_REASONS,
+    course_exit_plan,course_exit_proof_blocker,course_closed_motive_handoff)
+from williams_edition_rules import course_initial_protection
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
     next_tranche as tc2_next_tranche, cap_book_tranche,
@@ -429,40 +437,55 @@ class FuturesWilliamsScanner:
         point_zero_confirmed = bool(wave_snapshot.point_zero_confirmed)
         point_zero_score = int(wave_snapshot.point_zero_score)
 
-        profile = EXECUTION_PROFILE
+        profile = os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         profile_block_reason = _signal_profile_entry_block_reason(profile)
         if profile_block_reason:
             self.last_signal_profile_error = profile_block_reason
             return []
-        if profile == "TC2_THREE_WISE_MEN":
-            long_specs = extract_long_signal_specs(
-                symbol,
-                ind,
-                timeframe=self.interval,
-                tick_size=tick,
-                point_zero_confirmed=point_zero_confirmed,
-                point_zero_score=point_zero_score,
-                require_point_zero_for_reversal=os.getenv(
-                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                ).lower() == "true",
-            )
-            short_specs = extract_short_signal_specs(
-                symbol,
-                ind,
-                timeframe=self.interval,
-                tick_size=tick,
-                point_zero_confirmed=point_zero_confirmed,
-                point_zero_score=point_zero_score,
-                require_point_zero_for_reversal=os.getenv(
-                    "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                ).lower() == "true",
-            )
-        else:
-            long_specs=extract_profile_signals(symbol,ind,profile=profile,side="LONG",timeframe=self.interval,tick_size=tick)
-            short_specs=extract_profile_signals(symbol,ind,profile=profile,side="SHORT",timeframe=self.interval,tick_size=tick)
+        execution_source_errors={}
+        try:
+            if profile_allows_source(profile, TC2):
+                long_specs = extract_long_signal_specs(
+                    symbol,
+                    ind,
+                    timeframe=self.interval,
+                    tick_size=tick,
+                    point_zero_confirmed=point_zero_confirmed,
+                    point_zero_score=point_zero_score,
+                    require_point_zero_for_reversal=os.getenv(
+                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                    ).lower() == "true",
+                )
+                short_specs = extract_short_signal_specs(
+                    symbol,
+                    ind,
+                    timeframe=self.interval,
+                    tick_size=tick,
+                    point_zero_confirmed=point_zero_confirmed,
+                    point_zero_score=point_zero_score,
+                    require_point_zero_for_reversal=os.getenv(
+                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
+                    ).lower() == "true",
+                )
+            else:
+                long_specs=[];short_specs=[]
+        except Exception as exc:
+            long_specs=[];short_specs=[]
+            execution_source_errors[TC2]=type(exc).__name__
+        try:
+            if profile_allows_source(profile,NTD):
+                long_specs+=extract_profile_signals(symbol,ind,profile=NTD,side="LONG",timeframe=self.interval,tick_size=tick)
+                short_specs+=extract_profile_signals(symbol,ind,profile=NTD,side="SHORT",timeframe=self.interval,tick_size=tick)
+        except Exception as exc:
+            execution_source_errors[NTD]=type(exc).__name__
+        long_specs=[s for s in long_specs if s.strategy_profile not in execution_source_errors]
+        short_specs=[s for s in short_specs if s.strategy_profile not in execution_source_errors]
         observed,observations=observe_edition_signals(symbol,ind,timeframe=self.interval,tick_size=tick)
+        for observation in observations:
+            if observation["profile"] in execution_source_errors:
+                observation.update(state="ANALYSIS_FAILED",error_type=execution_source_errors[observation["profile"]])
         self.latest_edition_observations[symbol]=observations
-        raw_signals=long_specs+short_specs+[s for s in observed if s.strategy_profile!=EXECUTION_PROFILE]
+        raw_signals=list({s.signal_id:s for s in [*observed,*long_specs,*short_specs]}.values())
         trace_bars=wave_bars_from_dataframe(ind) if {"open","high","low","close","volume"}.issubset(ind.columns) else []
         hierarchy=self.wave_hierarchy(symbol,frame)
         def last_value(name):
@@ -517,8 +540,9 @@ class FuturesWilliamsScanner:
         out: list[FuturesCandidate] = []
 
         for side, specs, htf_ok in (
-            ("LONG", long_specs, long_htf),
-            ("SHORT", short_specs, short_htf),
+            (side,[s for s in specs if s.strategy_profile==source],htf)
+            for side,specs,htf in (("LONG",long_specs,long_htf),("SHORT",short_specs,short_htf))
+            for source in EXECUTION_PROFILES
         ):
             if side == "LONG" and not _env_bool("ALLOW_LONG", True):
                 continue
@@ -902,6 +926,59 @@ class FuturesWilliamsRuntime:
             return 0.0
         return value
 
+    def _course_quantity_grid(self,symbol):
+        filters=self._filters(symbol)
+        return ((filters.get("LOT_SIZE") or {}).get("stepSize",0),
+                (filters.get("MARKET_LOT_SIZE") or {}).get("stepSize",0))
+
+    def _record_course_entry_stage_fill(self,campaign,order,position,cid,*,addition):
+        """Protection and actual exposure survive a partial/unproved Course fill.
+
+        Stage authority does not: bind it to this intent's exact signed fill,
+        rather than reconstructing a unit from the current position on restart.
+        """
+        if campaign.tags.get("strategy_profile")!=COURSE:return
+        plan=campaign.tags.get("course_plan") or {}
+        proposal=campaign.tags.get("course_pending_add_quantity" if addition else "course_initial_quantity") or {}
+        blocker="COURSE_EXACT_QUANTITY_PROPOSAL_UNVERIFIED"
+        try:
+            expected=campaign.tags.get("course_pending_add_client_id" if addition else "course_initial_client_id",
+                campaign.tags.get("pending_order_client_id"))
+            if expected!=cid:
+                raise RuntimeError("COURSE_QUANTITY_FILL_OWNER_MISMATCH")
+            actual_id=order.get("actualOrderId")
+            actual=self.client.get_order(campaign.symbol,order_id=actual_id) if actual_id and str(actual_id)!="0" else order
+            # Conditional child identity is attributed through the signed algo
+            # parent above; a parent ACK cannot stand in for this actual fill.
+            expected_client=actual.get("clientOrderId","") if actual_id else cid
+            blocker=course_fill_blocker(proposal,actual,position,campaign.symbol,campaign.side,
+                expected_client_id=expected_client,expected_order_id=actual_id or order.get("orderId"),protection_verified=True)
+            if not blocker:
+                if proposal.get("from_stage")!=(plan.get("stage","") if addition else ""):
+                    raise RuntimeError("COURSE_QUANTITY_FILL_STAGE_CHANGED")
+                if addition and str(plan.get("unit_quantity"))!=str(proposal.get("unit_quantity")):
+                    # Decimal spelling may differ, its actual value must not.
+                    if Decimal(str(plan.get("unit_quantity")))!=Decimal(proposal["unit_quantity"]):
+                        raise RuntimeError("COURSE_QUANTITY_FILL_UNIT_CHANGED")
+                plan.update(stage=proposal["stage"],unit_quantity=proposal["unit_quantity"],
+                    unit_is_actual=True,unit_basis="CONFIRMED_INITIAL_FILL")
+                if "w3_to_w1_ratio" in proposal:plan["w3_to_w1_ratio"]=proposal["w3_to_w1_ratio"]
+                campaign.tags["course_plan"]=plan
+                receipts=campaign.tags.setdefault("course_stage_fills",[])
+                if not any(r.get("client_id")==cid for r in receipts):
+                    receipts.append({"source":"SIGNED_EXACT_COURSE_STAGE_FILL","client_id":cid,
+                        "order_id":str(actual.get("orderId")),"stage":proposal["stage"],
+                        "quantity":proposal["quantity"],"target_quantity":proposal["target_quantity"],
+                        "unit_quantity":proposal["unit_quantity"]})
+                campaign.tags.pop("course_quantity_blocker",None)
+                if addition:
+                    for key in ("course_pending_add_stage","course_pending_add_target","course_pending_add_quantity","course_pending_add_client_id"):
+                        campaign.tags.pop(key,None)
+                return
+        except Exception as exc:
+            blocker=str(exc) if str(exc).startswith("COURSE_") else "COURSE_SIGNED_STAGE_FILL_UNAVAILABLE"
+        campaign.tags["course_quantity_blocker"]=blocker
+
     def _full_market_close_qty(self, symbol, qty):
         value = Decimal(str(qty))
         if not value.is_finite() or value <= 0:
@@ -1253,6 +1330,12 @@ class FuturesWilliamsRuntime:
 
         purpose = intent.purpose.upper()
         if purpose in {"CAMPAIGN_ENTRY","CAMPAIGN_ADD_ON"}:self._require_entry_time()
+        if purpose in {"CAMPAIGN_ENTRY","CAMPAIGN_ADD_ON"}:
+            profile=getattr(campaign,"tags",{}).get("strategy_profile",TC2)
+            if not profile_allows_source(os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper(),profile):
+                raise RuntimeError("WILLIAMS_SOURCE_CHANGED_BEFORE_SUBMISSION")
+            if profile==NTD:
+                self._revalidate_ntd_signal(campaign,intent)
         if purpose == "CAMPAIGN_CANCEL_ENTRY":
             if campaign.tags.get("pending_order_client_id") != intent.client_order_id:
                 raise RuntimeError("Entry cancellation lacks durable campaign ownership")
@@ -1323,15 +1406,16 @@ class FuturesWilliamsRuntime:
             payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
             if payload.get("strategy_profile",TC2)!=campaign.tags.get("strategy_profile",TC2):
                 raise RuntimeError("Add-on edition changed before submission")
-            if campaign.tags.get("strategy_profile",TC2)==TC2:
+            if campaign.tags.get("strategy_profile",TC2) in OWNED_LIFECYCLE_PROFILES:
                 current=float(self.client.ticker_price(intent.symbol).get("price",0) or 0)
-                reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
-                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
-                if reason:raise RuntimeError("TC2_ADDITION_PREFLIGHT_BLOCKED: "+reason)
+                if intent.order_type!="MARKET":
+                    reason=_pending_entry_preflight_reason(campaign.tags.get("pending_signal"),intent,current,
+                        int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                    if reason:raise RuntimeError("BOOK_ADDITION_PREFLIGHT_BLOCKED: "+reason)
                 require_profitable_position(campaign.side,position.get("entryPrice"),current,
                     campaign.tags.get("pending_order_trigger"))
                 pyramid=campaign.tags.get("tc2_reverse_pyramid")
-                if pyramid is not None:
+                if campaign.tags.get("strategy_profile",TC2)==TC2 and pyramid is not None:
                     required=tc2_next_tranche(pyramid,owned_quantity=pos_qty,additions=campaign.additions)
                     if Decimal(str(intent.quantity))!=required:
                         raise RuntimeError("TC2_PYRAMID_EXACT_BOOK_QUANTITY_REQUIRED")
@@ -1353,6 +1437,14 @@ class FuturesWilliamsRuntime:
                     f"{intent.symbol}: liquidation safety buffer is violated"
                 )
         elif purpose == "CAMPAIGN_EXIT":
+            reason=campaign.tags.get("pending_exit_reason","")
+            if reason=="COURSE_STAGE_TRIM":
+                self._revalidate_course_trim(campaign,float(intent.quantity))
+            if (campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and
+                    reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION"):
+                self._revalidate_course_exit(campaign,reason)
+            if campaign.tags.get("strategy_profile")==NTD and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and campaign.tags.get("pending_exit_authority")!="VERIFIED_RISK_REDUCTION":
+                self._revalidate_ntd_exit(campaign,reason)
             if pos_qty <= 0 or not self._position_matches(campaign, position):
                 raise RuntimeError(
                     f"{intent.symbol}: exit requires the exact active campaign position"
@@ -1520,6 +1612,45 @@ class FuturesWilliamsRuntime:
         except Exception:
             pass  # Observation failure never turns a financial mutation into a retry.
 
+    def _revalidate_ntd_signal(self,campaign,intent):
+        """Recompute the pinned NTD dimension from fresh CLOSED H1 data.
+
+        A saved boolean or a profitable former campaign is insufficient to
+        authorize a new order. No Course/TC2 signal can substitute for NTD.
+        """
+        if intent.purpose.upper()=="CAMPAIGN_ADD_ON" and campaign.tags.get("ntd_cycle_basis") not in {"FIRST_EXTERNAL_FRACTAL","AUTHENTICATED_PROFITABLE_REENTRY"}:
+            raise RuntimeError("NTD_OWNED_FRACTAL_OR_PROFITABLE_CYCLE_NOT_PROVEN")
+        payload=(campaign.tags.get("pending_signal") or {}).get("signal") or {}
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        if (payload.get("strategy_profile")!=NTD or payload.get("timeframe")!="1h" or
+                payload.get("signal_type") not in NTD_FAMILIES or payload.get("signal_id")!=intent.signal_id):
+            raise RuntimeError("NTD_SOURCE_SIGNAL_IDENTITY_UNVERIFIED")
+        frame=fetch_klines(self.client,campaign.symbol,"1h",limit=220)
+        closed=closed_strategy_frame(frame,"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        if closed_h1_history_blocker(bars,now):
+            raise RuntimeError("NTD_CLOSED_H1_HISTORY_UNVERIFIED")
+        ind=calculate_indicators(closed,self.config)
+        found=extract_profile_signals(campaign.symbol,ind,profile=NTD,
+            side="LONG" if campaign.side=="BUY" else "SHORT",timeframe="1h",tick_size=self._tick(campaign.symbol))
+        actual=next((s for s in found if s.signal_id==intent.signal_id),None)
+        if (actual is None or actual.signal_type.value!=payload["signal_type"] or
+                actual.execution_semantics!=payload.get("execution_semantics","STOP_ENTRY") or
+                abs(actual.trigger_price-float(payload.get("trigger_price",0)))>self._tick(campaign.symbol)*.11 or
+                abs(actual.protective_reference-float(payload.get("protective_reference",0)))>self._tick(campaign.symbol)*.11):
+            raise RuntimeError("NTD_FRESH_H1_FORMATION_CHANGED")
+        if intent.purpose.upper()=="CAMPAIGN_ENTRY" and not campaign.tags.get("ntd_reentry_owner_id"):
+            if actual.signal_type!=SignalType.FRACTAL or actual.role!=SignalRole.ENTRY or not actual.setup_context.get("ntd_initial",{}).get("eligible"):
+                raise RuntimeError("NTD_SLEEP_OR_FIRST_BREAKOUT_NOT_PROVEN")
+        if intent.order_type=="MARKET":
+            contract=float(self.client.ticker_price(campaign.symbol).get("price",0))
+            mark_row=self.client.mark_price(campaign.symbol)
+            quote=self.client.book_ticker(campaign.symbol)
+            if mark_row.get("symbol")!=campaign.symbol or quote.get("symbol")!=campaign.symbol:
+                raise RuntimeError("NTD_CLOSE_QUOTE_SYMBOL_UNVERIFIED")
+            require_close_entry(campaign.side,actual.signal_bar_time_ms,actual.trigger_price,
+                float(campaign.tags.get("pending_order_trigger",0)),now,contract,float(mark_row.get("markPrice",0)),quote,self._tick(campaign.symbol))
+
     def _ntd_reentry_source(self,signal):
         row=self.db.conn.execute("SELECT campaign_id FROM campaigns WHERE symbol=? ORDER BY created_at DESC,rowid DESC LIMIT 1",(signal.symbol,)).fetchone()
         previous=self.engine.load_campaign(row["campaign_id"]) if row else None
@@ -1572,7 +1703,7 @@ class FuturesWilliamsRuntime:
         signal = candidate.signal
         if new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError(new_exposure_blocker(signal.strategy_profile))
-        selected_profile=EXECUTION_PROFILE
+        selected_profile=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         if not profile_allows_source(selected_profile,signal.strategy_profile):
             raise RuntimeError("Williams signal source changed before Futures entry")
         reentry=self._ntd_reentry_source(signal) if signal.strategy_profile==NTD else None
@@ -1614,7 +1745,8 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("COURSE_AIRBAG_HISTORY_NOT_PROVEN")
             airbag=course_airbag_stop("LONG" if signal.side=="BUY" else "SHORT",higher_bars,self._tick(symbol))
             if airbag is None:raise RuntimeError("COURSE_AIRBAG_UNAVAILABLE")
-            stop=min(stop,airbag) if signal.side=="BUY" else max(stop,airbag)
+            stop=course_initial_protection("LONG" if signal.side=="BUY" else "SHORT",stop,airbag,trigger)
+            if stop is None:raise RuntimeError("COURSE_FORMATION_OR_AIRBAG_ALREADY_INVALIDATED")
         if signal.side == "BUY":
             if stop >= trigger:
                 raise RuntimeError("LONG protective stop is not below entry trigger")
@@ -1623,7 +1755,7 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("SHORT protective stop is not above entry trigger")
 
         if (
-            self.config.require_htf_confirmation
+            self.config.require_htf_confirmation and signal.strategy_profile!=NTD
             and _requires_directional_htf_confirmation(signal.signal_type)
             and not candidate.htf_confirmed
         ):
@@ -1636,7 +1768,7 @@ class FuturesWilliamsRuntime:
             reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
                 int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,current)
             if reason:raise RuntimeError(reason)
-            trigger=current
+            trigger=close_entry_bound(signal.side,signal.trigger_price,self._tick(symbol))
         self._ensure_symbol_config(symbol)
         if not market_close and signal.side == "BUY" and current >= trigger:
             raise RuntimeError("LONG trigger already crossed")
@@ -1657,6 +1789,20 @@ class FuturesWilliamsRuntime:
         qty, risk_quote, notional = self._size_from_risk(
             symbol, trigger, stop, initial_risk_pct
         )
+        course_quantity=None
+        course_context=None
+        if signal.strategy_profile==COURSE:
+            course_context=course_active_context(self.scanner.wave_hierarchy(symbol,refresh=True),signal.side)
+            # Current H1 W3/W5 labels do not prove genesis of the illustrated
+            # FIRST larger wave. Do not bootstrap a late campaign from them.
+            if not course_context or course_context["phase"]!="W1":
+                raise RuntimeError("COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN")
+            course_quantity=course_initial_quantity(qty,*self._course_quantity_grid(symbol))
+            if course_quantity["status"]!="EXACT_COURSE_QUANTITY":raise RuntimeError(course_quantity["reason"])
+            admitted=float(course_quantity["quantity"])
+            if Decimal(str(self._normalize_qty(symbol,admitted)))!=Decimal(course_quantity["quantity"]):
+                raise RuntimeError("COURSE_FULL_INITIAL_QUANTITY_FILTER_CHANGED")
+            ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         if reentry:
@@ -1671,17 +1817,16 @@ class FuturesWilliamsRuntime:
         campaign.tags["scanner_score_at_entry"] = float(candidate.score)
         campaign.tags["trade_mode"] = candidate.trade_mode
         campaign.tags["strategy_profile"] = signal.strategy_profile
+        if signal.strategy_profile==NTD:
+            campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
         campaign.tags["setup_context"] = dict(signal.setup_context)
         if signal.strategy_profile==TC2:
             campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
                 "unit_quantity":None,"completed_quantities":[]}
         if signal.strategy_profile==COURSE:
-            context=course_active_context(self.scanner.wave_hierarchy(symbol),signal.side)
-            target=course_target(context["phase"],context.get("w3_to_w1_ratio")) if context else None
-            if target:
-                campaign.tags["course_plan"]={"stage":context["phase"],"origin_at":context["origin_at"],
-                    "unit_quantity":qty/target,"unit_is_actual":False,
-                    "w3_to_w1_ratio":context.get("w3_to_w1_ratio"),"policy":"COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED"}
+            campaign.tags["course_initial_quantity"]=course_quantity
+            campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
+                "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
         campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
         campaign.tags["correction_context"] = dict(candidate.correction_context)
         campaign.pending_risk_quote = risk_quote
@@ -1694,6 +1839,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
         campaign.tags["pending_order_stop"] = stop
         campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
+        if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
         self.db.save_campaign(campaign)
 
         cid = campaign.tags["pending_order_client_id"]
@@ -1774,8 +1920,10 @@ class FuturesWilliamsRuntime:
             campaign.tags["pending_signal"] = pending_signal.to_dict()
             campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
             self.db.save_campaign(campaign)
+            if market_close:self._reconcile_pending()
             return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "stop_price": stop, "quantity": qty}
         except Exception:
+            if market_close:self._reconcile_pending()
             self._set_state(symbol, "RECONCILE_REQUIRED")
             raise
 
@@ -1793,6 +1941,12 @@ class FuturesWilliamsRuntime:
             raise RuntimeError("WILLIAMS_SOURCE_OBSERVATION_ONLY")
         if signal.strategy_profile!=profile:
             raise RuntimeError("Add-on profile does not match the durable campaign edition")
+        if profile==NTD and campaign.tags.get("ntd_cycle_basis") not in {"FIRST_EXTERNAL_FRACTAL","AUTHENTICATED_PROFITABLE_REENTRY"}:
+            raise RuntimeError("NTD_OWNED_FRACTAL_OR_PROFITABLE_CYCLE_NOT_PROVEN")
+        if not profile_allows_source(os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper(),profile):
+            raise RuntimeError("ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION")
+        if profile==NTD and signal.signal_type.value not in NTD_FAMILIES:
+            raise RuntimeError("Signal does not belong to NTD")
         if profile==NTD and not addition_signal_time_allowed(signal,campaign):
             raise RuntimeError("NTD addition must be a distinct formation in the owned fractal cycle")
         market_close=(profile==NTD and signal.signal_type==SignalType.ZONE_ADD_ON and signal.execution_semantics=="MARKET_ON_CLOSE")
@@ -1813,10 +1967,10 @@ class FuturesWilliamsRuntime:
             reason=market_on_close_reason(signal.signal_bar_time_ms,FRAME_MS.get(signal.timeframe,0),
                 int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),signal.trigger_price,current)
             if reason:raise RuntimeError(reason)
-            trigger=current
+            trigger=close_entry_bound(signal.side,signal.trigger_price,self._tick(signal.symbol))
         elif (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
             raise RuntimeError("add-on trigger already crossed")
-        if profile==TC2:
+        if profile in OWNED_LIFECYCLE_PROFILES:
             require_profitable_position(campaign.side,campaign.average_entry_price,current,trigger)
         self._ensure_symbol_config(signal.symbol)
 
@@ -1852,16 +2006,23 @@ class FuturesWilliamsRuntime:
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         if profile==COURSE and campaign.tags.get("course_plan"):
             plan=campaign.tags["course_plan"]
+            if campaign.tags.get("course_quantity_blocker") or not plan.get("unit_is_actual"):
+                raise RuntimeError("COURSE_PREVIOUS_EXACT_STAGE_FILL_UNVERIFIED")
             context=course_active_context(self.scanner.wave_hierarchy(signal.symbol),signal.side,plan["origin_at"])
             next_stage=course_next_stage(plan["stage"],context["phase"],True,context.get("w3_to_w1_ratio")) if context else None
             units=course_target(next_stage,context.get("w3_to_w1_ratio")) if context else None
             if units is None:raise RuntimeError("COURSE_STAGE_OR_W3_W1_RATIO_UNCONFIRMED")
-            target=self._normalize_qty(signal.symbol,plan["unit_quantity"]*units)
-            admitted=self._normalize_qty(signal.symbol,min(qty,max(0,target-campaign.position_qty)))
-            if admitted<=0:raise RuntimeError("COURSE_TARGET_QUANTITY_ALREADY_REACHED")
+            exact=course_stage_quantity(plan["unit_quantity"],plan["stage"],next_stage,campaign.position_qty,
+                *self._course_quantity_grid(signal.symbol),risk_cap=qty,w3_to_w1_ratio=context.get("w3_to_w1_ratio"))
+            if exact["status"]!="EXACT_COURSE_QUANTITY":raise RuntimeError(exact["reason"])
+            if exact["action"]!="ADD":raise RuntimeError("COURSE_ADDITION_MUST_INCREASE_OWNED_STAGE")
+            admitted=float(exact["quantity"]);target=float(exact["target_quantity"])
+            if Decimal(str(self._normalize_qty(signal.symbol,admitted)))!=Decimal(exact["quantity"]):
+                raise RuntimeError("COURSE_FULL_TRANCHE_QUANTITY_FILTER_CHANGED")
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
             campaign.tags["course_pending_add_stage"]=next_stage
             campaign.tags["course_pending_add_target"]=target
+            campaign.tags["course_pending_add_quantity"]=exact
         self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
         if not self.db.try_claim_state(admitted_key,"true"):
             raise RuntimeError("This campaign signal is already owned by another admission")
@@ -1873,6 +2034,7 @@ class FuturesWilliamsRuntime:
         campaign.pending_risk_quote = risk_quote
         campaign.capital_reserved_quote = notional / self.config.leverage_for(signal.symbol)
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
+        if profile==COURSE:campaign.tags["course_pending_add_client_id"]=campaign.tags["pending_order_client_id"]
         campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
@@ -1906,18 +2068,22 @@ class FuturesWilliamsRuntime:
             risk_quote=risk_quote,
             capital_reserved_quote=campaign.capital_reserved_quote,
         )
-        result = self._submit(
-            intent,
-            lambda: self.client.order_safe(
-                signal.symbol,
-                signal.side,
-                "MARKET" if market_close else "STOP_MARKET",
-                quantity=self.client.decimal_format(qty),
-                stop_price=None if market_close else self.client.decimal_format(trigger),
-                new_client_order_id=cid,
-            ),
-            lambda _snapshot: None,
-        )
+        try:
+            result = self._submit(
+                intent,
+                lambda: self.client.order_safe(
+                    signal.symbol,
+                    signal.side,
+                    "MARKET" if market_close else "STOP_MARKET",
+                    quantity=self.client.decimal_format(qty),
+                    stop_price=None if market_close else self.client.decimal_format(trigger),
+                    new_client_order_id=cid,
+                ),
+                lambda _snapshot: None,
+            )
+        except Exception:
+            if market_close:self._reconcile_pending()
+            raise
         self.db.save_campaign_order(
             PendingOrderRecord(
                 order_id=str(result.get("orderId", "")),
@@ -1941,6 +2107,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_signal"] = pending_signal.to_dict()
         campaign.tags["pending_order_id"] = str(result.get("orderId", ""))
         self.db.save_campaign(campaign)
+        if market_close:self._reconcile_pending()
         return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "quantity": qty}
 
     def _cancel(self, symbol, order_id, purpose="CAMPAIGN_CANCEL"):
@@ -2151,6 +2318,187 @@ class FuturesWilliamsRuntime:
         return True
 
 
+    def _revalidate_ntd_exit(self,campaign,reason):
+        if market_exit_blocker(NTD,reason):raise RuntimeError("NTD_EXIT_REQUIRES_OWN_BOOK_RULE")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        closed=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=220),"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        if closed_h1_history_blocker(bars,now):raise RuntimeError("NTD_EXIT_H1_HISTORY_UNVERIFIED")
+        if reason in {"TEETH_CLOSE_EXIT","LIPS_CLOSE_EXIT","NTD_FIVE_ZONE_PROTECTION_CROSSED"}:
+            ind=calculate_indicators(closed,canonical_indicator_config_from_env())
+            def values(name):
+                column=next((n for n in (name+"_current",name+"_shifted",name) if n in ind),None)
+                return [float(v) for v in ind[column]] if column else [float("nan")]*len(ind)
+            plan=ntd_management_plan("LONG" if campaign.side=="BUY" else "SHORT",bars,
+                values("teeth"),values("lips"),values("ao"),values("ac"),self._tick(campaign.symbol),
+                int(campaign.tags.get("position_open_observed_at_ms",0)),campaign.tags.get("edition_management",{}))
+            if reason=="NTD_FIVE_ZONE_PROTECTION_CROSSED":
+                stop=plan["stop"];mark=float(self.client.mark_price(campaign.symbol).get("markPrice",0))
+                if stop is None or not math.isfinite(mark) or mark<=0 or not (mark<=stop if campaign.side=="BUY" else mark>=stop):
+                    raise RuntimeError("NTD_ZONE_STOP_NO_LONGER_CROSSED")
+            elif plan["exit_reason"]!=reason:raise RuntimeError("NTD_CLOSED_LINE_EXIT_NO_LONGER_VALID")
+        else:
+            self._require_ntd_opposite_profit(campaign)
+            current=float(self.client.ticker_price(campaign.symbol).get("price",0))
+            if self._triggered_opposite_from_history(campaign,closed,self._tick(campaign.symbol),current) is None:
+                raise RuntimeError("NTD_OPPOSITE_TRIGGER_NO_LONGER_VALID")
+
+    def _require_ntd_opposite_profit(self,campaign):
+        row=self.client.mark_price(campaign.symbol)
+        if not isinstance(row,dict) or row.get("symbol")!=campaign.symbol:
+            raise RuntimeError("NTD_OPPOSITE_EXIT_MARK_UNVERIFIED")
+        blocker=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,
+            row.get("markPrice"),tick=self._tick(campaign.symbol))
+        if blocker:raise RuntimeError(blocker)
+
+    def _course_correction_handoff(self,campaign):
+        plan=campaign.tags.get("course_plan") or {}
+        previous=self.engine.load_campaign(plan.get("motive_campaign_id","")) if plan.get("motive_campaign_id") else None
+        proof=previous.tags.get("course_flat_handoff") if previous else None
+        opened=int(campaign.tags.get("position_open_observed_at_ms",0))
+        if (previous is None or previous.state!=CampaignState.CLOSED or previous.position_qty!=0 or
+                previous.symbol!=campaign.symbol or previous.side==campaign.side or previous.tags.get("strategy_profile")!=COURSE or
+                previous.exit_reason!="COURSE_W5_TERMINAL_CONFIRMED" or not isinstance(proof,dict) or
+                proof.get("source")!="SIGNED_FLAT_COURSE_MOTIVE" or proof.get("motive_campaign_id")!=previous.campaign_id or
+                not 0<proof.get("flat_confirmed_at_ms",0)<opened or
+                self.db.state_get("course_correction_consumed:"+previous.campaign_id)!=campaign.campaign_id):
+            raise RuntimeError("COURSE_CORRECTION_DURABLE_FLAT_HANDOFF_UNVERIFIED")
+        return dict(proof,tick=self._tick(campaign.symbol))
+
+    def _course_exit_observation(self,campaign):
+        if campaign.tags.get("strategy_profile")!=COURSE:raise RuntimeError("COURSE_EXIT_OWNER_UNVERIFIED")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        frame=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+        bars=wave_bars_from_dataframe(frame)
+        if closed_h1_history_blocker(bars,now):raise RuntimeError("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+        quote=self.client.ticker_price(campaign.symbol)
+        if not isinstance(quote,dict) or quote.get("symbol")!=campaign.symbol:
+            raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+        contract=float(quote.get("price",0))
+        if not math.isfinite(contract) or contract<=0:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+        plan=campaign.tags.get("course_plan") or {}
+        correction=self._course_correction_handoff(campaign) if plan.get("stage") in {"A_ENTRY","A_REDUCE","C_ADD"} else None
+        if plan.get("unit_basis")!="CONFIRMED_INITIAL_FILL" or not plan.get("unit_is_actual"):
+            return {"status":"BLOCKED","blocker":"COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED"}
+        quantity_blocker=course_owned_quantity_blocker(plan.get("unit_quantity"),plan.get("stage"),campaign.position_qty,
+            *self._course_quantity_grid(campaign.symbol),w3_to_w1_ratio=plan.get("w3_to_w1_ratio"))
+        if quantity_blocker:return {"status":"BLOCKED","blocker":quantity_blocker}
+        hierarchy=self.scanner.wave_hierarchy(campaign.symbol,refresh=True).to_dict()
+        return course_exit_plan(hierarchy,campaign.side,plan.get("origin_at",0),plan.get("stage",""),
+            int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars,contract,correction)
+
+    def _revalidate_course_exit(self,campaign,reason,*,create=False):
+        if reason not in COURSE_BOOK_EXIT_REASONS or reason=="COURSE_STAGE_TRIM":
+            raise RuntimeError("COURSE_EXIT_REQUIRES_OWN_BOOK_RULE")
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        if campaign.tags.get("strategy_profile")!=COURSE:raise RuntimeError("COURSE_EXIT_OWNER_UNVERIFIED")
+        opened=int(campaign.tags.get("position_open_observed_at_ms",0))
+        old=campaign.tags.get("course_exit_evidence")
+        if not create:
+            blocker=course_exit_proof_blocker(old,campaign.campaign_id,campaign.symbol,campaign.side,reason,opened,now)
+            if blocker:raise RuntimeError(blocker)
+        if reason in COURSE_TERMINAL_REASONS or reason.startswith("COURSE_W3_") or reason.startswith("COURSE_W5_") or reason=="COURSE_CORRECTION_INVALIDATED":
+            proof=self._course_exit_observation(campaign)
+            if proof.get("status")!="OBSERVED_COURSE_SOURCE_RULE" or proof.get("reason")!=reason:
+                raise RuntimeError(proof.get("blocker") or "COURSE_SOURCE_EXIT_NO_LONGER_VALID")
+        else:
+            frame=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+            if closed_h1_history_blocker(wave_bars_from_dataframe(frame),now):raise RuntimeError("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+            quote=self.client.ticker_price(campaign.symbol)
+            if not isinstance(quote,dict) or quote.get("symbol")!=campaign.symbol:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+            contract=float(quote.get("price",0))
+            if not math.isfinite(contract) or contract<=0:raise RuntimeError("COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED")
+            if reason=="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED":
+                higher=wave_bars_from_dataframe(closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"6h",limit=80),"6h",now))
+                if (len(higher)<40 or any(y.t-x.t!=FRAME_MS["6h"] for x,y in zip(higher,higher[1:])) or
+                        not 0<=now-(higher[-1].t+FRAME_MS["6h"])<FRAME_MS["6h"]):
+                    raise RuntimeError("COURSE_AIRBAG_HISTORY_UNVERIFIED")
+                boundary=course_airbag_stop("LONG" if campaign.side=="BUY" else "SHORT",higher,self._tick(campaign.symbol))
+                if boundary is None or not (contract<=boundary if campaign.side=="BUY" else contract>=boundary):
+                    raise RuntimeError("COURSE_AIRBAG_NO_LONGER_CROSSED")
+                proof={"rule_id":"COURSE:AIRBAG:"+str(higher[-1].t),"boundary":boundary}
+            else:
+                signal=self._triggered_opposite_from_history(campaign,frame,self._tick(campaign.symbol),contract)
+                if (signal is None or signal.strategy_profile!=COURSE or signal.side==campaign.side or
+                        signal.role!=SignalRole.ENTRY or signal.execution_semantics!="STOP_ENTRY"):
+                    raise RuntimeError("COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED")
+                proof={"rule_id":"COURSE:OPPOSITION:"+signal.signal_id,"signal_id":signal.signal_id,"boundary":signal.trigger_price}
+        if reason in COURSE_TERMINAL_REASONS|COURSE_OPPOSITE_REASONS:
+            mark=self.client.mark_price(campaign.symbol)
+            if not isinstance(mark,dict) or mark.get("symbol")!=campaign.symbol:raise RuntimeError("COURSE_EXIT_LIVE_MARK_UNVERIFIED")
+            profit=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,mark.get("markPrice"),
+                2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),self._tick(campaign.symbol))
+            if profit:raise RuntimeError(profit.replace("TC2_OPPOSITE_EXIT","COURSE_DISCRETIONARY_EXIT"))
+        proof.update(reason=reason,owner_id=campaign.campaign_id,symbol=campaign.symbol,side=campaign.side,
+                     observed_at_ms=now,trigger_price_basis="CONTRACT_PRICE")
+        if create:
+            campaign.tags["course_exit_evidence"]=proof;self.db.save_campaign(campaign)
+        elif old.get("rule_id")!=proof.get("rule_id") or old.get("boundary")!=proof.get("boundary"):
+            raise RuntimeError("COURSE_EXIT_SOURCE_CHANGED_BEFORE_SUBMIT")
+        return proof
+
+    def _record_course_flat_handoff(self,campaign,order):
+        if campaign.tags.get("strategy_profile")!=COURSE or campaign.exit_reason!="COURSE_W5_TERMINAL_CONFIRMED":return False
+        if campaign.tags.get("course_flat_handoff"):return True
+        try:
+            qty=float(order.get("executedQty",0))
+            cid=str(order.get("clientOrderId",""))
+            row=self.db.conn.execute("SELECT campaign_id,purpose,quantity FROM campaign_orders WHERE client_order_id=? ORDER BY id DESC LIMIT 1",(cid,)).fetchone()
+            if (campaign.state!=CampaignState.CLOSED or campaign.position_qty!=0 or order.get("status")!="FILLED" or
+                    order.get("symbol")!=campaign.symbol or order.get("side")==campaign.side or not math.isfinite(qty) or qty<=0 or
+                    str(order.get("reduceOnly","")).lower()!="true" or not row or row["campaign_id"]!=campaign.campaign_id or row["purpose"]!="CAMPAIGN_EXIT" or
+                    not math.isclose(qty,float(row["quantity"]),rel_tol=1e-12,abs_tol=1e-12) or
+                    self._signed_position_qty(self._position(campaign.symbol))!=0 or self.client.open_orders(campaign.symbol)):
+                return False
+            proof=course_closed_motive_handoff(campaign.campaign_id,campaign.side,
+                (campaign.tags.get("course_plan") or {}).get("origin_at",0),campaign.exit_reason,
+                int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)),
+                signed_exit_filled=True,signed_flat=True,orders_clean=True)
+            if proof is None:return False
+            proof["exit_client_id"]=str(order.get("clientOrderId",""))
+            campaign.tags["course_flat_handoff"]=proof;self.db.save_campaign(campaign);return True
+        except Exception:return False
+
+    def _course_trim_plan(self,campaign):
+        plan=campaign.tags.get("course_plan") or {}
+        if (campaign.tags.get("strategy_profile")!=COURSE or not plan.get("unit_is_actual") or
+                plan.get("unit_basis")!="CONFIRMED_INITIAL_FILL"):
+            return {"status":"BLOCKED","reason":"COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED"}
+        now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+        closed=closed_strategy_frame(fetch_klines(self.client,campaign.symbol,"1h",limit=260),"1h",now)
+        bars=wave_bars_from_dataframe(closed)
+        blocker=closed_h1_history_blocker(bars,now)
+        if blocker:return {"status":"BLOCKED","reason":"COURSE_TRIM_H1_HISTORY_UNVERIFIED"}
+        report=self.scanner.wave_hierarchy(campaign.symbol,refresh=True)
+        proof=course_trim_proof(report.to_dict(),campaign.side,plan.get("origin_at",0),plan.get("stage",""),
+            int(campaign.tags.get("position_open_observed_at_ms",0)),now,bars)
+        if proof["status"]!="OBSERVED_SOURCE_PINNED_REDUCTION":return proof
+        exact=course_stage_quantity(plan.get("unit_quantity"),plan["stage"],proof["stage"],campaign.position_qty,
+            *self._course_quantity_grid(campaign.symbol),w3_to_w1_ratio=plan.get("w3_to_w1_ratio"))
+        if exact["status"]!="EXACT_COURSE_QUANTITY":return {"status":"BLOCKED","reason":exact["reason"]}
+        if exact["action"]!="REDUCE":return {"status":"BLOCKED","reason":"COURSE_TRIM_MUST_REDUCE_OWNED_STAGE"}
+        proof["target_quantity"]=float(exact["target_quantity"])
+        proof["reduction_quantity"]=float(exact["quantity"])
+        proof["exact_quantity"]=exact
+        mark=self.client.mark_price(campaign.symbol)
+        if not isinstance(mark,dict) or mark.get("symbol")!=campaign.symbol:
+            return {"status":"BLOCKED","reason":"COURSE_TRIM_LIVE_MARK_UNVERIFIED"}
+        profit=tc2_opposite_exit_profit_blocker(campaign.side,campaign.average_entry_price,mark.get("markPrice"),
+            2*float(os.getenv("FEE_BUFFER_PER_SIDE_PCT","0.001"))+float(os.getenv("RISK_SLIPPAGE_BUFFER_PCT","0.0015")),self._tick(campaign.symbol))
+        if profit:return {"status":"BLOCKED","reason":profit.replace("TC2_OPPOSITE_EXIT","COURSE_STAGE_TRIM")}
+        return proof
+
+    def _revalidate_course_trim(self,campaign,quantity):
+        proof=self._course_trim_plan(campaign)
+        if proof.get("status")!="OBSERVED_SOURCE_PINNED_REDUCTION":
+            raise RuntimeError(proof.get("reason","COURSE_SOURCE_TRIM_UNVERIFIED"))
+        if (campaign.tags.get("pending_course_stage")!=proof["stage"] or
+                not math.isfinite(quantity) or quantity<=0 or
+                Decimal(str(quantity))!=Decimal(proof["exact_quantity"]["quantity"]) or
+                not 0<proof["target_quantity"]<campaign.position_qty):
+            raise RuntimeError("COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED")
+        return proof
+
     @serialized_campaign_operation
     def _exit_market(self, campaign, reason, *, partial_quantity=None, risk_emergency=False):
         """Durable reduce-only market exit; protection is cancelled only after flat."""
@@ -2158,6 +2506,18 @@ class FuturesWilliamsRuntime:
                                      risk_emergency=risk_emergency)
         if blocker:
             raise RuntimeError(blocker)
+        if reason=="COURSE_STAGE_TRIM":
+            if partial_quantity is None:raise RuntimeError("COURSE_TRIM_MUST_BE_PARTIAL")
+            trim=self._revalidate_course_trim(campaign,float(partial_quantity))
+            if isinstance(trim,dict):campaign.tags["course_pending_trim_quantity"]=trim.get("exact_quantity")
+        if campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and not risk_emergency:
+            self._revalidate_course_exit(campaign,reason,create=True)
+        if campaign.tags.get("strategy_profile")==NTD and campaign.state==CampaignState.ADD_ON_PENDING and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
+            self._revalidate_ntd_exit(campaign,reason)
+        ntd_opposite=(campaign.tags.get("strategy_profile")==NTD and not risk_emergency and
+            reason in ("NTD_OPPOSITE_SIGNAL_TRIGGERED","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
+                       "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"))
+        if ntd_opposite:self._require_ntd_opposite_profit(campaign)
         # TC2 book exit MUST have a fresh, pinned-source causal trigger before
         # canceling resting additions or reading/mutating any exchange orders.
         if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
@@ -2236,13 +2596,28 @@ class FuturesWilliamsRuntime:
                 f"{symbol}: position is flat without attributable campaign exit"
             )
 
+        if campaign.tags.get("strategy_profile")==NTD and not risk_emergency and reason not in {"MANUAL_EXIT","KILL_SWITCH"}:
+            self._revalidate_ntd_exit(campaign,reason)
+        if ntd_opposite:self._require_ntd_opposite_profit(campaign)
         # Last possible read-only check before persisting EXIT_PENDING.
-        # The mark observed while detecting an H1 opposite signal is NOT
-        # authorization hours later, nor if MARK diverged from CONTRACT.
-        # No live-mark proof => keep the Binance protective stop untouched.
+        # A prior contract quote cannot authorize a later H1 book exit.
+        # Recheck its original price basis; retain MARK for risk/profit only.
         if (campaign.tags.get("strategy_profile",TC2)==TC2 and not risk_emergency
                 and reason in ("OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",
                                "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION")):
+            try:
+                contract_row=self.client.ticker_price(symbol)
+                if not isinstance(contract_row,dict) or contract_row.get("symbol")!=symbol:
+                    raise ValueError("contract quote symbol mismatch")
+                current_contract=float(contract_row["price"])
+            except Exception as exc:
+                raise RuntimeError("TC2_EXIT_LIVE_CONTRACT_UNVERIFIED") from exc
+            blocker=tc2_opposite_exit_evidence_blocker(
+                campaign.tags,reason,int(time.time()*1000)+
+                int(getattr(self.client,"time_offset_ms",0)),
+                campaign.side,symbol,live_contract=current_contract)
+            if blocker:
+                raise RuntimeError(blocker)
             try:
                 mark_row=self.client.mark_price(symbol)
                 if not isinstance(mark_row,dict) or mark_row.get("symbol")!=symbol:
@@ -2252,12 +2627,6 @@ class FuturesWilliamsRuntime:
                 # Network outage, malformed payload or stale/missing mark:
                 # no strategy close, the existing exchange STOP remains.
                 raise RuntimeError("TC2_EXIT_LIVE_MARK_UNVERIFIED") from exc
-            blocker=tc2_opposite_exit_evidence_blocker(
-                campaign.tags,reason,int(time.time()*1000)+
-                int(getattr(self.client,"time_offset_ms",0)),
-                campaign.side,symbol,live_mark=current_mark)
-            if blocker:
-                raise RuntimeError(blocker)
             # The final signed exchange position (not the original hypothetical
             # signal's price) defines actual break-even for this campaign.
             try:
@@ -2277,6 +2646,9 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError(profit_blocker)
 
         is_partial=partial_quantity is not None
+        if campaign.tags.get("strategy_profile")==COURSE and reason!="COURSE_STAGE_TRIM" and reason not in {"MANUAL_EXIT","KILL_SWITCH"} and not risk_emergency:
+            self._revalidate_course_exit(campaign,reason)
+        if reason=="COURSE_STAGE_TRIM":self._revalidate_course_trim(campaign,float(partial_quantity))
         if is_partial and (campaign.tags.get("strategy_profile")!=COURSE or reason!="COURSE_STAGE_TRIM"):
             raise RuntimeError("Partial reduction requires an owned Course campaign stage")
         qty = self._full_market_close_qty(symbol, float(partial_quantity) if is_partial else pos_qty)
@@ -2454,6 +2826,7 @@ class FuturesWilliamsRuntime:
             self.db.state_delete(f"entry_client_order_id:{symbol}")
             self._set_state(symbol, "FLAT")
             self._record_ntd_trade_result(campaign)
+            self._record_course_flat_handoff(campaign,result)
             return {
                 "state": "CLOSED",
                 "symbol": symbol,
@@ -2641,6 +3014,19 @@ class FuturesWilliamsRuntime:
                 symbol=campaign.symbol, side=trade["side"], entry_price=entry, exit_price=price, quantity=executed,
                 pnl=pnl, pnl_pct=pnl / (entry * executed), fees=fees + float(trade.get("fees") or 0) * executed / original,
                 reason="PARTIAL_CAMPAIGN_EXIT:" + order["clientOrderId"])
+        course_blocker=None
+        course_proposal=campaign.tags.get("course_pending_trim_quantity") or {}
+        if campaign.tags.get("pending_exit_is_course_reduction",False):
+            protected=False
+            try:protected=any(self._protection_matches(campaign,row) for row in self.client.open_orders(campaign.symbol))
+            except Exception:pass
+            course_blocker=course_fill_blocker(course_proposal,order,position,campaign.symbol,campaign.side,
+                expected_client_id=campaign.tags.get("pending_exit_client_id",""),protection_verified=protected)
+            plan=campaign.tags.get("course_plan") or {}
+            if not course_blocker and (course_proposal.get("from_stage")!=plan.get("stage") or
+                    course_proposal.get("stage")!=campaign.tags.get("pending_course_stage") or
+                    Decimal(str(plan.get("unit_quantity")))!=Decimal(course_proposal["unit_quantity"])):
+                course_blocker="COURSE_QUANTITY_FILL_STAGE_OR_UNIT_CHANGED"
         with self.db.transaction():
             if partial is not None:
                 if self.db.conn.execute("SELECT 1 FROM trades WHERE reason=?", (partial["reason"],)).fetchone():
@@ -2650,11 +3036,17 @@ class FuturesWilliamsRuntime:
                 self.db.update_trade_position(trade["id"], remaining, campaign.average_entry_price)
                 self.db.conn.execute("UPDATE trades SET fees=? WHERE id=?", (float(trade.get("fees") or 0) * remaining / original, trade["id"]))
             if campaign.tags.get("pending_exit_is_course_reduction",False):
-                requested=float(campaign.tags.get("pending_exit_quantity",0) or 0)
                 pending_stage=campaign.tags.pop("pending_course_stage",None)
-                if pending_stage and math.isclose(executed,requested,rel_tol=1e-12,abs_tol=1e-12):
+                if pending_stage and not course_blocker:
                     campaign.tags.setdefault("course_plan",{})["stage"]=pending_stage
+                    campaign.tags.setdefault("course_stage_fills",[]).append({"source":"SIGNED_EXACT_COURSE_STAGE_FILL",
+                        "client_id":order["clientOrderId"],"order_id":str(order["orderId"]),"stage":pending_stage,
+                        "quantity":course_proposal["quantity"],"target_quantity":course_proposal["target_quantity"],
+                        "unit_quantity":course_proposal["unit_quantity"]})
+                    campaign.tags.pop("course_quantity_blocker",None)
+                elif course_blocker:campaign.tags["course_quantity_blocker"]=course_blocker
                 campaign.tags.pop("pending_exit_is_course_reduction",None)
+                campaign.tags.pop("course_pending_trim_quantity",None)
             campaign.open_risk_quote *= remaining / original
             campaign.position_qty = remaining
             if campaign.state == CampaignState.EXIT_PENDING:
@@ -2832,7 +3224,8 @@ class FuturesWilliamsRuntime:
                     self._set_pending_signal_state(
                         campaign, SignalState.FILLED, filled_quantity=executed
                     )
-                    if purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING:
+                    is_addition_fill=purpose == "ADD_ON" or campaign.state == CampaignState.ADD_ON_PENDING
+                    if is_addition_fill:
                         expected_delta = float(executed)
                         old_qty = float(campaign.position_qty)
                         actual_delta = max(0.0, pos_qty - old_qty)
@@ -2967,6 +3360,8 @@ class FuturesWilliamsRuntime:
                             continue
                         self._set_state(symbol, "OPEN")
 
+                    self._record_course_entry_stage_fill(campaign,order,position,cid,addition=is_addition_fill)
+                    self.db.save_campaign(campaign)
                     components=campaign.tags.setdefault("verified_entry_risk_components",[])
                     if not any(fill["client_id"]==cid for fill in components):
                         components.append({"client_id":cid,"quantity":executed,"price":execution_price,
@@ -3064,6 +3459,10 @@ class FuturesWilliamsRuntime:
 
         self._cleanup_campaign_protection(campaign)
 
+        recovered_course_reason=(campaign.tags.get("pending_exit_reason") if
+            campaign.tags.get("strategy_profile")==COURSE and
+            str(order.get("clientOrderId",""))==campaign.tags.get("pending_exit_client_id") and
+            campaign.tags.get("pending_exit_reason") in COURSE_BOOK_EXIT_REASONS else None)
         trade = self.db.open_trade(campaign.symbol)
         if trade is not None:
             entry = float(campaign.average_entry_price or trade.get("entry_price") or 0)
@@ -3083,7 +3482,7 @@ class FuturesWilliamsRuntime:
             reason = (
                 "STOP_FILLED"
                 if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
-                else "CAMPAIGN_EXIT_FILLED"
+                else recovered_course_reason or "CAMPAIGN_EXIT_FILLED"
             )
             self.db.close_trade(
                 trade["id"],
@@ -3101,7 +3500,7 @@ class FuturesWilliamsRuntime:
         campaign.exit_reason = (
             "STOP_FILLED"
             if str(order.get("clientOrderId", "")).startswith("WILLF_STOP_")
-            else "CAMPAIGN_EXIT_FILLED"
+            else recovered_course_reason or "CAMPAIGN_EXIT_FILLED"
         )
         campaign.next_action = "WAIT"
         campaign.reconciliation_state = "CLEAN"
@@ -3110,6 +3509,7 @@ class FuturesWilliamsRuntime:
         self.db.state_delete(f"entry_client_order_id:{campaign.symbol}")
         self._set_state(campaign.symbol, "FLAT")
         self._record_ntd_trade_result(campaign)
+        self._record_course_flat_handoff(campaign,order)
         return True
 
     def _cleanup_campaign_protection(self, campaign):
@@ -3221,16 +3621,20 @@ class FuturesWilliamsRuntime:
                     campaign.current_stop_price = float(managed[0].get("stopPrice", campaign.current_stop_price) or campaign.current_stop_price)
                     campaign.tags.pop("pending_protection_client_id", None)
                     campaign.tags.pop("pending_protection_price", None)
-                course_plan=campaign.tags.get("course_plan")
-                if course_plan and not course_plan.get("unit_is_actual",False) and campaign.additions==0:
-                    units=course_target(course_plan["stage"],course_plan.get("w3_to_w1_ratio"))
-                    if units:
-                        course_plan["unit_quantity"]=campaign.position_qty/units
-                        course_plan["unit_is_actual"]=True
-                pending_stage=campaign.tags.get("course_pending_add_stage")
-                if pending_stage and math.isclose(campaign.position_qty,float(campaign.tags.get("course_pending_add_target",0)),rel_tol=1e-9,abs_tol=1e-9):
-                    campaign.tags["course_plan"]["stage"]=pending_stage
-                    campaign.tags.pop("course_pending_add_stage",None);campaign.tags.pop("course_pending_add_target",None)
+                # Never infer an initial unit or a completed addition merely
+                # from a target-shaped position. Exact signed fill receipts are
+                # recorded in _reconcile_pending after protection succeeds.
+                if campaign.tags.get("strategy_profile")==COURSE:
+                    plan=campaign.tags.get("course_plan") or {}
+                    addition=bool(campaign.tags.get("course_pending_add_quantity"))
+                    if addition or campaign.tags.get("course_initial_quantity") and not plan.get("unit_is_actual"):
+                        cid=campaign.tags.get("course_pending_add_client_id" if addition else "course_initial_client_id",
+                            campaign.tags.get("pending_order_client_id",""))
+                        try:
+                            order=self.client.get_order(symbol,orig_client_order_id=cid,
+                                conditional=campaign.tags.get("pending_order_type","STOP_MARKET")!="MARKET")
+                            self._record_course_entry_stage_fill(campaign,order,position,cid,addition=addition)
+                        except Exception:campaign.tags["course_quantity_blocker"]="COURSE_SIGNED_STAGE_FILL_UNAVAILABLE"
                 campaign.reconciliation_state = "CLEAN"
                 campaign.health = "GREEN"
                 self.db.save_campaign(campaign)
@@ -3276,9 +3680,7 @@ class FuturesWilliamsRuntime:
                 if not correction_bounds_valid(proof):
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
                 if not correction_price_allowed(proof,current_price):
-                    if profile!=TC2 and strategy_market_close_allowed(profile):
-                        return self._exit_market(campaign,"CORRECTION_PARENT_PRICE_INVALIDATED")
-                    tags["tc2_correction_boundary_advisory"] = {
+                    tags["course_boundary_advisory" if profile==COURSE else "tc2_correction_boundary_advisory"] = {
                         "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
                         "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
                     if hasattr(self, "db"):
@@ -3286,14 +3688,24 @@ class FuturesWilliamsRuntime:
             if profile==COURSE:
                 plan=tags.get("course_plan")
                 if plan and hasattr(self,"scanner"):
-                    context=course_active_context(self.scanner.wave_hierarchy(symbol),campaign.side,plan["origin_at"])
-                    stage=course_next_stage(plan["stage"],context["phase"]) if context else None
-                    if stage in {"W2","W4"}:
-                        target=plan["unit_quantity"]*COURSE_TARGETS[stage]
-                        reduction=self._normalize_qty(symbol,max(0,campaign.position_qty-target))
+                    try:proof=self._course_trim_plan(campaign)
+                    except Exception as exc:proof={"status":"BLOCKED","reason":"COURSE_TRIM_SOURCE_UNAVAILABLE","error":type(exc).__name__}
+                    tags["course_stage_admission"]=proof;self.db.save_campaign(campaign)
+                    if proof.get("status")=="OBSERVED_SOURCE_PINNED_REDUCTION":
+                        stage=proof["stage"];reduction=proof["reduction_quantity"]
                         if 0<reduction<campaign.position_qty:
                             tags["pending_course_stage"]=stage;self.db.save_campaign(campaign)
                             return self._exit_market(campaign,"COURSE_STAGE_TRIM",partial_quantity=reduction)
+                if plan and plan.get("stage") in {"W3","W5","A_ENTRY","A_REDUCE","C_ADD"}:
+                    try:terminal=self._course_exit_observation(campaign)
+                    except Exception as exc:terminal={"status":"BLOCKED","blocker":"COURSE_EXIT_SOURCE_UNAVAILABLE","error":type(exc).__name__}
+                    tags["course_terminal_admission"]=terminal;self.db.save_campaign(campaign)
+                    if terminal.get("status")=="OBSERVED_COURSE_SOURCE_RULE":
+                        try:return self._exit_market(campaign,terminal["reason"])
+                        except RuntimeError as rejection:
+                            if campaign.state in {CampaignState.EXIT_PENDING,CampaignState.EXIT_SIGNALLED}:raise
+                            tags["course_terminal_admission"]={"status":"BLOCKED","blocker":str(rejection)}
+                            self.db.save_campaign(campaign)
                 higher=closed_strategy_frame(fetch_klines(self.client,symbol,"6h",limit=80),"6h",
                     int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                 airbag=course_airbag_stop("LONG" if campaign.side=="BUY" else "SHORT",wave_bars_from_dataframe(higher),tick)
@@ -3348,7 +3760,8 @@ class FuturesWilliamsRuntime:
                             "strategy_profile":TC2,
                             "direction":"SHORT" if campaign.side=="BUY" else "LONG",
                             "signal_id":opposing.signal_id,"trigger":trigger,
-                            "mark":current_price,"event":event}
+                            "trigger_price_basis":"CONTRACT_PRICE",
+                            "contract_price":current_price,"event":event}
                         if hasattr(self,"db"):
                             self.db.save_campaign(campaign)
                         return self._exit_market(campaign,reason)
@@ -3396,7 +3809,9 @@ class FuturesWilliamsRuntime:
             if hasattr(self,"db") and hasattr(campaign,"campaign_id"):self.db.save_campaign(campaign)
             if management["exit_reason"]:return self._exit_market(campaign,management["exit_reason"])
             opposing=self._triggered_opposite_from_history(campaign,closed,tick,current_price)
-            if opposing is not None:return self._exit_market(campaign,"NTD_OPPOSITE_SIGNAL_TRIGGERED")
+            if opposing is not None and tc2_opposite_exit_profit_blocker(campaign.side,
+                    campaign.average_entry_price,current_price,tick=tick) is None:
+                return self._exit_market(campaign,"NTD_OPPOSITE_SIGNAL_TRIGGERED")
             proposed=management["stop"]
             if proposed is not None:
                 if (current_price<=proposed if campaign.side=="BUY" else current_price>=proposed):
@@ -3436,10 +3851,10 @@ class FuturesWilliamsRuntime:
                 s.execution_semantics,s.signal_bar_time_ms,s.trigger_price,
                 s.invalidation_price if s.invalidation_price>0 else None,s.expires_at_ms or now+FRAME_MS[interval])
                 for s in candidates.values()],wave_bars_from_dataframe(closed),mark,now,FRAME_MS[interval])
-        if profile==TC2 and assessment["uncertain"]:
+        if assessment["uncertain"]:
             # A same-bar trigger/invalidation or a gap cannot justify closing
             # a verified protected campaign. Keep broker STOP live.
-            campaign.tags["tc2_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
+            campaign.tags["tc2_opposition_advisory_error" if profile==TC2 else "source_opposition_advisory_error"]="AMBIGUOUS_OR_MISSING_H1_HISTORY"
             return None
         evidence=assessment["opposition"]
         if evidence is None:
@@ -3565,7 +3980,7 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
-        unified=False  # Observers cannot veto or authorize the TC2 execution pool.
+        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
         conflicts={symbol for symbol,rows in by_symbol.items()
                    if unified and unified_direction_conflict(
                        c.side for c in rows if c.signal.role==SignalRole.ENTRY)}

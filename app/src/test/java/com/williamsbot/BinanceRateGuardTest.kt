@@ -7,6 +7,33 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class BinanceRateGuardTest {
+    @Test fun longExchangeCooldownDoesNotStrandTheMonitoringWorkerOrPermitEarlyRequests() {
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("Retry-After", "120"), 429)
+        val start = System.nanoTime()
+        repeat(2) {
+            try {
+                guard.beforeRequest()
+                throw AssertionError("Long Binance cooldown must not admit a request")
+            } catch (expected: IllegalStateException) {
+                org.junit.Assert.assertTrue(expected.message.orEmpty().contains("cooldown retained"))
+            }
+        }
+        org.junit.Assert.assertTrue("Long cooldown must fail locally without sleeping", System.nanoTime()-start < 1_000_000_000L)
+        org.junit.Assert.assertTrue(guard.snapshot().getLong("cooldown_ms") > 110_000L)
+        assertEquals(2L, guard.snapshot().getLong("bounded_wait_rejected_count"))
+    }
+
+    @Test fun aShortLocalBudgetCannotOverrideExistingRateLimitReservation() {
+        val guard = BinanceRateGuard()
+        guard.beforeRequest()
+        try {
+            guard.beforeRequest(maximumWaitMs = 1L)
+            throw AssertionError("A short budget must reject, never skip the reserved delay")
+        } catch (_: IllegalStateException) { }
+        assertEquals(1L, guard.snapshot().getLong("bounded_wait_rejected_count"))
+    }
+
     @Test
     fun learnsTenSecondOrderLimitFromExchangeInfo() {
         val guard = BinanceRateGuard()

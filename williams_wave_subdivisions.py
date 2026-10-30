@@ -41,19 +41,21 @@ def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of,all
         endpoints.append(found[0])
     if any(a>=b for a,b in zip(endpoints,endpoints[1:])):
         return SubdivisionProof("UNRESOLVED",tuple(expected),(),0,"CHILD_ENDPOINT_ORDER_INVALID")
+    # Preserve the completed causal lower-degree legs when a later leg fails.
+    # This is diagnostic evidence only, not a completed Elliott count.
     observed=tuple(b-a for a,b in zip(endpoints,endpoints[1:]));last_known=0;shapes=[]
     for leg,(a,b),needed in zip(range(len(expected)),zip(endpoints,endpoints[1:]),expected):
         sub=known[a:b+1];sign=1 if sub[0].kind=="LOW" else -1
         p=[sign*x.price for x in sub]
         last_known=max(last_known,max(x.known_at for x in sub))
         if b-a!=needed:
-            return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"SUBDIVISION_COUNT_FAILED")
+            return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"SUBDIVISION_COUNT_FAILED",tuple(shapes))
         if needed==5:
             lengths=[p[1]-p[0],p[3]-p[2],p[5]-p[4]]
             # A completed fifth can end short of W3. Its price envelope is
             # then bounded by W3, not by the orthodox final endpoint W5.
             if not (p[0]<p[2]<p[1]<p[4]<p[3] and p[5]>p[4]) or lengths[1]<min(lengths[0],lengths[2]):
-                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_IMPULSE_GEOMETRY_FAILED")
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_IMPULSE_GEOMETRY_FAILED",tuple(shapes))
             shapes.append("IMPULSE_PRICE_SKELETON" if p[5]>p[3] else "TRUNCATED_IMPULSE_PRICE_SKELETON")
         else:
             # A corrective three may be flat: expanded B crosses its own
@@ -61,16 +63,16 @@ def prove_wave_subdivisions(parent,children,expected,*,parent_duration,as_of,all
             # must remain visible in evidence rather than be discarded by
             # an endpoint-envelope shortcut intended for simple zigzags.
             if not (p[1]>p[0] and p[2]<p[1] and p[3]>max(p[0],p[2])):
-                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED")
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED",tuple(shapes))
             if p[2]<p[0]:
                 shape="EXPANDED_FLAT_PRICE_SKELETON" if p[3]>p[1] else "RUNNING_FLAT_PRICE_SKELETON"
             elif p[3]>=p[1]:
                 shape="REGULAR_FLAT_PRICE_SKELETON" if p[2]==p[0] else "ZIGZAG_PRICE_SKELETON"
             else:
-                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED")
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"INTERNAL_ABC_GEOMETRY_FAILED",tuple(shapes))
             shapes.append(shape)
             if not allow_flat_corrections and shape!="ZIGZAG_PRICE_SKELETON":
-                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"DIAGONAL_REQUIRES_ZIGZAG_SUBWAVES")
+                return SubdivisionProof("UNRESOLVED",tuple(expected),observed,last_known,"DIAGONAL_REQUIRES_ZIGZAG_SUBWAVES",tuple(shapes))
     return SubdivisionProof("PRICE_SUBDIVISIONS_CONFIRMED",tuple(expected),observed,last_known,"REAL_CONFIRMED_CHILD_PIVOTS",tuple(shapes))
 
 

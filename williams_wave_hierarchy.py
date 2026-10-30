@@ -79,6 +79,7 @@ class WaveHypothesis:
     alternatives: list[str] = field(default_factory=list)
     leg_observation_start: int = 0
     third_momentum: dict | None = None
+    observed_close_price: float = 0.0
 
     @property
     def active_label(self):
@@ -155,7 +156,10 @@ def closed_wave_bars(bars: Sequence[WaveBar], frame: str, as_of: int) -> list[Wa
             raise ValueError("INVALID_OHLCV")
         if i and b.t - closed[i - 1].t != duration:
             raise ValueError("GAPPED_OR_UNORDERED_HISTORY")
-    if as_of - (closed[-1].t + duration) >= duration * 2:
+    # The latest fully closed candle must be present. At a new H1/H4
+    # boundary an older close is *already* stale; never infer a wave from a
+    # silently missing whole period. Keep parity with Android's closed bars.
+    if as_of < closed[-1].t + duration or as_of - (closed[-1].t + duration) >= duration:
         raise ValueError("STALE_CLOSED_HISTORY")
     return closed
 
@@ -256,8 +260,14 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     # length and a 140-bar screen window do not determine its wave degree.
     options = []
     for frame, bars in frames.items():
+        # The wave's proposed parent degree cannot borrow senior oscillators.
+        # TC1 pp.61-63 instead switches to a *finer real resolution* until
+        # the SAME price sequence occupies 100-140 genuine bars.
+        if FRAME_MS[frame] > FRAME_MS[h.frame]:
+            continue
         indexes = [i for i, b in enumerate(bars) if b.t >= start and b.t < stop]
-        if not indexes or indexes[0] < 33 or bars[0].t > start:
+        if (not indexes or indexes[0] < 33 or bars[0].t > start
+                or bars[indexes[0]].t - start >= FRAME_MS[frame]):
             continue
         count = len(indexes)
         options.append((not 100 <= count <= 140, abs(count - 120), frame, indexes))
@@ -279,11 +289,29 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
             and abs((b.h if anchor.kind=="HIGH" else b.l)-anchor.price)<=max(1e-9,anchor.price*1e-9)]
         return candidates[0] if len(candidates)==1 and FRAME_MS[frame]<=FRAME_MS[h.frame] else None
 
+    # Book W5 price-target geometry is independent of certainty about AO
+    # timestamps; keep it visible even if W3/W4 evidence must abstain.
+    if len(p) >= 6:
+        extension = abs(p[3].price - p[0].price)
+        target1 = p[4].price + sign * extension * .62
+        target2 = p[4].price + sign * extension
+        h.target_zone = min(target1, target2) <= p[5].price <= max(target1, target2)
     third_index=unique_price_index(p[3])
     fourth_index=unique_price_index(p[4]) if len(p)>=5 else indexes[-1]
     h.third_momentum=(evaluate_third_momentum(bars,osc,indexes[0],third_index,fourth_index,
         h.direction,FRAME_MS[frame]) if third_index is not None and fourth_index is not None else
         third_momentum_unavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"))
+    # The wrong 100-140 scale is a primary evidence failure, even if the
+    # precise price-extreme timestamp is also unknown. No wave-4 minimum.
+    if not 100 <= h.scale_bars <= 140:
+        h.w4_zero = "WRONG_SCALE"
+        return
+    # If the parent candle's price extreme has several possible lower-frame
+    # timestamps, assigning an AO bar to W3/W4 is only a guess. Keep W4
+    # minimum evidence UNKNOWN, never upgrade an ambiguous genealogy.
+    if third_index is None or fourth_index is None:
+        h.w4_zero = "SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"
+        return
 
     def peak(a, b):
         values = [sign * osc[i] for i in indexes
@@ -295,25 +323,30 @@ def _rhythm(h: WaveHypothesis, frames: Mapping[str, list[WaveBar]]) -> None:
     if len(p) >= 5:
         third_end = min(third_end, p[4].extreme_at)
     w3_indexes = [i for i in indexes if p[2].extreme_at <= bars[i].t <= third_end]
-    if not w3_indexes:
+    # No NaN skipping or arbitrary winner in a tied global W3 momentum peak.
+    # Otherwise a later AO value can turn an unknown degree into a false W4.
+    if not w3_indexes or any(not isfinite(osc[i]) for i in w3_indexes):
         h.w4_zero = "MISSING_W3_MOMENTUM"
         return
-    w3 = max(w3_indexes, key=lambda i: sign * osc[i])
+    third_peak = max(sign * osc[i] for i in w3_indexes)
+    winners = [i for i in w3_indexes if sign * osc[i] == third_peak]
+    if len(winners) != 1:
+        h.w4_zero = "AMBIGUOUS_W3_MOMENTUM_PEAK"
+        return
+    w3 = winners[0]
     end = p[4].extreme_at if len(p) >= 5 else stop
-    fourth_values = [sign * osc[i] for i in indexes
-                     if i > w3 and bars[i].t <= end and isfinite(osc[i])]
-    h.w4_zero = classify_fourth_ao(sign * osc[w3],
-                                  min(fourth_values) if fourth_values else float("nan"),
+    w4_indexes = [i for i in indexes if i > w3 and bars[i].t <= end]
+    if not w4_indexes or any(not isfinite(osc[i]) for i in w4_indexes):
+        h.w4_zero = "MISSING_W4_MOMENTUM"
+        return
+    fourth_values = [sign * osc[i] for i in w4_indexes]
+    h.w4_zero = classify_fourth_ao(third_peak, min(fourth_values),
                                   h.scale_bars)
     if len(p) >= 6:
         third = peak(p[2].extreme_at, third_end)
         fifth = peak(p[4].extreme_at, min(stop, p[5].extreme_at + 5 * FRAME_MS[frame]))
         h.divergence = bool(third is not None and fifth is not None and
                             0 < fifth < third and sign * (p[5].price - p[3].price) > 0)
-        extension = abs(p[3].price - p[0].price)
-        target1 = p[4].price + sign * extension * .62
-        target2 = p[4].price + sign * extension
-        h.target_zone = min(target1, target2) <= p[5].price <= max(target1, target2)
     if h.w4_zero != "MINIMUM_ONLY" and len(p) >= 4:
         h.alternatives.append("W3_EXTENSION_OR_WRONG_DEGREE")
 
@@ -406,7 +439,8 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
             frame, "UP" if sign == 1 else "DOWN", label, p,
             last_bar.t + duration, p[-1].extreme_at,
             min(b.l for b in leg), max(b.h for b in leg), inv,
-            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons)
+            "INVALIDATED" if reasons else ("ALTERNATIVE" if diagonal_overlap or w2_origin_touch else "PROVISIONAL"), reasons,
+            observed_close_price=last_bar.c)
         if w2_origin_touch and not reasons:
             h.alternatives.append("W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED")
         if diagonal_overlap and not reasons:

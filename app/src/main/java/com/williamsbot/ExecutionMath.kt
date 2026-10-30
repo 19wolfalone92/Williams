@@ -19,6 +19,14 @@ object ExecutionMath {
         return floorToStepDecimal(BigDecimal.valueOf(value), BigDecimal.valueOf(step)).toDouble()
     }
 
+    /** For protective buy-stops and upper price bounds; do not use a floating
+     * price/step quotient, which may move an on-grid price by an extra tick. */
+    fun ceilToStep(value: Double, step: Double): Double {
+        require(value.isFinite() && step.isFinite() && step > 0.0)
+        val units = BigDecimal.valueOf(value).divide(BigDecimal.valueOf(step), 0, RoundingMode.CEILING)
+        return units.multiply(BigDecimal.valueOf(step)).stripTrailingZeros().toDouble()
+    }
+
     fun decimal(value: Double): BigDecimal = BigDecimal.valueOf(value)
 
     /** Number of decimal places required to represent an exchange tick/step exactly. */

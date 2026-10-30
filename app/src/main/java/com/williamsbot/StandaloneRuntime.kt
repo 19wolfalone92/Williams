@@ -22,6 +22,7 @@ import java.util.Locale
 import java.util.ArrayDeque
 import java.util.Calendar
 import java.util.concurrent.Callable
+import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -32,7 +33,10 @@ import kotlin.math.ceil
 
 object StandaloneRuntime {
     @SuppressLint("StaticFieldLeak")
-    private var server: StandaloneServer? = null
+    @Volatile private var server: StandaloneServer? = null
+
+    /** No initialization, HTTP, SQLite, or exchange door on the service guard. */
+    internal fun backgroundSnapshot():BackgroundRuntimeSnapshot = server?.backgroundSnapshot() ?: BackgroundRuntimeSnapshot()
 
     @Synchronized
     fun start(context: Context) {
@@ -349,6 +353,26 @@ internal fun mayCommitUserStreamSync(
     currentGeneration: Long
 ): Boolean = connected && !reconciliationPending && attemptGeneration == currentGeneration
 
+/** 
+ * A burst of private Binance events must not spin forever inside the same
+ * reconciliation worker. After two complete signed snapshots, reschedule a
+ * new attempt on the normal worker tick and RETAIN sync_required=true.
+ * A bounded retry is never proof that new orders or STOPs are safe.
+ */
+internal fun privateStreamReconciliationMayRepeat(
+    pending:Boolean,
+    passes:Int,
+    maximumPasses:Int=2
+):Boolean = pending && passes>0 && maximumPasses>0 && passes<maximumPasses
+
+/** A completed signed account audit can expose a genuine risk/owner blocker.
+ * Receiving that snapshot synchronizes DATA; it never grants order authority.
+ * Transport/identity/partial-audit failures must retain the WS resync latch. */
+internal fun futuresSignedSnapshotComplete(result: JSONObject): Boolean =
+    result.optBoolean("exchange_snapshot_complete", false) &&
+        result.optJSONArray("exchange_protection_observations") != null &&
+        result.optInt("positions_checked", -1) >= 0
+
 /** A reconciliation worker is unhealthy if its start time is unknown, in the future, or over the deadline. */
 internal fun reconciliationTaskLifecycleHealthy(
     running: Boolean,
@@ -361,6 +385,50 @@ internal fun reconciliationTaskLifecycleHealthy(
     return nowMs - startedAtMs <= maximumDurationMs
 }
 
+/** A finished signed REST reconcile may be logically valid but far too slow
+ * for a 90-second entry-freshness fence. Report its duration independently of
+ * the in-flight watchdog; do NOT invalidate Binance proof or relaunch orders. */
+internal fun completedFuturesReconciliationTooSlow(
+    running: Boolean, startedAtMs: Long, finishedAtMs: Long,
+    maxDurationMs: Long = 300_000L
+): Boolean = !running && startedAtMs > 0L && finishedAtMs >= startedAtMs &&
+    maxDurationMs > 0L && finishedAtMs - startedAtMs > maxDurationMs
+
+/** The WS remains UNSYNCED and execution remains blocked while signed REST
+ * reconciliation is in progress. Distinguish a pending healthy worker (WARN)
+ * from an absent, disconnected, failed, or >300s stalled reconciliation (FAIL).
+ * This helper classifies diagnostic severity ONLY, never entry eligibility. */
+internal fun privateUserStreamSyncFailureSeverity(
+    connected: Boolean,
+    syncRequired: Boolean,
+    reconciliationRunning: Boolean,
+    reconciliationStartedAtMs: Long,
+    nowMs: Long,
+    lastFailure: String?
+): String {
+    if (connected && syncRequired && reconciliationRunning &&
+        lastFailure.isNullOrBlank() &&
+        reconciliationTaskLifecycleHealthy(true, reconciliationStartedAtMs, nowMs))
+        return "WARNING"
+    return "FAIL"
+}
+
+
+/** Independent authenticated display evidence is permitted to VETO new risk,
+ * never to grant it. Requires a working full-position STOP for every signed
+ * live row; a stored campaign's PROTECTED label does not qualify.
+ * Empty rows mean flat only after the caller's successful bracketed signed GET. */
+internal fun signedFuturesPositionStopDisplayHasUnverifiedExposure(rows: JSONArray): Boolean =
+    (0 until rows.length()).any { index ->
+        val row = rows.optJSONObject(index) ?: return@any true
+        val quantity = row.optString("positionAmt").toDoubleOrNull()
+        if(quantity == null || !quantity.isFinite() || quantity == 0.0) return@any true
+        val verified = row.optString("stop_verification_status") in
+            setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN")
+        val stop = row.optString("stop").toDoubleOrNull()
+        !verified || stop == null || !stop.isFinite() || stop <= 0.0
+    }
+
 /** Private-stream readiness is based on successful exchange reconciliation, not event traffic. */
 internal fun userStreamSyncIsFresh(
     connected: Boolean,
@@ -370,6 +438,31 @@ internal fun userStreamSyncIsFresh(
 ): Boolean =
     connected && !syncRequired && lastSuccessfulSyncMs > 0L &&
         nowMs >= lastSuccessfulSyncMs
+
+/** Display-only lifecycle diagnosis. No timeout here cancels an unknown
+ * exchange mutation or authorizes a second concurrent REST reconciliation. */
+internal fun privateStreamReconcileDiagnosticState(
+    connected: Boolean, syncRequired: Boolean, running: Boolean,
+    startedAtMs: Long, lastVerifiedSyncMs: Long, nowMs: Long
+): String = when {
+    running && !reconciliationTaskLifecycleHealthy(true,startedAtMs,nowMs) ->
+        "STALLED_IN_FLIGHT_NO_NEW_ENTRY_AUTHORITY"
+    running -> "SIGNED_RECONCILIATION_IN_FLIGHT"
+    userStreamSyncIsFresh(connected,syncRequired,lastVerifiedSyncMs,nowMs) ->
+        "CURRENT_SOCKET_SYNC_PROVED"
+    !connected -> "PRIVATE_SOCKET_DISCONNECTED"
+    else -> "PRIVATE_SOCKET_NOT_SIGNED_SYNCED"
+}
+
+/** A connected private WebSocket is not sufficient to submit NEW exposure. The
+ * periodic signed account/position/STOP reconciliation must also have succeeded
+ * recently. A stalled worker or a deferred lock must not indefinitely reuse
+ * a once-valid REST snapshot. This fence does NOT prevent safety management.
+ */
+internal fun signedFuturesReconciliationFresh(
+    lastSuccessfulAtMs: Long, nowMs: Long, maximumAgeMs: Long = 90_000L
+): Boolean = lastSuccessfulAtMs > 0L && nowMs >= lastSuccessfulAtMs &&
+    maximumAgeMs > 0L && nowMs - lastSuccessfulAtMs <= maximumAgeMs
 
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
@@ -541,6 +634,58 @@ internal fun runtimeStartButtonEnabled(
  * Permit a throttled retry when a connected private stream remains unsynchronized.
  * This schedules reconciliation only; it never clears the safety barrier itself.
  */
+/** A private-stream REST sync may defer behind another account-wide reconciliation.
+ * Deferred never means exchange-verified; caller retains the sync-required latch.
+ * Startup and operator recovery deliberately require a strict lock wait.
+ */
+internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
+    purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
+
+/** A private WS reconnect MUST eventually get an account-wide signed snapshot.
+ * Position management may run every 2.5s while orphaned exposure is present;
+ * a zero-timeout user-stream lock can then collide forever and show connected
+ * WebSocket with last_successful_rest_sync_ms=0. Wait on the dedicated WS worker
+ * for at most 15s, WITHOUT skipping the durable execution door. Maintenance
+ * ticks stay nonblocking and all mutation/entry gates remain unchanged. */
+internal fun futuresReconciliationLockBudgetMs(purpose:String,maximumWaitMs:Long):Long = when(purpose) {
+    "POSITION_MANAGEMENT_RECONCILIATION" -> 0L
+    "USER_STREAM_RECONCILIATION" -> minOf(15_000L,maximumWaitMs.coerceAtLeast(0L))
+    else -> maximumWaitMs.coerceAtLeast(0L)
+}
+
+/** Read-only last-known signed positions fallback. The caller MUST set
+ * positions_snapshot_ok=false; these rows do not prove a current position,
+ * a working STOP, available risk budget or that the account is flat.
+ */
+/**
+ * Stop movement is permitted only with fresh, quantity+side-matched signed
+ * exchange evidence (the caller performs that match before invoking this).
+ * An operator-approved, STOP-only observation is distinct from strategy
+ * ownership. Arbitrary 'external stop exists' does not authorize trailing.
+ */
+internal fun williamsObservedStopCanTrail(observation: JSONObject?): Boolean {
+    if (observation == null || !observation.optBoolean("automatic_trailing_authorized",false)) return false
+    return when (observation.optString("stop_proof")) {
+        "OWNED_STOP_SEEN" ->
+            observation.optBoolean("strategy_ownership_verified",false) &&
+                observation.optString("management_mode") == "STRATEGY_OWNED"
+        "EXTERNAL_PROTECTED" ->
+            !observation.optBoolean("strategy_ownership_verified",false) &&
+                observation.optString("management_mode") in setOf("OPERATOR_APPROVED_STOP_ONLY", "AUTO_VERIFIED_STOP_ONLY")
+        else -> false
+    }
+}
+
+internal fun lastKnownFuturesPositionsForDisplay(
+    envelope: Pair<String, Long>?, refreshError: String?
+): Triple<JSONArray, String, Long> {
+    val rows = envelope?.let { JSONArray(it.first) } ?: JSONArray()
+    val error = refreshError ?: if (envelope == null)
+        "Exchange position snapshot is loading; no cached snapshot yet"
+    else "Showing a stale cached Futures position snapshot while refresh runs"
+    return Triple(rows, error, envelope?.second ?: 0L)
+}
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -1032,14 +1177,24 @@ internal fun reflectedTc2SetupContext(
             if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
         }
     }
-    // SHORT uses a reflected price/AO sequence. Convert the book-context
-    // oscillator colour back to the actual exchange candles. TC2 ch9
-    // requires colour opposite the NEW position side for countertrend WM1.
-    if (signalType=="REVERSAL" && context.has("wm1_ao_color")) {
-        val color=context.optString("wm1_ao_color")
-        context.put("wm1_ao_color",when(color) {
-            "RED" -> "GREEN"; "GREEN" -> "RED"; else -> color
-        })
+    // SHORT uses a reflected price/AO sequence. Convert BOTH colour and
+    // its diagnostic reason back into actual exchange-candle coordinates.
+    // TC2 PDF125 EXPECTS, rather than requires, green on bearish WM1.
+    if (signalType=="REVERSAL") {
+        if (context.has("wm1_ao_color")) {
+            val color=context.optString("wm1_ao_color")
+            context.put("wm1_ao_color",when(color) {
+                "RED" -> "GREEN"; "GREEN" -> "RED"; else -> color
+            })
+        }
+        if (context.has("wm1_ao_context_status")) {
+            val status=context.optString("wm1_ao_context_status")
+            context.put("wm1_ao_context_status",when(status) {
+                "WM1_AO_NOT_RED" -> "WM1_AO_NOT_GREEN"
+                "WM1_AO_NOT_GREEN" -> "WM1_AO_NOT_RED"
+                else -> status
+            })
+        }
     }
     if (context.has("risk_stop_at_price") && !context.isNull("risk_stop_at_price")) {
         val originalStop = context.getDouble("risk_stop_at_price")
@@ -1127,7 +1282,10 @@ private class StandaloneServer(private val context: Context) {
         }
     )
 
-    private var engine: NativeEngine? = null
+    @Volatile private var engine: NativeEngine? = null
+
+    fun backgroundSnapshot():BackgroundRuntimeSnapshot = engine?.backgroundSnapshot() ?: BackgroundRuntimeSnapshot(
+        autoRunRequested=runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false))
 
     fun stop(): Boolean = engine?.stop()?.optBoolean("stopped", false) ?: true
 
@@ -1273,11 +1431,16 @@ private class StandaloneServer(private val context: Context) {
             method == "POST" && path == "/api/v1/control/resume" ->
                 x.resume().toString()
 
-            method == "POST" && path == "/api/v1/control/testnet-force-mode" ->
-                x.testnetForceMode(JSONObject(body)).toString()
-
-            method == "POST" && path == "/api/v1/control/testnet-force-entry" ->
-                x.forceTestnetEntry(JSONObject(body)).toString()
+            // Legacy endpoint remains recognisable to old installed UIs,
+            // but NEVER dispatches a trading mutation. Do not silently
+            // substitute an automatic order or weaken the execution gate.
+            method == "POST" && path in setOf(
+                "/api/v1/control/testnet-force-mode",
+                "/api/v1/control/testnet-force-entry"
+            ) -> JSONObject().put("accepted", false).put("enabled", false)
+                .put("error", "OPERATOR_FORCED_TRADING_REMOVED")
+                .put("message", "Ручные принудительные входы удалены. Обычные входы только по подтверждённым правилам Вильямса.")
+                .toString()
 
             method == "POST" &&
                 path == "/api/v1/control/recover" ->
@@ -1346,7 +1509,8 @@ private class NativeEngine(
     @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
         WilliamsEntryTimePolicy.fromJson(JSONObject(it))
     } ?: WilliamsEntryTimePolicy()
-    @Volatile private var williamsProfile=williamsExecutionProfile
+    @Volatile private var williamsProfile=williamsRestoredExecutionSelection(
+        prefs.getString("williams_strategy_profile_v1",null),prefs.getString("williams_execution_policy_v2",null))
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
     private val futuresCampaignCoordinator by lazy {
         NativeFuturesCampaignCoordinator(executionStore) {
@@ -1354,12 +1518,23 @@ private class NativeEngine(
                 beforeExposureMutation = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
+                },
+                beforeExposureTransport = {
+                    executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
+                    futuresExposureTransportBlocker(
+                        RuntimeServiceState.active, RuntimeServiceState.monitorHeartbeatStale,
+                        userStreamConnected, userStreamSyncRequired,
+                        lastRestReconcileMs, System.currentTimeMillis()
+                    )?.let { error(it) }
                 })
         }.also { coordinator ->
             coordinator.requireM15FractalForAutomatedEntries = false
             coordinator.m15EntryVerifier = null
             coordinator.requireBookH1ProofForAutomatedEntries = true
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
+            coordinator.bookNtdExitVerifier = { owner,reason -> verifyNtdExitBeforeSubmit(owner,reason) }
+            coordinator.bookCourseTrimVerifier = { owner,quantity -> verifyCourseTrimBeforeSubmit(owner,quantity) }
+            coordinator.bookCourseExitVerifier = { owner,reason -> verifyCourseExitBeforeSubmit(owner,reason) }
             coordinator.setEditionSelectionProvider { williamsProfile }
             coordinator.setEntryTimePolicyProvider { entryTimePolicy }
             coordinator.setEntryPassportAuditSink { event -> auditStore.recordEntryPassportEvent(event) }
@@ -1514,10 +1689,10 @@ private class NativeEngine(
     @Volatile
     private var paused = prefs.getBoolean("operator_entries_paused", false)
 
+    // Legacy forced-direction orders must still be RECOVERED from the
+    // exchange journal, but no new operator override can ever be armed.
     @Volatile
-    private var forceTestnetMode =
-        prefs.getBoolean("force_testnet_mode", false) ||
-            executionStore.readState("futures_testnet_force_mode") == "true"
+    private var forceTestnetMode = false
 
     @Volatile
     private var nativeManagementRunning = false
@@ -1531,7 +1706,11 @@ private class NativeEngine(
     @Volatile
     private var lastScanAt = 0L
 
-    private var worker: Thread? = null
+    @Volatile private var worker: Thread? = null
+    @Volatile private var lastWorkerLoopElapsedMs=0L
+    fun backgroundSnapshot():BackgroundRuntimeSnapshot = BackgroundRuntimeSnapshot(
+        runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,
+        worker?.isAlive==true,runtimeGeneration,lastWorkerLoopElapsedMs)
     private var scanSymbols = mutableListOf<String>()
     private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
@@ -1568,7 +1747,7 @@ private class NativeEngine(
     // position-management, recovery and self-heal callers. The durable Execution Door
     // serializes mutations, but without this lock concurrent reconciliation requests can
     // race their coordinator snapshots and incorrectly latch RECONCILE_REQUIRED.
-    private val futuresReconciliationLock = java.util.concurrent.locks.ReentrantLock()
+    private val futuresReconciliationLock = java.util.concurrent.locks.ReentrantLock(true)
     @Volatile private var futuresReconciliationRunning = false
     @Volatile private var futuresStreamReconcileRunning = false
     @Volatile private var futuresStreamReconcilePending = false
@@ -1576,8 +1755,15 @@ private class NativeEngine(
     @Volatile private var userStreamReconcileStartedAtMs = 0L
     @Volatile private var userStreamReconcileFinishedAtMs = 0L
     @Volatile private var userStreamReconcileFailure: String? = null
+    // Read-only phase instrumentation; only matching signed REST generation clears sync.
+    @Volatile private var userStreamReconcilePhase = "NOT_STARTED"
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var lastUserStreamSyncAtMs = 0L
+    // GET-only forensic data: never used by the Execution Door, position
+    // ownership, STOP replacement, reconciliation or order admission.
+    @Volatile private var signedFillAuditJson = """{"state":"NOT_REQUESTED"}"""
+    @Volatile private var signedFillAuditRunning = false
+    @Volatile private var signedFillAuditLastAttemptMs = 0L
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -1585,7 +1771,11 @@ private class NativeEngine(
     @Volatile private var futuresAccountSnapshotLastAttemptMs = 0L
     @Volatile private var futuresAccountSnapshotRefreshError: String? = null
     // Publish bytes and their confirmation time together; a later refresh cannot relabel old rows as fresh.
-    @Volatile private var cachedFuturesPositionEnvelope: Pair<String, Long>? = null
+    @Volatile private var cachedFuturesPositionEnvelope: FuturesPositionDisplayEnvelope? = null
+    // Negative signed evidence only. Never grants a new-entry permission:
+    // one unverified live position blocks NEW exposure until a later complete
+    // signed position/STOP display read proves all current positions protected.
+    @Volatile private var signedStopDisplayUnverified = false
     // An in-flight display REST read must not republish a pre-mutation STOP
     // snapshot after an exchange-confirmed structural stop replacement.
     @Volatile private var futuresPositionSnapshotEpoch = 0L
@@ -1604,6 +1794,7 @@ private class NativeEngine(
     @Volatile private var restLastTickerPrice = 0.0
     @Volatile private var restProbeRunning = false
     private var restProbeThread: Thread? = null
+    private var exchangeClockProbeThread: Thread? = null
     @Volatile private var lastRestReconcileMs = 0L
     @Volatile private var lastReconciliationAttemptAtMs = 0L
     @Volatile private var lastReconciliationCompletedAtMs = 0L
@@ -1658,6 +1849,29 @@ private class NativeEngine(
 
     init {
         loadPersistedState()
+        // Migrate installations left in legacy forced-direction mode.
+        // DO NOT silently resume automatic entries after removing the UI:
+        // pause, retain every existing position/STOP and require an explicit
+        // operator START/RESUME after exchange reconciliation.
+        if (prefs.getBoolean("force_testnet_mode", false) ||
+            executionStore.readState("futures_testnet_force_mode") == "true") {
+            paused = true
+            val preferencesCleared = prefs.edit()
+                .putBoolean("force_testnet_mode", false)
+                .putBoolean("operator_entries_paused", true)
+                .putBoolean("auto_run", false).commit()
+            val databaseCleared =
+                executionStore.writeState("futures_testnet_force_mode", "false")
+            if (!preferencesCleared || !databaseCleared) {
+                reconcileRequired = true
+                persistSafetyFlag("reconcile_required", true)
+                lastError = "LEGACY_FORCED_MODE_MIGRATION_UNVERIFIED"
+            }
+            runCatching { auditStore.recordCockpitEvent(
+                "OPERATOR_DIRECTION_MODE_REMOVED", state="PAUSED",
+                detail="Old forced override disabled; existing Binance orders must be reconciled before restart."
+            ) }
+        }
         startRestDataProbe()
         restoreExecutionAccumulators()
         // SQLite is authoritative for the execution-door lease. SharedPreferences
@@ -1832,6 +2046,7 @@ private class NativeEngine(
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
             RuntimeServiceState.active &&
+            !RuntimeServiceState.monitorHeartbeatStale &&
             campaignCoordinatorReadyForEntry() &&
             running &&
             !paused &&
@@ -1842,6 +2057,8 @@ private class NativeEngine(
             publicWebSocketFresh() &&
             userStreamConnected &&
             !userStreamSyncRequired &&
+            signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()) &&
+            !signedStopDisplayUnverified &&
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
@@ -1855,6 +2072,7 @@ private class NativeEngine(
         buildList {
             if (!futuresExecutionAdapterReady) add("futures_execution_adapter_disabled")
             if (!RuntimeServiceState.active) add("foreground_service_not_confirmed")
+            if (RuntimeServiceState.monitorHeartbeatStale) add("runtime_worker_heartbeat_stale")
             if (!campaignCoordinatorReadyForEntry()) {
                 val coordinator = runCatching { futuresCampaignCoordinator.status() }.getOrNull()
                 add("futures_campaign_coordinator_not_ready:" +
@@ -1869,6 +2087,10 @@ private class NativeEngine(
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
             if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
+            if (!signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()))
+                add("signed_futures_account_position_stop_reconciliation_stale_or_unknown")
+            if (signedStopDisplayUnverified)
+                add("signed_binance_display_detected_unverified_protection_new_entries_frozen")
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
@@ -2115,6 +2337,13 @@ private class NativeEngine(
             .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
+            .put("user_stream_reconcile_phase", userStreamReconcilePhase)
+            .put("user_stream_reconcile_diagnostic_state", privateStreamReconcileDiagnosticState(
+                userStreamConnected,userStreamSyncRequired,futuresStreamReconcileRunning,
+                userStreamReconcileStartedAtMs,lastUserStreamSyncAtMs,System.currentTimeMillis()))
+            .put("user_stream_signed_account_snapshot_at_ms", lastRestReconcileMs)
+            .put("user_stream_reconcile_pending_events", futuresStreamReconcilePending)
+            .put("signed_stop_display_unverified", signedStopDisplayUnverified)
             .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
@@ -2341,7 +2570,13 @@ private class NativeEngine(
         require(key().isNotBlank() && secret().isNotBlank()) {
             "Configure Binance USD-M Futures Testnet credentials first"
         }
-        if (running) return JSONObject().put("started", false).put("reason", "already_running")
+        if (running && worker?.isAlive==true) return JSONObject().put("started", false).put("reason", "already_running")
+        if(running) {
+            // This synchronized start cannot race another start's initialization.
+            // A dead worker cannot be accepted as an already-running monitor.
+            running=false
+            ++runtimeGeneration
+        }
 
         // Reconciliation is allowed to run under a persisted kill latch because it
         // only queries exchange state and performs explicitly owned protection cleanup.
@@ -2490,9 +2725,11 @@ private class NativeEngine(
         scanProgressSymbols = 0
         warmCoreHistoryAsync(generation)
 
+        lastWorkerLoopElapsedMs=0L
         worker = Thread {
             try {
                 while (running && generation == runtimeGeneration) {
+                    lastWorkerLoopElapsedMs=android.os.SystemClock.elapsedRealtime()
                     try {
                         repairStaleMarketStreams()
                         // A connected private stream can still be unsynchronized after a
@@ -2556,6 +2793,7 @@ private class NativeEngine(
                 }
             } finally {
                 if (running && generation == runtimeGeneration) {
+                    lastWorkerLoopElapsedMs=0L
                     running = false
                     scannerState = "FAILED"
                     scannerError = "Runtime worker exited unexpectedly"
@@ -2571,6 +2809,7 @@ private class NativeEngine(
         }
         // A newly started monitoring worker proves the Android runtime can
         // initialize again. Execution gates remain separate and fail-closed.
+        RuntimeServiceState.refreshLease?.invoke()
         RuntimeStartupEvidence.clear(context)
         return JSONObject()
             .put("started", true)
@@ -2696,6 +2935,7 @@ private class NativeEngine(
         activeHistoryTasks.forEach { it.cancel(true) }
         activeHistoryTasks.clear()
 
+        RuntimeServiceState.refreshLease?.invoke()
         return JSONObject().put("stopped", true).put("state", "STOPPED")
             .put("pending_entry_cancellation", cancellation)
             .put("reconcile_required", reconcileRequired)
@@ -2923,307 +3163,8 @@ private class NativeEngine(
         return result
     }
 
-    /**
-     * Testnet-only directional override. It does not bypass risk, reconciliation,
-     * account, freshness, session, exchange filters, or structural protection gates.
-     * Automatic signal entries are suspended while this mode is enabled so the
-     * explicitly chosen side cannot race an autonomous opposite-side entry.
-     */
-    @Synchronized
-    fun testnetForceMode(request: JSONObject): JSONObject {
-        require(baseUrl == "https://demo-fapi.binance.com") {
-            "Forced trading is available only on the pinned USD-M Futures Demo endpoint"
-        }
-        require(request.optBoolean("acknowledge", false)) {
-            "Explicit acknowledgement is required for the Testnet directional override"
-        }
-        val enabled = request.optBoolean("enabled", false)
-        if (!enabled) {
-            forceTestnetMode = false
-            val preferenceSaved = prefs.edit()
-                .putBoolean("force_testnet_mode", false)
-                .putBoolean("auto_run", false)
-                .commit()
-            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "false")
-            paused = true
-            lastError = if (preferenceSaved && databaseSaved) {
-                "TESTNET_FORCE_MODE_DISABLED: Runtime paused; daily-risk baseline retained"
-            } else {
-                "TESTNET_FORCE_MODE_DISABLE_PERSISTENCE_FAILED: Runtime paused; restart requires reconciliation"
-            }
-            if (!preferenceSaved || !databaseSaved) {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-            }
-            return JSONObject()
-                .put("enabled", false)
-                .put("demo_only", true)
-                .put("paused", true)
-                .put("daily_loss_limit_pct", 0.03)
-                .put("baseline_reset", false)
-                .put("message", lastError)
-        }
-
-        require(running) { "Start the Futures Demo Runtime before enabling the directional override" }
-        require(!killLatched && !reconcileRequired && !equityCircuitBreaker.isTripped()) {
-            "KILL_SWITCH_LATCHED, RECONCILE_REQUIRED, or equity circuit breaker prevents forced trading"
-        }
-        require(historyReady && marketDataFresh() && marketWebSocketFresh() &&
-            publicWebSocketFresh() && userStreamConnected && !userStreamSyncRequired
-        ) { "Fresh Futures history and synchronized market/public/user streams are required" }
-        require(restAccountReady && accountFundedForEntry()) {
-            "A valid funded Futures Demo account snapshot is required"
-        }
-        require(campaignCoordinatorReadyForEntry()) {
-            "Futures positions/orders/protection must be reconciled before enabling the override"
-        }
-
-        val previousError = lastError
-        val dailyRiskAllowed = runCatching { checkFuturesDailyLoss() }.getOrElse {
-            lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
-                (it.message ?: it.javaClass.simpleName)
-            false
-        }
-        require(dailyRiskAllowed) {
-            lastError ?: "Daily Futures risk limit has not been verified; forced trading remains blocked"
-        }
-        val baselineOnlyPause = paused &&
-            previousError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true
-        require(!paused || baselineOnlyPause) {
-            "Runtime is paused for a reason other than the recoverable missing daily baseline; inspect Diagnostics first"
-        }
-        if (baselineOnlyPause) {
-            require(prefs.edit().putBoolean("auto_run", true).commit()) {
-                "Could not persist Runtime resume after daily-baseline reconstruction"
-            }
-            paused = false
-            lastError = null
-        }
-
-        require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY)) {
-            "Futures Execution Door is busy; retry after the in-flight exchange operation is reconciled"
-        }
-        try {
-            require(executionReady()) {
-                "Testnet override cannot be armed: " + executionBlockers().joinToString(", ")
-            }
-            forceTestnetMode = true
-            val preferenceSaved = prefs.edit()
-                .putBoolean("force_testnet_mode", true)
-                .putBoolean("auto_run", true)
-                .commit()
-            val databaseSaved = executionStore.writeState("futures_testnet_force_mode", "true")
-            if (!preferenceSaved || !databaseSaved) {
-                forceTestnetMode = false
-                paused = true
-                prefs.edit().putBoolean("auto_run", false).putBoolean("force_testnet_mode", false).commit()
-                executionStore.writeState("futures_testnet_force_mode", "false")
-                lastError = "TESTNET_FORCE_MODE_PERSISTENCE_FAILED: forced entries remain disabled"
-                throw IllegalStateException(lastError)
-            }
-        } finally {
-            executionGate.release(FUTURES_EXECUTION_DOOR_KEY)
-        }
-        lastError = null
-        return JSONObject()
-            .put("enabled", true)
-            .put("demo_only", true)
-            .put("automatic_entries_suspended", true)
-            .put("daily_loss_limit_pct", 0.03)
-            .put("daily_baseline_source", "UTC_DAY_RECONCILED_FROM_FUTURES_INCOME")
-            .put("baseline_reset", false)
-            .put("message", "Testnet force mode armed; select LONG or SHORT for an H1 conditional entry. Mandatory risk/protection gates remain active.")
-    }
-
-    /**
-     * Submit one operator-directed conditional H1 breakout on Futures Demo.
-     * The direction may override the current strategy hypothesis, but never the
-     * account-wide Execution Door, daily-loss cap, exchange filters, or structural SL.
-     */
-    @Synchronized
-    fun forceTestnetEntry(request: JSONObject): JSONObject {
-        require(baseUrl == "https://demo-fapi.binance.com" && forceTestnetMode) {
-            "Enable the explicit Futures Demo force mode first"
-        }
-        require(request.optBoolean("acknowledge", false)) {
-            "Explicit acknowledgement is required before submitting the forced directional entry"
-        }
-        val symbol = request.optString("symbol").trim().uppercase(Locale.US)
-        require(symbol in coreSymbols) { "Symbol is outside the approved ten-contract Futures universe" }
-        val directionText = request.optString("direction").trim().uppercase(Locale.US)
-        val direction = when (directionText) {
-            "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
-            "SHORT" -> NativeFuturesCampaignCoordinator.Direction.SHORT
-            else -> throw IllegalArgumentException("Direction must be LONG or SHORT")
-        }
-        require(executionReady()) {
-            "Forced entry blocked by the mandatory Execution Gate: " + executionBlockers().joinToString(", ")
-        }
-        require(checkFuturesDailyLoss()) {
-            lastError ?: "Daily Futures risk limit is unknown or breached"
-        }
-        require(executionReady()) {
-            "Forced entry blocked after daily-risk refresh: " + executionBlockers().joinToString(", ")
-        }
-
-        val book = futuresMarketData.topOfBook(symbol)
-        val liveSpreadPct = (book.second - book.first) / book.first
-        require(
-            book.first.isFinite() && book.first > 0.0 &&
-                book.second.isFinite() && book.second >= book.first &&
-                liveSpreadPct.isFinite() && liveSpreadPct in 0.0..maxSpreadPct
-        ) {
-            "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=$liveSpreadPct"
-        }
-        val nowMs = futuresMarketData.exchangeNowMs()
-        require(entryTimePolicy.allows(nowMs)) {
-            "ENTRY_TIME_POLICY_BLOCKED: выбранное окно UTC закрыто"
-        }
-        val h1BarMs = frameSeconds("1h") * 1000L
-        val h1 = fetchCandles(symbol, "1h", 180)
-            .filter { it.t > 0L && it.t + h1BarMs <= nowMs }
-        require(h1.size >= 150) {
-            "Forced entry requires at least 150 closed H1 candles; found ${h1.size}"
-        }
-        val rules = symbolFilters(symbol)
-        val levels = forcedH1EntryLevels(
-            direction = direction.name,
-            highs = h1.takeLast(5).map { it.h },
-            lows = h1.takeLast(5).map { it.l },
-            tickSize = rules.tick
-        ) ?: throw IllegalStateException("Could not derive valid structural H1 trigger/stop for $symbol")
-        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            normalizeTriggerPrice(levels.triggerPrice, rules.tick)
-        } else {
-            normalizePrice(levels.triggerPrice, rules.tick)
-        }
-        val stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            normalizePrice(levels.protectiveStop, rules.tick)
-        } else {
-            normalizeTriggerPrice(levels.protectiveStop, rules.tick)
-        }
-        val mark = futuresMarketData.markPrice(symbol)
-        require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) mark < trigger
-            else mark > trigger
-        ) {
-            "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED: mark=$mark, trigger=$trigger; no market-order substitution"
-        }
-        require(
-            if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) stop < trigger
-            else stop > trigger
-        ) { "Structural stop is on the wrong side of the forced H1 trigger" }
-
-        val account = futuresCampaignCoordinator.accountSnapshot()
-        val parsed = parseFuturesAccountSnapshot(account)
-            ?: throw IllegalStateException("Fresh authenticated USD-M Futures account snapshot is invalid")
-        require(updateCachedFuturesAccount(account) && futuresAccountFundedForEntry(parsed.availableUsdt, parsed.equityUsdt)) {
-            "Positive available USDT and equity are required for a forced entry"
-        }
-        val intents = futuresCampaignCoordinator.intentsSnapshot()
-        val riskUsed = (0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.sumOf { intent ->
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                futuresCampaignReservedRisk(intent,intents)
-            } else 0.0
-        }
-        val riskPct = min(campaignInitialRiskPct, min(maxRiskPerTradePct, maxTotalRiskPct - riskUsed))
-        require(riskPct > 0.0) { "Aggregate Futures campaign risk budget is exhausted or unknown" }
-
-        val stopFraction = kotlin.math.abs(trigger - stop) / trigger
-        val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct
-        require(stopFraction.isFinite() && stopFraction > 0.0 && effectiveLoss.isFinite()) {
-            "Forced-entry structural stop/risk calculation is invalid"
-        }
-        val entryLeverage = futuresLeverageSettings.forSymbol(symbol)
-        val notional = min(
-            parsed.equityUsdt * 0.25,
-            min(parsed.availableUsdt * entryLeverage * 0.95, parsed.equityUsdt * riskPct / effectiveLoss)
-        )
-        val marketLotEnabled = rules.marketStep.isFinite() && rules.marketStep > 0.0
-        val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
-        val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
-        val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
-        val qty = floorStep(notional / trigger, quantityStep)
-        require(
-            qty.isFinite() && qty >= minQuantity && qty <= maxQuantity &&
-                ExecutionMath.isMultiple(qty, rules.step) &&
-                (!marketLotEnabled || ExecutionMath.isMultiple(qty, rules.marketStep)) &&
-                qty * trigger >= rules.minNotional &&
-                qty * trigger <= rules.maxNotional
-        ) {
-            "FUTURES_QUANTITY_FILTER_BLOCKED: forced quantity fails LOT_SIZE/MARKET_LOT_SIZE/notional filters"
-        }
-        val clientId = ("W2F_" + symbol.take(7) + "_" + direction.name.take(1) + "_" + nowMs.toString(36)).take(36)
-        val plan = NativeFuturesCampaignCoordinator.EntryPlan(
-            symbol = symbol,
-            direction = direction,
-            kind = NativeFuturesCampaignCoordinator.EntryKind.STOP,
-            quantity = fmtQty(qty, rules.decimals),
-            entryPrice = fmtPrice(trigger, rules.tick),
-            protectiveStop = fmtPrice(stop, rules.tick),
-            clientId = clientId,
-            riskPct = riskPct,
-            signalType = "OPERATOR_FORCED_DIRECTION",
-            leverage = entryLeverage,
-            signalReason = "Оператор выбрал направление Testnet; структурный H1 STOP"
-        )
-        val result = withCampaignMutation(
-            symbol = symbol,
-            purpose = "TESTNET_FORCED_DIRECTION_ENTRY"
-        ) {
-            require(forceTestnetMode && executionReady()) {
-                "Forced-mode state or mandatory Execution Gate changed before submission"
-            }
-            require(checkFuturesDailyLoss()) {
-                lastError ?: "Daily loss limit could not be verified at submission"
-            }
-            val submitMark = futuresMarketData.markPrice(symbol)
-            require(
-                if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
-            ) { "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED at final preflight; no market-order substitution" }
-            futuresCampaignCoordinator.submitPendingEntry(plan)
-        }
-        if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
-        runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
-            if (result.optBoolean("accepted")) "ACCEPTED" else "UNCONFIRMED_OR_REJECTED", detail = result.optString("blocker", result.optString("error"))) }
-        lastOrder = result
-        if (!result.optBoolean("accepted", false)) {
-            lastError = result.optString("blocker", result.optString("error", "Forced conditional entry rejected"))
-            if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
-                reconcileRequired = true
-                persistSafetyFlag("reconcile_required", true)
-                stateMachine.force(TradingState.RECONCILE_REQUIRED, lastError ?: "Forced Futures submission unresolved")
-            }
-        } else {
-            lastRestReconcileMs = 0L
-            stateMachine.force(
-                TradingState.ENTRY_PENDING,
-                "Operator-selected Futures Demo $direction conditional H1 entry submitted; awaiting exchange fill/reconciliation"
-            )
-        }
-        return JSONObject()
-            .put("accepted", result.optBoolean("accepted", false))
-            .put("safe_rejection", result.optBoolean("safe_rejection", false))
-            .put("demo_only", true)
-            .put("manual_direction_override", true)
-            .put("automatic_entries_suspended", true)
-            .put("symbol", symbol)
-            .put("direction", direction.name)
-            .put("entry_kind", "STOP")
-            .put("quantity", plan.quantity)
-            .put("trigger_price", plan.entryPrice)
-            .put("protective_stop", plan.protectiveStop)
-            .put("spread_pct", liveSpreadPct)
-            .put("risk_pct", riskPct)
-            .put("max_daily_loss_pct", 0.03)
-            .put("blocker", result.optString("blocker", JSONObject.NULL.toString()))
-            .put("message", if (result.optBoolean("accepted", false)) {
-                "Forced Testnet conditional entry accepted; exchange reconciliation and stop confirmation are still required"
-            } else {
-                result.optString("blocker", "Forced conditional entry rejected before execution")
-            })
-    }
+    // Manual forced trading removed. Old W2E_ / operator intents are
+    // deliberately still recognised during reconciliation/recovery.
 
     @Synchronized
     fun recover(): JSONObject {
@@ -4739,14 +4680,14 @@ private class NativeEngine(
         // Bound lock acquisition so a stalled account-wide reconciliation cannot strand
         // queued private-stream work indefinitely. Unknown exchange state remains blocked.
         val waitStartedAtMs = System.currentTimeMillis()
-        // Periodic management is a best-effort maintenance tick. If another
-        // authoritative reconciliation already owns the account lock, coalesce
-        // the tick rather than queue for 50s and falsely persist a fatal latch.
-        // Kill, startup, user-stream, and explicit recovery remain strict.
-        val maintenanceTick = purpose == "POSITION_MANAGEMENT_RECONCILIATION"
+        // Periodic management stays opportunistic; a private-stream sync waits
+        // fairly for a bounded window to avoid starvation from fast maintenance.
+        // An overlap still cannot grant new trading authority or create two workers.
+        // Kill, startup, and explicit operator recovery remain strict.
+        val deferrable = deferrableFuturesReconciliation(purpose)
         val lockAcquired = try {
             futuresReconciliationLock.tryLock(
-                if (maintenanceTick) 0L else waitForDoorMs.coerceAtLeast(0L),
+                futuresReconciliationLockBudgetMs(purpose,waitForDoorMs),
                 TimeUnit.MILLISECONDS
             )
         } catch (interrupted: InterruptedException) {
@@ -4755,7 +4696,7 @@ private class NativeEngine(
             false
         }
         lastReconciliationLockWaitMs = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
-        if (!lockAcquired && maintenanceTick &&
+        if (!lockAcquired && deferrable &&
             !Thread.currentThread().isInterrupted && futuresReconciliationRunning) {
             // The owner continues to hold the Execution Door. No new entry is
             // enabled here; the periodic monitor rechecks on the next tick.
@@ -4843,23 +4784,22 @@ private class NativeEngine(
             // private-stream reconciliation and never reach its failure branch.
             // Neither the reconciliation result nor entry authority is relaxed.
             runOperatorStopSupervisionIfDue()
+            // Diagnostics 24: maintenance reconciliation repeats every ~6-7s.
+            // Clearing the read-only signed position cache on EVERY result
+            // (including blocked/unowned-stop results) made the Active screen
+            // alternate between real positions and an empty loading state.
+            // Keep last-known rows for display, including during failed/ongoing
+            // REST refresh. The fast-status path marks them UNVERIFIED as soon
+            // as their 15s signed-snapshot freshness window expires. It also
+            // schedules another signed refresh. This display cache is NEVER an
+            // execution admission, stop-proof, ownership or FLAT confirmation.
+            // Explicit credential reset and acknowledged stop replacement still
+            // clear or invalidate the cache through their own separate paths.
             if (result.optBoolean("ok", false)) {
-                lastRestReconcileMs = System.currentTimeMillis()
+                // Completion time must not make an old account/position snapshot
+                // look fresh after slow history queries or STOP maintenance.
+                lastRestReconcileMs = result.optLong("exchange_snapshot_started_at_ms", 0L)
                 lastReconciliationResult = "SUCCESS"
-                // Diagnostic 12: the BNBUSDT STOP was observed by signed REST
-                // after the dashboard cached its older unverified row. Each
-                // successful signed reconciliation invalidates only the
-                // DISPLAY cache, so the next cockpit refresh recomputes from
-                // current positions and protective order observations. Never
-                // use this cache to authorize trading or label a stale STOP
-                // exchange-confirmed. Epoch prevents in-flight old snapshots
-                // from resurrecting stale protection after this invalidation.
-                synchronized(this) {
-                    futuresPositionSnapshotEpoch++
-                    cachedFuturesPositionEnvelope = null
-                    futuresPositionSnapshotLastAttemptMs = 0L
-                    futuresPositionSnapshotRefreshError = null
-                }
             } else {
                 lastReconciliationResult = "BLOCKED: " +
                     result.optString("blocker", result.optString("error", "unknown"))
@@ -4897,7 +4837,8 @@ private class NativeEngine(
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
         // TC2's first still-valid presenting Wise Man. Consumed levels have
         // already been removed by their causal trigger checks.
-        candidate.campaignSignals.filter { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
+        candidate.campaignSignals.filter { williamsVerifiedNewRiskSource(it.strategyProfile) &&
+            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
 
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
@@ -5291,9 +5232,9 @@ private class NativeEngine(
     private fun fastFuturesPositionsSnapshot(): Triple<JSONArray, String?, Long> {
         val nowMs = System.currentTimeMillis()
         val envelope = cachedFuturesPositionEnvelope
-        val cachedAt = envelope?.second ?: 0L
+        val cachedAt = envelope?.observedAtMs ?: 0L
         if (envelope != null && CockpitDiagnostics.fresh(cachedAt, nowMs, 15_000L)) {
-            return Triple(JSONArray(envelope.first), null, cachedAt)
+            return Triple(JSONArray(envelope.positionsJson), futuresPositionSnapshotRefreshError, cachedAt)
         }
 
         val shouldRefresh = synchronized(this) {
@@ -5308,11 +5249,16 @@ private class NativeEngine(
             } else false
         }
         if (shouldRefresh) {
+            val generationAtStart = runtimeGeneration
+            val apiKeyAtStart = key()
+            val epochAtStart = futuresPositionSnapshotEpoch
             Thread {
                 try {
                     futuresPositionSnapshot()
                     futuresPositionSnapshotRefreshError = null
                 } catch (failure: Exception) {
+                    if (generationAtStart != runtimeGeneration || apiKeyAtStart != key() ||
+                        epochAtStart != futuresPositionSnapshotEpoch) return@Thread
                     val reason = failure.message ?: failure.javaClass.simpleName
                     futuresPositionSnapshotRefreshError = reason
                     reconcileRequired = true
@@ -5329,27 +5275,30 @@ private class NativeEngine(
             }
         }
 
-        val fallback = cachedFuturesPositionEnvelope
-        val error = futuresPositionSnapshotRefreshError
-            ?: if (fallback == null) {
-                "Exchange position snapshot is loading; no cached snapshot yet"
-            } else {
-                "Showing a stale cached Futures position snapshot while refresh runs"
-            }
-        return Triple(fallback?.let { JSONArray(it.first) } ?: JSONArray(), error, fallback?.second ?: 0L)
+        // In-flight refresh is not a verified FLAT. A previously signed row
+        // remains visible as LAST KNOWN, but snapshot_ok stays false.
+        return lastKnownFuturesPositionsForDisplay(
+            cachedFuturesPositionEnvelope?.let { it.positionsJson to it.observedAtMs },
+            futuresPositionSnapshotRefreshError
+        )
     }
 
-    private fun futuresPositionSnapshot(): JSONArray {
+    private fun futuresPositionSnapshot(): JSONArray =
+        JSONArray(futuresPositionDisplaySnapshot().positionsJson)
+
+    private fun futuresPositionDisplaySnapshot(): FuturesPositionDisplayEnvelope {
         val snapshotEpoch = futuresPositionSnapshotEpoch
+        val generationAtStart = runtimeGeneration
+        val apiKeyAtStart = key()
         val out = JSONArray()
-        if (key().isBlank() || secret().isBlank()) return out
-        val positions = futuresCampaignCoordinator.positionsSnapshot()
+        if (key().isBlank() || secret().isBlank()) return FuturesPositionDisplayEnvelope("[]",0L,"[]")
+        val signedSnapshot = futuresCampaignCoordinator.protectionDisplaySnapshot()
+        val positions = signedSnapshot.positions
         val intents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
         // The persisted campaign STOP is only a planned value. A refreshed
         // signed Binance protection observation is separate and authoritative
         // even when a 4.52 upgrade lost the original local campaign journal.
-        val observedStops = futuresCampaignCoordinator.status()
-            .optJSONArray("exchange_protection_observations") ?: JSONArray()
+        val observedStops = signedSnapshot.observations
         val snapshotAt = System.currentTimeMillis()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
@@ -5383,8 +5332,7 @@ private class NativeEngine(
                 val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
                 proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
                     signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
-                    observedAt>0L && snapshotAt>=observedAt && snapshotAt-observedAt<=
-                        (if(proof.optString("stop_proof")=="NATIVE_REPLACEMENT_PROTECTION_SEEN") 15_000L else 60_000L) &&
+                    CockpitDiagnostics.fresh(observedAt,snapshotAt,CockpitDiagnostics.POSITION_TTL_MS) &&
                     proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
                         "NATIVE_REPLACEMENT_PROTECTION_SEEN")
             }
@@ -5399,19 +5347,40 @@ private class NativeEngine(
                 .put("mark_price", mark).put("stop", stop)
                 .put("stop_verification_status",stopProof)
                 .put("stop_confirmed_at_ms",exchangeStop?.optLong("observed_at_ms") ?: JSONObject.NULL)
-                .put("stop_can_be_auto_trailed",stopProof=="OWNED_STOP_SEEN")
-                .put("risk_pct", intent?.optDouble("risk_pct", 0.0) ?: 0.0)
+                // An explicitly operator-approved stop-only supervisor is a
+                // separate, limited authority from strategy campaign ownership.
+                // It can trail an exchange-verified STOP without adding risk.
+                .put("stop_can_be_auto_trailed",williamsObservedStopCanTrail(exchangeStop))
+                .put("stop_management_mode",exchangeStop?.optString("management_mode") ?: "UNVERIFIED")
+                .put("strategy_ownership_verified",exchangeStop?.optBoolean(
+                    "strategy_ownership_verified",false) ?: false)
+                // An unowned / operator-supervised position has no trusted
+                // initial campaign risk. Null is UNKNOWN, never 0% risk.
+                .put("risk_pct", if(intent?.optBoolean("strategy_ownership_verified",false)==true)
+                    intent.optDouble("risk_pct", Double.NaN).takeIf { it.isFinite() && it>0 }
+                        ?: JSONObject.NULL
+                    else JSONObject.NULL)
                 .put("unrealized_pnl_usdt", pnl).put("margin_type", row.optString("marginType"))
                 .put("leverage", row.optString("leverage")).put("exchange_confirmed", true))
         }
-        val snapshotNow = System.currentTimeMillis()
+        check(CockpitDiagnostics.fresh(signedSnapshot.observedAtMs,System.currentTimeMillis(),
+            CockpitDiagnostics.POSITION_TTL_MS)) { "Signed Futures display snapshot expired during normalization" }
+        val envelope = FuturesPositionDisplayEnvelope(
+            out.toString(), signedSnapshot.observedAtMs, observedStops.toString())
         synchronized(this) {
-            if (futuresPositionSnapshotEpoch == snapshotEpoch) {
-                cachedFuturesPositionEnvelope = out.toString() to snapshotNow
-                futuresPositionSnapshotRefreshError = null
+            check(generationAtStart == runtimeGeneration && apiKeyAtStart == key()) {
+                "Credentials changed during signed Futures display refresh"
             }
+            check(futuresPositionSnapshotEpoch == snapshotEpoch) {
+                "Futures STOP changed during display refresh; newer exchange evidence is required"
+            }
+            if ((cachedFuturesPositionEnvelope?.observedAtMs ?: 0L) <= envelope.observedAtMs) {
+                cachedFuturesPositionEnvelope = envelope
+                signedStopDisplayUnverified = signedFuturesPositionStopDisplayHasUnverifiedExposure(out)
+            }
+            futuresPositionSnapshotRefreshError = null
         }
-        return out
+        return envelope
     }
 
     private fun sellFuturesPosition(symbolInput: String): JSONObject {
@@ -5921,7 +5890,7 @@ private class NativeEngine(
             // Binance executes conditional stops asynchronously. In particular,
             // the WM3 fractal must still break on the correct side of Teeth.
             val bookAddition=pending.optString("intent_role")=="ADD_ON" &&
-                profile==williamsTc2Profile && pending.optString("entry_client_id").isNotBlank() &&
+                williamsVerifiedNewRiskSource(profile) && pending.optString("entry_client_id").isNotBlank() &&
                 pending.optString("client_id").startsWith("W2A_")
             if(((pending.optString("intent_role","ENTRY")=="ENTRY" && exchangeRowsValid &&
                     pending.optString("client_id").startsWith("W2H_")) || bookAddition) && !invalidEdition &&
@@ -5937,20 +5906,45 @@ private class NativeEngine(
                     val proofError=williamsBookH1ProofBlocker(setup.toString(),
                         pending.optString("direction"),parentId,pending.optString("signal_type"),
                         pending.optString("strategy_profile",williamsTc2Profile),price,stop,now,
-                        pending.optString("entry_client_id"))
+                        pending.optString("entry_client_id"),pending.optString("reentry_owner_id"),
+                        pending.optString("execution_semantics","STOP_ENTRY"),pending.optDouble("reference_close",0.0))
                     if(proofError!=null) proofError
                     else {
                         val h1=fetchCandles(symbol,"1h",220)
                         val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
                             it.signalId==parentId && it.type==pending.optString("signal_type") &&
-                            it.strategyProfile==profile && it.role=="ENTRY"
+                            it.strategyProfile==profile && williamsBookSignalRoleAllowed(profile,it.type,it.role,
+                                pending.optString("entry_client_id"),pending.optString("reentry_owner_id"))
                         }
                         if(!valid) h1ParentRejectionReason(symbol,parentId,"H1_BOOK_PARENT_INVALIDATED")
                         else {
                             val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
-                            val teeth=williamsBookH1ActivationTeeth(closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
-                            williamsBookFractalTeethBlocker(pending.optString("signal_type"),
-                                pending.optString("direction"),price,teeth,tick)
+                            val waveBars=closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                            // TC2 ch11 fig 11.7: an unfilled STOP can become a
+                            // late, unsuitable fractal as H1 enters congestion.
+                            // Revoke only clearly unfilled exchange-acknowledged
+                            // NEW/WORKING entries, not TRIGGERING, PARTIALLY_FILLED,
+                            // unknown, filled positions or protective STOPs.
+                            val correctionInvalidation=if(profile==williamsTc2Profile &&
+                                williamsTc2PendingCongestionRecheckEligible(
+                                    pending.optString("intent_role","ENTRY"),
+                                    exchangeOrderStatus(pending),pending.optString("client_id"),
+                                    knownFill=pending.optLong("fill_observed_at_ms")>0L ||
+                                        listOf("executed_qty","actual_entry_executed_qty",
+                                            "confirmed_position_qty").any { key ->
+                                            pending.has(key) &&
+                                                pending.optString(key).toBigDecimalOrNull()?.signum()!=0
+                                        }))
+                                williamsTc2CongestionEntryBlocker(profile,
+                                    pending.optString("signal_type"),pending.optString("direction"),
+                                    price,waveBars,now)
+                            else null
+                            if(correctionInvalidation!=null) correctionInvalidation
+                            else {
+                                val teeth=williamsBookH1ActivationTeeth(waveBars,now)
+                                williamsBookFractalTeethBlocker(pending.optString("signal_type"),
+                                    pending.optString("direction"),price,teeth,tick)
+                            }
                         }
                     }
                 }.getOrElse { failure ->
@@ -5992,7 +5986,7 @@ private class NativeEngine(
                                 .put("trigger_price",signal.triggerPrice)
                                 .put("protective_price",signal.protectivePrice))
                         }
-                    },futuresMarketData.markPrice(symbol),tick,now)
+                    },futuresMarketData.price(symbol),tick,now)
                     proposal?.let { it to now }
                 }.getOrNull()
                 if(next!=null) {
@@ -6069,7 +6063,104 @@ private class NativeEngine(
             }
         }
         manageVerifiedNativePositions(positions, intents, riskOnly = false)
+        if(processNativeTc2Reversals()) return false
         return true
+    }
+
+    /** Resume a durable opposite-Wise-Man handoff after close/restart. All
+     * normal runtime, session, daily, portfolio and exchange risk doors apply. */
+    private fun processNativeTc2Reversals():Boolean {
+        if(forceTestnetMode || !executionReady() || !williamsProfileAllowsSource(williamsProfile,williamsTc2Profile)) return false
+        val now=futuresMarketData.exchangeNowMs()
+        if(!entryTimePolicy.allows(now)) return false
+        val ledger=futuresCampaignCoordinator.intentsSnapshot()
+        for(i in 0 until ledger.length()) {
+            val owner=ledger.optJSONObject(i) ?: continue
+            if(owner.optString("intent_role","ENTRY")!="ENTRY") continue
+            val c=williamsTc2ReversalCandidate(ledger,owner.optString("client_id"),now) ?: continue
+            val symbol=c.getString("symbol")
+            try {
+                if(!checkFuturesDailyLoss() || !executionReady()) return false
+                val positions=futuresCampaignCoordinator.positionsSnapshot()
+                val openSymbols=(0 until positions.length()).map { index ->
+                    val p=positions.optJSONObject(index) ?: error("TC2_REVERSAL_POSITION_SNAPSHOT_MALFORMED")
+                    val qty=p.optString("positionAmt").toBigDecimalOrNull() ?: error("TC2_REVERSAL_POSITION_QUANTITY_UNKNOWN")
+                    p.optString("symbol").takeIf { qty.signum()!=0 }
+                }.filterNotNull()
+                val slot=futuresPositionSlotBlocker(symbol,openSymbols,ledger,maxOpenPositions)
+                if(slot!=null) { rejectDecision(symbol,slot);continue }
+                val side=c.getString("direction")
+                val direction=NativeFuturesCampaignCoordinator.Direction.valueOf(side)
+                val rules=symbolFilters(symbol)
+                val trigger=c.getDouble("trigger")
+                // Budget at the adverse end of the permitted trigger deviation,
+                // rather than reusing the old campaign's risk or quantity.
+                val entry=if(side=="LONG") normalizePrice(trigger*(1+maxSlippagePct),rules.tick)
+                    else normalizeTriggerPrice(trigger*(1-maxSlippagePct),rules.tick)
+                val stop=if(side=="LONG") normalizePrice(c.getDouble("protective_stop"),rules.tick)
+                    else normalizeTriggerPrice(c.getDouble("protective_stop"),rules.tick)
+                val contract=futuresMarketData.price(symbol)
+                val mark=futuresMarketData.markPrice(symbol)
+                val (bid,ask)=futuresMarketData.topOfBook(symbol)
+                if((ask-bid)/bid !in 0.0..maxSpreadPct ||
+                    (if(side=="LONG") ask>entry else bid<entry)) {
+                    rejectDecision(symbol,"TC2_REVERSAL_EXECUTABLE_QUOTE_OUTSIDE_RISK_BOUND");continue
+                }
+                val blocker=williamsTc2ReversalEntryBlocker(ledger,c.getString("owner_id"),symbol,side,
+                    c.getString("signal_id"),c.getString("signal_type"),c.getLong("signal_bar_time_ms"),
+                    c.getString("client_id"),entry,stop,now,contract,mark,rules.tick)
+                if(blocker!=null) { rejectDecision(symbol,blocker);continue }
+                val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot())
+                    ?: error("TC2_REVERSAL_ACCOUNT_UNVERIFIED")
+                check(futuresAccountFundedForEntry(account.availableUsdt,account.equityUsdt)) { "TC2_REVERSAL_FUNDS_UNVERIFIED" }
+                val riskUsed=(0 until ledger.length()).mapNotNull { ledger.optJSONObject(it) }.sumOf {
+                    if(it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it))
+                        conservativeRiskReservation(futuresCampaignReservedRisk(it,ledger),maxTotalRiskPct) else 0.0
+                }
+                val cap=williamsTc2InitialUnitRisk(campaignInitialRiskPct,campaignRiskLimitPct,maxRiskPerTradePct)
+                val riskPct=min(cap,min(maxRiskPerTradePct,maxTotalRiskPct-riskUsed))
+                check(riskPct>0) { "TC2_REVERSAL_PORTFOLIO_RISK_EXHAUSTED" }
+                val leverage=futuresLeverageSettings.forSymbol(symbol)
+                val loss=abs(entry-stop)/entry+2*feeBufferPerSidePct+maxSlippagePct
+                val notional=min(account.equityUsdt*.25,min(account.availableUsdt*leverage*.95,account.equityUsdt*riskPct/loss))
+                val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+                val qty=floorStep(notional/entry,step)
+                val marketLot=rules.marketStep.isFinite() && rules.marketStep>0
+                check(qty.isFinite() && qty>=maxOf(rules.minQty,if(marketLot) rules.marketMinQty else rules.minQty) &&
+                    qty<=minOf(rules.maxQty,if(marketLot) rules.marketMaxQty else rules.maxQty) &&
+                    ExecutionMath.isMultiple(qty,rules.step) && (!marketLot || ExecutionMath.isMultiple(qty,rules.marketStep)) &&
+                    qty*entry>=rules.minNotional && qty*entry<=rules.maxNotional) { "TC2_REVERSAL_QUANTITY_FILTER_BLOCKED" }
+                val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,direction,
+                    NativeFuturesCampaignCoordinator.EntryKind.MARKET,fmtQty(qty,rules.decimals),fmtPrice(entry,rules.tick),
+                    fmtPrice(stop,rules.tick),c.getString("client_id"),riskPct,
+                    signalType=c.getString("signal_type"),signalBarTimeMs=c.getLong("signal_bar_time_ms"),
+                    signalReason="TC2 book reversal after confirmed reduce-only flat",leverage=leverage,
+                    strategyProfile=williamsTc2Profile,executionSemantics=WILLIAMS_TC2_REVERSAL,
+                    setupContext=JSONObject().put("tc2_book_reversal",c)
+                        .put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY)).toString(),
+                    signalId=c.getString("signal_id"),reversalOwnerId=c.getString("owner_id"))
+                val before=futuresCampaignCoordinator.intentsSnapshot().length()
+                val result=withCampaignMutation(symbol,"TC2_CONFIRMED_FLAT_REVERSE_ENTRY") {
+                    check(executionReady() && !forceTestnetMode && entryTimePolicy.allows(futuresMarketData.exchangeNowMs())) {
+                        "TC2_REVERSAL_RUNTIME_CHANGED_BEFORE_SUBMISSION"
+                    }
+                    futuresCampaignCoordinator.submitPendingEntry(plan)
+                }
+                lastOrder=result
+                if(result.optBoolean("accepted")) {
+                    lastRestReconcileMs=0L
+                    stateMachine.force(TradingState.ENTRY_PENDING,"TC2 reversal fill/protection reconciliation")
+                } else rejectDecision(symbol,result.optString("blocker","TC2_REVERSAL_REJECTED"))
+                if(futuresCampaignCoordinator.state==NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED) {
+                    reconcileRequired=true;persistSafetyFlag("reconcile_required",true)
+                }
+                return result.optBoolean("accepted") || futuresCampaignCoordinator.intentsSnapshot().length()!=before
+            } catch(failure:Exception) {
+                lastError="TC2_REVERSAL_REQUIRES_REVALIDATION: $symbol: "+(failure.message ?: failure.javaClass.simpleName)
+                rejectDecision(symbol,lastError ?: "TC2_REVERSAL_BLOCKED")
+            }
+        }
+        return false
     }
 
     /** Cancel first; a replacement is sized only after a fresh complete exchange reconciliation. */
@@ -6139,13 +6230,142 @@ private class NativeEngine(
     }
 
     private var lastOperatorSupervisionAttemptMs:Long=0L
+    @Volatile private var autonomousOrphanAnalysisRunning=false
+    @Volatile private var autonomousOrphanAnalysisStartedAtMs=0L
+    @Volatile private var autonomousRecoveredCandidateCursor=0
+
+    /**
+     * User-authorized on-device Demo recovery: analyse current signed Binance
+     * exposure against closed H1/H4 and TC2 first, then require the coordinator
+     * to independently verify exact position/STOP twice >=30s apart.
+     * The result is STOP-ONLY supervision, NEVER strategy ownership.
+     *
+     * Review/admission may be deferred during bad data; existing Binance STOP
+     * is left unchanged. This method can never open/close/add/reverse trades.
+     */
+    private fun analyzeAndEnrollAutonomousRecoveredStops() {
+        if(!running || !userStreamConnected || userStreamSyncRequired ||
+            killLatched || !campaignEngineEnabled) return
+        val source=futuresCampaignCoordinator.status()
+        val signedProofs=CockpitDiagnostics.rows(source.optJSONArray("exchange_protection_observations"))
+        if(signedProofs.isEmpty()) return
+        val now=System.currentTimeMillis()
+        val signedPositions=futuresCampaignCoordinator.positionsSnapshot()
+        val existing=futuresCampaignCoordinator.operatorSupervisionsSnapshot()
+        val candidates=CockpitDiagnostics.rows(signedPositions).filter { row ->
+            row.optString("symbol") in coreSymbols &&
+                CockpitDiagnostics.rows(existing).none {
+                    it.optString("symbol")==row.optString("symbol") &&
+                        it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED")
+                }
+        }
+        if(candidates.isEmpty()) return
+        // Fair rotation: one malformed/no-history symbol must not starve the
+        // other orphan positions; bound signed GET and book reviews per sweep.
+        val offset=autonomousRecoveredCandidateCursor%candidates.size
+        val selected=(0 until minOf(2,candidates.size)).map {
+            candidates[(offset+it)%candidates.size]
+        }
+        autonomousRecoveredCandidateCursor=(offset+selected.size)%candidates.size
+        for(pos in selected) {
+            val symbol=pos.optString("symbol")
+            if(symbol !in coreSymbols ||
+                CockpitDiagnostics.rows(existing).any { it.optString("symbol")==symbol &&
+                    it.optString("state") in setOf("ACTIVE","REPLACEMENT_UNRESOLVED") }) continue
+            val quantity=pos.optString("positionAmt").toBigDecimalOrNull() ?: continue
+            if(quantity.signum()==0) continue
+            val direction=if(quantity.signum()>0) "LONG" else "SHORT"
+            val proof=signedProofs.singleOrNull {
+                it.optString("symbol")==symbol && it.optString("direction")==direction
+            } ?: continue
+            if(autonomousRecoveredStopCandidateBlocker(pos,proof,now)!=null) continue
+            val stop=proof.optString("stop").toDoubleOrNull() ?: continue
+            val entry=pos.optString("entryPrice").toDoubleOrNull() ?: continue
+            if(!stop.isFinite() || stop<=0.0 || !entry.isFinite() || entry<=0.0) continue
+            runCatching {
+                val h1=fetchCandles(symbol,"1h",180)
+                val h4=fetchCandles(symbol,"4h",80)
+                require(h1.size>=45 && h4.size>=45) {
+                    "Book wave/Alligator evidence requires 45 H1/H4 candles"
+                }
+                val h1Wave=h1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val h4Wave=h4.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val exchangeNow=futuresMarketData.exchangeNowMs()
+                require(williamsClosedH1HistoryBlocker(h1Wave,exchangeNow)==null) {
+                    "H1 closed-candle source not independently verified"
+                }
+                val mark=futuresMarketData.markPrice(symbol)
+                val tick=symbolFilters(symbol).tick
+                val review=reviewWilliamsTc2StopTightening(
+                    direction=direction,oldStop=stop,entry=entry,initialStop=stop,
+                    mark=mark,tick=tick,
+                    openedAtMs=now,asOfMs=exchangeNow,
+                    h1Input=h1Wave,h4Input=h4Wave,
+                    feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
+                )
+                // All initial analysis, including a WAIT / no-proposal decision,
+                // must be durably auditable before optional future STOP trailing.
+                val evidence=review.evidence
+                    .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
+                    .put("strategy_ownership_verified",false)
+                    .put("no_add_close_reverse",true)
+                val evidenceId=auditStore.recordStopTrailDecision(
+                    symbol,direction,"AUTO_RECOVERY:"+symbol,
+                    "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",evidence)
+                check(evidenceId>0L) { "Book analysis audit not durable" }
+                val result=futuresCampaignCoordinator.enrollAutonomousRecoveredStopOnly(
+                    symbol,direction,quantity.abs().toPlainString(),
+                    pos.optString("entryPrice"),proof.optString("stop")
+                )
+                if(result.optString("status")=="AUTONOMOUS_STOP_ONLY_ACTIVATED") {
+                    auditStore.recordCockpitEvent("AUTO_RECOVERED_STOP_ONLY",symbol,direction,
+                        "TWO_SIGNED_PROOFS_H1_H4_ANALYZED",
+                        "SL retained; no new position, no market close, no strategy ownership; evidence="+evidenceId)
+                }
+            }.onFailure {
+                val detail="AUTONOMOUS_ORPHAN_ANALYSIS_BLOCKED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName)
+                lastError=detail
+                runCatching { auditStore.recordCockpitEvent("AUTO_RECOVERY",symbol,direction,
+                    "NOT_AUTHORIZED",detail) }
+            }
+        }
+    }
+
+    private fun scheduleAutonomousOrphanAnalysis() {
+        val now=System.currentTimeMillis()
+        if(!running || !userStreamConnected || userStreamSyncRequired ||
+            killLatched || !campaignEngineEnabled) return
+        synchronized(this) {
+            if(autonomousOrphanAnalysisRunning ||
+                now-autonomousOrphanAnalysisStartedAtMs<30_000L) return
+            autonomousOrphanAnalysisRunning=true
+            autonomousOrphanAnalysisStartedAtMs=now
+        }
+        // Signed reads + H1/H4 analysis MUST NOT execute while holding the
+        // account-wide futuresReconciliationLock; private-stream/fill/STOP
+        // reconciliation must remain available every few seconds.
+        Thread({
+            try {
+                analyzeAndEnrollAutonomousRecoveredStops()
+            } catch(failure:Exception) {
+                lastError="AUTONOMOUS_RECOVERY_ANALYSIS_UNAVAILABLE: "+
+                    (failure.message ?: failure.javaClass.simpleName)
+            } finally {
+                autonomousOrphanAnalysisRunning=false
+            }
+        },"williams-recovery-book-analysis").apply { isDaemon=true; start() }
+    }
 
     private fun runOperatorStopSupervisionIfDue() {
         val now=System.currentTimeMillis()
         if(lastOperatorSupervisionAttemptMs>0L &&
             now>=lastOperatorSupervisionAttemptMs && now-lastOperatorSupervisionAttemptMs<10_000L) return
-        if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
         lastOperatorSupervisionAttemptMs=now
+        // Never block this signed reconciliation's account lock on H1/H4
+        // downloads or the independent two-snapshot adoption preflight.
+        scheduleAutonomousOrphanAnalysis()
+        if(futuresCampaignCoordinator.operatorSupervisionsSnapshot().length()==0) return
         // One failed maintenance observation must not erase the signed account
         // reconciliation result. Every mutation still acquires its own Door.
         runCatching { futuresCampaignCoordinator.refreshOperatorClosedTradeHistory() }
@@ -6188,42 +6408,83 @@ private class NativeEngine(
                 require(bars.size>=45) { "Need 45 H1 candles before supervised trailing" }
                 val rules=symbolFilters(symbol)
                 val mark=futuresMarketData.markPrice(symbol)
-                val plan=planWilliamsCampaignStop(
+                val review=reviewWilliamsTc2StopTightening(
                     direction=direction.name,
                     oldStop=record.getDouble("stop"),
-                    actualEntry=record.getDouble("entry_price"),
+                    entry=record.getDouble("entry_price"),
                     initialStop=record.optDouble("initial_stop",record.getDouble("stop")),
-                    markPrice=mark,
-                    tickSize=rules.tick,
-                    openedObservedAtMs=record.optLong("approved_at_ms",0L),
-                    bars=bars.map { FuturesTrailBar(it.t,it.h,it.l) },
-                    feeAllowance=2.0*feeBufferPerSidePct+maxSlippagePct
+                    mark=mark,tick=rules.tick,
+                    openedAtMs=record.optLong("approved_at_ms",0L),
+                    asOfMs=futuresMarketData.exchangeNowMs(),
+                    h1Input=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                    h4Input=fetchCandles(symbol,"4h",50).map {
+                        WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                    },
+                    feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct
                 )
+                val plan=review.proposal
+                val trailClientId=if(plan!=null) ("W2T_"+symbol.take(8)+"_"+
+                    System.nanoTime().toString(36).takeLast(14)).take(36) else null
+                val submittedStop=plan?.let { fmtPrice(it.stop,rules.tick) }
+                if(trailClientId!=null)
+                    review.evidence.put("proposed_binance_protection_client_id",trailClientId)
+                        .put("submitted_stop_price",submittedStop)
+                val supervisionId="SUPERVISION:"+symbol+":"+record.optLong("approved_at_ms",0L)
+                // Append the complete decision before any optional Binance mutation.
+                // If SQLite is not durable, voluntary trailing must NOT proceed.
+                val decisionAuditId=if(plan!=null)
+                    auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                        "PROPOSED_BEFORE_MUTATION",review.evidence)
+                    else runCatching {
+                        auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                            "REVIEW_DEFERRED",review.evidence)
+                    }.getOrDefault(0L)
                 val awaitingFirstClose=bars.last().t+WILLIAMS_H1_MS<=record.optLong("approved_at_ms",0L)
                 futuresCampaignCoordinator.recordOperatorSupervisionObservation(symbol,
                     if(plan!=null) "STOP_PROPOSED" else if(awaitingFirstClose)
                         "WAITING_FOR_FIRST_CLOSED_H1" else "WAITING_FOR_STRUCTURE",
                     plan?.reason ?: if(awaitingFirstClose)
                         "No H1 candle has closed after operator approval; existing protection retained"
-                        else "No confirmed closed-H1 structure improves the current stop",
+                        else review.blocker,
                     bars.last().t+WILLIAMS_H1_MS,plan?.stop)
                 if(plan!=null) {
-                    val clientId=("W2T_"+symbol.take(8)+"_"+
-                        System.nanoTime().toString(36).takeLast(14)).take(36)
-                    val outcome=withCampaignMutation(
-                        symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
-                        allowPaused=true,allowStopped=true,allowKillLatched=true,
-                        allowReconcileRequired=true,waitForDoorMs=15_000L
-                    ) {
-                        futuresCampaignCoordinator.trailOperatorSupervisedStop(
-                            symbol,direction,fmtPrice(plan.stop,rules.tick),clientId)
+                    val clientId=trailClientId ?: error("MISSING_STOP_TRAIL_CLIENT_ID")
+                    val outcome=try {
+                        withCampaignMutation(
+                            symbol,"OPERATOR_EXISTING_STOP_ONLY_TRAIL",
+                            allowPaused=true,allowStopped=true,allowKillLatched=true,
+                            allowReconcileRequired=true,waitForDoorMs=15_000L
+                        ) {
+                            futuresCampaignCoordinator.trailOperatorSupervisedStop(
+                                symbol,direction,submittedStop ?: error("NO_SUBMITTED_STOP"),clientId)
+                        }
+                    } catch(failure:Exception) {
+                        runCatching {
+                            auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                                "EXCHANGE_EXCEPTION_UNVERIFIED",review.evidence,
+                                JSONObject().put("error_type",failure.javaClass.simpleName)
+                                    .put("retry_authorized",false))
+                        }
+                        throw failure
+                    }
+                    // The exchange response is evidence only when the coordinator
+                    // has verified it. Never retry an ambiguous mutation for audit.
+                    runCatching {
+                        auditStore.recordStopTrailDecision(symbol,direction.name,supervisionId,
+                            if(outcome.optBoolean("ok")) "EXCHANGE_RESPONSE_OK"
+                            else "EXCHANGE_NOT_CONFIRMED",review.evidence,outcome)
+                    }.onFailure {
+                        lastError="POST_STOP_AUDIT_FAILED "+symbol+": "+
+                            (it.message ?: it.javaClass.simpleName)
                     }
                     check(outcome.optBoolean("ok")) {
                         outcome.optString("blocker","Operator stop replacement unresolved")
                     }
                     auditStore.recordCockpitEvent("OPERATOR_PROTECTION_TRAILED",
                         symbol,state="EXCHANGE_CONFIRMED",
-                        detail="TC2 H1 only; "+plan.reason+"; new_stop="+plan.stop+"; no book ownership claimed")
+                        detail="TC2 H1/H4 stop reviewed; new_stop="+plan.stop+
+                            "; decision_audit_id="+decisionAuditId+
+                            "; full source candles and Binance outcome in SQLite; no book ownership claimed")
                     futuresCampaignCoordinator.recordOperatorSupervisionObservation(
                         symbol,"TRAILED",plan.reason,bars.last().t+WILLIAMS_H1_MS,plan.stop)
                 }
@@ -6280,6 +6541,9 @@ private class NativeEngine(
             if(eligibleSymbols!=null && profile!=williamsTc2Profile) continue
             require(profile in williamsEditionProfiles) { "Unknown durable strategy profile; retain protection" }
             val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            require(williamsClosedH1HistoryBlocker(bars,futuresMarketData.exchangeNowMs())==null) {
+                "SOURCE_MANAGEMENT_CLOSED_H1_HISTORY_UNVERIFIED"
+            }
             var editionExit="";var editionStop:Double?=null
             if(profile==williamsNtdProfile) {
                 val aos=candles.indices.map { ao(candles,it) }
@@ -6288,45 +6552,53 @@ private class NativeEngine(
                     williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN },
                     williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,rules.tick,openedAt,
                     intent.optJSONObject("edition_management") ?: JSONObject())
+                val oldBookEvidence=intent.optJSONObject("edition_management")
+                    ?.optString("zone_book_evidence").orEmpty()
+                val newBookEvidence=management.state.optString("zone_book_evidence")
+                if(newBookEvidence!=oldBookEvidence && newBookEvidence in setOf(
+                    "HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
+                    "NTD_ZONE_HISTORY_WINDOW_UNVERIFIED",
+                    "NTD_REPLAY_CONFLICTS_WITH_PERSISTED_STOP",
+                    "NTD_BOOK_PRICE_OFF_EXCHANGE_TICK_GRID",
+                    "NTD_H1_HISTORY_GAP"
+                )) {
+                    // Historical OHLC may prove a BOOK stop *could* have
+                    // triggered, but it is NOT a signed Binance fill. Alert
+                    // instead of inventing a retrospective market exit.
+                    runCatching { auditStore.recordCockpitEvent(
+                        "NTD_BOOK_EXIT_EVIDENCE_QUARANTINED",symbol=symbol,direction=dir,
+                        state="EXISTING_BINANCE_STOP_RETAINED",
+                        detail="reason="+newBookEvidence+
+                            "; position and exchange order require signed reconciliation"
+                    ) }.onFailure { lastError="NTD_BOOK_EXIT_AUDIT_FAILED "+symbol+": "+
+                        (it.message ?: it.javaClass.simpleName) }
+                }
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management.state)
+                intent.put("edition_management",management.state)
                 editionExit=management.exitReason;editionStop=management.stop
                 if(editionStop!=null && (if(dir=="LONG") mark<=editionStop else mark>=editionStop))
                     editionExit="NTD_FIVE_ZONE_PROTECTION_CROSSED"
             } else if(profile==williamsCourseProfile) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                val setup=runCatching { JSONObject(intent.optString("setup_context")) }.getOrDefault(JSONObject())
-                val initialStage=setup.optString("course_initial_stage")
-                val initialUnits=williamsCourseTarget(initialStage,setup.optDouble("course_w3_to_w1_ratio",Double.NaN))
-                if(!management.has("course_unit_quantity") && initialUnits!=null && initialUnits>0 && setup.has("course_origin_at")) {
-                    management.put("course_stage",initialStage).put("course_origin_at",setup.getLong("course_origin_at"))
-                        .put("course_unit_quantity",abs(signedQty)/initialUnits)
-                        .put("policy","COURSE_BOOK_EXAMPLE_RATIOS_RISK_CAPPED")
-                }
-                fun filledIntent(cid:String):Boolean=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.any {
-                    it.optString("client_id")==cid && it.optString("order_status")=="FILLED" &&
-                        (it.optString("intent_role")=="ADD_ON" || it.optString("exchange_status")=="EXIT_CONFIRMED")
-                }
-                val pendingStage=management.optString("course_pending_stage")
-                val pendingTarget=management.optDouble("course_pending_target",Double.NaN)
-                if(pendingStage.isNotEmpty() && pendingTarget.isFinite() && abs(abs(signedQty)-pendingTarget)<=maxOf(1e-9,pendingTarget*1e-9) &&
-                    filledIntent(management.optString("course_pending_client_id"))) {
-                    management.put("course_stage",pendingStage).remove("course_pending_stage")
-                    management.remove("course_pending_target");management.remove("course_pending_client_id")
-                }
+                // Only coordinator reconciliation can publish an exact signed
+                // stage receipt. A target-shaped position or partial initial
+                // fill must never manufacture a unit or advance this stage.
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                intent.put("edition_management",management)
                 if(management.has("course_unit_quantity")) {
-                    val context=williamsCourseActiveContext(waveHierarchyFor(symbol),dir,management.getLong("course_origin_at"))
-                    val stage=context?.let { williamsCourseNextStage(management.getString("course_stage"),it.getString("phase")) }
-                    if(stage in listOf("W2","W4")) {
-                        val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
-                        val target=floorStep(management.getDouble("course_unit_quantity")*courseTargets.getValue(stage!!),step)
-                        val reduction=floorStep(maxOf(0.0,abs(signedQty)-target),step)
+                    val proof=runCatching { courseTrimPlan(intent) }.getOrElse { JSONObject().put("status","BLOCKED")
+                        .put("reason","COURSE_TRIM_SOURCE_UNAVAILABLE").put("error",it.javaClass.simpleName) }
+                    management.put("course_stage_admission",proof)
+                    futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                    if(proof.optString("status")=="OBSERVED_SOURCE_PINNED_REDUCTION") {
+                        val stage=proof.getString("stage")
+                        val reduction=proof.getDouble("reduction_quantity")
                         if(reduction>0 && reduction<abs(signedQty)) {
                             val seed=intent.getString("client_id")+":"+stage+":"+candles.last().t+":"+abs(signedQty)
                             val digest=java.security.MessageDigest.getInstance("SHA-256").digest(seed.toByteArray()).joinToString("") { "%02x".format(it) }.take(20)
                             val cid="W2R_${symbol.take(7)}_$digest"
                             management.put("course_pending_stage",stage).put("course_pending_target",abs(signedQty)-reduction)
-                                .put("course_pending_client_id",cid)
+                                .put("course_pending_client_id",cid).put("course_pending_quantity",proof.getJSONObject("exact_quantity"))
                             futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                             val trimmed=withCampaignMutation(symbol,"COURSE_STAGE_REDUCTION",allowPaused=true, allowReconcileRequired=riskOnly) {
                                 futuresCampaignCoordinator.closePosition(symbol,direction,fmtQty(reduction,rules.decimals),cid,"COURSE_STAGE_TRIM",partialReduction=true)
@@ -6336,10 +6608,18 @@ private class NativeEngine(
                         }
                     }
                 }
+                if(management.optString("course_stage") in setOf("W3","W5","A_ENTRY","A_REDUCE","C_ADD")) {
+                    val terminal=runCatching { courseExitObservation(intent) }.getOrElse {
+                        JSONObject().put("status","BLOCKED").put("blocker","COURSE_EXIT_SOURCE_UNAVAILABLE") }
+                    management.put("course_terminal_admission",terminal)
+                    futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                    if(terminal.optString("status")=="OBSERVED_COURSE_SOURCE_RULE") editionExit=terminal.getString("reason")
+                }
                 val higher=fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
                 val checked=closedWilliamsWaveBars(higher,"6h",futuresMarketData.exchangeNowMs())
                 val airbag=williamsCourseAirbagStop(dir,checked,rules.tick)
-                if(airbag!=null && (if(dir=="LONG") mark<=airbag else mark>=airbag)) editionExit="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED"
+                val courseContract=futuresMarketData.price(symbol)
+                if(airbag!=null && (if(dir=="LONG") courseContract<=airbag else courseContract>=airbag)) editionExit="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED"
                 val old=intent.getString("protective_stop").toDouble()
                 val candidates=listOfNotNull(airbag,williamsCourseTwoFractalStop(dir,bars,rules.tick)).filter {
                     if(dir=="LONG") it>old && it<mark else it<old && it>mark
@@ -6353,14 +6633,15 @@ private class NativeEngine(
             // wave hypothesis ALONE never orders a TC2 market exit. The broker
             // protection remains armed until the reduce-only exit is confirmed.
             val opposing = if(profile==williamsTc2Profile) {
-                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile) }
+                runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile) }
                     .onFailure { lastError="TC2_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+
                         (it.message ?: it.javaClass.simpleName) }.getOrNull()
-            } else triggeredOpposingSignal(symbol,direction,candles,rules.tick,mark,openedAt,profile)
-            if(profile==williamsTc2Profile && boundaryExit) {
+            } else runCatching { triggeredOpposingSignal(symbol,direction,candles,rules.tick,futuresMarketData.price(symbol),openedAt,profile) }
+                .onFailure { lastError="SOURCE_OPPOSITION_EVIDENCE_UNAVAILABLE: $symbol: "+(it.message ?: it.javaClass.simpleName) }.getOrNull()
+            if(profile in setOf(williamsTc2Profile,williamsCourseProfile) && boundaryExit) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                    .put("tc2_correction_boundary_advisory",JSONObject()
-                        .put("policy","TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
+                    .put(if(profile==williamsCourseProfile) "course_boundary_advisory" else "tc2_correction_boundary_advisory",JSONObject()
+                        .put("policy",if(profile==williamsCourseProfile) "COURSE_SOURCE_PRICE_RULE_REQUIRED" else "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED")
                         .put("observed_at_ms",futuresMarketData.exchangeNowMs())
                         .put("mark_price",mark).put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
@@ -6370,17 +6651,32 @@ private class NativeEngine(
                 opposing.role=="ENTRY" && opposing.executionSemantics=="STOP_ENTRY" &&
                 opposing.type.removePrefix("SHORT_") in setOf("REVERSAL","SUPER_AO","FRACTAL") &&
                 campaignSignalDirection(opposing.type)!=dir &&
-                (if(dir=="LONG") mark<=opposing.triggerPrice else mark>=opposing.triggerPrice)
+                (executionStore.readState("decision_h1_opposition_"+symbol)?.let {
+                    val quote=JSONObject(it).optDouble("contract_price",Double.NaN)
+                    quote.isFinite() && quote>0 &&
+                        (if(dir=="LONG") quote<=opposing.triggerPrice else quote>=opposing.triggerPrice)
+                }==true)
             val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
-            val oppositeProfitBlocker=if(profile==williamsTc2Profile)
+            val oppositeProfitBlocker=if(profile in williamsSourceProfiles)
                 williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
                     2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
             val actionableOpposing = opposing?.takeIf {
                 williamsOpposingSignalCanMarketClose(profile) &&
+                    oppositeProfitBlocker==null &&
                     (profile!=williamsTc2Profile ||
                         (!riskOnly && eligibleSymbols==null && tc2TriggerNow &&
                             oppositeProfitBlocker==null))
             }
+            val courseReason=if(profile==williamsCourseProfile) {
+                if(editionExit.isNotEmpty()) editionExit else if(actionableOpposing!=null) "COURSE_OPPOSITE_FORMATION_TRIGGERED" else null
+            } else null
+            val courseProof=if(courseReason!=null) runCatching { courseExitSourceProof(intent,courseReason) }.onFailure {
+                val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
+                    .put("course_exit_advisory",JSONObject().put("reason",courseReason).put("blocker",it.message ?: it.javaClass.simpleName)
+                        .put("market_close_authorized",false))
+                futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
+                intent.put("edition_management",management)
+            }.getOrNull() else null
             if(profile==williamsTc2Profile && opposing!=null && actionableOpposing==null) {
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
                     .put("tc2_opposing_signal_advisory",JSONObject()
@@ -6393,12 +6689,12 @@ private class NativeEngine(
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
             if (williamsStrategyCanMarketClose(profile) &&
+                (profile!=williamsCourseProfile || courseProof!=null) &&
                 (actionableOpposing != null ||
-                    profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty()))) {
+                    profile!=williamsTc2Profile && editionExit.isNotEmpty())) {
                 val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
                     if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
-                val exitReason = if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
-                    else if(profile!=williamsTc2Profile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"
+                val exitReason = if(profile==williamsCourseProfile) courseReason!! else if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                 val decision = if(profile==williamsTc2Profile)
@@ -6406,12 +6702,19 @@ private class NativeEngine(
                 val proofAt = if(profile==williamsTc2Profile)
                     decision.optLong("observed_at_ms") else futuresMarketData.exchangeNowMs()
                 val management=JSONObject((intent.optJSONObject("edition_management") ?: JSONObject()).toString())
-                management.put("exit_evidence",JSONObject().put("reason",exitReason)
+                management.put("exit_evidence",(courseProof?.let { JSONObject(it.toString()) } ?: JSONObject()).put("reason",exitReason)
                     .put("signal_id",actionableOpposing?.signalId ?: JSONObject.NULL)
                     .put("observed_at_ms",proofAt).put("edition_exit",editionExit)
                     .put("correction_boundary_broken",boundaryExit).put("higher_correction",correction.toJson())
                     .put("opposition_check",if(actionableOpposing!=null)
-                        JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL))
+                        JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) else JSONObject.NULL)
+                    .put("reverse_candidate",if(profile==williamsTc2Profile && actionableOpposing!=null) JSONObject()
+                        .put("symbol",symbol).put("direction",campaignSignalDirection(actionableOpposing.type))
+                        .put("signal_id",actionableOpposing.signalId).put("signal_type",actionableOpposing.type)
+                        .put("strategy_profile",profile).put("execution_semantics",actionableOpposing.executionSemantics)
+                        .put("signal_bar_time_ms",actionableOpposing.signalBarTimeMs)
+                        .put("trigger",actionableOpposing.triggerPrice).put("protective_stop",actionableOpposing.protectivePrice)
+                        else JSONObject.NULL))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
                 val closeQty = fullMarketCloseQuantity(row.optString("positionAmt"),rules)
                 val clientId = ("W2O_"+symbol.take(8)+"_"+System.nanoTime().toString(16).takeLast(12)).take(36)
@@ -6426,33 +6729,77 @@ private class NativeEngine(
             val originalStop = intent.optString("initial_protective_stop").toDoubleOrNull()
             val actualEntry = row.optString("entryPrice").toDoubleOrNull()
                 ?: throw IllegalStateException(symbol + " Binance entry price is missing for trailing")
+            val tc2Review = if(profile==williamsTc2Profile) reviewWilliamsTc2StopTightening(
+                direction=dir,oldStop=oldStop,entry=actualEntry,initialStop=originalStop,
+                mark=mark,tick=rules.tick,
+                openedAtMs=intent.optLong("position_open_observed_at_ms",0L),
+                asOfMs=futuresMarketData.exchangeNowMs(),
+                h1Input=bars,
+                h4Input=fetchCandles(symbol,"4h",50).map {
+                    WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                },
+                feeAndSlippagePct=2.0*feeBufferPerSidePct+maxSlippagePct,
+                campaignQuantity=kotlin.math.abs(signedQty)
+            ) else null
             val plan = if(profile!=williamsTc2Profile) editionStop?.takeIf {
                 if(dir=="LONG") it>oldStop && it<mark else it<oldStop && it>mark
-            }?.let { FuturesStopTrailProposal(it,"${profile}_PROTECTION") } else planWilliamsCampaignStop(
-                direction = dir,
-                oldStop = oldStop,
-                actualEntry = actualEntry,
-                initialStop = originalStop,
-                markPrice = mark,
-                tickSize = rules.tick,
-                openedObservedAtMs = intent.optLong("position_open_observed_at_ms", 0L),
-                bars = candles.map { FuturesTrailBar(it.t, it.h, it.l) },
-                feeAllowance = 2.0 * feeBufferPerSidePct + maxSlippagePct
-            )
+            }?.let { FuturesStopTrailProposal(it,"${profile}_PROTECTION") } else tc2Review?.proposal
+            if(tc2Review!=null && plan==null &&
+                tc2Review.blocker !in setOf("NO_NEW_CONFIRMED_H1_PROTECTION_STRUCTURE")) {
+                runCatching { auditStore.recordCockpitEvent(
+                    "TC2_STOP_REVIEW_DEFERRED",symbol= symbol,direction=dir,
+                    state="EXISTING_BINANCE_STOP_RETAINED",
+                    detail="blocker="+tc2Review.blocker+
+                        "; complete H1/H4 evidence stored as a structured stop decision"
+                ) }
+                runCatching {
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.optString("client_id"),
+                        "REVIEW_DEFERRED",tc2Review.evidence)
+                }.onFailure { lastError="DEFERRED_STOP_AUDIT_FAILED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
+            }
             if (plan != null) {
-                // Distinct structural H1/fractal improvements require unique Binance
-                // algo IDs; a timestamp alone cannot identify replacements.
+                // Bind the forensic PREPARED receipt to the very same client ID
+                // the coordinator will persist before Binance network I/O.
                 val clientId = ("W2T_" + symbol.take(8) + "_" +
                     System.nanoTime().toString(36).takeLast(14)).take(36)
-                val result = withCampaignMutation(
-                    symbol = symbol,
-                    purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
-                    allowPaused = true, allowReconcileRequired = riskOnly
-                ) {
-                    futuresCampaignCoordinator.trailProtectiveStop(
-                        symbol, direction, fmtPrice(plan.stop, rules.tick), clientId, reason = plan.reason
-                    )
+                val submittedStop=fmtPrice(plan.stop,rules.tick)
+                tc2Review?.evidence?.put("proposed_binance_protection_client_id",clientId)
+                    ?.put("previous_binance_protection_client_id",intent.optString("protection_client_id"))
+                    ?.put("submitted_stop_price",submittedStop)
+                val decisionAuditId=if(tc2Review!=null) {
+                    // Fail closed when forensic decision write is unavailable:
+                    // no optional STOP swap without complete pre-mutation evidence.
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                        "PROPOSED_BEFORE_MUTATION",tc2Review.evidence)
+                } else 0L
+                // Distinct structural H1/fractal improvements require unique Binance
+                // algo IDs; a timestamp alone cannot identify replacements.
+                val result = try {
+                    withCampaignMutation(
+                        symbol = symbol,
+                        purpose = "WILLIAMS_STRUCTURAL_STOP_TRAIL",
+                        allowPaused = true, allowReconcileRequired = riskOnly
+                    ) {
+                        futuresCampaignCoordinator.trailProtectiveStop(
+                            symbol, direction, submittedStop, clientId, reason = plan.reason
+                        )
+                    }
+                } catch(failure:Exception) {
+                    if(tc2Review!=null) runCatching {
+                        auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                            "EXCHANGE_EXCEPTION_UNVERIFIED",tc2Review.evidence,
+                            JSONObject().put("error_type",failure.javaClass.simpleName)
+                                .put("retry_authorized",false))
+                    }
+                    throw failure
                 }
+                if(tc2Review!=null) runCatching {
+                    auditStore.recordStopTrailDecision(symbol,dir,intent.getString("client_id"),
+                        if(result.optBoolean("ok",false)) "EXCHANGE_RESPONSE_OK"
+                        else "EXCHANGE_NOT_CONFIRMED",tc2Review.evidence,result)
+                }.onFailure { lastError="POST_STOP_AUDIT_FAILED "+symbol+": "+
+                    (it.message ?: it.javaClass.simpleName) }
                 if (!result.optBoolean("ok", false)) {
                     throw IllegalStateException(result.optString("blocker", result.optString("error")))
                 }
@@ -6465,7 +6812,9 @@ private class NativeEngine(
                     auditStore.recordCockpitEvent(
                         "PROTECTION_TRAILED", symbol = symbol, direction = dir,
                         state = "OPEN_PROTECTED",
-                        detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry"
+                        detail = "${plan.reason}; previous=$oldStop; new=${plan.stop}; mark=$mark; entry=$actualEntry; "+
+                            if(tc2Review!=null) "decision_audit_id=$decisionAuditId; full evidence in SQLite"
+                            else "non_TC2_management"
                     )
                 }
             }
@@ -6477,7 +6826,7 @@ private class NativeEngine(
         // A verified old NTD/Course owner can retain exchange protection and
         // recovery, but observation-only sources must not create add-on risk.
         if(!williamsVerifiedNewRiskSource(profile)) {
-            rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: no NTD/Course LIVE add-ons before Demo acceptance")
+            rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: source lifecycle not enabled")
             return
         }
         if(!williamsProfileAllowsSource(williamsProfile,profile) || !executionReady()) return
@@ -6494,6 +6843,7 @@ private class NativeEngine(
             return "W2A_${symbol.take(7)}_$digest"
         }
         val rules=symbolFilters(symbol);val mark=futuresMarketData.markPrice(symbol)
+        val contractPrice=futuresMarketData.price(symbol)
         val signal=candidate.campaignSignals.filter { it.strategyProfile==profile &&
             campaignSignalDirection(it.type)==direction && williamsAdditionTimeEligible(profile,it.signalBarTimeMs,it.type,
                 owner.optLong("signal_bar_time_ms"),owner.optString("signal_type"),latest) &&
@@ -6501,13 +6851,19 @@ private class NativeEngine(
             (it.executionSemantics!="MARKET_ON_CLOSE" || williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,now,it.triggerPrice,mark)==null) &&
             children.none { child -> child.optString("client_id")==additionClientId(it) } }
             .minWithOrNull(compareBy<CampaignSignalN> { it.executionSemantics!="MARKET_ON_CLOSE" }.thenBy { it.signalBarTimeMs }) ?: return
+        // Existing campaign stays protected; only an attempted ADD_ON adds risk.
+        // TC2 ch11 fig.11.7 cautions against late trades in bounded correction.
+        williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
+            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
+            ?.let { return rejectDecision(symbol,it+": new add-on withheld, protected owner unchanged") }
         val market=signal.executionSemantics=="MARKET_ON_CLOSE"
         if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
-        val price=if(market) mark else signal.triggerPrice
+        val price=if(market) williamsNtdCloseEntryBound(direction,signal.triggerPrice,rules.tick) ?: return
+            else signal.triggerPrice
         val stop=owner.getString("protective_stop").toDouble()
-        if((if(direction=="LONG") stop>=price || !market && price<=mark else stop<=price || !market && price>=mark)) return
-        if(profile==williamsTc2Profile) {
+        if((if(direction=="LONG") stop>=price || !market && price<=contractPrice else stop<=price || !market && price>=contractPrice)) return
+        if(profile in williamsExecutionProfiles) {
             williamsTc2ProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,mark,price)
                 ?.let { return rejectDecision(symbol,it) }
         }
@@ -6525,7 +6881,8 @@ private class NativeEngine(
         val reserved=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.filter {
             it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it)
         }.sumOf { futuresCampaignReservedRisk(it,all) }
-        val risk=minOf(campaignAddRiskCapPct,maxRiskPerTradePct,maxTotalRiskPct-reserved)
+        val risk=minOf(campaignAddRiskCapPct,maxRiskPerTradePct,maxTotalRiskPct-reserved,
+            campaignRiskLimitPct-futuresCampaignReservedRisk(owner,all))
         if(risk<=0) return
         val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot()) ?: return
         val leverage=owner.optInt("requested_leverage",0)
@@ -6547,22 +6904,26 @@ private class NativeEngine(
         }
         val courseManagement=owner.optJSONObject("edition_management")
         if(profile==williamsCourseProfile && courseManagement?.has("course_unit_quantity")==true) {
+            if(courseManagement.has("course_quantity_blocker")) return rejectDecision(symbol,"COURSE_PREVIOUS_EXACT_STAGE_FILL_UNVERIFIED")
             val context=williamsCourseActiveContext(waveHierarchyFor(symbol),direction,courseManagement.getLong("course_origin_at")) ?: return
             val targetStage=williamsCourseNextStage(courseManagement.getString("course_stage"),context.getString("phase"),true,
                 context.optDouble("w3_to_w1_ratio",Double.NaN)) ?: return
-            val units=williamsCourseTarget(targetStage,context.optDouble("w3_to_w1_ratio",Double.NaN))
-                ?: return rejectDecision(symbol,"COURSE_W5_W3_W1_RATIO_UNCONFIRMED")
-            val target=floorStep(courseManagement.getDouble("course_unit_quantity")*units,step)
-            quantity=floorStep(minOf(quantity,maxOf(0.0,target-owner.getString("confirmed_position_qty").toDouble())),step)
-            setup.put("course_target_stage",targetStage).put("course_target_quantity",target)
+            val exact=williamsCourseStageQuantity(courseManagement.opt("course_unit_quantity"),courseManagement.getString("course_stage"),
+                targetStage,owner.getString("confirmed_position_qty"),rules.step,rules.marketStep,quantity,
+                context.optDouble("w3_to_w1_ratio",Double.NaN))
+            if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return rejectDecision(symbol,exact.getString("reason"))
+            if(exact.getString("action")!="ADD") return rejectDecision(symbol,"COURSE_ADDITION_MUST_INCREASE_OWNED_STAGE")
+            quantity=exact.getString("quantity").toDouble()
+            setup.put("course_target_stage",targetStage).put("course_target_quantity",exact.getString("target_quantity"))
+                .put("course_exact_quantity",exact)
         }
         if(!quantity.isFinite() || quantity<=0) return
-        if(profile==williamsTc2Profile) setup.put("book_h1_entry",williamsBookH1Proof(
+        if(profile in williamsExecutionProfiles) setup.put("book_h1_entry",williamsBookH1Proof(
             signal.signalId,direction,signal.type,profile,signal.signalBarTimeMs,
-            fmtPrice(price,rules.tick).toDouble(),
+            (if(market) signal.triggerPrice else fmtPrice(price,rules.tick).toDouble()),
             (if(direction=="LONG") normalizePrice(signal.protectivePrice,rules.tick)
                 else normalizeTriggerPrice(signal.protectivePrice,rules.tick)),
-            rules.tick,parentId,stop))
+            rules.tick,parentId,stop,signal.executionSemantics,if(market) signal.triggerPrice else 0.0))
         val clientId=additionClientId(signal)
         if((0 until all.length()).any { all.optJSONObject(it)?.optString("client_id")==clientId }) return
         val plan=NativeFuturesCampaignCoordinator.EntryPlan(symbol,
@@ -6577,10 +6938,15 @@ private class NativeEngine(
             check(williamsProfileAllowsSource(williamsProfile,profile)) { "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION" }
             check(entryTimePolicy.allows(submitNow)) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION" }
             check(checkFuturesDailyLoss()) { "DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION: "+lastError }
-            val fresh=editionCampaignSignals(symbol,fetchCandles(symbol,"1h",220),"1h",rules.tick,profile)
+            val currentH1=fetchCandles(symbol,"1h",220)
+            val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
             check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
+            check(williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
+                currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)==null) {
+                WILLIAMS_TC2_CONGESTION_BLOCKER+": NEW ADDITION BLOCKED"
+            }
             if(!market) {
-                val current=futuresMarketData.markPrice(symbol)
+                val current=futuresMarketData.price(symbol)
                 check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
             }
             futuresCampaignCoordinator.submitPendingEntry(plan)
@@ -6641,8 +7007,8 @@ private class NativeEngine(
             submitNativeFuturesAddition(candidate,owned)
             return
         }
-        if(williamsProfile !in setOf(williamsTc2Profile,williamsUnifiedProfile)) {
-            return rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: TC2 is the only verified automated entry source")
+        if(williamsProfile!=williamsUnifiedProfile && !williamsVerifiedNewRiskSource(williamsProfile)) {
+            return rejectDecision(symbol,"SOURCE_OBSERVATION_ONLY: selected source lifecycle not enabled")
         }
         // Keep both directional hypotheses until D1/H4 context is known. Picking
         // the newest signal before applying the directional macro veto caused a
@@ -6742,7 +7108,29 @@ private class NativeEngine(
         fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
             signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
             corrections[signal.signalId]?.allowed == true)
-        val allowedSignals = freshSignals.filter { contextRank(it)>0 }
+        // TC2 ch11 fig.11.7: g/h/j fractals inside corrective congestion are
+        // not permission to create NEW risk. Numerical evidence is explicitly
+        // PROJECT policy; never relabel as certain Elliott wave genealogy.
+        // Screen all possible H1 Wise Men BEFORE choosing the oldest signal.
+        val congestionBars=candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        val congestion=freshSignals.associate { signal ->
+            signal.signalId to williamsTc2CongestionEvidence(congestionBars,contextNow,
+                signal.type,campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice)
+        }
+        check(executionStore.writeState("decision_tc2_congestion_"+symbol,JSONObject()
+            .put("as_of",contextNow).put("policy",WILLIAMS_TC2_CONGESTION_POLICY)
+            .put("signals",JSONArray(freshSignals.map { signal ->
+                JSONObject().put("signal_id",signal.signalId)
+                    .put("report",congestion[signal.signalId])
+            })).toString())) { "TC2_CONGESTION_DECISION_NOT_DURABLE" }
+        val allowedSignals = freshSignals.filter { signal ->
+            contextRank(signal)>0 &&
+                (signal.strategyProfile!=williamsTc2Profile ||
+                    congestion[signal.signalId]?.optBoolean("blocked",false)!=true)
+        }
+        if(allowedSignals.isEmpty() && congestion.values.any { it.optBoolean("blocked",false) })
+            return rejectDecision(symbol,WILLIAMS_TC2_CONGESTION_BLOCKER+
+                ": new entry deferred; existing position STOP and management unchanged")
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
         if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
@@ -6789,7 +7177,7 @@ private class NativeEngine(
         // Even with no old Binance order, prefer a newer confirmed WM3 level
         // when it has moved TOWARD current price. Do not blindly select the
         // oldest surviving Wise-Man hypothesis high above market.
-        val currentMark=futuresMarketData.markPrice(symbol)
+        val currentContractPrice=futuresMarketData.price(symbol)
         val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
             val side=campaignSignalDirection(baseline.type)
             selectableSignals.filter { alt ->
@@ -6797,9 +7185,9 @@ private class NativeEngine(
                     alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
                     alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
                     alt.protectivePrice>0 && alt.triggerPrice.isFinite() &&
-                    (if(side=="LONG") alt.triggerPrice>currentMark &&
+                    (if(side=="LONG") alt.triggerPrice>currentContractPrice &&
                         alt.triggerPrice<baseline.triggerPrice && alt.protectivePrice<alt.triggerPrice
-                     else alt.triggerPrice<currentMark &&
+                     else alt.triggerPrice<currentContractPrice &&
                         alt.triggerPrice>baseline.triggerPrice && alt.protectivePrice>alt.triggerPrice)
             }.maxByOrNull { it.signalBarTimeMs }
         } else null
@@ -6883,27 +7271,30 @@ private class NativeEngine(
         if (!futuresAccountFundedForEntry(available, equity)) return rejectDecision(symbol,"ACCOUNT_FUNDS_NOT_PROVEN")
         val mark = futuresMarketData.markPrice(symbol)
         val rules = symbolFilters(symbol)
+        val contractPrice = futuresMarketData.price(symbol)
         // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
         // signal bar trigger, independent of any junior execution fractal.
-        val marketReentry=false
+        val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
         val reference=signal.triggerPrice
-        val trigger = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
-            normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
+        val trigger = if(marketReentry) williamsNtdCloseEntryBound(direction.name,reference,rules.tick)
+            ?: return rejectDecision(symbol,"NTD_CLOSE_BOUND_UNVERIFIED")
+            else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
+                normalizeTriggerPrice(reference, rules.tick) else normalizePrice(reference, rules.tick)
         var stop = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG)
             normalizePrice(signal.protectivePrice, rules.tick) else normalizeTriggerPrice(signal.protectivePrice, rules.tick)
         if(signal.strategyProfile==williamsCourseProfile) {
             val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",100).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",contextNow)
             val airbag=williamsCourseAirbagStop(direction.name,higher,rules.tick) ?: return rejectDecision(symbol,"REQUIRED_ENTRY_EVIDENCE_UNAVAILABLE")
-            // The Course higher Air Bag may tighten protection, not increase
-            // the original H1 book signal's initial risk.
-            stop=if(direction.name=="LONG") normalizePrice(maxOf(stop,airbag),rules.tick)
-                else normalizeTriggerPrice(minOf(stop,airbag),rules.tick)
+            val combined=williamsCourseInitialProtection(direction.name,stop,airbag,trigger)
+                ?: return rejectDecision(symbol,"COURSE_FORMATION_OR_AIRBAG_ALREADY_INVALIDATED")
+            stop=if(direction.name=="LONG") normalizePrice(combined,rules.tick)
+                else normalizeTriggerPrice(combined,rules.tick)
         }
         if (trigger <= 0.0 || stop <= 0.0) return rejectDecision(symbol,"INVALID_TRIGGER_OR_STOP")
         if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) {
-            if (!marketReentry && trigger <= mark || stop >= trigger) return rejectDecision(symbol,"LONG_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
+            if (!marketReentry && trigger <= contractPrice || stop >= trigger) return rejectDecision(symbol,"LONG_TRIGGER_CONSUMED_OR_STOP_INVALID: contract=$contractPrice; trigger=$trigger; stop=$stop")
         } else {
-            if (!marketReentry && trigger >= mark || stop <= trigger) return rejectDecision(symbol,"SHORT_TRIGGER_CONSUMED_OR_STOP_INVALID: mark=$mark; trigger=$trigger; stop=$stop")
+            if (!marketReentry && trigger >= contractPrice || stop <= trigger) return rejectDecision(symbol,"SHORT_TRIGGER_CONSUMED_OR_STOP_INVALID: contract=$contractPrice; trigger=$trigger; stop=$stop")
         }
         val stopFraction = kotlin.math.abs(trigger - stop) / trigger
         if (!stopFraction.isFinite() || stopFraction <= 0.0) return rejectDecision(symbol,"INVALID_STRUCTURAL_RISK_DISTANCE")
@@ -6919,7 +7310,15 @@ private class NativeEngine(
         val quantityStep = ExecutionMath.commonQuantityStep(rules.step, rules.marketStep)
         val minQuantity = if (marketLotEnabled) max(rules.minQty, rules.marketMinQty) else rules.minQty
         val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
-        val qty = floorStep(notional / trigger, quantityStep)
+        var qty = floorStep(notional / trigger, quantityStep)
+        val courseInitial=if(signal.strategyProfile==williamsCourseProfile) {
+            val context=williamsCourseActiveContext(hierarchy,direction.name)
+            if(context?.optString("phase")!="W1") return rejectDecision(symbol,"COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN")
+            val exact=williamsCourseInitialQuantity(qty,rules.step,rules.marketStep)
+            if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return rejectDecision(symbol,exact.getString("reason"))
+            qty=exact.getString("quantity").toDouble()
+            exact
+        } else null
         if (!qty.isFinite() || qty < minQuantity || qty > maxQuantity ||
             !ExecutionMath.isMultiple(qty, rules.step) ||
             (marketLotEnabled && !ExecutionMath.isMultiple(qty, rules.marketStep)) ||
@@ -6947,15 +7346,18 @@ private class NativeEngine(
                 " stop-entry at H1 signal trigger (no M15 confirmation)",
             tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
             waveContext = if (correction.allowed) correction.toJson().toString() else "",
-            strategyProfile=signal.strategyProfile,executionSemantics="STOP_ENTRY",
+            strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
                 put("parent_execution_semantics",signal.executionSemantics)
                 if(signal.strategyProfile==williamsTc2Profile)
                     put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY))
                 put("book_h1_entry",williamsBookH1Proof(signal.signalId,direction.name,
                     signal.type,signal.strategyProfile,signal.signalBarTimeMs,
-                    trigger,stop,rules.tick))
+                    (if(marketReentry) reference else trigger),stop,rules.tick,
+                    executionSemantics=signal.executionSemantics,referenceClose=if(marketReentry) reference else 0.0,
+                    reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else ""))
                 if(signal.strategyProfile==williamsCourseProfile) {
+                    put("course_exact_quantity",courseInitial)
                     williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
                         if(!context.isNull("w3_to_w1_ratio")) put("course_w3_to_w1_ratio",context.getDouble("w3_to_w1_ratio"))
@@ -7001,9 +7403,41 @@ private class NativeEngine(
                 "H1_BOOK_SIGNAL_NO_LONGER_VALID: no Futures order submitted"
             }
             val submitH1=fetchCandles(symbol,"1h",220)
-            check(!williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
+            check(marketReentry || !williamsBookH1TriggerConsumed(direction.name,signal.signalBarTimeMs,trigger,
                 submitNow,submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
                 "H1_BOOK_BREAKOUT_ALREADY_CONSUMED_BEFORE_SUBMISSION"
+            }
+            // Regression from 2026-10-25 15:00:00 UTC: Binance can still
+            // return the PREVIOUS H1 forming/closed bar during the first
+            // milliseconds of a new hour. The final coordinator verifier
+            // correctly refuses this, but without a preflight the coordinator
+            // has already persisted an ENTRY_PENDING / SUBMISSION_UNKNOWN
+            // intent and then latches RECONCILE_REQUIRED even though NO
+            // exchange entry request was sent. Check the same raw current bar
+            // BEFORE creating an intent or changing exchange leverage.
+            // This veto is never permission to bypass the final H1 verifier.
+            if (!marketReentry) {
+                val rawH1Result=runCatching { futuresMarketData.klines(symbol,"1h",2) }
+                val rawH1=rawH1Result.getOrNull()
+                val recentBars=runCatching {
+                    (0 until (rawH1?.length() ?: 0)).map { idx ->
+                        val row=rawH1!!.getJSONArray(idx)
+                        WilliamsWaveBar(row.getLong(0),row.getDouble(1),row.getDouble(2),
+                            row.getDouble(3),row.getDouble(4),row.getDouble(5))
+                    }
+                }.getOrDefault(emptyList())
+                val gateAt=futuresMarketData.exchangeNowMs()
+                val rawBlocker=williamsBookH1ObservedBreakoutBlocker(direction.name,
+                    signal.signalBarTimeMs,trigger,gateAt,
+                    submitH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },recentBars)
+                if (rawBlocker!=null) {
+                    return@withCampaignMutation JSONObject()
+                        .put("accepted",false).put("safe_rejection",true)
+                        .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                        .put("blocker",if(rawBlocker=="H1_CURRENT_BAR_OBSERVATION_UNVERIFIED")
+                            "H1_CURRENT_BAR_NOT_PUBLISHED_YET_DEFER_ENTRY" else rawBlocker)
+                        .put("raw_h1_fetch_error",rawH1Result.exceptionOrNull()?.javaClass?.simpleName ?: JSONObject.NULL)
+                }
             }
             val submitH1Closed=submitH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
             val submitTeeth=williamsBookH1ActivationTeeth(submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
@@ -7021,16 +7455,17 @@ private class NativeEngine(
                     "CORRECTION_PARENT_PRICE_INVALIDATED: mark crossed parent boundary"
                 }
             }
-            // Revalidate the actual H1 trigger against the latest Futures mark
+            // Revalidate the H1 trade-price trigger against CONTRACT_PRICE
             // after network/door waits. Never convert a consumed stop-entry into a late
             // entry at the current market price.
             val submitMark = futuresMarketData.markPrice(symbol)
+            val submitContractPrice = futuresMarketData.price(symbol)
             require(
                 if(marketReentry) williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,submitNow,signal.triggerPrice,submitMark)==null
-                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitMark < trigger
-                else submitMark > trigger
+                else if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) submitContractPrice < trigger
+                else submitContractPrice > trigger
             ) {
-                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol mark=$submitMark trigger=$trigger; pending entry not submitted"
+                "H1_BOOK_TRIGGER_ALREADY_CROSSED: $symbol contract=$submitContractPrice trigger=$trigger; pending entry not submitted"
             }
             check(williamsBookH1ProofBlocker(plan.setupContext,direction.name,signal.signalId,
                 signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
@@ -7138,8 +7573,9 @@ private class NativeEngine(
             (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
         }
         val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
+        val completedScans = ExecutorCompletionService<BaseAnalysis?>(scanExecutor)
         val futures = scanSymbols.map { symbol ->
-            scanExecutor.submit(Callable {
+            completedScans.submit(Callable<BaseAnalysis?> {
                 var stage = "FETCH_H1_CLOSED_CANDLES"
                 try {
                     // The validated H1 startup history has 150 closed bars.
@@ -7157,31 +7593,43 @@ private class NativeEngine(
                 }
             })
         }
-        val ranked = mutableListOf<BaseAnalysis>()
-        // Bound the whole symbol fan-out, not each Future independently. A per-symbol
-        // 30s timeout multiplied by 10 contracts could leave the cockpit showing
-        // RUNNING for five minutes when one or more REST requests stall.
-        val scanDeadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
-        for ((index, future) in futures.withIndex()) {
-            val remainingNanos = scanDeadlineNanos - System.nanoTime()
-            if (remainingNanos <= 0L) {
-                futures.drop(index).forEach { it.cancel(true) }
-                scannerError = scannerError ?: "Futures H1 scan exceeded 60s total deadline; remaining symbols were not completed"
-                break
-            }
-            runCatching {
-                future.get(remainingNanos, TimeUnit.NANOSECONDS)
-            }.getOrElse {
-                future.cancel(true)
-                scannerError = scannerError ?: "Futures H1 scanner timeout within 60s total deadline: " +
-                    (it.message ?: it.javaClass.simpleName)
-                null
-            }?.let { if (it is BaseAnalysis) ranked.add(it) }
-        }
+        // A sequential Future.get waited on an unlucky slow symbol FIRST,
+        // hiding other finished results for the full 60-second deadline.
+        // Consume actual task completions: deterministic ranking below is
+        // unchanged; no unfinished candle can ever become a signal.
+        val completed = collectReadOnlyScannerCompletions(
+            completedScans, futures, System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
+        )
+        val ranked = completed.values.toMutableList()
+        if (completed.timedOut) scannerError = scannerError
+            ?: "Futures H1 scan exceeded its shared 60s deadline; " +
+                (futures.size - completed.completedCount) + " symbol tasks unfinished"
+        if (completed.failedCount > 0) scannerError = scannerError
+            ?: "Futures H1 scan had " + completed.failedCount + " failed analysis tasks"
+
         candidates = JSONArray().apply {
             ranked.sortedWith(compareByDescending<BaseAnalysis> { it.campaignReady }
                 .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }.thenBy { it.spreadPct })
-                .take(20).forEach { put(toJson(it)) }
+                .take(20).forEach { analysis ->
+                    val row=toJson(analysis)
+                    val h1=analysis.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                    // Every scanned Futures symbol receives the same read-only
+                    // regime diagnostics, including symbols without an entry.
+                    // This is NOT a claim about exchange-owned positions.
+                    val assessment=williamsTc2CongestionEvidence(h1,System.currentTimeMillis(),
+                        "FRACTAL","LONG",h1.lastOrNull()?.c ?: Double.NaN)
+                    row.put("h1_correction_regime",assessment.put("entry_relevant",false)
+                        .put("blocked",false))
+                    row.put("h1_correction_signal_checks",JSONArray(
+                        analysis.campaignSignals.filter { it.strategyProfile==williamsTc2Profile &&
+                            it.role=="ENTRY" }.map { signal ->
+                            JSONObject().put("signal_id",signal.signalId)
+                                .put("classification",williamsTc2CongestionEvidence(h1,
+                                    System.currentTimeMillis(),signal.type,
+                                    campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice))
+                        }))
+                    put(row)
+                }
         }
         lastSymbolsScanned = ranked.size
         lastScannerSymbolErrors = JSONObject().apply {
@@ -7190,7 +7638,17 @@ private class NativeEngine(
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
         runCatching { PositionsWidgetProvider.refresh(context) }
-        runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }
+        // Avoid an eleventh SQLite/REST H1 read when the primary symbol's
+        // validated closed candles already came back from this very scan.
+        // Revalidate the last closed-bar boundary to preserve correctness
+        // if an hourly close occurred during the 60-second fan-out.
+        runCatching {
+            val primary = ranked.firstOrNull { it.symbol == primarySymbol }?.candles
+            primaryCandles = if (primary != null && primary.size >= 150 &&
+                runCatching { candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs()) }
+                    .getOrDefault(false)
+            ) primary.takeLast(150) else fetchCandles(primarySymbol, "1h", 150)
+        }
 
         // Never overwrite a safety blocker with READY merely because market data was
         // scanned. Market-analysis success and permission to execute are separate facts.
@@ -7454,28 +7912,55 @@ private class NativeEngine(
                 )) return
             lastUserStreamReconcileAttemptMs = nowMs
             userStreamReconcileStartedAtMs = nowMs
+            userStreamReconcilePhase = "QUEUED"
             userStreamReconcileFailure = null
             futuresStreamReconcileRunning = true
             futuresStreamReconcilePending = false
         }
         Thread {
             try {
+                var reconciliationPasses=0
                 while (true) {
+                    reconciliationPasses++
                     val connectionGenerationForAttempt = synchronized(this) {
                         futuresStreamReconcilePending = false
                         userStreamConnectionGeneration
                     }
+                    userStreamReconcilePhase = "WAITING_FOR_SIGNED_ACCOUNT_RECONCILIATION"
                     val result = reconcileFuturesThroughDoor(
                         "USER_STREAM_RECONCILIATION",
                         allowStopped = true,
                         allowKillLatched = true
                     )
-                    check(result.optBoolean("ok", false)) {
+                    if (result.optBoolean("deferred_to_active_reconciliation", false)) {
+                        // No signed REST proof was taken. Surface lock contention
+                        // to diagnostics, but do not call it a Binance auth error
+                        // or persist a new kill/reconcile latch. The normal
+                        // monitoring worker will retry after its bounded backoff.
+                        userStreamReconcileFailure =
+                            "PRIVATE_SIGNED_REST_SYNC_DEFERRED_ACCOUNT_LOCK; RETRY_PENDING"
+                        userStreamReconcilePhase = "ACCOUNT_LOCK_DEFERRED_NO_SIGNED_PROOF"
+                        break
+                    }
+                    userStreamReconcilePhase = "SIGNED_SNAPSHOT_RETURNED_NEEDS_VALIDATION"
+                    check(futuresSignedSnapshotComplete(result)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
                     val repeat = synchronized(this) {
                         if (futuresStreamReconcilePending) {
-                            true
+                            // A concurrent fill/STOP update invalidates this
+                            // snapshot for the current live stream. Bound replay
+                            // to avoid a hot loop that starves periodic position
+                            // management and Android liveness checks.
+                            userStreamSyncRequired = true
+                            if(privateStreamReconciliationMayRepeat(true,reconciliationPasses)) {
+                                true
+                            } else {
+                                userStreamReconcileFailure =
+                                    "PRIVATE_STREAM_EVENTS_ARRIVED_DURING_SIGNED_SYNC; BOUNDED_RETRY_PENDING"
+                                userStreamReconcilePhase = "PRIVATE_EVENTS_BOUNDED_RETRY_REQUIRED"
+                                false
+                            }
                         } else if (!mayCommitUserStreamSync(
                                 connected = userStreamConnected,
                                 reconciliationPending = futuresStreamReconcilePending,
@@ -7486,12 +7971,12 @@ private class NativeEngine(
                             // This attempt may finish just as the socket changes. Never let
                             // an old-session REST snapshot clear the current session's latch.
                             userStreamSyncRequired = true
-                            futuresStreamReconcileRunning = false
+                            userStreamReconcilePhase = "SOCKET_GENERATION_CHANGED_NO_SYNC_PROOF"
                             false
                         } else {
                             userStreamSyncRequired = false
                             lastUserStreamSyncAtMs = System.currentTimeMillis()
-                            futuresStreamReconcileRunning = false
+                            userStreamReconcilePhase = "CURRENT_SOCKET_SIGNED_SYNC_PROVEN"
                             false
                         }
                     }
@@ -7504,6 +7989,7 @@ private class NativeEngine(
                 // Previously this path set the global blocker but left user_stream_last_error
                 // null, hiding the cause of a permanently blocked private-stream sync.
                 userStreamReconcileFailure = failureReason
+                userStreamReconcilePhase = "FAILED_SIGNED_RECONCILIATION"
                 userStreamLastError = failureReason
                 lastError = failureReason
                 setReconcileRequired(failureReason)
@@ -7522,7 +8008,29 @@ private class NativeEngine(
     }
 
     private fun handleUserEvent(event: JSONObject) {
-        tradingEventLoop.post { handleUserEventSerialized(event) }
+        // Invalidate entry authority on receipt, before a busy serialized actor
+        // can delay applying a real fill/account update. Callback delivery itself
+        // must never be mistaken for a successful durable event application.
+        if (event.optString("e") in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+                "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT", "listenKeyExpired", "serverShutdown")) {
+            synchronized(this) {
+                userStreamSyncRequired = true
+                lastUserStreamSyncAtMs = 0L
+                if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
+            }
+        }
+        tradingEventLoop.post {
+            try {
+                handleUserEventSerialized(event)
+            } catch (failure: Exception) {
+                val reason = "Private Futures event application failed: " +
+                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+                userStreamSyncRequired = true
+                lastUserStreamSyncAtMs = 0L
+                userStreamLastError = reason
+                setReconcileRequired(reason)
+            }
+        }
     }
 
     private fun handleUserEventSerialized(event: JSONObject) {
@@ -7965,12 +8473,14 @@ private class NativeEngine(
 
     private fun normalizePrice(price: Double, tick: Double): Double {
         if (price <= 0.0 || tick <= 0.0) return price
-        return floor(price / tick + 1e-12) * tick
+        // On-grid decimal source values must not lose a whole tick because
+        // Double division produces N - 1 ulp (BTC/ETH SHORT WM3 incident).
+        return ExecutionMath.floorToStep(price, tick)
     }
 
     private fun normalizeTriggerPrice(price: Double, tick: Double): Double {
         if (price <= 0.0 || tick <= 0.0) return price
-        return ceil(price / tick - 1e-12) * tick
+        return ExecutionMath.ceilToStep(price, tick)
     }
 
     private fun symbolFilters(symbol: String): SymbolRules {
@@ -8266,7 +8776,7 @@ private class NativeEngine(
             if(profile==williamsUnifiedProfile && !exitMode) for(source in williamsSourceProfiles) {
                 executionStore.writeState("edition_observation_"+symbol+"_"+source,
                     JSONObject().put("profile", source).put("execution_role",
-                        if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                        if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                         .put("state", "HISTORY_INVALID")
                         .put("reason", bookSeriesBlocker)
                         .put("as_of_close_ms", candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
@@ -8280,7 +8790,7 @@ private class NativeEngine(
             return williamsSourceProfiles.flatMap { source ->
                 val result=runCatching { editionCampaignSignals(symbol,candles,frame,tick,source,exitMode) }
                 if(!exitMode) executionStore.writeState("edition_observation_"+symbol+"_"+source,JSONObject()
-                    .put("profile",source).put("execution_role",if(source==williamsExecutionProfile) "LIVE" else "OBSERVE")
+                    .put("profile",source).put("execution_role",if(williamsVerifiedNewRiskSource(source)) "LIVE" else "OBSERVE")
                     .put("state",if(result.isFailure) "ANALYSIS_FAILED" else if(result.getOrNull().isNullOrEmpty()) "NO_VALID_FORMATION" else "FORMATION_OBSERVED")
                     .put("error_type",result.exceptionOrNull()?.javaClass?.simpleName ?: JSONObject.NULL)
                     .put("as_of_close_ms",candles.lastOrNull()?.let { it.t+WILLIAMS_H1_MS } ?: 0L)
@@ -8309,7 +8819,8 @@ private class NativeEngine(
                         else -> true
                     }
                 }
-            setups.filter { bars.last().t-bars[it.knownIndex].t<18_000_000L }.map { setup ->
+            setups.filter { (profile==williamsNtdProfile && it.kind=="FRACTAL") ||
+                bars.last().t-bars[it.knownIndex].t<18_000_000L }.map { setup ->
                 val type=(if(side=="SHORT") "SHORT_" else "")+setup.kind
                 val whenMs=bars[setup.knownIndex].t
                 val id=if(setup.kind=="BALANCE_LINE") "$profile:$symbol:$frame:$side:BALANCE_LINE:${setup.context.getString("formation_key")}" else profile+":"+campaignSignalId(symbol,frame,type,whenMs)
@@ -8326,7 +8837,10 @@ private class NativeEngine(
         symbol: String,
         candles: List<CandleN>,
         frame: String,
-        tick: Double
+        tick: Double,
+        // The SHORT scanner reuses mirrored geometry; reflected floating
+        // OHLC are not exchange grid prices and must not be grid-validated.
+        sourceExchangePrices: Boolean = true
     ): List<CampaignSignalN> {
         if (candles.size < 45 || tick <= 0.0) return emptyList()
 
@@ -8345,7 +8859,8 @@ private class NativeEngine(
 
         val waveBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         fun angulationProof(i:Int)=williamsAngulation("LONG",waveBars.take(i+1),
-            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1))
+            jawS.take(i+1),teethS.take(i+1),lipsS.take(i+1),
+            expectedStepMs=if(frame=="1h") WILLIAMS_H1_MS else null)
 
         val current = candles.lastIndex
         val out = mutableListOf<CampaignSignalN>()
@@ -8366,12 +8881,20 @@ private class NativeEngine(
         val reversalStart = max(2, candles.lastIndex - 20)
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
+            // TC2 PDF125 expects prior-trend AO colour; PDF131 adds that
+            // without that momentum context this is NOT a countertrend trade.
+            // Conservative source-qualified WM1 gate remains mandatory.
             val wm1AoBlocker=williamsFirstWiseManAoBlocker(
                 "LONG",ao(candles,i),ao(candles,i-1))
             if (wm1AoBlocker==null &&
                 validWilliamsReversalBar("LONG",waveBars[i],priorLow,
                     listOf(jawS[i],teethS[i],lipsS[i]),angulationProof(i).score)) {
-                val trigger = candles[i].h + tick
+                val levels=if(sourceExchangePrices)
+                    exactTc2WiseManPriceBarLevels("LONG",waveBars[i],tick)
+                    else Tc2WiseManPriceBarLevels(candles[i].h+tick,candles[i].l-tick,
+                        candles[i].h,candles[i].l)
+                if(levels==null) continue
+                val trigger=levels.trigger
                 if (triggerStillPending(i, trigger)) {
                     out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "REVERSAL", candles[i].t),
@@ -8379,9 +8902,9 @@ private class NativeEngine(
                         role = "ENTRY",
                         signalBarTimeMs = candles[i].t,
                         triggerPrice = trigger,
-                        protectivePrice = candles[i].l - tick,
+                        protectivePrice = levels.protective,
                         teethAtDetection = teethS[i].takeIf { it.isFinite() } ?: 0.0,
-                        invalidationPrice = candles[i].l - tick,
+                        invalidationPrice = levels.protective,
                         reason = "WM1 bullish reversal with mouth-anchored angulation; waiting above signal-bar high",
                         setupContext = JSONObject()
                             .put("angulation",angulationProof(i).toJson())
@@ -8396,6 +8919,7 @@ private class NativeEngine(
                                 ao(candles,i)<ao(candles,i-1))
                             .put("wm1_ao_qualifies_book_countertrend",true)
                             .put("wm1_ao_color_is_mandatory",true)
+                            .put("wm1_ao_rule_reference","TC2_PDF125_AND_131_COUNTERTREND_CONTEXT")
                             .toString()
                     )
                 }
@@ -8416,13 +8940,19 @@ private class NativeEngine(
         if (streak >= 3) {
             val signalIndex = candles.lastIndex - (streak - 3)
             if (signalIndex in 35..candles.lastIndex) {
-                val trigger = candles[signalIndex].h + tick
-                val structuralStop = williamsTc2SuperAoInitialStop(
-                    "LONG",waveBars,signalIndex,tick,window=5
-                )
-                if (structuralStop != null && structuralStop<trigger &&
-                    triggerStillPending(signalIndex, trigger)) {
-                    out += CampaignSignalN(
+                val sourceLevel=if(sourceExchangePrices)
+                    exactTc2WiseManPriceBarLevels("LONG",waveBars[signalIndex],tick)
+                    else Tc2WiseManPriceBarLevels(candles[signalIndex].h+tick,
+                        candles[signalIndex].l-tick,candles[signalIndex].h,candles[signalIndex].l)
+                if (sourceLevel!=null) {
+                    val trigger=sourceLevel.trigger
+                    val structuralStop = williamsTc2SuperAoInitialStop(
+                        "LONG",waveBars,signalIndex,tick
+                    )
+                    if (structuralStop != null &&
+                        abs(structuralStop-sourceLevel.protective)<=tick*.001 &&
+                        structuralStop<trigger && triggerStillPending(signalIndex, trigger)) {
+                        out += CampaignSignalN(
                         signalId = campaignSignalId(symbol, frame, "SUPER_AO", candles[signalIndex].t),
                         type = "SUPER_AO",
                         role = "ENTRY",
@@ -8431,11 +8961,12 @@ private class NativeEngine(
                         protectivePrice = structuralStop,
                         teethAtDetection = teethS[signalIndex].takeIf { it.isFinite() } ?: 0.0,
                         invalidationPrice = structuralStop,
-                        reason = "WM2 Super AO: third rising AO bar; stop behind previous five closed H1 bars",
-                        setupContext = JSONObject().put("initial_stop_rule","TC2_3_TO_5_CLOSED_PRICE_BARS")
-                            .put("initial_stop_window",5).put("third_ao_bar_at_ms",candles[signalIndex].t)
+                        reason = "WM2 Super AO: third rising AO bar; initial stop behind its signal price bar",
+                        setupContext = JSONObject().put("initial_stop_rule","TC2_SUPER_AO_SIGNAL_BAR")
+                            .put("initial_stop_window",1).put("third_ao_bar_at_ms",candles[signalIndex].t)
                             .put("risk_stop_at_price",structuralStop).toString()
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -8445,19 +8976,41 @@ private class NativeEngine(
         // five-bar fractal first becomes knowable. Never backdate a decision.
         val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
         if (fractal != null) {
-            out += CampaignSignalN(
-                signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
-                type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
-                triggerPrice=fractal.trigger,protectivePrice=fractal.protective,
-                teethAtDetection=fractal.currentTeeth,invalidationPrice=fractal.protective,
-                reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
-                setupContext=JSONObject()
-                    .put("wise_man","WM3")
-                    .put("signal_family","CONFIRMED_FRACTAL")
-                    .put("fractal_center_time_ms",candles[fractal.center].t)
-                    .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
-                    .put("teeth_filter_verified",true).toString(),
-                formationAtMs=candles[fractal.center].t)
+            val exact=if(sourceExchangePrices)
+                exactTc2LongFractalLevels(waveBars,
+                    candles[fractal.center].t,candles[fractal.groupStart].t,
+                    candles[fractal.confirmation].t,tick)
+                else Tc2LongFractalSourceLevels(fractal.trigger,fractal.protective,
+                    waveBars[fractal.center].h,waveBars[fractal.center].l)
+            // A mirrored selection or binary rounding is not an authority
+            // for an exchange tick; refuse on an actual source disagreement.
+            if(exact!=null &&
+                (!sourceExchangePrices || (abs(exact.trigger-fractal.trigger)<=tick*.001 &&
+                    abs(exact.protective-fractal.protective)<=tick*.001)) &&
+                triggerStillPending(fractal.center,exact.trigger)) {
+                out += CampaignSignalN(
+                    signalId=campaignSignalId(symbol,frame,"FRACTAL",candles[fractal.center].t),
+                    type="FRACTAL",role="ENTRY",signalBarTimeMs=candles[fractal.confirmation].t,
+                    triggerPrice=exact.trigger,protectivePrice=exact.protective,
+                    teethAtDetection=fractal.currentTeeth,invalidationPrice=exact.protective,
+                    reason="WM3 eligible confirmed fractal outside Teeth; waiting for actual trigger",
+                    setupContext=JSONObject()
+                        .put("wise_man","WM3")
+                        .put("signal_family","CONFIRMED_FRACTAL")
+                        .put("fractal_center_time_ms",candles[fractal.center].t)
+                        .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
+                        .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
+                        .put("teeth_filter_verified",true)
+                        .apply { if(sourceExchangePrices) {
+                            put("book_price_source","ORIGINAL_EXCHANGE_OHLC")
+                                .put("book_pivot_high",exact.pivotHigh)
+                                .put("book_stop_window_low",exact.stopWindowLow)
+                                .put("book_tick",tick)
+                                .put("book_trigger_exact",exact.trigger)
+                                .put("book_protective_exact",exact.protective)
+                        } }.toString(),
+                    formationAtMs=candles[fractal.center].t)
+            }
         }
 
         // Keep at most one signal per family, ordered by formation time. The
@@ -8493,15 +9046,60 @@ private class NativeEngine(
                 v = candle.v
             )
         }
-        return longCampaignSignals(symbol, reflected, frame, tick).mapNotNull { signal ->
-            val trigger = reflection - signal.triggerPrice
-            val stop = reflection - signal.protectivePrice
+        val sourceBars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        return longCampaignSignals(symbol, reflected, frame, tick,
+            sourceExchangePrices=false).mapNotNull { signal ->
+            // Reflection determines the BOOK signal geometry only; the original
+            // Binance candle, not a reflected Double, determines monetary ticks.
+            val sourceFractal = if (signal.type == "FRACTAL") {
+                val proof = runCatching { JSONObject(signal.setupContext) }.getOrNull()
+                    ?: return@mapNotNull null
+                exactTc2ShortFractalLevels(sourceBars,
+                    proof.optLong("fractal_center_time_ms", -1L),
+                    proof.optLong("fractal_group_start_time_ms", -1L),
+                    proof.optLong("fractal_confirmation_time_ms", -1L), tick)
+                    ?: return@mapNotNull null
+            } else null
+            val sourceBarLevels=if(signal.type in setOf("REVERSAL","SUPER_AO")) {
+                // WM1: reversal price bar. WM2: the third directional AO bar.
+                // Both are identified by the original closed bar time.
+                val originalBar=sourceBars.singleOrNull { it.t==signal.signalBarTimeMs }
+                    ?: return@mapNotNull null
+                exactTc2WiseManPriceBarLevels("SHORT",originalBar,tick)
+                    ?: return@mapNotNull null
+            } else null
+            if(sourceFractal==null && sourceBarLevels==null)
+                return@mapNotNull null
+            val sourceTrigger=sourceFractal?.trigger ?: sourceBarLevels!!.trigger
+            val sourceStop=sourceFractal?.protective ?: sourceBarLevels!!.protective
+            val reflectedTrigger = reflection - signal.triggerPrice
+            val reflectedStop = reflection - signal.protectivePrice
+            // Reflected prices are only consistency evidence; never the order
+            // price. Even WM1/WM2 may be one tick wrong after floating division.
+            if(abs(reflectedTrigger-sourceTrigger)>tick*.001 ||
+                abs(reflectedStop-sourceStop)>tick*.001)
+                return@mapNotNull null
+            val trigger=sourceTrigger
+            val stop=sourceStop
             // A short entry must trigger below current price and its protective stop
             // must be above entry. Invalid reflected levels are rejected, never guessed.
             val current = candles.last().c
             if (!trigger.isFinite() || !stop.isFinite() ||
                 trigger <= 0.0 || stop <= trigger || trigger >= current
             ) return@mapNotNull null
+            val sourceContext = JSONObject(reflectedTc2SetupContext(signal.type, signal.setupContext, reflection))
+            sourceContext.put("short_price_source","ORIGINAL_EXCHANGE_OHLC")
+                .put("book_tick",tick)
+                .put("book_trigger_exact",trigger)
+                .put("book_protective_exact",stop)
+            if(sourceFractal!=null) sourceContext
+                .put("book_pivot_low",sourceFractal.pivotLow)
+                .put("book_stop_window_high",sourceFractal.stopWindowHigh)
+            if(sourceBarLevels!=null) sourceContext
+                .put("book_source_bar_high",sourceBarLevels.sourceHigh)
+                .put("book_source_bar_low",sourceBarLevels.sourceLow)
+                .put("book_source_bar_time_ms",signal.signalBarTimeMs)
+                .apply { if(has("risk_stop_at_price")) put("risk_stop_at_price",stop) }
             signal.copy(
                 signalId = campaignSignalId(
                     symbol, frame, "SHORT_" + signal.type, signal.formationAtMs
@@ -8510,7 +9108,7 @@ private class NativeEngine(
                 triggerPrice = trigger,
                 protectivePrice = stop,
                 teethAtDetection = reflection-signal.teethAtDetection,
-                setupContext = reflectedTc2SetupContext(signal.type, signal.setupContext, reflection),
+                setupContext = sourceContext.toString(),
                 invalidationPrice = stop,
                 reason = signal.reason.replace("bullish","bearish").replace("above signal-bar high","below signal-bar low")
                     .replace("rising AO","falling AO").replace("above price bar","below price bar")
@@ -8528,16 +9126,19 @@ private class NativeEngine(
         val now=futuresMarketData.exchangeNowMs()
         val bars=input.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
         if(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)!=null) return emptyList()
-        val mark=futuresMarketData.markPrice(symbol)
+        val contractPrice=futuresMarketData.price(symbol)
         val out=mutableListOf<CampaignSignalN>()
         for(omitted in 0..minOf(4,bars.size-45)) {
             val prefix=bars.take(bars.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,if(omitted==0) williamsUnifiedProfile else williamsExecutionProfile)
             out+=signals.filter { signal ->
-                if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") omitted==0
+                if(signal.strategyProfile!=williamsTc2Profile || signal.role!="ENTRY") omitted==0 &&
+                    (signal.strategyProfile!=williamsNtdProfile || signal.executionSemantics=="MARKET_ON_CLOSE" ||
+                        williamsH1ParentInvalidation(h1EntryParent(signal),
+                            bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)==null)
                 else williamsH1SignalTimeEligible(signal.signalBarTimeMs,signal.type,signal.strategyProfile,now) &&
                     williamsH1ParentInvalidation(h1EntryParent(signal),
-                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)==null
+                        bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)==null
             }
         }
         val oppositeCandidates=h1OppositionCandidates(symbol,bars,tick,williamsProfile)
@@ -8547,7 +9148,8 @@ private class NativeEngine(
         val valid=out.distinctBy { it.signalId }.filter { signal ->
             if(signal.strategyProfile!=williamsExecutionProfile || signal.role!="ENTRY") return@filter true
             val parent=h1EntryParent(signal)
-            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,sourceEvidence,waveBars,mark,now)
+            val assessment=assessWilliamsScenarioOpposition(parent.direction,parent.knownAt,
+                sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)
             lifecycle.put(JSONObject().put("parent_id",parent.signalId).put("direction",parent.direction)
                 .put("state",if(assessment.blocker==null) "VALID_CONTEXT" else if(assessment.opposition!=null) "REVOKED" else "UNVERIFIED")
                 .put("reason",assessment.blocker ?: "NO_LATER_TRIGGERED_OPPOSITION")
@@ -8556,8 +9158,169 @@ private class NativeEngine(
             assessment.blocker==null
         }.sortedBy { it.signalBarTimeMs }
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
-            .put("observed_at_ms",now).put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+            .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
         return valid
+    }
+
+    private fun courseTrimPlan(owner:JSONObject):JSONObject {
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        fun blocked(reason:String)=JSONObject().put("status","BLOCKED").put("reason",reason)
+        if(owner.optString("strategy_profile")!=williamsCourseProfile ||
+            management.optString("course_unit_basis")!="CONFIRMED_INITIAL_FILL")
+            return blocked("COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED")
+        val symbol=owner.getString("symbol");val now=futuresMarketData.exchangeNowMs()
+        val bars=fetchCandles(symbol,"1h",260).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            .filter { it.t+WILLIAMS_H1_MS<=now }
+        if(williamsClosedH1HistoryBlocker(bars,now)!=null) return blocked("COURSE_TRIM_H1_HISTORY_UNVERIFIED")
+        val proof=williamsCourseTrimProof(waveHierarchyFor(symbol,refresh=true).toJson(),owner.getString("direction"),
+            management.optLong("course_origin_at"),management.optString("course_stage"),
+            owner.optLong("position_open_observed_at_ms"),now,bars)
+        if(proof.optString("status")!="OBSERVED_SOURCE_PINNED_REDUCTION") return proof
+        val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
+        val rules=symbolFilters(symbol)
+        val exact=williamsCourseStageQuantity(management.opt("course_unit_quantity"),management.optString("course_stage"),
+            proof.getString("stage"),owner.optString("confirmed_position_qty"),rules.step,rules.marketStep,
+            w3ToW1Ratio=management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+        if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return blocked(exact.getString("reason"))
+        if(exact.getString("action")!="REDUCE") return blocked("COURSE_TRIM_MUST_REDUCE_OWNED_STAGE")
+        val profit=williamsTc2OppositeExitProfitBlocker(owner.getString("direction"),
+            owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,futuresMarketData.markPrice(symbol),
+            2*feeBufferPerSidePct+maxSlippagePct,rules.tick)
+        if(profit!=null) return blocked(profit.replace("TC2_OPPOSITE_EXIT","COURSE_STAGE_TRIM"))
+        return proof.put("target_quantity",exact.getString("target_quantity").toDouble())
+            .put("reduction_quantity",exact.getString("quantity").toDouble()).put("exact_quantity",exact)
+    }
+
+    private fun verifyCourseTrimBeforeSubmit(owner:JSONObject,quantity:String) {
+        val proof=courseTrimPlan(owner)
+        check(proof.optString("status")=="OBSERVED_SOURCE_PINNED_REDUCTION") { proof.optString("reason","COURSE_SOURCE_TRIM_UNVERIFIED") }
+        val management=owner.optJSONObject("edition_management") ?: error("COURSE_MANAGEMENT_MISSING")
+        val requested=quantity.toBigDecimalOrNull()
+        check(management.optString("course_pending_stage")==proof.getString("stage") && requested!=null &&
+            requested.signum()>0 && requested.compareTo(proof.getJSONObject("exact_quantity").getString("quantity").toBigDecimal())==0 &&
+            proof.getDouble("target_quantity")>0 && proof.getDouble("target_quantity")<owner.getString("confirmed_position_qty").toDouble()) {
+            "COURSE_SOURCE_TRIM_STAGE_OR_QUANTITY_CHANGED"
+        }
+    }
+
+    private fun courseCorrectionHandoff(owner:JSONObject):JSONObject {
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        val motiveId=management.optString("course_motive_owner_id")
+        val all=futuresCampaignCoordinator.intentsSnapshot()
+        val previous=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
+            it.optString("client_id")==motiveId && it.optString("intent_role","ENTRY")=="ENTRY" }
+        val proof=previous?.optJSONObject("edition_management")?.optJSONObject("course_flat_handoff")
+        check(previous!=null && campaignLifecycleStatus(previous)=="CLOSED_OR_STOPPED" && previous.optString("symbol")==owner.optString("symbol") &&
+            previous.optString("direction")!=owner.optString("direction") && previous.optString("strategy_profile")==williamsCourseProfile &&
+            previous.optString("close_reason")=="COURSE_W5_TERMINAL_CONFIRMED" && proof!=null &&
+            proof.optString("source")=="SIGNED_FLAT_COURSE_MOTIVE" && proof.optString("motive_campaign_id")==motiveId &&
+            proof.optLong("flat_confirmed_at_ms")>0 && proof.optLong("flat_confirmed_at_ms")<owner.optLong("position_open_observed_at_ms") &&
+            previous.optString("course_correction_consumed_by")==owner.optString("client_id")) {
+            "COURSE_CORRECTION_DURABLE_FLAT_HANDOFF_UNVERIFIED"
+        }
+        return JSONObject(proof!!.toString()).put("tick",symbolFilters(owner.getString("symbol")).tick)
+    }
+
+    private fun courseExitObservation(owner:JSONObject):JSONObject {
+        check(owner.optString("strategy_profile")==williamsCourseProfile) { "COURSE_EXIT_OWNER_UNVERIFIED" }
+        fun blocked(why:String)=JSONObject().put("status","BLOCKED").put("blocker",why)
+        val management=owner.optJSONObject("edition_management") ?: JSONObject()
+        if(management.optString("course_unit_basis")!="CONFIRMED_INITIAL_FILL") return blocked("COURSE_ACTUAL_UNIT_BASIS_UNVERIFIED")
+        val stage=management.optString("course_stage");val symbol=owner.getString("symbol")
+        val correction=if(stage in setOf("A_ENTRY","A_REDUCE","C_ADD")) courseCorrectionHandoff(owner) else JSONObject()
+        val setup=runCatching { JSONObject(owner.optString("setup_context")) }.getOrDefault(JSONObject())
+        val rules=symbolFilters(symbol)
+        williamsCourseOwnedQuantityBlocker(management.opt("course_unit_quantity"),stage,owner.optString("confirmed_position_qty"),
+            rules.step,rules.marketStep,management.optDouble("course_w3_to_w1_ratio",setup.optDouble("course_w3_to_w1_ratio",Double.NaN)))
+            ?.let { return blocked(it) }
+        val now=futuresMarketData.exchangeNowMs()
+        val bars=fetchCandles(symbol,"1h",260).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }.filter { it.t+WILLIAMS_H1_MS<=now }
+        if(williamsClosedH1HistoryBlocker(bars,now)!=null) return blocked("COURSE_EXIT_H1_HISTORY_UNVERIFIED")
+        return williamsCourseExitPlan(waveHierarchyFor(symbol,refresh=true).toJson(),owner.getString("direction"),
+            management.optLong("course_origin_at"),stage,owner.optLong("position_open_observed_at_ms"),now,bars,futuresMarketData.price(symbol),correction)
+    }
+
+    private fun courseExitSourceProof(owner:JSONObject,reason:String):JSONObject {
+        check(owner.optString("strategy_profile")==williamsCourseProfile && reason in williamsCourseBookExitReasons && reason!="COURSE_STAGE_TRIM") {
+            "COURSE_EXIT_REQUIRES_OWN_BOOK_RULE"
+        }
+        val symbol=owner.getString("symbol");val direction=owner.getString("direction")
+        val now=futuresMarketData.exchangeNowMs();val tick=symbolFilters(symbol).tick
+        val proof=if(reason in williamsCourseTerminalReasons+williamsCourseFailureReasons) {
+            courseExitObservation(owner).also {
+                check(it.optString("status")=="OBSERVED_COURSE_SOURCE_RULE" && it.optString("reason")==reason) {
+                    it.optString("blocker","COURSE_SOURCE_EXIT_NO_LONGER_VALID") }
+            }
+        } else {
+            val candles=fetchCandles(symbol,"1h",260).filter { it.t+WILLIAMS_H1_MS<=now }
+            check(williamsClosedH1HistoryBlocker(candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) { "COURSE_EXIT_H1_HISTORY_UNVERIFIED" }
+            val contract=futuresMarketData.price(symbol)
+            check(contract.isFinite() && contract>0) { "COURSE_EXIT_LIVE_CONTRACT_UNVERIFIED" }
+            if(reason=="COURSE_HIGHER_FRAME_AIRBAG_TRIGGERED") {
+                val higher=closedWilliamsWaveBars(fetchCandles(symbol,"6h",80).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },"6h",now)
+                check(now-(higher.last().t+21_600_000L) in 0 until 21_600_000L) { "COURSE_AIRBAG_HISTORY_UNVERIFIED" }
+                val boundary=williamsCourseAirbagStop(direction,higher,tick) ?: error("COURSE_AIRBAG_HISTORY_UNVERIFIED")
+                check(if(direction=="LONG") contract<=boundary else contract>=boundary) { "COURSE_AIRBAG_NO_LONGER_CROSSED" }
+                JSONObject().put("rule_id","COURSE:AIRBAG:${higher.last().t}").put("boundary",boundary)
+            } else {
+                val signal=triggeredOpposingSignal(symbol,NativeFuturesCampaignCoordinator.Direction.valueOf(direction),candles,tick,contract,
+                    owner.optLong("position_open_observed_at_ms"),williamsCourseProfile) ?: error("COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED")
+                check(signal.strategyProfile==williamsCourseProfile && signal.role=="ENTRY" && signal.executionSemantics=="STOP_ENTRY" &&
+                    campaignSignalDirection(signal.type)!=direction) { "COURSE_OPPOSITE_SOURCE_TRIGGER_UNVERIFIED" }
+                JSONObject().put("rule_id","COURSE:OPPOSITION:${signal.signalId}").put("signal_id",signal.signalId).put("boundary",signal.triggerPrice)
+            }
+        }
+        if(reason in williamsCourseTerminalReasons+williamsCourseOppositeReasons) {
+            val blocker=williamsTc2OppositeExitProfitBlocker(direction,owner.optString("actual_entry_price").toDoubleOrNull() ?: Double.NaN,
+                futuresMarketData.markPrice(symbol),2*feeBufferPerSidePct+maxSlippagePct,tick)
+            check(blocker==null) { blocker!!.replace("TC2_OPPOSITE_EXIT","COURSE_DISCRETIONARY_EXIT") }
+        }
+        return proof.put("reason",reason).put("owner_id",owner.getString("client_id")).put("symbol",symbol).put("side",direction)
+            .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE")
+    }
+
+    private fun verifyCourseExitBeforeSubmit(owner:JSONObject,reason:String) {
+        val old=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+        val blocker=williamsCourseExitProofBlocker(old,owner.getString("client_id"),owner.getString("symbol"),owner.getString("direction"),
+            reason,owner.optLong("position_open_observed_at_ms"),futuresMarketData.exchangeNowMs())
+        check(blocker==null) { blocker!! }
+        val fresh=courseExitSourceProof(owner,reason)
+        val sameBoundary=old!!.has("boundary")==fresh.has("boundary") &&
+            (!old.has("boundary") || old.optDouble("boundary",Double.NaN)==fresh.optDouble("boundary",Double.NaN))
+        check(old.optString("rule_id")==fresh.optString("rule_id") && sameBoundary) {
+            "COURSE_EXIT_SOURCE_CHANGED_BEFORE_SUBMIT"
+        }
+    }
+
+    private fun verifyNtdExitBeforeSubmit(owner:JSONObject,reason:String) {
+        check(owner.optString("strategy_profile")==williamsNtdProfile && reason in williamsNtdBookExitReasons) {
+            "NTD_EXIT_OWNER_OR_RULE_CHANGED"
+        }
+        val symbol=owner.getString("symbol");val direction=owner.getString("direction")
+        val now=futuresMarketData.exchangeNowMs();val tick=symbolFilters(symbol).tick
+        val candles=fetchCandles(symbol,"1h",220).filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+        val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+        check(williamsClosedH1HistoryBlocker(bars,now)==null) { "NTD_EXIT_H1_HISTORY_UNVERIFIED" }
+        if(reason in setOf("TEETH_CLOSE_EXIT","LIPS_CLOSE_EXIT","NTD_FIVE_ZONE_PROTECTION_CROSSED")) {
+            val aos=candles.indices.map { ao(candles,it) }
+            val acs=candles.indices.map { i -> if(i>=4) nativeAcFromClosedAo(aos.subList(i-4,i+1)) else Double.NaN }
+            val plan=williamsNtdManagementPlan(direction,bars,
+                williamsAlligatorLine(candles,8,5).map { it ?: Double.NaN },
+                williamsAlligatorLine(candles,5,3).map { it ?: Double.NaN },aos,acs,tick,
+                owner.optLong("position_open_observed_at_ms"),owner.optJSONObject("edition_management") ?: JSONObject())
+            if(reason=="NTD_FIVE_ZONE_PROTECTION_CROSSED") {
+                val stop=plan.stop ?: error("NTD_ZONE_PROTECTION_NOT_ACTIVE")
+                val mark=futuresMarketData.markPrice(symbol)
+                check(if(direction=="LONG") mark<=stop else mark>=stop) { "NTD_ZONE_STOP_NO_LONGER_CROSSED" }
+            } else check(plan.exitReason==reason) { "NTD_CLOSED_LINE_EXIT_NO_LONGER_VALID" }
+        } else {
+            val signal=triggeredOpposingSignal(symbol,NativeFuturesCampaignCoordinator.Direction.valueOf(direction),
+                candles,tick,futuresMarketData.price(symbol),owner.optLong("position_open_observed_at_ms"),williamsNtdProfile)
+                ?: error("NTD_OPPOSITE_TRIGGER_NO_LONGER_VALID")
+            val proof=owner.optJSONObject("edition_management")?.optJSONObject("exit_evidence")
+            check(signal.strategyProfile==williamsNtdProfile && proof!=null && proof.optString("reason")==reason &&
+                proof.optString("signal_id")==signal.signalId) { "NTD_OPPOSITE_SOURCE_PROOF_CHANGED" }
+        }
     }
 
     /** Final non-M15 book-rule check executed by the coordinator AFTER
@@ -8568,17 +9331,61 @@ private class NativeEngine(
         check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
         val now=futuresMarketData.exchangeNowMs()
         val tick=symbolFilters(plan.symbol).tick
+        if(plan.reversalOwnerId.isNotBlank()) {
+            check(plan.strategyProfile==williamsTc2Profile && williamsProfileAllowsSource(williamsProfile,williamsTc2Profile)) {
+                "TC2_REVERSAL_SOURCE_CHANGED"
+            }
+            val c=williamsTc2ReversalCandidate(futuresCampaignCoordinator.intentsSnapshot(),plan.reversalOwnerId,now,plan.clientId)
+                ?: error("TC2_REVERSAL_DURABLE_HANDOFF_UNVERIFIED")
+            val bars=fetchCandles(plan.symbol,"1h",220).filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+            check(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+                "TC2_REVERSAL_H1_HISTORY_UNVERIFIED"
+            }
+            val signal=h1OppositionCandidates(plan.symbol,bars,tick,williamsTc2Profile).singleOrNull {
+                it.signalId==plan.signalId && it.type==plan.signalType && it.signalBarTimeMs==plan.signalBarTimeMs &&
+                    abs(it.triggerPrice-c.getDouble("trigger"))<=tick*.11 &&
+                    abs(it.protectivePrice-plan.protectiveStop.toDouble())<=tick*.11
+            } ?: error("TC2_REVERSAL_H1_SIGNAL_CHANGED")
+            val teeth=williamsBookH1ActivationTeeth(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
+            check(williamsBookFractalTeethBlocker(signal.type,plan.direction.name,signal.triggerPrice,teeth,tick)==null) {
+                "TC2_REVERSAL_FRACTAL_TEETH_INVALID"
+            }
+            // A confirmed FLAT reversal is still NEW directional exposure.
+            // Existing position close/reconciliation was executed separately;
+            // this check cannot hold back the old protective exit.
+            check(williamsTc2CongestionEntryBlocker(williamsTc2Profile,signal.type,
+                plan.direction.name,signal.triggerPrice,
+                bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+                WILLIAMS_TC2_CONGESTION_BLOCKER+": REVERSAL_NEW_EXPOSURE"
+            }
+            return
+        }
         val target=plan.entryPrice.toDouble()
         val stop=plan.protectiveStop.toDouble()
         check(williamsProfileAllowsSource(williamsProfile,plan.strategyProfile)) { "H1_BOOK_EDITION_CHANGED" }
         check(williamsBookH1ProofBlocker(plan.setupContext,plan.direction.name,plan.signalId,
-            plan.signalType,plan.strategyProfile,target,stop,now,plan.entryClientId)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
+            plan.signalType,plan.strategyProfile,target,stop,now,plan.entryClientId,plan.reentryOwnerId,
+            plan.executionSemantics,plan.referenceClose)==null) { "H1_BOOK_PROOF_UNVERIFIED" }
         val candles=fetchCandles(plan.symbol,"1h",220)
         val signals=h1ContextCampaignSignals(plan.symbol,candles,tick)
         val actual=signals.singleOrNull { it.signalId==plan.signalId &&
-            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile && it.role=="ENTRY" &&
+            it.type==plan.signalType && it.strategyProfile==plan.strategyProfile &&
+            williamsBookSignalRoleAllowed(it.strategyProfile,it.type,it.role,plan.entryClientId,plan.reentryOwnerId) &&
             campaignSignalDirection(it.type)==plan.direction.name }
             ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
+        // Re-evaluate H1 congestion at the final Binance mutation fence.
+        // Applies only to new exposure (entries/additions), not owned STOPs
+        // or discretionary/protective exits.
+        check(williamsTc2CongestionEntryBlocker(plan.strategyProfile,plan.signalType,
+            plan.direction.name,plan.entryPrice.toDouble(),
+            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
+            WILLIAMS_TC2_CONGESTION_BLOCKER
+        }
+        if(plan.executionSemantics=="MARKET_ON_CLOSE") {
+            check(plan.strategyProfile==williamsNtdProfile && actual.executionSemantics=="MARKET_ON_CLOSE" &&
+                abs(actual.triggerPrice-plan.referenceClose)<=tick*.11) { "NTD_CLOSE_EVENT_CHANGED" }
+            return // coordinator independently verifies fresh contract/mark AND executable bid/ask bound
+        }
         val expected=if(plan.direction.name=="LONG")
             normalizeTriggerPrice(actual.triggerPrice,tick)
             else normalizePrice(actual.triggerPrice,tick)
@@ -8607,8 +9414,8 @@ private class NativeEngine(
         check(williamsBookFractalTeethBlocker(plan.signalType,plan.direction.name,target,teeth,tick)==null) {
             "H1_BOOK_FRACTAL_NO_LONGER_OUTSIDE_TEETH"
         }
-        val mark=futuresMarketData.markPrice(plan.symbol)
-        check(if(plan.direction.name=="LONG") mark<target else mark>target) {
+        val contractPrice=futuresMarketData.price(plan.symbol)
+        check(if(plan.direction.name=="LONG") contractPrice<target else contractPrice>target) {
             "H1_BOOK_PENDING_BREAKOUT_ALREADY_CROSSED"
         }
     }
@@ -8774,7 +9581,7 @@ private class NativeEngine(
 
         var strictSignal =
             if (campaignEngineEnabled) {
-                campaignSignals.any { it.strategyProfile==williamsExecutionProfile } &&
+                campaignSignals.any { williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) } &&
                     atrPct in 0.0..0.08 &&
                     spread <= maxSpreadPct
             } else {
@@ -8843,7 +9650,8 @@ private class NativeEngine(
             tradeFlowImbalance = flowImbalance,
             reason = reason,
             campaignSignals = campaignSignals,
-            campaignReady = campaignEngineEnabled && campaignSignals.any { it.strategyProfile==williamsExecutionProfile && it.role=="ENTRY" }
+            campaignReady = campaignEngineEnabled && campaignSignals.any {
+                williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) }
         )
     }
 
@@ -9021,7 +9829,9 @@ private class NativeEngine(
         val cutoff = now / 900_000L * 900_000L
         waveHierarchyCache[symbol]?.takeIf { it.asOf == cutoff && !refresh }?.let { return it }
         val frames = linkedMapOf<String, List<WilliamsWaveBar>>()
-        for (frame in williamsRequiredWaveFrames) {
+        // H6 is additional stand-alone market context; it cannot form a
+        // geometrically nested H6 -> H4 parent due the 6h/4h bar alignment.
+        for (frame in (williamsRequiredWaveFrames + "6h").distinct()) {
             frames[frame] = runCatching { fetchCandles(symbol, frame, 240) }
                 .getOrDefault(emptyList()).map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         }
@@ -9091,20 +9901,21 @@ private class NativeEngine(
 
     private fun triggeredOpposingSignal(
         symbol: String, direction: NativeFuturesCampaignCoordinator.Direction,
-        candles: List<CandleN>, tick: Double, mark: Double, openedAt: Long, profile:String=williamsTc2Profile
+        candles: List<CandleN>, tick: Double, contractPrice: Double, openedAt: Long, profile:String=williamsTc2Profile
     ): CampaignSignalN? {
         if(openedAt<=0L) return null
         val now = futuresMarketData.exchangeNowMs()
         val closed=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
         val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
         val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
-            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },mark,now)
+            closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)
         val evidence=assessment.opposition
         check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
+            .put("trigger_price_basis","CONTRACT_PRICE").put("contract_price",contractPrice)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
             .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
-        if(profile==williamsTc2Profile && assessment.uncertain.isNotEmpty()) return null
+        if(assessment.uncertain.isNotEmpty()) return null
         return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
     }
 
@@ -9847,15 +10658,25 @@ private class NativeEngine(
     private fun startRestDataProbe() {
         if (restProbeRunning) return
         restProbeRunning = true
+        // The signed account probe below can block on REST. Never couple that
+        // latency to the 30-second Binance UTC-day clock safety gate. Only this
+        // independent read-only clock pulse refreshes the cached server sample;
+        // a failed /fapi/v1/time request still leaves all NEW entries blocked.
+        exchangeClockProbeThread = Thread {
+            while (restProbeRunning) {
+                runCatching { futuresMarketData.exchangeNowMs() }
+                try { Thread.sleep(5_000L) }
+                catch (_: InterruptedException) { break }
+            }
+        }.apply {
+            isDaemon = true
+            name = "williams-futures-exchange-clock-probe"
+            start()
+        }
         restProbeThread = Thread {
             var lastAccountProbe = 0L
             while (restProbeRunning) {
                 val started = System.currentTimeMillis()
-                // Keep authoritative exchange time fresh independently from
-                // scanning, account reconciliation and operator UI requests.
-                // This is read-only /fapi/v1/time. If the request fails, the
-                // existing 30-second execution clock gate remains fail-closed.
-                runCatching { futuresMarketData.exchangeNowMs() }
                 // Market and account health are independent. An account schema/auth
                 // error must not erase a successful public ticker snapshot.
                 try {
@@ -9973,7 +10794,11 @@ private class NativeEngine(
                 positionObservedAtMs = snapshotAt
                 snapshot
             } else {
-                runCatching { futuresPositionSnapshot().also { positionObservedAtMs = cachedFuturesPositionEnvelope?.second ?: 0L } }.getOrElse { failure ->
+                runCatching {
+                    val display = futuresPositionDisplaySnapshot()
+                    positionObservedAtMs = display.observedAtMs
+                    JSONArray(display.positionsJson)
+                }.getOrElse { failure ->
                     futuresPositionSnapshotError = failure.message ?: failure.javaClass.simpleName
                     reconcileRequired = true
                     persistSafetyFlag("reconcile_required", true)
@@ -9985,7 +10810,8 @@ private class NativeEngine(
         } else {
             JSONArray()
         }
-        val futuresPositionsSnapshotOk = credentialsConfigured && futuresPositionSnapshotError == null
+        val futuresPositionsSnapshotOk = credentialsConfigured && futuresPositionSnapshotError == null &&
+            CockpitDiagnostics.fresh(positionObservedAtMs,System.currentTimeMillis(),CockpitDiagnostics.POSITION_TTL_MS)
         val firstPosition = futuresPositions.optJSONObject(0)
         var livePnl = 0.0
         var totalEntryNotional = 0.0
@@ -10040,6 +10866,14 @@ private class NativeEngine(
         val reconciliationRunningBefore = futuresReconciliationRunning
         val futuresRuntimeStatus = runCatching { futuresCampaignCoordinator.status() }
             .getOrElse { JSONObject().put("state", "RECONCILE_REQUIRED").put("blocker", it.message ?: it.javaClass.simpleName) }
+        // Attach protection from the SAME immutable position display generation.
+        // The coordinator's execution state/proofs are never changed by UI GETs.
+        cachedFuturesPositionEnvelope?.takeIf {
+            it.observedAtMs == positionObservedAtMs && it.positionsJson == futuresPositions.toString()
+        }?.let { display ->
+            futuresRuntimeStatus.put("exchange_protection_observations",JSONArray(display.protectionJson))
+                .put("protection_observation_scope","SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY")
+        }
         val coordinatorReconciliationInProgress = futuresRuntimeStatus.optBoolean("reconciliation_running", false)
         val reconciliationObserved = coordinatorReconciliationInProgress ||
             reconciliationRunningBefore || futuresReconciliationRunning ||
@@ -10070,6 +10904,11 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("new_entry_leverage_cap_x",MAX_CONFIGURED_FUTURES_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage in 1..MAX_CONFIGURED_FUTURES_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it in 1..MAX_CONFIGURED_FUTURES_LEVERAGE })
+            .put("new_entry_leverage_blocker",JSONObject.NULL)
+            .put("new_entry_leverage_preflight","SIGNED_EXCHANGE_BRACKETS_AND_ISOLATED_STOP_BUFFER")
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("paused", paused)
@@ -10197,6 +11036,16 @@ private class NativeEngine(
             .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
+            // Status(fast=true) is what the downloadable diagnostics ZIP uses.
+            // The separate runtime-health JSON already contained these keys,
+            // so failing to mirror them here made the incident phase UNKNOWN.
+            .put("user_stream_reconcile_phase", userStreamReconcilePhase)
+            .put("user_stream_reconcile_diagnostic_state", privateStreamReconcileDiagnosticState(
+                userStreamConnected,userStreamSyncRequired,futuresStreamReconcileRunning,
+                userStreamReconcileStartedAtMs,lastUserStreamSyncAtMs,System.currentTimeMillis()))
+            .put("user_stream_signed_account_snapshot_at_ms",lastRestReconcileMs)
+            .put("user_stream_reconcile_pending_events",futuresStreamReconcilePending)
+            .put("signed_stop_display_unverified",signedStopDisplayUnverified)
             .put("history_ready", historyReady)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
@@ -10626,6 +11475,13 @@ private class NativeEngine(
             if (secureKeysPresent) "Binance credentials stored in encrypted app-private storage"
             else "Binance credentials unavailable in this Android package; changing debug/release variant or reinstalling does not migrate keys")
         test("rest_market_data", "binance", restMarketReady, "FAIL", if (restMarketReady) "Ticker REST OK; price=" + restLastTickerPrice + "; latency_ms=" + restLastLatencyMs else "REST market failed: " + (restLastError ?: "pending"))
+        val signedReconcileNowMs = System.currentTimeMillis()
+        val signedReconcileFresh = signedFuturesReconciliationFresh(lastRestReconcileMs, signedReconcileNowMs)
+        test("signed_futures_reconciliation_freshness", "execution", signedReconcileFresh, "WARNING",
+            "last_successful_at_ms=$lastRestReconcileMs; max_age_ms=90000; " +
+                "age_ms=" + (if (lastRestReconcileMs > 0L && signedReconcileNowMs >= lastRestReconcileMs)
+                    (signedReconcileNowMs-lastRestReconcileMs).toString() else "UNKNOWN") +
+                "; stale evidence blocks new entries but does not block protective reconciliation")
         test("rest_account", "binance", restAccountReady, "WARN", if (restAccountReady) "Signed account OK; USDT available=" + liveUsdtBalance + "; equity=" + liveFuturesEquity else "Account REST failed: " + (restAccountLastError ?: "pending"))
         test("market_websocket", "websocket", marketSocketConnected, "WARN", if (marketSocketConnected) "Market kline/aggTrade stream connected" else "Market stream disconnected")
         test("public_websocket", "websocket", publicSocketConnected && publicWebSocketFresh(), "WARN", if (publicSocketConnected && publicWebSocketFresh()) "Public depth/bookTicker stream connected and fresh" else "Public stream disconnected or stale")
@@ -10639,9 +11495,19 @@ private class NativeEngine(
             lastSuccessfulSyncMs = lastUserStreamSyncAtMs,
             nowMs = userNowMs
         )
+        val userSyncFailureSeverity = privateUserStreamSyncFailureSeverity(
+            connected = userStreamConnected,
+            syncRequired = userStreamSyncRequired,
+            reconciliationRunning = futuresStreamReconcileRunning,
+            reconciliationStartedAtMs = userStreamReconcileStartedAtMs,
+            nowMs = userNowMs,
+            lastFailure = userStreamReconcileFailure
+        )
         test(
-            "user_stream_freshness", "websocket", userStreamFresh, "FAIL",
+            "user_stream_freshness", "websocket", userStreamFresh, userSyncFailureSeverity,
             "connected=" + userStreamConnected +
+                "; diagnostic_failure_severity=" + (if(userStreamFresh) "PASS" else userSyncFailureSeverity) +
+                "; new_entries_must_remain_blocked_until_current_socket_has_signed_REST_sync=true;" +
                 "; sync_required=" + userStreamSyncRequired +
                 "; last_successful_rest_sync_ms=" + lastUserStreamSyncAtMs +
                 "; sync_age_ms=" + (if (userSyncAgeMs == Long.MAX_VALUE) "UNKNOWN" else userSyncAgeMs.toString()) +
@@ -10664,7 +11530,28 @@ private class NativeEngine(
                 "; finished_at_ms=" + streamReconcileFinishedAtMs +
                 "; duration_ms=" + (if (streamReconcileDurationMs >= 0L) streamReconcileDurationMs.toString() else "UNKNOWN") +
                 "; max_running_duration_ms=300000" +
+                "; phase=" + statusSnapshot.optString("user_stream_reconcile_phase", "UNKNOWN") +
+                "; diagnostic_state=" + statusSnapshot.optString("user_stream_reconcile_diagnostic_state", "UNKNOWN") +
+                "; signed_account_snapshot_at_ms=" + statusSnapshot.optLong("user_stream_signed_account_snapshot_at_ms", 0L) +
+                "; pending_private_events=" + statusSnapshot.optBoolean("user_stream_reconcile_pending_events", false) +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
+        )
+        val streamHasCompletedProof = !streamReconcileRunning && streamReconcileStartedAtMs > 0L &&
+            streamReconcileFinishedAtMs >= streamReconcileStartedAtMs
+        val streamCompletedTooSlow = completedFuturesReconciliationTooSlow(
+            streamReconcileRunning, streamReconcileStartedAtMs, streamReconcileFinishedAtMs
+        )
+        test(
+            "user_stream_last_completed_signed_rest_duration", "runtime",
+            streamHasCompletedProof && !streamCompletedTooSlow,
+            if(streamHasCompletedProof) "WARNING" else "NOT_VERIFIED",
+            "last_duration_ms=" + (if (!streamReconcileRunning &&
+                streamReconcileStartedAtMs > 0L &&
+                streamReconcileFinishedAtMs >= streamReconcileStartedAtMs)
+                (streamReconcileFinishedAtMs-streamReconcileStartedAtMs).toString() else "UNKNOWN") +
+                "; diagnostic_threshold_ms=300000" +
+                "; finished_sync_does_not_guarantee_signed_account_snapshot_is_younger_than_90000ms" +
+                "; last_completed_phase=" + statusSnapshot.optString("user_stream_reconcile_phase","UNKNOWN")
         )
         val coordinatorTaskHealthy = reconciliationTaskLifecycleHealthy(
             coordinatorSnapshot.optBoolean("reconciliation_running", false),
@@ -10803,12 +11690,110 @@ private class NativeEngine(
         }
     }
 
+    private fun scheduleReadOnlySignedFillAudit() {
+        val nowMs=System.currentTimeMillis()
+        synchronized(this) {
+            if(signedFillAuditRunning ||
+                (signedFillAuditLastAttemptMs>0L && nowMs-signedFillAuditLastAttemptMs<60_000L)) return
+            signedFillAuditRunning=true
+            signedFillAuditLastAttemptMs=nowMs
+            // Preserve the last COMPLETED read-only snapshot across a refresh.
+            // Otherwise every user-requested diagnostic >60s apart would show
+            // only IN_PROGRESS and erase useful BNB closure evidence.
+            if(JSONObject(signedFillAuditJson).optString("state")=="NOT_REQUESTED") {
+                signedFillAuditJson=JSONObject().put("state","SIGNED_GET_IN_PROGRESS")
+                    .put("requested_at_ms",nowMs).toString()
+            }
+        }
+        Thread({
+            val output=JSONObject().put("source","BINANCE_USDM_SIGNED_USER_TRADES_READ_ONLY")
+                .put("report_generation_at_ms",nowMs)
+                .put("can_authorize_exchange_mutations",false)
+            try {
+                val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
+                val symbols=FuturesSignedTradeForensics.auditSymbols(
+                    CockpitDiagnostics.rows(live).map { it.optString("symbol") },limit=8)
+                val audited=JSONArray()
+                val endMs=System.currentTimeMillis()
+                val sevenDaysMs=7L*24L*60L*60L*1000L
+                val incomeStart=(endMs-sevenDaysMs).coerceAtLeast(0L)
+                // One signed GET-only history sweep for all symbols. A failed or
+                // saturated income read stays unknown; never call unknown funding zero.
+                // Income pagination may require dozens of signed GETs. It is
+                // forensic P1 work and must not contend with active P0
+                // protection, pending fills or an in-flight reconciliation.
+                val safetyPriority = futuresReconciliationRunning ||
+                    futuresStreamReconcileRunning || nativeManagementRunning ||
+                    futuresCampaignCoordinator.state in setOf(
+                        NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
+                        NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
+                        NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
+                        NativeFuturesCampaignCoordinator.State.EXIT_PENDING)
+                val incomeResult = if(safetyPriority)
+                    runCatching<List<JSONObject>> {
+                        throw IllegalStateException("Funding history deferred while active Futures safety work has priority")
+                    } else runCatching {
+                        val rows=futuresCampaignCoordinator.incomeHistory(incomeStart,endMs)
+                        (0 until rows.length()).map { rows.getJSONObject(it) }
+                    }
+                val incomeRows=incomeResult.getOrNull()
+                output.put("funding_read",when {
+                    safetyPriority -> "DEFERRED_ACTIVE_POSITION_PRIORITY"
+                    incomeRows==null -> "INCOMPLETE"
+                    else -> "SIGNED_GET_COMPLETE"
+                })
+                incomeResult.exceptionOrNull()?.let {
+                    output.put("funding_error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
+                }
+                for(symbol in symbols) {
+                    val ageMs=if(symbol in setOf("BNBUSDT","LTCUSDT")) sevenDaysMs
+                        else 24L*60L*60L*1000L
+                    // Never let one failing symbol erase independent signed
+                    // forensics of BNB/LTC or other contracts.
+                    val fromMs=(endMs-ageMs).coerceAtLeast(0L)
+                    val trades=runCatching {
+                        loadFuturesTradeRows(symbol,fromMs,endMs)
+                    }.getOrNull()
+                    audited.put(FuturesSignedTradeForensics.summarize(symbol,trades,endMs)
+                        .put("window_start_ms",fromMs)
+                        .put("window_end_ms",endMs)
+                        .put("funding_evidence",FuturesSignedTradeForensics.summarizeFunding(
+                            symbol,incomeRows,incomeStart,endMs)))
+                }
+                output.put("state","READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED")
+                    .put("symbols",audited)
+                    .put("full_campaign_pnl_verified",false)
+            } catch(failure:Exception) {
+                output.put("state","SIGNED_GET_FAILED")
+                    .put("error",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
+            } finally {
+                signedFillAuditJson=output.toString()
+                signedFillAuditRunning=false
+            }
+        },"williams-readonly-futures-fill-audit").apply { isDaemon=true; start() }
+    }
+
     fun diagnostics(): JSONObject {
+        // GET-only diagnostics run separately from the Android/UI thread and
+        // never block STOP maintenance or create a position owner. A later
+        // diagnostic export includes the completed snapshot.
+        scheduleReadOnlySignedFillAudit()
+        // SQLite indicator/history reads and supervised-history locking can take
+        // longer than the strict 15s STOP TTL. Finish them BEFORE capturing the
+        // signed position/protection generation used by every report check.
+        val strategyEvidence = strategyDiagnosticEvidence()
+        val tradeEvidence = JSONArray(CockpitDiagnostics.rows(trades()).take(20))
+        runCatching { futuresPositionSnapshot() }.onFailure {
+            futuresPositionSnapshotRefreshError = it.message ?: it.javaClass.simpleName
+        }
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
         val statusSnapshot = status(fast = true)
-            .put("strategy_audit", strategyDiagnosticEvidence())
-            .put("trade_observations", JSONArray(CockpitDiagnostics.rows(trades()).take(20)))
+            .put("strategy_audit", strategyEvidence)
+            .put("trade_observations", tradeEvidence)
+            .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
+                .put("refresh_running",signedFillAuditRunning)
+                .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
@@ -10877,11 +11862,16 @@ private class NativeEngine(
             .put("name", "Происхождение сигналов TC2 / NTD / Course")
             .put("severity", when {
                 badSourceEvidence > 0 -> "FAIL"
+                // A Binance-recovered position with unknown entry provenance
+                // must not masquerade as a malformed Williams book signal.
+                // Nor may its unknown source grant PASS on ownership.
+                unifiedEvidence.optInt("unattributed_recovered_positions") > 0 -> "NOT_VERIFIED"
                 fullSourceEvidence && unifiedEvidence.optInt("observed_signal_count") > 0 -> "PASS"
                 else -> "NOT_VERIFIED"
             }).put("detail", "Режим=${unifiedEvidence.optString("mode")}; " +
                 "статус=${unifiedEvidence.optString("status")}; " +
                 "достоверных источников=3; необработанных ошибок=$badSourceEvidence; " +
+                "неатрибутированных восстановленных позиций=${unifiedEvidence.optInt("unattributed_recovered_positions")}; " +
                 "сигналов=${unifiedEvidence.optInt("observed_signal_count")}. " +
                 "PASS подтверждает только происхождение сигналов в полном снимке сканера, не корректность книг."))
         val tc1Evidence = CockpitDiagnostics.rows(tc1ZeroPointAudit)
@@ -10977,6 +11967,83 @@ private class NativeEngine(
                 newerExchangeStopSymbols.joinToString().ifBlank { "none" } +
                 "; снимок позиции=" + positionDisplayAt +
                 "; NEVER infer current protection from a stale cached screen."))
+        // Operator-direction overrides were removed. A stale pre-upgrade
+        // persisted flag must be reported as a safety defect, not a "mode".
+        val removedModePersisted =
+            prefs.getBoolean("force_testnet_mode",false) ||
+            executionStore.readState("futures_testnet_force_mode") == "true"
+        tests.put(JSONObject().put("id","SAF-LEGACY-01").put("domain","execution")
+            .put("name","Отключён удалённый режим принудительных входов")
+            .put("severity",if(!forceTestnetMode && !removedModePersisted) "PASS" else "FAIL")
+            .put("detail","Legacy forced-entry override inaccessible in API; " +
+                "prefs_or_db_flag_present=$removedModePersisted; runtime_override_active=$forceTestnetMode; " +
+                "old exchange orders still recovered, never silently cancelled."))
+        val requiredWaves = CockpitDiagnostics.rows(chartReadingAudit)
+            .filter { it.optString("interval") in setOf("1d","4h","1h","15m") }
+        val requiredKeys = coreSymbols.flatMap { symbol ->
+            listOf("1d","4h","1h","15m").map { frame -> symbol to frame }
+        }
+        val absentRequired=requiredKeys.filter { (symbol,frame) ->
+            requiredWaves.count {
+                it.optString("symbol")==symbol && it.optString("interval")==frame &&
+                    it.optString("state")=="OBSERVED" &&
+                    it.optInt("closed_candle_count")>=40 &&
+                    it.optLong("as_of_close_ms")>0
+            } != 1
+        }
+        val observedRequired=requiredKeys.size-absentRequired.size
+        val missingDescription=absentRequired.take(10)
+            .joinToString("; ") { (symbol,frame) -> "$symbol/$frame" }
+            .ifBlank { "none" } +
+            if(absentRequired.size>10) "; plus ${absentRequired.size-10}" else ""
+        tests.put(JSONObject().put("id","WAVE-04").put("domain","strategy")
+            .put("name","Собственные закрытые свечи D1/H4/H1/M15 для всех десяти пар")
+            .put("severity", when {
+                requiredWaves.size != requiredKeys.size -> "NOT_VERIFIED"
+                absentRequired.isEmpty() -> "PASS"
+                else -> "WARNING"
+            }).put("detail","Closed causal frames: $observedRequired/${requiredKeys.size}; " +
+                "missing/underfilled: $missingDescription. " +
+                "M15 is optional CONTEXT for initial TC2 H1 entries, not an invented entry requirement; " +
+                "PASS proves data availability, not correct nested wave degree, book figures or accuracy."))
+        val historyEvidence=williamsDurableHistoryEvidence(
+            statusSnapshot,coreSymbols.toList(),durableBackfillFrames)
+        tests.put(JSONObject().put("id","WAVE-ARCHIVE-01").put("domain","strategy")
+            .put("name","Исторический архив и причинное воспроизведение волн")
+            .put("severity",historyEvidence.getString("severity"))
+            .put("detail",historyEvidence.getString("detail")))
+        val stopAuditResult = runCatching { auditStore.recentStopTrailDecisionEvents(20) }
+        val auditRows = stopAuditResult.getOrNull()?.length() ?: 0
+        tests.put(JSONObject().put("id","EXE-SL-AUDIT").put("domain","execution")
+            .put("name","Долговременный журнал решений по переносу SL")
+            .put("severity",when {
+                stopAuditResult.isFailure -> "FAIL"
+                auditRows==0 -> "NOT_VERIFIED"
+                else -> "PASS"
+            }).put("detail","SQLite stop-trail audit readable=${stopAuditResult.isSuccess}; " +
+                "recent_events=$auditRows; full source candles and signed outcomes are exported to ZIP; " +
+                "the absence of records alone does NOT prove a STOP was missing."))
+        // Snapshot races occur during BOTH safe pre-submit H1 rejection and
+        // legitimate exchange-acknowledged pending STOP orders. Never guess
+        // whether an order exists from coordinator state alone. A mixed-time
+        // read remains fail-closed until the next signed reconciliation.
+        val coordinatorStateAtEnd=futuresCampaignCoordinator.state.name
+        val coordinatorStateAtStart=coordinatorSnapshot.optString("state","UNKNOWN")
+        val concurrentCoordinatorTransition=coordinatorStateAtStart!=coordinatorStateAtEnd
+        if(concurrentCoordinatorTransition) {
+            tests.put(JSONObject().put("id","DIAG-STATE-RACE")
+                .put("domain","runtime")
+                .put("name","Состояние Futures изменилось во время диагностики")
+                .put("severity","WARNING")
+                .put("detail","Coordinator at snapshot=$coordinatorStateAtStart; " +
+                    "at diagnostic end=$coordinatorStateAtEnd. " +
+                    "ENTRY_PENDING may represent actual Binance-accepted STOP " +
+                    "entry orders, a still-unconfirmed submission, or a transient " +
+                    "state before rejection; it does NOT prove a filled position. " +
+                    "Never assume exchange orders are absent or cancel them from " +
+                    "this diagnostic. Obtain fresh signed positions, conditional " +
+                    "orders and STOP proof before changing execution blocks."))
+        }
         val unresolvedChecks = JSONArray().apply {
             for (test in CockpitDiagnostics.rows(tests)) {
                 val severity = test.optString("severity")
@@ -10993,6 +12060,13 @@ private class NativeEngine(
         val failedTests = checkedSummary.optInt("failed_test_count")
         val warningTests = checkedSummary.optInt("warning_test_count")
         val diagnosticOverall = if (consistencyFindings.isNotEmpty()) "FAIL" else checkedSummary.optString("overall")
+        // This is a forensic read-only picture, NOT an authorization source.
+        // The exchange coordinator can change state while JSON is built.
+        val gateReadyAtReport = !concurrentCoordinatorTransition && executionReady()
+        val gateReasonsAtReport = williamsDiagnosticGateReasons(
+            executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
+        )
+        val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
         return JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -11005,6 +12079,7 @@ private class NativeEngine(
             .put("unified_strategy_evidence", unifiedEvidence)
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
+            .put("durable_history_evidence",historyEvidence)
             .put("tc1_zero_point_audit", tc1ZeroPointAudit)
             .put("book_rule_coverage", bookRuleCoverage)
             .put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))
@@ -11018,6 +12093,7 @@ private class NativeEngine(
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
                 .put("app_version", BuildConfig.VERSION_NAME)
+                .put("source_revision", BuildConfig.SOURCE_REVISION)
                 .put("android_sdk", android.os.Build.VERSION.SDK_INT)
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
@@ -11026,8 +12102,15 @@ private class NativeEngine(
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
             .put("unresolved_diagnostic_checks", unresolvedChecks)
+            .put("diagnostic_triage",williamsDiagnosticTriage(tests,
+                gateReadyAtReport &&
+                    cockpitReadiness.optBoolean("new_entries_allowed") &&
+                    consistencyFindings.isEmpty() && failedTests==0,
+                livePositionCount=exposureCountAtReport))
             .put("diagnostic_summary", JSONObject()
                 .put("overall", diagnosticOverall)
+                .put("snapshot_non_atomic_coordinator_transition",concurrentCoordinatorTransition)
+                .put("coordinator_state_at_diagnostic_end",coordinatorStateAtEnd)
                 .put("finding_count", consistencyFindings.size)
                 .put("unresolved_check_count", unresolvedChecks.length())
                 .put("finding_count_scope", "INTERNAL_CONTRACT_CONTRADICTIONS_ONLY")
@@ -11035,7 +12118,8 @@ private class NativeEngine(
                 .put("warning_test_count", warningTests)
                 .put("not_verified_test_count", checkedSummary.optInt("not_verified_test_count"))
                 .put("passed_test_count", checkedSummary.optInt("passed_test_count"))
-                .put("execution_allowed", cockpitReadiness.optBoolean("new_entries_allowed") &&
+                .put("execution_allowed",gateReadyAtReport &&
+                    cockpitReadiness.optBoolean("new_entries_allowed") &&
                     consistencyFindings.isEmpty() && failedTests == 0)
                 .put("top_level_runtime_state", statusSnapshot.optString("state", "UNKNOWN"))
                 .put("contract_runtime_state", statusSnapshot.optJSONObject("execution_state_contract")
@@ -11045,9 +12129,11 @@ private class NativeEngine(
             .put("diagnostic_contract_version", CockpitDiagnostics.VERSION)
             .put("execution_gate", JSONObject()
                 .put("scope", "TECHNICAL_EXECUTION_DOOR_ONLY")
-                .put("new_entries_allowed", cockpitReadiness.optBoolean("new_entries_allowed"))
-                .put("ready", executionReady())
-                .put("reasons", JSONArray(executionBlockers()))
+                .put("snapshot_non_atomic",concurrentCoordinatorTransition)
+                .put("new_entries_allowed", gateReadyAtReport &&
+                    cockpitReadiness.optBoolean("new_entries_allowed"))
+                .put("ready",gateReadyAtReport)
+                .put("reasons",JSONArray(gateReasonsAtReport))
                 .put("degraded_channels", JSONArray().apply {
                     if (!marketSocketConnected) put("market_ws")
                     if (!userStreamConnected || userStreamSyncRequired) put("user_ws")
@@ -11202,11 +12288,18 @@ private class NativeEngine(
     @Synchronized
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
+        // Keep the operator's chosen leverage. FuturesLeverageSettings
+        // already validates the requested 1..125 range for all ten pairs.
+        // Binance brackets and the margin available BEFORE liquidation or
+        // the structural STOP are authoritative on every new order.
         val profile=payload.optString("strategy_profile",williamsProfile)
         val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
-        require(profile==williamsExecutionProfile) { "Торговля — TC2; NTD и Course работают в наблюдении" }
+        require(profile==williamsUnifiedProfile || williamsVerifiedNewRiskSource(profile)) {
+            "Торговые источники: TC2 и NTD; Course работает в наблюдении"
+        }
         fun persist() {
             check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
+                .putString("williams_execution_policy_v2",WILLIAMS_EXECUTION_POLICY)
                 .putString("futures_leverage_settings_v1", next.toJson().toString()).commit()) {
                 "Не удалось сохранить настройки стратегии"
             }
@@ -11228,6 +12321,11 @@ private class NativeEngine(
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
+            .put("new_entry_leverage_cap_x",MAX_CONFIGURED_FUTURES_LEVERAGE)
+            .put("new_entry_leverage_compliant",futuresLeverageSettings.defaultLeverage in 1..MAX_CONFIGURED_FUTURES_LEVERAGE &&
+                futuresLeverageSettings.symbolLeverages.values.all { it in 1..MAX_CONFIGURED_FUTURES_LEVERAGE })
+            .put("new_entry_leverage_blocker",JSONObject.NULL)
+            .put("new_entry_leverage_preflight","SIGNED_EXCHANGE_BRACKETS_AND_ISOLATED_STOP_BUFFER")
             .put("futures_margin_type", "ISOLATED")
             .put("futures_force_one_way", true)
             .put("version", BuildConfig.VERSION_NAME)

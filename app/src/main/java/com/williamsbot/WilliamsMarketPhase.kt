@@ -38,7 +38,8 @@ internal fun buildWilliamsObservedMarketContext(history:Map<String,List<Williams
  * matching flags are NOT proof of a finished wave or authority to exit.
  */
 internal fun williamsCourseFourSignEvidence(scenario:JSONObject):JSONObject {
-    val completedProvisionalFifth=scenario.optString("label")=="W5"
+    val completedProvisionalFifth=scenario.optString("label")=="W5" &&
+        williamsCourseCausalAnchors(scenario,scenario.optLong("observed_at"))?.size==6
     val bars=scenario.optInt("scale_bars",0)
     val scaleObserved=bars in 100..140
     val checks=JSONObject()
@@ -82,12 +83,25 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
         val usable=all.filter { h ->
             val anchors=rows(h.optJSONArray("anchors"))
             h.optString("frame")==frame && h.optString("status")=="PROVISIONAL" &&
-                h.optLong("observed_at") in 1L..asOf && anchors.size>=2 &&
+                h.optLong("observed_at")==asOf && anchors.size>=2 &&
                 anchors.all { it.optLong("known_at") in 1L..asOf } &&
                 h.optString("active_direction") in listOf("UP","DOWN") &&
                 h.optString("active_label") in listOf("W1","W2","W3","W4","W5","A","B","C")
         }.takeIf { !errors.has(frame) }.orEmpty()
         val phases=usable.map { it.optString("active_label")+":"+it.optString("active_direction") }.distinct()
+        // Two wave counts may share a label (e.g. W3 UP) yet disagree on
+        // their pivot origin or invalidation. Treat that as ALTERNATIVES, not
+        // as one agreed wave. Scenario IDs alone are not structural evidence.
+        fun signature(h:JSONObject):String {
+            val anchors=rows(h.optJSONArray("anchors")).joinToString(";") { a ->
+                listOf(a.optString("kind"),a.optLong("extreme_at"),a.optDouble("price",Double.NaN))
+                    .joinToString(":")
+            }
+            return listOf(h.optString("active_label"),h.optString("active_direction"),
+                h.optString("direction"),h.optDouble("invalidation",Double.NaN),anchors).joinToString("|")
+        }
+        val distinctStructures=usable.map(::signature).distinct().size
+        val competing=distinctStructures>1
         val hypotheses=usable.map { h -> JSONObject().put("scenario_id",h.optString("scenario_id"))
             .put("last_confirmed_leg",h.optString("last_confirmed_leg",h.optString("label")))
             .put("active_label",h.optString("active_label")).put("active_direction",h.optString("active_direction"))
@@ -97,6 +111,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("scale_bars",h.optInt("scale_bars"))
             .put("signs",JSONArray(signs.filterKeys { h.optBoolean(it) }.values.toList()))
             .put("course_four_signs",williamsCourseFourSignEvidence(h))
+            .put("course_stage_locations",williamsCourseStageLocations(h,asOf))
             .put("tc1_five_bullets",williamsTc1FiveBulletEvidence(h)) }
         val frameScenarios=all.filter { it.optString("frame")==frame }
         JSONObject().put("frame",frame).put("state",when {
@@ -106,7 +121,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             // reading when history/scenarios were not provided by the engine.
             frame=="4h" && !counts.has(frame) && usable.isEmpty() -> "UNAVAILABLE"
             phases.isEmpty() -> "UNRESOLVED"
-            phases.size>1 -> "ALTERNATIVES"
+            competing -> "ALTERNATIVES"
             else -> "PHASE_CANDIDATE"
         }).put("history_error",if(asOf<=0L) "WAVE_ANALYSIS_NOT_RUN" else
             errors.optString(frame).takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
@@ -114,7 +129,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
                 asOf<=0L -> "WAVE_ANALYSIS_NOT_RUN"
                 errors.has(frame) -> errors.optString(frame)
                 phases.isEmpty() -> "NO_UNAMBIGUOUS_CAUSAL_WAVE_COUNT"
-                phases.size>1 -> "COMPETING_WAVE_COUNTS"
+                competing -> "COMPETING_WAVE_COUNTS"
                 else -> "PROVISIONAL_COUNT_NOT_CERTAINTY"
             })
             .put("closed_bar_count",hierarchy.optJSONObject("frame_candle_counts")?.optInt(frame,0) ?: 0)
@@ -124,6 +139,13 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("hypotheses",JSONArray(hypotheses))
             .put("history_candle_count",if(counts.has(frame)) counts.optInt(frame) else JSONObject.NULL)
             .put("hypothesis_count",hypotheses.size)
+            .put("distinct_structural_hypotheses",distinctStructures)
+            .put("wave_count_ambiguous",competing)
+            .put("ambiguity_reason",when {
+                competing && phases.size==1 -> "SAME_LABEL_DIFFERENT_PIVOTS_OR_INVALIDATION"
+                competing -> "DIFFERENT_WAVE_LABELS_OR_DIRECTIONS"
+                else -> "NONE"
+            })
             .put("wave_degree_confirmed",false)
             .put("probability_calibrated",false)
             .put("can_place_orders",false).put("can_close",false)
@@ -162,6 +184,7 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
         if(recursive.length()>=16) break
     }
     val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
+        .put("course_correction_policy",williamsCourseCorrectionPolicySnapshot())
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
         .put("recursive_degree_evidence",recursive)
         .put("wave_interpretation",williamsWaveInterpretation(hierarchy))

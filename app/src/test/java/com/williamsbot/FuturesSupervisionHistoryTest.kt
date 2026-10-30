@@ -83,6 +83,39 @@ class FuturesSupervisionHistoryTest {
         }
     }
 
+    @Test fun diagnostics27ExecutedReplacementStopIsShownWithoutInventingNetPnl() {
+        val r=record(direction="SHORT")
+            .put("pending_protection_client_id","W2T_NEW")
+            .put("pending_stop","101")
+        val algo=parent("SHORT")
+            .put("clientAlgoId","W2T_NEW")
+            .put("triggerPrice","101")
+        val proof=requireNotNull(verifiedSupervisedStopClosure(r,algo,child("SHORT"),fills("SHORT")))
+        r.put("last_replacement_failure",JSONObject()
+            .put("client_id","W2T_NEW").put("phase","AFTER_POST_ACK")
+            .put("message","Stop replacement requires manual reconciliation after exchange mutation"))
+        // A journalled proposal is never the confirmed last stop while open.
+        assertEquals("104",confirmedSupervisionLastStop(r))
+        r.put("confirmed_closure",proof).put("state","CLOSED_EXCHANGE_CONFIRMED")
+        annotateVerifiedOperatorStopClosure(r,proof)
+        val row=futuresVisibleTradeHistory(JSONArray(),JSONArray().put(r),JSONArray()).getJSONObject(0)
+        assertEquals(105.0,row.getDouble("stop_price"),0.0) // initial unchanged
+        assertEquals(101.0,row.getDouble("last_stop"),0.0)  // exact triggered SL
+        assertEquals("CLOSED",row.getString("status"))
+        assertTrue(row.isNull("pnl"))
+        assertFalse(row.getBoolean("pnl_complete"))
+        assertEquals("VERIFIED_REPLACEMENT_STOP_FILLED",
+            r.getJSONObject("last_replacement_failure").getString("resolution"))
+        // A forged unrelated child never resolves the earlier exception.
+        val unknown=record(direction="SHORT")
+            .put("pending_protection_client_id","W2T_NEW").put("pending_stop","101")
+            .put("last_replacement_failure",JSONObject()
+                .put("client_id","W2T_DIFFERENT").put("phase","AFTER_POST_ACK"))
+        annotateVerifiedOperatorStopClosure(unknown,proof)
+        assertFalse(unknown.getJSONObject("last_replacement_failure").has("resolution"))
+        assertEquals("104",confirmedSupervisionLastStop(unknown))
+    }
+
     @Test fun wrongTradeOrIncompleteFillEvidenceCannotBeAssignedToTheFormerPosition() {
         for(mutation in 0..7) {
             val r=record();val a=parent("LONG");val c=child("LONG");val f=fills("LONG")

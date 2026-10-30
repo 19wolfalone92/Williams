@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
+/** A rejected or exhausted exchange clock calibration is NOT a retryable signed GET. */
+internal class FuturesClockSyncException(detail: String, cause: Throwable? = null) : IOException(detail, cause)
+
 internal class FuturesHttpException(
     val statusCode: Int,
     val exchangeCode: Int?,
@@ -23,6 +26,10 @@ internal class FuturesHttpException(
  * GET/preflight cannot be confused with a lost acknowledgement after POST. */
 internal class FuturesProtectionNotSubmittedException(cause: Exception) :
     IOException("Protective STOP was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
+
+/** The final local entry gate rejected BEFORE the order transport was entered. */
+internal class FuturesExposureNotSubmittedException(cause: Exception) :
+    IOException("Futures entry was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
 
 /**
  * Native USDⓈ-M Futures Testnet transport.
@@ -62,6 +69,16 @@ internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
  * whenever the Android wall clock and elapsed time diverge (sleep/manual clock
  * adjustments). Neither a cached offset nor a wide recvWindow authorizes trades.
  */
+/** 8s network RTT is tolerable only for signed read-only recovery with a 10s recvWindow.
+ * Order-changing operations still require a <=3s clock sample and a 5s recvWindow.
+ * A wall/monotonic drift, missing exchange time or slow (>8s) response is untrusted.
+ */
+internal fun futuresClockProbeUsableForSignedRead(
+    sentMonoNs: Long, roundTripMs: Long, wallElapsedMs: Long, exchangeTimeMs: Long
+): Boolean = sentMonoNs > 0L && exchangeTimeMs > 0L &&
+    roundTripMs in 0L..8_000L &&
+    kotlin.math.abs(wallElapsedMs - roundTripMs) <= 1_000L
+
 internal fun futuresClockSyncNeeded(
     synchronized: Boolean, anchorWallMs: Long, anchorMonoNs: Long,
     wallNowMs: Long, monoNowNs: Long
@@ -83,11 +100,18 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .writeTimeout(15, TimeUnit.SECONDS)
         .build(),
     private val rateGuard: BinanceRateGuard? = null,
-    private val beforeExposureMutation: () -> Unit = {}
+    private val beforeExposureMutation: () -> Unit = {},
+    private val beforeExposureTransport: () -> Unit = {}
 ) {
     // Application-level retry rules must also govern OkHttp's transparent retries
     // and redirects. A replayed POST can create duplicate exposure after a lost reply.
     private val http = http.newBuilder()
+        // Android runtime shares a 45s read timeout with long-lived WebSockets.
+        // The financial REST adapter must NOT inherit an unbounded total call
+        // deadline: a dead radio/DNS route previously stalled reconciliation and
+        // Android's worker heartbeat. POST/DELETE timeouts remain ambiguous and
+        // are never transparently retried.
+        .callTimeout(25, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)
@@ -99,8 +123,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     @Volatile private var serverAnchorMs: Long = 0L
     @Volatile private var anchorMonoNs: Long = 0L
     @Volatile private var anchorWallMs: Long = 0L
+    @Volatile private var lastClockProbeRttMs: Long = Long.MAX_VALUE
 
-    private fun ensureFreshServerClock(): Long = synchronized(clockLock) {
+    private fun ensureFreshServerClock(readOnly: Boolean): Long = synchronized(clockLock) {
         val wall = System.currentTimeMillis()
         val mono = System.nanoTime()
         if (futuresClockSyncNeeded(timeSynced,anchorWallMs,anchorMonoNs,wall,mono)) {
@@ -108,6 +133,17 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         }
         check(timeSynced && anchorMonoNs > 0L) {
             "Binance Futures server time is not confirmed; signed request blocked"
+        }
+        if (!readOnly && lastClockProbeRttMs > 3_000L) {
+            // A slow read-only sample cannot sign a financial write. Retry ONLY
+            // the unsigned GET /time preflight; a newly fast sample permits the
+            // mutation, but failed/slow probes NEVER retry POST/DELETE.
+            serverTime()
+            if (lastClockProbeRttMs > 3_000L) {
+                throw FuturesClockSyncException(
+                    "Clock sample RTT $lastClockProbeRttMs ms exceeds 3000 ms mutation safety limit; financial write blocked"
+                )
+            }
         }
         val age = (System.nanoTime()-anchorMonoNs)/1_000_000L
         check(age in 0L..30_000L) { "Signed Futures timestamp is stale; request blocked" }
@@ -120,28 +156,70 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     }
 
     fun serverTime(): JSONObject = synchronized(clockLock) {
-        // A single clock lock prevents N overlapping signed reads/mutations
-        // racing to overwrite each other's skew corrections.
+        // A GET /time probe must measure only its own network trip. Neither
+        // rate-limit waiting nor retry/backoff for earlier GETs may contribute
+        // to the sample RTT used for signing financial requests.
+        // Two bounded, independent read-only samples; no speculative mutation.
         timeSynced = false
-        val beforeMono = System.nanoTime()
-        val beforeWall = System.currentTimeMillis()
-        val response = request("GET", "/fapi/v1/time", emptyMap(), signed = false)
-        val afterMono = System.nanoTime()
-        val afterWall = System.currentTimeMillis()
-        val durationNs = afterMono-beforeMono
-        val roundTripMs = durationNs/1_000_000L
-        val exchangeTime = response.optLong("serverTime", 0L)
-        // Very delayed network samples cannot safely calibrate a 5s order
-        // recvWindow; prefer a blocked mutation to using guessed exchange time.
-        if (exchangeTime <= 0L || roundTripMs !in 0L..3_000L ||
-            kotlin.math.abs((afterWall-beforeWall)-roundTripMs)>1_000L) {
-            throw IOException("Futures server time sample is invalid, delayed, or device clock changed")
+        lastClockProbeRttMs = Long.MAX_VALUE
+        var lastFailure: IOException? = null
+        repeat(2) { attempt ->
+            var sentMonoNs = 0L
+            var sentWallMs = 0L
+            val raw = try {
+                requestRawOnce("GET", "/fapi/v1/time", emptyMap(), signed = false) {
+                    sentMonoNs = System.nanoTime()
+                    sentWallMs = System.currentTimeMillis()
+                }
+            } catch (failure: IOException) {
+                // Explicit exchange rejection is preserved for callers and
+                // must not be disguised as a transport-clock outage.
+                if (failure is FuturesHttpException &&
+                    !isRetryableSafeReadFailure(failure.message.orEmpty())) throw failure
+                if (attempt == 1 || !isRetryableSafeReadFailure(failure.message.orEmpty())) {
+                    throw FuturesClockSyncException(
+                        "Futures server clock probe failed; signed request blocked", failure
+                    )
+                }
+                lastFailure = failure
+                return@repeat
+            }
+            val receivedMonoNs = System.nanoTime()
+            val receivedWallMs = System.currentTimeMillis()
+            val durationNs = receivedMonoNs - sentMonoNs
+            val roundTripMs = durationNs / 1_000_000L
+            val wallElapsedMs = receivedWallMs - sentWallMs
+            val response = runCatching { JSONObject(raw) }.getOrNull()
+            val exchangeTime = response?.optLong("serverTime", 0L) ?: 0L
+            // A rejected sample NEVER establishes a new timestamp anchor.
+            if (futuresClockProbeUsableForSignedRead(
+                    sentMonoNs, roundTripMs, wallElapsedMs, exchangeTime
+                )) {
+                serverAnchorMs = exchangeTime
+                // A slow read-only probe may be asymmetric. Using the midpoint
+                // could put a signed timestamp >1000ms AHEAD of Binance time,
+                // which Binance rejects even with a wide recvWindow. Anchor the
+                // response at receipt for slow probes: bias behind the exchange,
+                // bounded by the read-only 10s window. Never authorize writes
+                // from such a sample.
+                anchorMonoNs = if (roundTripMs > 3_000L) receivedMonoNs
+                    else sentMonoNs + durationNs / 2L
+                anchorWallMs = if (roundTripMs > 3_000L) receivedWallMs
+                    else sentWallMs + wallElapsedMs / 2L
+                lastClockProbeRttMs = roundTripMs
+                timeSynced = true
+                return@synchronized response!!
+            }
+            lastFailure = IOException(
+                "Futures server time sample is invalid, delayed, or device clock changed " +
+                    "(probe=${attempt + 1}, network_rtt_ms=$roundTripMs, wall_elapsed_ms=$wallElapsedMs)"
+            )
         }
-        serverAnchorMs = exchangeTime
-        anchorMonoNs = beforeMono + durationNs/2L
-        anchorWallMs = beforeWall+(afterWall-beforeWall)/2L
-        timeSynced = true
-        response
+        throw FuturesClockSyncException(
+            "Futures server clock could not be verified after bounded independent GET probes: " +
+                (lastFailure?.message ?: "no valid sample"),
+            lastFailure
+        )
     }
 
     fun exchangeInfo(): JSONObject =
@@ -158,6 +236,28 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             ?: throw IOException("Futures mark price response is malformed")
         if (!value.isFinite() || value <= 0.0) throw IOException("Futures mark price is invalid")
         return value
+    }
+
+    /** Last traded price is the basis of ordinary Futures OHLC and book entry
+     * breakouts. Never substitute the independent liquidation MARK index. */
+    fun contractPrice(symbol: String): Double {
+        requireSymbol(symbol)
+        val row=JSONObject(requestRaw("GET", "/fapi/v2/ticker/price",mapOf("symbol" to symbol),signed=false))
+        val value=row.optString("price").toDoubleOrNull()
+        if(row.optString("symbol")!=symbol || value==null || !value.isFinite() || value<=0.0)
+            throw IOException("Futures contract price response identity/value is invalid")
+        return value
+    }
+
+    fun bestBidAsk(symbol:String):Pair<Double,Double> {
+        requireSymbol(symbol)
+        val row=JSONObject(requestRaw("GET","/fapi/v1/ticker/bookTicker",mapOf("symbol" to symbol),signed=false))
+        val bid=row.optString("bidPrice").toDoubleOrNull()
+        val ask=row.optString("askPrice").toDoubleOrNull()
+        if(row.optString("symbol")!=symbol || bid==null || ask==null ||
+            !bid.isFinite() || !ask.isFinite() || bid<=0 || ask<bid)
+            throw IOException("Futures executable quote identity/value is invalid")
+        return bid to ask
     }
 
     fun klines(symbol: String, interval: String = "1h", limit: Int = 300): JSONArray {
@@ -536,12 +636,12 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(qty.signum() > 0 && trigger.signum() > 0)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         requireOneWayMode()
-        val mark = java.math.BigDecimal.valueOf(markPrice(symbol))
+        val contract = java.math.BigDecimal.valueOf(contractPrice(symbol))
         val isBuy = direction == "LONG"
         val shouldTriggerAbove = (triggerType == "STOP" && isBuy) ||
             (triggerType == "TAKE_PROFIT" && !isBuy)
-        require(if (shouldTriggerAbove) trigger > mark else trigger < mark) {
-            "Conditional entry trigger is on the wrong side of the current mark price"
+        require(if (shouldTriggerAbove) trigger > contract else trigger < contract) {
+            "Conditional entry trigger is on the wrong side of the current contract price"
         }
         val exchangeType = when (triggerType) {
             "STOP" -> "STOP_MARKET"
@@ -555,7 +655,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "type" to exchangeType,
             "quantity" to qty.stripTrailingZeros().toPlainString(),
             "triggerPrice" to trigger.stripTrailingZeros().toPlainString(),
-            "workingType" to "MARK_PRICE",
+            "workingType" to "CONTRACT_PRICE",
             "clientAlgoId" to clientOrderId
         )
         return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
@@ -698,6 +798,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 // never retry POST/DELETE on timeout or 5xx because exchange execution may
                 // be ambiguous. 418/429 and all other 4xx are surfaced immediately.
                 if (method.equals("GET", ignoreCase = true) &&
+                    error !is FuturesClockSyncException &&
                     safeReadAttempt < safeReadDelaysMs.size &&
                     isRetryableSafeReadFailure(message)
                 ) {
@@ -729,7 +830,8 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         method: String,
         path: String,
         params: Map<String, String>,
-        signed: Boolean
+        signed: Boolean,
+        beforeNetwork: (() -> Unit)? = null
     ): String {
         require(path.matches(Regex("/fapi/v[1-3]/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*"))) {
             "Only canonical USD-M Futures endpoints are allowed"
@@ -738,15 +840,26 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         // P0: the exposure-gate preflight used to run AFTER signing. If it
         // waited behind reconciliation the signed timestamp could expire
         // BEFORE the HTTP request left the device. Run it first.
-        if (method == "POST" && path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
-            params["reduceOnly"] != "true" && params["closePosition"] != "true") {
-            beforeExposureMutation()
+        val increasesExposure = method == "POST" &&
+            path in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") &&
+            params["reduceOnly"] != "true" && params["closePosition"] != "true"
+        if (increasesExposure) {
+            try {
+                beforeExposureMutation()
+            } catch (failure: Exception) {
+                throw FuturesExposureNotSubmittedException(failure)
+            }
         }
         // Rate limit admission may sleep: also finish it BEFORE signing.
-        rateGuard?.beforeRequest(isOrder = orderMutation)
+        try {
+            rateGuard?.beforeRequest(isOrder = orderMutation)
+        } catch (failure: Exception) {
+            if (increasesExposure) throw FuturesExposureNotSubmittedException(failure)
+            throw failure
+        }
         val all = LinkedHashMap(params)
         if (signed) {
-            all["timestamp"] = ensureFreshServerClock().toString()
+            all["timestamp"] = ensureFreshServerClock(readOnly = method == "GET").toString()
             // Reads may tolerate RTT jitter; financial mutations retain the
             // strict 5s exchange rejection window and never retry ambiguously.
             all["recvWindow"] = if (method == "GET") "10000" else "5000"
@@ -769,6 +882,18 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "POST" -> builder.post(body!!)
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
+        }
+        beforeNetwork?.invoke()
+        // Rate admission and clock probes above can block while a disconnect,
+        // fill or operator pause invalidates entry authority. This second gate
+        // must be local/nonblocking and runs immediately before the transport.
+        // It is deliberately absent from reduce-only exits and protective STOPs.
+        if (increasesExposure) {
+            try {
+                beforeExposureTransport()
+            } catch (failure: Exception) {
+                throw FuturesExposureNotSubmittedException(failure)
+            }
         }
         http.newCall(builder.build()).execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)

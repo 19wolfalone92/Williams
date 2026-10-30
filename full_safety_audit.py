@@ -503,7 +503,8 @@ finding(
 finding(
     "PASS" if "StandaloneRuntime.start(applicationContext)" in service
     and "StandaloneRuntime.autostart(applicationContext)" in service
-    and "StandaloneRuntime.stopTrading()" in service
+    and ("if (StandaloneRuntime.stop()) stopSelf()" in service
+         or "StandaloneRuntime.stopTrading()" in service)
     else "FAIL",
     "Foreground service owns native runtime startup, autostart, and stop"
 )

@@ -11,12 +11,77 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Ignore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun transportGateRejectionDoesNotPersistAPhantomPendingEntryForEitherDirection() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (earlyGate in listOf(false, true)) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(journal) {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", exchange.client,
+                    beforeExposureMutation = { if (earlyGate) error("Runtime paused before entry") },
+                    beforeExposureTransport = { error("Private stream lost during entry preflight") })
+            }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.getBoolean("safe_rejection"))
+            assertFalse(result.getBoolean("order_mutation_attempted"))
+            val intents = JSONArray(journal.readState("futures_campaign_intents_v2"))
+            assertEquals("REJECTED", intents.getJSONObject(0).getString("order_status"))
+            assertEquals("CLOSED_OR_STOPPED", intents.getJSONObject(0).getString("campaign_status"))
+            assertFalse(exchange.requests.any { it.method == "POST" &&
+                it.url.encodedPath in setOf("/fapi/v1/order", "/fapi/v1/algoOrder") })
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun slowReconciliationPublishesOriginalObservationAgeSeparatelyFromCompletion() {
+        var now = System.currentTimeMillis()
+        val started = now
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.beforeRequest = { request, _ ->
+            if (request.url.encodedPath == "/fapi/v3/positionRisk") now += 95_000L
+        }
+        val coordinator = NativeFuturesCampaignCoordinator(Journal(), clock = { now }) { exchange.adapter() }
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
+        assertEquals(started, result.getLong("exchange_snapshot_started_at_ms"))
+        assertTrue(result.getLong("exchange_snapshot_completed_at_ms") >= started + 95_000L)
+        assertFalse(signedFuturesReconciliationFresh(result.getLong("exchange_snapshot_started_at_ms"), now))
+    }
+
+    @Test fun terminalBnbExitIsSeparatedWithoutChangingLedgerOrCallingBinance() {
+        val journal = Journal()
+        val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")
+            .put("intent_role", "EXIT").put("client_id", "W2X_OLD_BNB")
+            .put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN").put("order_status", "FILLED")
+            .put("quantity", "0.22").put("executed_qty", "0.22")
+        val entry = JSONObject().put("symbol", "XRPUSDT").put("direction", "SHORT")
+            .put("intent_role", "ENTRY").put("client_id", "W2H_XRP_CURRENT")
+            .put("campaign_status", "OPEN_PROTECTED").put("order_status", "NEW")
+        val original = JSONArray().put(exit).put(entry).toString()
+        journal.writeState("futures_campaign_intents_v2", original)
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val result = coordinator.status()
+        assertEquals(1, result.getInt("pending_intents"))
+        assertEquals("XRPUSDT", result.getJSONArray("pending_intent_details").getJSONObject(0).getString("symbol"))
+        val history = result.getJSONArray("exit_reconciliation_details").getJSONObject(0)
+        assertEquals("BNBUSDT", history.getString("symbol"))
+        assertEquals("FILLED", history.getString("exchange_order_status"))
+        assertEquals("EXIT_TERMINAL_POSITION_OPEN", history.getString("order_status"))
+        assertEquals(original, journal.readState("futures_campaign_intents_v2"))
+        assertFalse(result.getBoolean("ready_for_new_entry"))
+        assertTrue(exchange.requests.isEmpty())
+    }
     private class Journal : FuturesCampaignStateStore {
         private val values = mutableMapOf<String, String>()
         var rejectWrites = false
@@ -39,6 +104,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var quantity = 0.0
         var entry = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) 101.0 else 99.0
         var mark = 100.0
+        var contract: Double? = null
         var liquidation = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) "50" else "200"
         var leverage = 2
         var badConfirmation = false
@@ -59,6 +125,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var closeFraction = 1.0
         var closeStatus = "FILLED"
         var positionSide = "BOTH"
+        var positionSnapshotTransform: ((JSONArray) -> JSONArray)? = null
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             requests += request
@@ -74,6 +141,9 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v3/positionRisk" -> positions()
                 "/fapi/v1/premiumIndex" -> { beforeMarkRead?.invoke()
                     JSONObject().put("symbol", "BTCUSDT").put("markPrice", mark.toString()) }
+                "/fapi/v2/ticker/price" -> JSONObject().put("symbol","BTCUSDT").put("price",(contract ?: mark).toString())
+                "/fapi/v1/ticker/bookTicker" -> JSONObject().put("symbol","BTCUSDT")
+                    .put("bidPrice",(contract ?: mark).toString()).put("askPrice",(contract ?: mark).toString())
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
@@ -139,12 +209,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                     }
                 }
                 "/fapi/v1/order" -> if (request.method == "POST" && p["reduceOnly"]!="true") {
-                    check(p["side"]==if(quantity>0 || quantity==0.0 && direction.name=="LONG") "BUY" else "SELL")
+                    check(quantity==0.0 || p["side"]==if(quantity>0) "BUY" else "SELL")
                     val added=p.getValue("quantity").toDouble()*additionFraction
                     val id=(100+orders.size).toString()
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
-                    quantity=(quantity.toString().toBigDecimal()+(if(quantity>0 || quantity==0.0 && direction.name=="LONG") added else -added).toString().toBigDecimal()).toDouble()
+                    quantity=(quantity.toString().toBigDecimal()+(if(p["side"]=="BUY") added else -added).toString().toBigDecimal()).toDouble()
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
@@ -175,23 +245,25 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .body(response.toString().toResponseBody("application/json".toMediaType())).build()
         }.build()
 
-        fun positions() = JSONArray().apply {
+        fun positions(): JSONArray = JSONArray().apply {
             if (quantity != 0.0) put(JSONObject().put("symbol", "BTCUSDT").put("positionSide", positionSide)
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
-        }
-        fun fill(fraction: Double = 1.0, childClientId: String? = null) {
-            val pending = algos.values.single { it.optString("closePosition") != "true" }
+        }.let { positionSnapshotTransform?.invoke(it) ?: it }
+        fun fill(fraction: Double = 1.0, childClientId: String? = null,
+            pendingClientId: String? = null, childOrderId: String = "42") {
+            val pending = algos.values.single { it.optString("closePosition") != "true" &&
+                (pendingClientId == null || it.optString("clientAlgoId") == pendingClientId) }
             entry = pending.getString("triggerPrice").toDouble()
             quantity = pending.getString("quantity").toBigDecimal().multiply(fraction.toBigDecimal()).toDouble() *
                 if (pending.getString("side") == "BUY") 1.0 else -1.0
             mark = if (quantity > 0) 102.0 else 98.0
-            pending.put("algoStatus", "FINISHED").put("actualOrderId", "42")
-            orders["42"] = JSONObject().put("symbol", "BTCUSDT").put("orderId", "42")
+            pending.put("algoStatus", "FINISHED").put("actualOrderId", childOrderId)
+            orders[childOrderId] = JSONObject().put("symbol", "BTCUSDT").put("orderId", childOrderId)
                 .put("clientOrderId", childClientId ?: pending.getString("clientAlgoId"))
                 .put("status", if (fraction == 1.0) "FILLED" else "PARTIALLY_FILLED")
                 .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
-                .put("side", pending.getString("side")).put("avgPrice", entry.toString())
+                .put("side", pending.getString("side")).put("avgPrice", entry.toString()).put("reduceOnly",false).put("positionSide","BOTH")
         }
         fun fillAddition(clientId:String) {
             val parent=algos.values.single { it.optString("clientAlgoId")==clientId }
@@ -202,7 +274,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             parent.put("algoStatus","FINISHED").put("actualOrderId",id)
             orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)
                 .put("status","FILLED").put("origQty",qty.toString()).put("executedQty",qty.toString())
-                .put("side",parent.getString("side")).put("avgPrice",price.toString())
+                .put("side",parent.getString("side")).put("avgPrice",price.toString()).put("reduceOnly",false).put("positionSide","BOTH")
         }
         fun posts(path: String) = requests.count { it.method == "POST" && it.url.encodedPath == path }
         fun adapter(admission: () -> Unit = {}) = BinanceUsdMFuturesTestnetAdapter("key", "secret", client,
@@ -215,12 +287,12 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    private fun plan(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_") =
+    private fun plan(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 2, prefix: String = "W2E_") =
         NativeFuturesCampaignCoordinator.EntryPlan("BTCUSDT", direction, NativeFuturesCampaignCoordinator.EntryKind.STOP,
             "1", if (direction.name == "LONG") "101" else "99", if (direction.name == "LONG") "95" else "105",
             "${prefix}BTC_${direction.name}_$leverage", 0.002, leverage = leverage)
 
-    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 5, prefix: String = "W2E_",
+    private fun open(direction: NativeFuturesCampaignCoordinator.Direction, leverage: Int = 2, prefix: String = "W2E_",
         journal: Journal = Journal(), clock: () -> Long = System::currentTimeMillis):
         Pair<NativeFuturesCampaignCoordinator, Exchange> {
         val exchange = Exchange(direction)
@@ -240,6 +312,105 @@ class NativeFuturesCoordinatorLifecycleTest {
         return coordinator to exchange
     }
 
+    @Test fun displayProtectionUsesSignedGetsWithoutChangingExecutionStateOrProofs() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange) = open(direction)
+            val state = coordinator.state
+            val executionProof = coordinator.status().getJSONArray("exchange_protection_observations").toString()
+            val before = exchange.requests.size
+            val snapshot = coordinator.protectionDisplaySnapshot()
+            assertEquals(1, snapshot.positions.length())
+            assertEquals("OWNED_STOP_SEEN", snapshot.observations.getJSONObject(0).getString("stop_proof"))
+            assertTrue(exchange.requests.drop(before).all { it.method == "GET" })
+            assertEquals(2, exchange.requests.drop(before).count { it.url.encodedPath == "/fapi/v3/positionRisk" })
+            assertEquals(state, coordinator.state)
+            assertEquals(executionProof, coordinator.status().getJSONArray("exchange_protection_observations").toString())
+        }
+    }
+
+    @Test fun displayProtectionCanRefreshWhileCampaignReconciliationWaitsOnNetwork() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val entered = CountDownLatch(1); val release = CountDownLatch(1)
+        exchange.beforeRequest = { request, _ ->
+            if (Thread.currentThread().name == "test-slow-reconcile" &&
+                request.url.encodedPath == "/fapi/v3/account") {
+                entered.countDown(); check(release.await(10, TimeUnit.SECONDS))
+            }
+        }
+        val task = Thread({ coordinator.reconcile() }, "test-slow-reconcile")
+        task.start()
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            val snapshot = coordinator.protectionDisplaySnapshot()
+            assertEquals("OWNED_STOP_SEEN", snapshot.observations.getJSONObject(0).getString("stop_proof"))
+            assertTrue(coordinator.status().getBoolean("reconciliation_running"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            assertEquals(0, coordinator.operatorSupervisionsSnapshot().length())
+        } finally { release.countDown(); task.join(5_000L) }
+        assertFalse(task.isAlive)
+    }
+
+    @Test fun oldSignedFlatExitCannotBecomePendingWhenAnotherCampaignOpens() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var time = System.currentTimeMillis() - 60_000L
+            val (coordinator, exchange) = open(direction, clock = { time })
+            time += 10_000
+            val closed = coordinator.closePosition("BTCUSDT", direction, "1", "W2X_OLD", "MANUAL_EXIT")
+            assertTrue(closed.toString(), closed.optBoolean("ok"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val oldExit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
+            val originalFlatAt = oldExit.getLong("confirmed_flat_at_ms")
+            time += 10_000
+            exchange.mark = 100.0 // a fresh trigger must still be ahead of the market
+            // Stable protection IDs include the entry ID suffix; a separate
+            // campaign must have its own suffix as real H1 intents do.
+            val next = plan(direction, prefix = "W2E_NEXT_").let { it.copy(clientId = it.clientId + "_NEXT") }
+            val acceptedNext = coordinator.submitPendingEntry(next)
+            assertTrue(acceptedNext.toString(), acceptedNext.getBoolean("accepted"))
+            exchange.fill(pendingClientId = next.clientId, childOrderId = "43")
+            time += 1_000
+            val current = coordinator.reconcile()
+            assertTrue(current.toString(), current.getBoolean("ok"))
+            val exit = CockpitDiagnostics.rows(coordinator.intentsSnapshot()).single { it.optString("intent_role") == "EXIT" }
+            assertEquals("EXIT_CONFIRMED", exit.getString("exchange_status"))
+            assertEquals(originalFlatAt, exit.getLong("confirmed_flat_at_ms"))
+            assertTrue(exit.getBoolean("historical_flat_proof_preserved"))
+            assertEquals("OPEN_PROTECTED", coordinator.state.name)
+            assertTrue(CockpitDiagnostics.rows(coordinator.status().getJSONArray("pending_intent_details"))
+                .none { it.optString("role") == "EXIT" })
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+
+    @Test fun selectableTenXLeverageAllowsProtectedPositionWithVerifiedMarginForBothDirections() {
+        // 10x is a requested exchange parameter, NOT 10x risk: Binance
+        // bracket, structural stop and initial margin are checked by the
+        // production coordinator prior to every Futures order.
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val (coordinator, exchange)=open(direction,10)
+            assertEquals(10,exchange.leverage)
+            assertTrue(coordinator.isManagedOpenPosition("BTCUSDT",direction))
+            assertTrue(coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_10X_${direction.name}","MANUAL_EXIT").getBoolean("ok"))
+            assertEquals(0.0,exchange.quantity,0.0)
+        }
+    }
+
+    @Test fun unsafe125xInitialMarginAndInvalid126xAreRejectedBeforeBinanceOrder() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for (leverage in listOf(125,126)) {
+                val exchange=Exchange(direction)
+                val coordinator=NativeFuturesCampaignCoordinator(Journal()) {exchange.adapter()}
+                assertTrue(coordinator.reconcile().getBoolean("ok"))
+                val rejected=coordinator.submitPendingEntry(plan(direction,leverage))
+                assertFalse(rejected.toString(),rejected.optBoolean("accepted"))
+                assertTrue(rejected.toString(),rejected.has("blocker"))
+                assertEquals(0,exchange.posts("/fapi/v1/order"))
+                assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+            }
+        }
+    }
 
     @Test fun bookH1W2HStopsMustBePlacedAndConfirmedAfterBothLongAndShortFills() {
         // Production book H1 client IDs start with W2H_ (not W2E_).
@@ -706,17 +877,165 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun legacyProfitableNtdCycleCannotAuthorizeNewObserverRisk() {
-        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) {
+    private fun ntdBookPlan(base:NativeFuturesCampaignCoordinator.EntryPlan,now:Long):NativeFuturesCampaignCoordinator.EntryPlan {
+        val at=(now/WILLIAMS_H1_MS-1)*WILLIAMS_H1_MS
+        val type=if(base.direction.name=="SHORT" && !base.signalType.startsWith("SHORT_")) "SHORT_"+base.signalType else base.signalType
+        val id="NTD:${base.symbol}:${base.direction}:$type:$at"
+        val setup=JSONObject().put("ntd_initial",JSONObject().put("eligible",true).put("sleep_at_ms",at-10*WILLIAMS_H1_MS))
+        val sourceTrigger=if(base.kind==NativeFuturesCampaignCoordinator.EntryKind.MARKET) base.referenceClose else base.entryPrice.toDouble()
+        val p=base.copy(signalId=id,signalType=type,signalBarTimeMs=at,
+            entryPrice=if(base.kind==NativeFuturesCampaignCoordinator.EntryKind.MARKET)
+                williamsNtdCloseEntryBound(base.direction.name,base.referenceClose,.1)!!.toString() else base.entryPrice)
+        setup.put("book_h1_entry",williamsBookH1Proof(id,p.direction.name,p.signalType,p.strategyProfile,at,
+            sourceTrigger,p.protectiveStop.toDouble(),.1,p.entryClientId,p.protectiveStop.toDouble(),
+            p.executionSemantics,p.referenceClose,p.reentryOwnerId))
+        return p.copy(setupContext=setup.toString())
+    }
+    private fun requireNtdBookProof(c:NativeFuturesCampaignCoordinator) {
+        c.requireBookH1ProofForAutomatedEntries=true
+        c.bookH1EntryVerifier={ p ->
+            check(williamsBookH1ProofBlocker(p.setupContext,p.direction.name,p.signalId,p.signalType,
+                p.strategyProfile,p.entryPrice.toDouble(),p.protectiveStop.toDouble(),
+                p.signalBarTimeMs+WILLIAMS_H1_MS+1000,p.entryClientId,p.reentryOwnerId,p.executionSemantics,p.referenceClose)==null)
+        }
+    }
+
+    @Test fun finalSignedFuturesDoorRejectsNtdAndCourseNewOrdersForBothSides() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for(profile in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                val journal=Journal();val exchange=Exchange(direction)
+                val c=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                assertTrue(c.reconcile().getBoolean("ok"))
+                val plan=plan(direction).copy(
+                    strategyProfile=profile,
+                    signalType=if(profile==williamsNtdProfile) "FRACTAL" else "COURSE_THUMB")
+                val beforeAlgo=exchange.posts("/fapi/v1/algoOrder")
+                val beforeMarket=exchange.posts("/fapi/v1/order")
+                val result=c.submitPendingEntry(plan)
+                assertFalse(result.toString(),result.optBoolean("accepted"))
+                assertTrue(result.toString(),
+                    result.optString("blocker").contains("WILLIAMS_SOURCE_OBSERVATION_ONLY"))
+                assertEquals(beforeAlgo,exchange.posts("/fapi/v1/algoOrder"))
+                assertEquals(beforeMarket,exchange.posts("/fapi/v1/order"))
+                assertEquals("READY",c.state.name)
+            }
+        }
+    }
+
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
+    @Test fun ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(family in williamsNtdFamilies-setOf("ZONE_ADD_ON")) {
+            val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
             val journal=Journal();val exchange=Exchange(direction)
-            var now=System.currentTimeMillis()
+            val c=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            c.reconcile();requireNtdBookProof(c)
+            val first=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
+            val missing=c.submitPendingEntry(first.copy(setupContext="{}"))
+            assertFalse(missing.getBoolean("accepted"));assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+            assertTrue(c.submitPendingEntry(first).getBoolean("accepted"))
+            exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
+            val stopId=c.intentsSnapshot().getJSONObject(0).getString("protection_client_id")
+            val sign=if(direction.name=="LONG") 1 else -1
+            val add=ntdBookPlan(first.copy(quantity="0.1",riskPct=.001,entryPrice=(exchange.mark+sign).toString(),
+                clientId="W2A_NTD_${direction.name}_$family",entryClientId=first.clientId,signalType=family),now)
+            assertTrue(c.submitPendingEntry(add).getBoolean("accepted"))
+            exchange.fillAddition(add.clientId);assertTrue(c.reconcile().getBoolean("ok"))
+            val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertEquals(1.1,kotlin.math.abs(exchange.quantity),1e-9)
+            assertEquals(stopId,restarted.intentsSnapshot().getJSONObject(0).getString("protection_client_id"))
+            assertFalse(restarted.submitPendingEntry(add).getBoolean("accepted"))
+        }
+    }
+
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
+    @Test fun ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
+            val journal=Journal();val exchange=Exchange(direction)
+            val c=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            c.reconcile();requireNtdBookProof(c)
+            val initial=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
+            requireNtdBookProof(c)
+            val sign=if(direction.name=="LONG") 1 else -1
+            val add=ntdBookPlan(initial.copy(strategyProfile=williamsNtdProfile,signalType="AO_SAUCER",quantity="0.1",riskPct=.001,
+                entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_NTD_RACE_${direction.name}"),now)
+            exchange.afterSymbolConfig={ exchange.mark=exchange.entry }
+            val before=exchange.posts("/fapi/v1/algoOrder")
+            val blocked=c.submitPendingEntry(add)
+            assertFalse(blocked.toString(),blocked.getBoolean("accepted"))
+            assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+            exchange.afterSymbolConfig=null
+            val noVerifier=c.closePosition("BTCUSDT",direction,"1","W2X_NTD_NO_PROOF","TEETH_CLOSE_EXIT")
+            assertFalse(noVerifier.getBoolean("ok"));assertEquals(0,exchange.posts("/fapi/v1/order"))
+            c.bookNtdExitVerifier={ _,_ -> error("NTD_CLOSED_LINE_EXIT_NO_LONGER_VALID") }
+            assertFalse(c.closePosition("BTCUSDT",direction,"1","W2X_NTD_OLD_PROOF","TEETH_CLOSE_EXIT").getBoolean("ok"))
+            assertEquals(1,exchange.algos.values.count { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
+    @Test fun ntdCampaignCannotSpendTheUnusedPortfolioBudgetBeyondItsOwnCeiling() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
+            val journal=Journal();val exchange=Exchange(direction)
+            val c=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            c.reconcile();requireNtdBookProof(c)
+            val initial=ntdBookPlan(plan(direction,leverage=2).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now-WILLIAMS_H1_MS)
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill();assertTrue(c.reconcile().getBoolean("ok"))
+            val sign=if(direction.name=="LONG") 1 else -1
+            for(family in listOf("AO_SAUCER","AO_ZERO_LINE","AC_SIGNAL","AO_TWIN_PEAKS")) {
+                val add=ntdBookPlan(initial.copy(signalType=family,quantity="0.1",riskPct=.001,
+                    entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_${direction.name}_$family"),now)
+                val admitted=c.submitPendingEntry(add);assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+                exchange.fillAddition(add.clientId);assertTrue(c.reconcile().getBoolean("ok"))
+            }
+            val ledger=c.intentsSnapshot()
+            assertEquals(.006,futuresCampaignReservedRisk(ledger.getJSONObject(0),ledger),1e-9)
+            val last=ntdBookPlan(initial.copy(signalType="BALANCE_LINE",quantity="0.1",riskPct=.001,
+                entryPrice=(exchange.mark+sign).toString(),entryClientId=initial.clientId,clientId="W2A_CAP_LAST_${direction.name}"),now)
+            val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(last)
+            assertFalse(blocked.toString(),blocked.getBoolean("accepted"))
+            assertTrue(blocked.toString(),blocked.getString("blocker").startsWith("CAMPAIGN_RISK_LIMIT:"))
+            assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals("OPEN_PROTECTED",c.state.name)
+        }
+    }
+
+    @Test fun oldNtdSourceLabelAloneCannotAcquireAdditionAuthority() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val c=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            c.reconcile()
+            val initial=plan(direction).copy(signalBarTimeMs=System.currentTimeMillis()-7_200_000L)
+            assertTrue(c.submitPendingEntry(initial).getBoolean("accepted"));exchange.fill()
+            assertTrue(c.reconcile().getBoolean("ok"))
+            markLegacySource(journal,c,williamsNtdProfile,"FRACTAL")
+            val base=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="AO_SAUCER",quantity="0.1",riskPct=.001,
+                entryPrice=(exchange.mark+if(direction.name=="LONG") 1 else -1).toString(),
+                entryClientId=plan(direction).clientId,clientId="W2A_OLD_NTD_${direction.name}",signalBarTimeMs=(System.currentTimeMillis()/WILLIAMS_H1_MS-1)*WILLIAMS_H1_MS)
+            val before=exchange.posts("/fapi/v1/algoOrder");val blocked=c.submitPendingEntry(base)
+            assertFalse(blocked.getBoolean("accepted"))
+            assertTrue(blocked.getString("blocker").contains("CYCLE_NOT_PROVEN"))
+            assertEquals(before,exchange.posts("/fapi/v1/algoOrder"));assertEquals("OPEN_PROTECTED",c.state.name)
+        }
+    }
+
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
+    @Test fun profitableNtdCycleReentersOnlyOnceWithOwnedStopOrCloseEvent() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(market in listOf(false,true)) for(lost in listOf(false,true)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            var now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
             val coordinator=NativeFuturesCampaignCoordinator(journal,clock={ now }) { exchange.adapter() }
             coordinator.reconcile()
             val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",signalBarTimeMs=now-7_200_000L)
             assertTrue(coordinator.submitPendingEntry(initial.copy(strategyProfile=williamsTc2Profile)).getBoolean("accepted"))
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             markLegacySource(journal,coordinator,williamsNtdProfile,"FRACTAL")
-            assertTrue(coordinator.closePosition("BTCUSDT",direction,"1","W2X_NTD_PROFIT_${direction.name}_$market","TEST_PROFIT").getBoolean("ok"))
+            assertTrue(coordinator.closePosition("BTCUSDT",direction,"1","W2X_NTD_PROFIT_${direction.name}_$market","MANUAL_EXIT").getBoolean("ok"))
             assertTrue(coordinator.recordVerifiedCampaignResult(initial.clientId,1.0,false,2))
             var previous=coordinator.intentsSnapshot().getJSONObject(0)
             now+=7_200_000L
@@ -724,17 +1043,22 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(coordinator.recordVerifiedCampaignResult(initial.clientId,1.0,true,2))
             previous=coordinator.intentsSnapshot().getJSONObject(0)
             assertTrue(williamsNtdReentryEligible(previous,"BTCUSDT",direction.name,now-3_601_000L))
-            val reentry=initial.copy(clientId="W2E_NTD_RE_${direction.name}_$market",quantity="0.5",riskPct=.001,
+            val reentry=ntdBookPlan(initial.copy(clientId="W2E_NTD_RE_${direction.name}_$market",quantity="0.5",riskPct=.001,
                 signalType=if(market) "ZONE_ADD_ON" else "AO_SAUCER",signalBarTimeMs=now-3_601_000L,
                 reentryOwnerId=initial.clientId,kind=if(market) NativeFuturesCampaignCoordinator.EntryKind.MARKET else NativeFuturesCampaignCoordinator.EntryKind.STOP,
                 executionSemantics=if(market) "MARKET_ON_CLOSE" else "STOP_ENTRY",
                 referenceClose=if(market) exchange.mark else 0.0,
-                entryPrice=(exchange.mark+if(market) 0 else if(direction.name=="LONG") 1 else -1).toString())
+                entryPrice=(exchange.mark+if(market) 0 else if(direction.name=="LONG") 1 else -1).toString()),now)
+            requireNtdBookProof(coordinator)
+            exchange.loseAdditionReply=lost
             val admitted=coordinator.submitPendingEntry(reentry)
-            assertFalse(admitted.toString(),admitted.getBoolean("accepted"))
-            assertTrue(admitted.toString().contains("OBSERVATION_ONLY"))
-            assertEquals(0.0,exchange.quantity,0.0)
-            assertTrue(williamsNtdReentryEligible(coordinator.intentsSnapshot().getJSONObject(0),"BTCUSDT",direction.name,now))
+            assertTrue(admitted.toString(),admitted.getBoolean("accepted"))
+            assertFalse(williamsNtdReentryEligible(coordinator.intentsSnapshot().getJSONObject(0),"BTCUSDT",direction.name,now))
+            if(market) {
+                assertEquals(.5,kotlin.math.abs(exchange.quantity),1e-9)
+                assertEquals("PROTECTED",admitted.getString("protection"))
+            }
+            assertFalse(coordinator.submitPendingEntry(reentry).getBoolean("accepted"))
         }
     }
 
@@ -748,15 +1072,27 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(coordinator.submitPendingEntry(initial.copy(strategyProfile=williamsTc2Profile,signalType="FRACTAL")).getBoolean("accepted"))
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val closeId="W2X_COURSE_TRIM_${direction.name}_$lost"
+            coordinator.saveManagementState("BTCUSDT",initial.clientId,JSONObject().put("course_stage","W3_EXTENSION")
+                .put("course_unit_quantity","0.1").put("course_unit_basis","CONFIRMED_INITIAL_FILL").put("course_w3_to_w1_ratio",2.0)
+                .put("course_pending_client_id",closeId).put("course_pending_stage","W4")
+                .put("course_pending_quantity",williamsCourseStageQuantity("0.1","W3_EXTENSION","W4","1","0.001",w3ToW1Ratio=2.0)))
             val protection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
+            // This test isolates signed reduction/recovery. The production
+            // source gate has its own causal parent/terminal fixture tests.
+            coordinator.bookCourseTrimVerifier={ _,_ -> }
             exchange.loseCloseReply=lost
-            val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_COURSE_TRIM_${direction.name}_$lost",
+            val reduced=coordinator.closePosition("BTCUSDT",direction,"0.7",closeId,
                 "COURSE_STAGE_TRIM",partialReduction=true)
             if(!lost) assertTrue(reduced.toString(),reduced.getBoolean("ok"))
             coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             assertTrue(coordinator.reconcile().getBoolean("ok"))
             assertEquals(.3,kotlin.math.abs(exchange.quantity),1e-8)
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            val management=coordinator.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management")
+            assertEquals("W4",management.getString("course_stage"))
+            assertEquals("0.1",management.getString("course_unit_quantity"))
+            assertEquals(1,management.getJSONArray("course_stage_fills").length())
             val trigger=exchange.mark+if(direction.name=="LONG") 1 else -1
             val addition=initial.copy(quantity="0.4",entryPrice=trigger.toString(),riskPct=.001,
                 clientId="W2A_COURSE_${direction.name}_$lost",entryClientId=initial.clientId,
@@ -769,38 +1105,174 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun legacyNtdRemainsProtectedAcrossRestartAndRejectsObserverAdditions() {
-        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) for(fraction in listOf(.5,1.0)) {
+    @Test fun courseTrimRequiresASourceVerifierBeforeAnyMutationAndImmediatelyBeforePost() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) {
             val journal=Journal();val exchange=Exchange(direction)
             val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
-            assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
-            val initial=plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL",
-                signalBarTimeMs=System.currentTimeMillis()-3_601_000L)
-            assertTrue(coordinator.submitPendingEntry(initial.copy(strategyProfile=williamsTc2Profile)).getBoolean("accepted"))
+            coordinator.reconcile()
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
             exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
-            markLegacySource(journal,coordinator,williamsNtdProfile,"FRACTAL")
+            markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val before=exchange.posts("/fapi/v1/order")
+            val missing=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_CRS_MISSING_${direction.name}","COURSE_STAGE_TRIM",true)
+            assertFalse(missing.getBoolean("ok"))
+            assertTrue(missing.getString("blocker").contains("COURSE_FINAL_TRIM_VERIFIER_REQUIRED"))
+            assertEquals(before,exchange.posts("/fapi/v1/order"))
+            var checks=0
+            coordinator.bookCourseTrimVerifier={ _,_ -> checks++;check(checks==1) { "COURSE_SOURCE_CHANGED_BEFORE_POST" } }
+            val raced=coordinator.closePosition("BTCUSDT",direction,"0.7","W2X_CRS_RACE_${direction.name}","COURSE_STAGE_TRIM",true)
+            assertFalse(raced.getBoolean("ok"));assertEquals(2,checks)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertEquals(before,exchange.posts("/fapi/v1/order"))
+            assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
+            assertTrue(exchange.algos.values.any { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun courseInitialUnitRequiresTheExactSignedFillAndDoesNotRescaleAfterRestart() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(partial in listOf(false,true)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.reconcile()
+            val proposal=williamsCourseInitialQuantity("0.9","0.001")
+            val initial=plan(direction).copy(quantity="0.9")
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            val rows=coordinator.intentsSnapshot()
+            // Legacy filled intent fixture. Course new-risk execution remains
+            // disabled; source/degree admission is not claimed by this test.
+            rows.getJSONObject(0).put("strategy_profile",williamsCourseProfile).put("signal_type","COURSE_HUMP")
+                .put("setup_context",JSONObject().put("course_exact_quantity",proposal).put("course_initial_stage","W1")
+                    .put("course_origin_at",10L).toString())
+            journal.writeState("futures_campaign_intents_v2",rows.toString())
+            exchange.fill(if(partial) .5 else 1.0,childClientId="SIGNED_ACTUAL_CHILD")
+            if(partial) exchange.orders.getValue("42").put("status","CANCELED")
+            val reconciled=coordinator.reconcile()
+            assertTrue(reconciled.toString(),reconciled.getBoolean("ok"))
+            val owner=coordinator.intentsSnapshot().getJSONObject(0);val management=owner.getJSONObject("edition_management")
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            if(partial) {
+                assertFalse(management.has("course_unit_quantity"))
+                assertEquals("COURSE_STAGE_REQUIRES_FULL_TERMINAL_FILL",management.getString("course_quantity_blocker"))
+            } else {
+                assertEquals("0.3",management.getString("course_unit_quantity"))
+                assertEquals("W1",management.getString("course_stage"))
+                assertEquals(1,management.getJSONArray("course_stage_fills").length())
+            }
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            val restarted=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().toString(),restarted.reconcile().getBoolean("ok"))
+            val after=restarted.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management")
+            assertEquals(management.toString(),after.toString())
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(change in listOf("NORMAL","LOST_REPLY","PARTIAL","SOURCE_RACE","PROFIT_RACE")) {
+            val hour=3_600_000L
+            val base=System.currentTimeMillis()/hour*hour-153*hour
+            val source=courseExitCase(JSONObject().put("kind","W5"),direction.name,base,200.0)
+            val journal=Journal();val exchange=Exchange(direction)
+            var coordinator=NativeFuturesCampaignCoordinator(journal,clock={ source.now }) { exchange.adapter() }
+            coordinator.reconcile()
+            val initial=plan(direction).copy(signalBarTimeMs=source.now-7_200_000L)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
+            markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+            val rows=coordinator.intentsSnapshot();val owner=rows.getJSONObject(0)
+            val evidence=source.observe().put("owner_id",initial.clientId).put("symbol","BTCUSDT").put("side",direction.name)
+                .put("observed_at_ms",source.now)
+            assertEquals("OBSERVED_COURSE_SOURCE_RULE",evidence.getString("status"))
+            owner.put("position_open_observed_at_ms",source.opened).put("edition_management",JSONObject()
+                .put("course_origin_at",source.origin).put("course_stage","W5").put("course_unit_quantity",1.0/6)
+                .put("course_unit_basis","CONFIRMED_INITIAL_FILL").put("course_w3_to_w1_ratio",2.0).put("exit_evidence",evidence))
+            assertTrue(journal.writeState("futures_campaign_intents_v2",rows.toString()))
+            exchange.mark=source.contract
+            var checks=0
+            coordinator.bookCourseExitVerifier={ current,reason ->
+                checks++
+                check(williamsCourseExitProofBlocker(current.getJSONObject("edition_management").getJSONObject("exit_evidence"),
+                    current.getString("client_id"),"BTCUSDT",direction.name,reason,source.opened,source.now)==null)
+                val proof=if(change=="SOURCE_RACE" && checks>1) JSONObject().put("status","BLOCKED") else source.observe()
+                check(proof.optString("status")=="OBSERVED_COURSE_SOURCE_RULE" && proof.optString("reason")==reason) { "COURSE_SOURCE_CHANGED" }
+                if(change=="PROFIT_RACE" && checks>1) exchange.mark=100.0
+                check(williamsTc2OppositeExitProfitBlocker(direction.name,current.getString("actual_entry_price").toDouble(),exchange.mark)==null) { "COURSE_PROFIT_CHANGED" }
+            }
+            if(change=="LOST_REPLY") exchange.loseCloseReply=true
+            if(change=="PARTIAL") exchange.closeFraction=.5
+            val before=exchange.posts("/fapi/v1/order")
+            val result=coordinator.closePosition("BTCUSDT",direction,"1","W2X_CRSEND_${direction.name}_$change","COURSE_W5_TERMINAL_CONFIRMED")
+            if(change=="NORMAL") assertTrue(result.toString(),result.getBoolean("ok"))
+            else assertFalse(result.getBoolean("ok"))
+            coordinator=NativeFuturesCampaignCoordinator(journal,clock={ source.now }) { exchange.adapter() }
+            if(change in setOf("NORMAL","LOST_REPLY")) {
+                assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
+                val closed=coordinator.intentsSnapshot().getJSONObject(0)
+                val handoff=closed.getJSONObject("edition_management").getJSONObject("course_flat_handoff")
+                assertEquals(initial.clientId,handoff.getString("motive_campaign_id"));assertFalse(handoff.getBoolean("can_place_orders"))
+                assertEquals(0.0,kotlin.math.abs(exchange.quantity),1e-9)
+                assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            } else if(change=="PARTIAL") {
+                coordinator.reconcile()
+                assertTrue(kotlin.math.abs(exchange.quantity)>0)
+                assertFalse(coordinator.intentsSnapshot().getJSONObject(0).getJSONObject("edition_management").has("course_flat_handoff"))
+            } else {
+                assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
+                assertEquals(before,exchange.posts("/fapi/v1/order"))
+            }
+            if(change !in setOf("NORMAL","LOST_REPLY")) assertTrue(exchange.algos.values.any {
+                it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun courseTerminalDoorRejectsMissingVerifierAndArbitraryReasonsBeforeMutation() {
+        val journal=Journal();val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        coordinator.reconcile();assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+        exchange.fill();coordinator.reconcile();markLegacySource(journal,coordinator,williamsCourseProfile,"COURSE_HUMP")
+        val before=exchange.posts("/fapi/v1/order")
+        for(reason in listOf("TAKE_PROFIT","CORRECTION_PARENT_PRICE_INVALIDATED","COURSE_W5_TERMINAL_CONFIRMED")) {
+            val result=coordinator.closePosition("BTCUSDT",exchange.direction,"1","W2X_CRS_BAD_${reason.take(15)}",reason)
+            assertFalse(result.getBoolean("ok"));assertTrue(result.optBoolean("safe_rejection"))
+        }
+        assertEquals(before,exchange.posts("/fapi/v1/order"));assertEquals("OPEN_PROTECTED",coordinator.state.name)
+    }
+
+    @Ignore("NTD new exposure is disabled; historical transport fixture retained for independent future approval")
+    @Test fun ntdZoneAdditionRetainsProtectionAcrossPartialFillLostReplyAndRestart() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.values()) for(lost in listOf(false,true)) for(fraction in listOf(.5,1.0)) {
+            val journal=Journal();val exchange=Exchange(direction)
+            val now=System.currentTimeMillis()/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000
+            val coordinator=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().toString(),coordinator.status().optBoolean("ready_for_new_entry"))
+            val initial=ntdBookPlan(plan(direction).copy(strategyProfile=williamsNtdProfile,signalType="FRACTAL"),now)
+            requireNtdBookProof(coordinator)
+            assertTrue(coordinator.submitPendingEntry(initial).getBoolean("accepted"))
+            exchange.fill();assertTrue(coordinator.reconcile().getBoolean("ok"))
             val oldProtection=exchange.algos.values.single { it.optString("closePosition")=="true" }.getString("clientAlgoId")
             val leverageCalls=exchange.posts("/fapi/v1/leverage")
             exchange.loseAdditionReply=lost;exchange.additionFraction=fraction
-            val addition=initial.copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.5",
+            val addition=ntdBookPlan(initial.copy(kind=NativeFuturesCampaignCoordinator.EntryKind.MARKET,quantity="0.5",
                 entryPrice=exchange.mark.toString(),clientId="W2A_NTD_${direction.name}_${lost}_$fraction",riskPct=.001,
                 entryClientId=initial.clientId,signalType="ZONE_ADD_ON",executionSemantics="MARKET_ON_CLOSE",
-                referenceClose=exchange.mark,signalBarTimeMs=initial.signalBarTimeMs)
+                referenceClose=exchange.mark,signalBarTimeMs=initial.signalBarTimeMs),now)
+            requireNtdBookProof(coordinator)
             val submitted=coordinator.submitPendingEntry(addition)
-            assertFalse(submitted.toString(),submitted.getBoolean("accepted"))
+            assertTrue(submitted.toString(),submitted.getBoolean("accepted"))
+            assertEquals("PROTECTED",submitted.getString("protection"))
             // New coordinator represents process death after an unknown response.
             val recovered=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             val reconciled=recovered.reconcile()
             assertTrue(reconciled.toString(),reconciled.getBoolean("ok"))
             assertEquals(reconciled.toString(),"OPEN_PROTECTED",recovered.state.name)
-            assertEquals(1.0,kotlin.math.abs(exchange.quantity),1e-9)
+            assertEquals(1.0+.5*fraction,kotlin.math.abs(exchange.quantity),1e-9)
             assertEquals(leverageCalls,exchange.posts("/fapi/v1/leverage"))
             val protection=exchange.algos.values.filter { it.optString("algoStatus")=="NEW" && it.optString("closePosition")=="true" }
             assertEquals(1,protection.size);assertEquals(oldProtection,protection.single().getString("clientAlgoId"))
             assertFalse(recovered.submitPendingEntry(addition).getBoolean("accepted"))
-            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
             val closed=recovered.closePosition("BTCUSDT",direction,kotlin.math.abs(exchange.quantity).toString(),
-                "W2X_NTD_${direction.name}_${lost}_$fraction","TEST_EXIT")
+                "W2X_NTD_${direction.name}_${lost}_$fraction","MANUAL_EXIT")
             assertTrue(closed.toString(),closed.getBoolean("ok"))
             assertEquals(0.0,exchange.quantity,0.0)
         }
@@ -1123,6 +1595,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("execution_semantics","STOP_ENTRY")
                 .put("signal_bar_time_ms",signalAt).put("trigger",trigger).put("event",event)
             val decision=JSONObject().put("observed_at_ms",observed)
+                .put("trigger_price_basis","CONTRACT_PRICE")
                 .put("scope_started_at_ms",opened).put("direction",direction.name)
                 .put("opposition",detected).put("uncertain",JSONArray())
             assertTrue(journal.writeState("decision_h1_opposition_BTCUSDT",decision.toString()))
@@ -1145,6 +1618,12 @@ class NativeFuturesCoordinatorLifecycleTest {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
             exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
+            exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
+            val markOnly=coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_MARK_ONLY_"+direction.name,reason)
+            assertFalse(markOnly.toString(),markOnly.optBoolean("ok",false))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            exchange.contract=if(direction.name=="LONG") 108.0 else 92.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_BOOK_"+direction.name,reason)
             assertTrue(result.toString(),result.optBoolean("ok",false))
@@ -1159,6 +1638,124 @@ class NativeFuturesCoordinatorLifecycleTest {
                     it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
                 }
             })
+        }
+    }
+
+    private fun persistReversalSignal(coordinator:NativeFuturesCampaignCoordinator,journal:Journal,
+        direction:NativeFuturesCampaignCoordinator.Direction,now:Long) {
+        val owner=coordinator.intentsSnapshot().getJSONObject(0)
+        val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
+        val trigger=if(opposite=="LONG") 90.0 else 110.0
+        val signalId="REVERSAL_BOOK_"+opposite
+        val signalAt=now-2*3_600_000L
+        val decision=JSONObject().put("direction",direction.name)
+            .put("scope_started_at_ms",owner.getLong("position_open_observed_at_ms"))
+            .put("observed_at_ms",now-1000).put("trigger_price_basis","CONTRACT_PRICE")
+            .put("uncertain",JSONArray()).put("opposition",JSONObject().put("signal_id",signalId)
+                .put("direction",opposite).put("strategy_profile",williamsTc2Profile).put("execution_semantics","STOP_ENTRY")
+                .put("signal_bar_time_ms",signalAt).put("trigger",trigger)
+                .put("event",JSONObject().put("state","TRIGGERED").put("known_at_ms",now-2000)))
+        assertTrue(journal.writeState("decision_h1_opposition_BTCUSDT",decision.toString()))
+        val candidate=JSONObject().put("symbol","BTCUSDT").put("direction",opposite)
+            .put("strategy_profile",williamsTc2Profile).put("execution_semantics","STOP_ENTRY")
+            .put("signal_id",signalId).put("signal_type",if(opposite=="LONG") "REVERSAL" else "SHORT_REVERSAL")
+            .put("signal_bar_time_ms",signalAt).put("trigger",trigger).put("protective_stop",if(opposite=="LONG") 85.0 else 115.0)
+        coordinator.saveManagementState("BTCUSDT",owner.getString("client_id"),JSONObject().put("exit_evidence",JSONObject()
+            .put("reason","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED").put("signal_id",signalId).put("observed_at_ms",now-1000)
+            .put("opposition_check",decision).put("reverse_candidate",candidate)))
+    }
+
+    private fun reversalPlan(c:JSONObject)=NativeFuturesCampaignCoordinator.EntryPlan("BTCUSDT",
+        NativeFuturesCampaignCoordinator.Direction.valueOf(c.getString("direction")),
+        NativeFuturesCampaignCoordinator.EntryKind.MARKET,"0.1",
+        if(c.getString("direction")=="LONG") "90.1" else "109.9",c.getDouble("protective_stop").toString(),
+        c.getString("client_id"),.002,signalType=c.getString("signal_type"),signalId=c.getString("signal_id"),
+        signalBarTimeMs=c.getLong("signal_bar_time_ms"),reversalOwnerId=c.getString("owner_id"),
+        executionSemantics=WILLIAMS_TC2_REVERSAL)
+
+    @Test fun bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry() {
+        val h=3_600_000L
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) for(lostReply in listOf(false,true)) {
+            var now=System.currentTimeMillis()-4*h
+            val journal=Journal();val (coordinator,exchange)=open(direction,journal=journal,clock={now})
+            now+=4*h;persistReversalSignal(coordinator,journal,direction,now)
+            val ownerId=coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+            val oldStop=coordinator.intentsSnapshot().getJSONObject(0).getString("protection_client_id")
+            exchange.mark=if(direction.name=="LONG") 110.0 else 90.0
+            exchange.loseCloseReply=lostReply
+            val closed=coordinator.closePosition("BTCUSDT",direction,"1","REV_EXIT_${direction.name}_$lostReply",
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            assertEquals(!lostReply,closed.optBoolean("ok"))
+            val resumed=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            val recovered=resumed.reconcile()
+            assertTrue(recovered.toString(),recovered.optBoolean("ok"))
+            val c=williamsTc2ReversalCandidate(resumed.intentsSnapshot(),ownerId,now)!!
+            assertFalse(exchange.algos.values.any { it.optString("clientAlgoId")==oldStop && it.optString("algoStatus")=="NEW" })
+            val p=reversalPlan(c)
+            var verified=false
+            resumed.bookH1EntryVerifier={ checked -> assertEquals(p.signalId,checked.signalId);verified=true }
+            exchange.liquidation=if(p.direction.name=="LONG") "50" else "200"
+            exchange.loseAdditionReply=lostReply
+            val before=exchange.posts("/fapi/v1/order")
+            val reversed=resumed.submitPendingEntry(p)
+            assertTrue(verified)
+            assertTrue(reversed.toString(),reversed.optBoolean("accepted"))
+            assertEquals("PROTECTED",reversed.optString("protection"))
+            assertFalse(reversed.has("blocker"));assertFalse(reversed.has("error"))
+            assertEquals("OPEN_PROTECTED",resumed.state.name)
+            assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            assertEquals(if(p.direction.name=="LONG") .1 else -.1,exchange.quantity,1e-10)
+            now+=6*h // Expired entry proof never disables recovery of an existing fill/STOP.
+            val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            val protectedResult=restarted.reconcile()
+            assertTrue(protectedResult.toString(),protectedResult.optBoolean("ok"))
+            assertEquals("OPEN_PROTECTED",restarted.state.name)
+            assertNull(williamsTc2ReversalCandidate(restarted.intentsSnapshot(),ownerId,now))
+            assertFalse(restarted.submitPendingEntry(p).getBoolean("accepted"))
+            assertEquals(before+1,exchange.posts("/fapi/v1/order"))
+            val reverse=restarted.intentsSnapshot().let { a -> (0 until a.length()).map { a.getJSONObject(it) }
+                .single { it.optString("reversal_owner_id")==ownerId } }
+            assertEquals("OPEN_PROTECTED",campaignLifecycleStatus(reverse))
+            assertNotEquals(oldStop,reverse.getString("protection_client_id"))
+            assertTrue(exchange.algos.values.any { it.optString("clientAlgoId")==reverse.getString("protection_client_id") &&
+                it.optString("workingType")=="MARK_PRICE" && it.optString("closePosition")=="true" })
+        }
+    }
+
+    @Test fun partialOppositeExitCannotAuthorizeReverseRiskAfterRestart() {
+        val h=3_600_000L
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            var now=System.currentTimeMillis()-4*h
+            val journal=Journal();val (coordinator,exchange)=open(direction,journal=journal,clock={now})
+            now+=4*h;persistReversalSignal(coordinator,journal,direction,now)
+            val ownerId=coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+            exchange.mark=if(direction.name=="LONG") 110.0 else 90.0
+            exchange.closeStatus="PARTIALLY_FILLED";exchange.closeFraction=.5
+            val result=coordinator.closePosition("BTCUSDT",direction,"1","PARTIAL_REVERSE_"+direction.name,
+                "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            assertFalse(result.getBoolean("ok"));assertEquals(.5,kotlin.math.abs(exchange.quantity),1e-10)
+            assertNull(williamsTc2ReversalCandidate(coordinator.intentsSnapshot(),ownerId,now))
+            val restarted=NativeFuturesCampaignCoordinator(journal,clock={now}) { exchange.adapter() }
+            restarted.reconcile()
+            assertNull(williamsTc2ReversalCandidate(restarted.intentsSnapshot(),ownerId,now))
+            assertEquals(1,exchange.posts("/fapi/v1/order"))
+            assertTrue(exchange.algos.values.any { it.optString("closePosition")=="true" && it.optString("algoStatus")=="NEW" })
+        }
+    }
+
+    @Test fun newlySubmittedBookEntryCannotReconcileAgainstAnotherPriceBasis() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("CONTRACT_PRICE",owner.getString("entry_trigger_basis"))
+            exchange.algos.values.single().put("workingType","MARK_PRICE")
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",coordinator.state.name)
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
         }
     }
 
@@ -2423,6 +3020,72 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+
+    @Test fun diagnostics19RecoveredStopIsPublishedInTheSameSignedAudit() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val (coordinator,exchange)=open(direction,journal=journal)
+            // open() performs the first fill reconciliation and STOP POST.
+            // Its proof must already reflect that newly confirmed STOP.
+            val proof=coordinator.status().getJSONArray("exchange_protection_observations").getJSONObject(0)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("OWNED_STOP_SEEN",proof.getString("stop_proof"))
+            assertEquals(owner.getString("protection_client_id"),proof.getString("protection_client_id"))
+            assertEquals(owner.getString("protective_stop"),proof.getString("stop"))
+            assertTrue(proof.getBoolean("automatic_trailing_authorized"))
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun diagnostics19UnrelatedReversedCampaignCannotContaminateOwnedPositionRiskOrProof() {
+        val journal=Journal()
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG,journal=journal)
+        val rows=coordinator.intentsSnapshot()
+        val foreign=JSONObject(rows.getJSONObject(0).toString())
+            .put("symbol","ETHUSDT").put("client_id","W2E_ETH_OLD_LONG")
+        rows.put(foreign)
+        journal.writeState("futures_campaign_intents_v2",rows.toString())
+        exchange.positionSnapshotTransform={ positions -> positions.put(JSONObject()
+            .put("symbol","ETHUSDT").put("positionSide","BOTH").put("positionAmt","-1")
+            .put("entryPrice","99").put("markPrice","100").put("liquidationPrice","200")) }
+        val before=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        val owned=coordinator.intentsSnapshot().getJSONObject(0)
+        assertEquals("PASS",owned.getString("actual_risk_audit_status"))
+        assertFalse(owned.has("actual_risk_audit_blocker"))
+        val proofs=result.getJSONArray("exchange_protection_observations")
+        assertEquals(2,proofs.length())
+        assertEquals("OWNED_STOP_SEEN",proofs.getJSONObject(0).getString("stop_proof"))
+        assertEquals("REVERSED_CAMPAIGN_QUARANTINE",proofs.getJSONObject(1).getString("management_mode"))
+        assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        val scope=result.getJSONArray("verified_external_stop_management_symbols")
+        assertEquals(1,scope.length())
+        assertEquals("BTCUSDT",scope.getString(0))
+        val trail=coordinator.trailProtectiveStop("BTCUSDT",NativeFuturesCampaignCoordinator.Direction.LONG,
+            "96","W2T_ISOLATED_BTC","TC2_LAST_5_CLOSED_BARS")
+        assertTrue(trail.toString(),trail.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",coordinator.state.name)
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
+
+    @Test fun diagnostics19DuplicateSignedPositionRowsNeverOverwriteRealExposure() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform={ rows -> rows.put(JSONObject(rows.getJSONObject(0).toString())
+            .put("positionAmt","0")) }
+        val before=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.getBoolean("ok"))
+        assertTrue(result.toString(),result.getString("blocker").contains("duplicate",ignoreCase=true))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertEquals(before,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+    }
 
     @Test fun diagnostics18ReversedLivePositionNeverBelongsToOldCampaignAndDoesNotMutateOrders() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {

@@ -19,29 +19,37 @@ def test_market_feed_uses_independent_websocket_transport_and_freshness_contract
     assert 'publicSocketConnected' in runtime
 
 
-def test_signed_reconciliation_invalidates_only_read_only_ui_cache():
+def test_reconciliation_retains_last_known_ui_rows_without_authorizing_stale_positions():
     runtime = (K / "StandaloneRuntime.kt").read_text()
     section = runtime.split("private fun reconcileFuturesThroughDoor(", 1)[1].split(
         "private fun requireSuccessfulFuturesReconciliation(", 1
     )[0]
     assert "futuresCampaignCoordinator.reconcile()" in section
-    success = section.split('if (result.optBoolean("ok", false)) {', 1)[1]
-    assert 'lastReconciliationResult = "SUCCESS"' in success
-    for marker in (
-        "futuresPositionSnapshotEpoch++",
-        "cachedFuturesPositionEnvelope = null",
-        "futuresPositionSnapshotLastAttemptMs = 0L",
-    ):
-        assert marker in success
-    assert section.index("futuresCampaignCoordinator.reconcile()") < section.index(
-        "futuresPositionSnapshotEpoch++"
-    )
-    # Never infer an exchange STOP from the journal or this UI cache.
-    snapshot = runtime.split("private fun futuresPositionSnapshot(): JSONArray {", 1)[1].split(
+    assert 'lastReconciliationResult = "SUCCESS"' in section
+    # A 6-second reconciliation used to empty the UI cache every time,
+    # causing the Active page to alternate between real rows and loading.
+    # Neither successful nor blocked periodic reconciliation may erase the
+    # last-known signed rows. Freshness is enforced separately below.
+    assert "cachedFuturesPositionEnvelope = null" not in section
+    assert "futuresPositionSnapshotEpoch++" not in section
+    fast = runtime.split("private fun fastFuturesPositionsSnapshot()", 1)[1].split(
+        "private fun futuresPositionSnapshot(): JSONArray", 1
+    )[0]
+    assert "CockpitDiagnostics.fresh(cachedAt, nowMs, 15_000L)" in fast
+    assert "lastKnownFuturesPositionsForDisplay(" in fast
+    assert '"Showing a stale cached Futures position snapshot' in runtime
+    assert "futuresPositionSnapshotError == null" in runtime
+    assert '.put("positions_snapshot_ok", futuresPositionsSnapshotOk)' in runtime
+    # Unknown or stale positions MUST still block new trading; the read-only
+    # cached display cannot serve as position, ownership or STOP proof.
+    snapshot = runtime.split("private fun futuresPositionDisplaySnapshot(): FuturesPositionDisplayEnvelope {", 1)[1].split(
         "private fun sellFuturesPosition(", 1
     )[0]
-    assert 'optJSONArray("exchange_protection_observations")' in snapshot
+    assert "futuresCampaignCoordinator.protectionDisplaySnapshot()" in snapshot
+    assert "signedSnapshot.observations" in snapshot
     assert "signedProof.compareTo(signedLive)==0" in snapshot
+    assert "signedSnapshot.observedAtMs" in snapshot
+    assert "CockpitDiagnostics.POSITION_TTL_MS" in snapshot
     assert '"UNVERIFIED_OR_STALE"' in snapshot
 
 

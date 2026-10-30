@@ -59,4 +59,21 @@ class WilliamsWaveInterpretationTest {
         assertTrue(text.contains("продолжение импульса"))
         assertEquals("ALTERNATIVES",scope.getString("state"))
     }
+
+    @Test fun anchorDoesNotBecomeWaveProofUntilSecondRightBarClosed() {
+        val fixture=cases().first().getJSONObject("input")
+        val test=JSONObject(fixture.toString())
+        val child=test.getJSONArray("scenarios").getJSONObject(1)
+        val pivot=child.getJSONArray("anchors").getJSONObject(0)
+        pivot.put("known_at",pivot.getLong("extreme_at")+2*3_600_000L)
+        val report=williamsWaveInterpretation(test)
+        assertTrue(report.getJSONArray("rejected_scenario_ids").toString().contains(child.getString("scenario_id")))
+        val row=rows(report.getJSONArray("scopes")).single {
+            it.getString("parent_frame")=="4h" && it.getString("child_frame")=="1h"
+        }
+        assertEquals("UNRESOLVED",row.getString("state"))
+        assertEquals(0,row.getInt("relation_count"))
+        assertFalse(report.getBoolean("can_place_orders"))
+    }
+
 }

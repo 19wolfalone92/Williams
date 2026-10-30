@@ -244,6 +244,22 @@ def course_airbag_stop(side,higher_bars,tick):
     return None
 
 
+def course_initial_protection(side, formation_stop, airbag_stop, entry):
+    """Course PDF86-87: retain formation protection AND the higher Air Bag.
+
+    A tighter formation stop already gets flat before the Air Bag is crossed.
+    Widening it discards that formation's own invalidation. A crossed Air Bag
+    cannot authorize a new position in that direction.
+    """
+    if side not in {"LONG", "SHORT"} or not all(
+            isinstance(p, (int, float)) and isfinite(p) and p > 0
+            for p in (formation_stop, airbag_stop, entry)):
+        return None
+    if side == "LONG":
+        return max(formation_stop, airbag_stop) if max(formation_stop, airbag_stop) < entry else None
+    return min(formation_stop, airbag_stop) if min(formation_stop, airbag_stop) > entry else None
+
+
 def course_rhythm(bars):
     if len(bars)<34 or not valid_edition_bars(bars):return {"twr":"UNKNOWN","momentum":"UNKNOWN"}
     mids=[(b.h+b.l)/2 for b in bars]
@@ -303,6 +319,8 @@ def ntd_management_plan(side,bars,teeth,lips,ao,ac,tick,opened_at,state=None):
     if side not in {"LONG","SHORT"} or n<6 or not valid_edition_bars(bars) or tick<=0 or opened_at<=0:
         return {"state":state,"exit_reason":"","stop":None}
     if any(len(v)!=n for v in (teeth,lips,ao,ac)):
+        return {"state":state,"exit_reason":"","stop":None}
+    if bars[-1].t+3_600_000<=opened_at:
         return {"state":state,"exit_reason":"","stop":None}
     run=0
     for i in range(1,n):

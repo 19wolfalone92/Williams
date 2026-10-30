@@ -17,6 +17,8 @@ from wave_blind_reference_price_grammar import blind_reference
 from williams_wave_hierarchy import FRAME_MS,WaveBar,build_wave_hierarchy
 
 SYMBOLS=("BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT")
+ALL_15=SYMBOLS+("DOGEUSDT","ADAUSDT","LINKUSDT","AVAXUSDT","LTCUSDT",
+                "TRXUSDT","DOTUSDT","UNIUSDT","BCHUSDT","NEARUSDT")
 DATES=("2024-11-18T12:00:00+00:00","2024-11-20T12:00:00+00:00",
        "2024-11-22T12:00:00+00:00","2024-11-24T12:00:00+00:00",
        "2024-11-26T12:00:00+00:00","2024-11-28T12:00:00+00:00")
@@ -47,9 +49,25 @@ def model_label(rows,now):
         return ("COMPLEX_CORRECTION" if "TRIANGLE" in pat or "COMBINATION" in pat
             else "CORRECTION_ABC"),{"reason":"ONE_COMPLEX_PRICE_HYPOTHESIS",
                                     "pattern":pat,"num_hypotheses":len(report.scenarios)}
+    # Reporting only: many 160-H1 windows depict a DEVELOPING W2/W3/W4
+    # rather than a completed unique W5/ABC. Preserve the correct abstention
+    # from a completed-wave label, but expose causal partial alternatives
+    # so expert reviewers can see exactly what needs to be resolved. No
+    # candidate in this field can ever open/close/reverse an exchange order.
+    partial=[s for s in report.scenarios if s.frame=="1h" and
+        s.status=="PROVISIONAL" and s.anchors and
+        s.anchors[-1].known_at<=now]
+    phases=sorted({s.active_label for s in partial})
+    directions=sorted({s.active_direction for s in partial})
     return "UNRESOLVED",{"reason":"NO_UNIQUE_CAUSAL_WAVE_HYPOTHESIS",
         "num_hypotheses":len(report.scenarios),"candidate_w5":len(five),
-        "complex_correction_candidates":len(corrections)}
+        "complex_correction_candidates":len(corrections),
+        "developing_phase_candidates":phases,
+        "developing_direction_candidates":directions,
+        "partial_hypothesis_count":len(partial),
+        "multi_degree_ambiguity_unresolved":len(phases)>1 or len(directions)>1,
+        "book_wave_degree_certified":False,
+        "can_place_orders":False,"can_close":False,"can_reverse":False}
 
 def load_source(symbol):
     f=ROOT/f"app/src/test/resources/blind_wave_20241109_29_{symbol}.json"
@@ -60,10 +78,12 @@ def load_source(symbol):
     assert all(rows[i][0]-rows[i-1][0]==3_600_000 for i in range(1,len(rows)))
     return rows,digest(rows)
 
-def run(output,charts=False):
+def run(output,charts=False,symbols=SYMBOLS):
+    if tuple(symbols) not in (SYMBOLS,ALL_15):
+        raise ValueError("Unknown frozen blind-wave universe")
     output.mkdir(parents=True,exist_ok=True)
     cases=[]
-    for symbol in SYMBOLS:
+    for symbol in symbols:
         full,full_hash=load_source(symbol)
         for time in DATES:
             now=int(datetime.fromisoformat(time).timestamp()*1000)
@@ -81,7 +101,7 @@ def run(output,charts=False):
                 "reference_label":reference["label"],"reference_reason":reference["reason"],
                 "reference_pivots":reference.get("anchors",[]),
                 "_prefix":prefix})
-    assert len(cases)==30
+    assert len(cases)==len(symbols)*len(DATES)
     reference_export=[{k:v for k,v in c.items() if k!="_prefix"} for c in cases]
     (output/"blind_reference_frozen.json").write_text(json.dumps({
         "status":"EXPLORATORY_RULE_PROXY_NOT_EXPERT_ACCEPTANCE",
@@ -98,9 +118,9 @@ def run(output,charts=False):
             confusion[(c["reference_label"],prediction)]+=1
             matched+=prediction==c["reference_label"]
     comparable=len(cases)-abstain
-    metrics={"schema":"WILLIAMS_BLIND_H1_RULE_PROXY_30_V1",
+    metrics={"schema":f"WILLIAMS_BLIND_H1_RULE_PROXY_{len(cases)}_V1",
         "source":"REAL_BINANCE_H1_CLOSED_CANDLES_NOT_SYNTHETIC",
-        "snapshot_count":len(cases),"instruments":list(SYMBOLS),
+        "snapshot_count":len(cases),"instruments":list(symbols),
         "decision_times_utc":list(DATES),
         "reference_origin":"SECOND_IMPLEMENTATION_PRICE_GRAMMAR_NOT_HUMAN",
         "independent_expert_annotations":0,
@@ -163,8 +183,11 @@ if __name__=="__main__":
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output",type=Path,required=True)
     p.add_argument("--charts",action="store_true")
+    p.add_argument("--all-fifteen",action="store_true",
+        help="90 causal H1 windows across the full 15-asset frozen research universe")
     args=p.parse_args()
-    m=run(args.output,charts=args.charts)
+    m=run(args.output,charts=args.charts,
+        symbols=ALL_15 if args.all_fifteen else SYMBOLS)
     print(json.dumps({k:m[k] for k in ("snapshot_count","instruments","classified",
        "abstained","coverage","agreement_on_classified","label_counts",
        "prediction_counts","independent_expert_annotations",

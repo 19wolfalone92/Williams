@@ -216,12 +216,18 @@ def main() -> None:
     must(futures, 'market_on_close_reason(', "futures_williams_runtime.py")
     coordinator_editions=read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
     must(coordinator_editions,'Addition campaign/profile identity mismatch',"NativeFuturesCampaignCoordinator.kt")
-    must(coordinator_editions,'Market exposure is only a verified NTD zone addition',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'Market exposure requires an owned NTD close event or TC2 confirmed-flat reversal',"NativeFuturesCampaignCoordinator.kt")
+    must(coordinator_editions,'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)',"TC2 reversal final exchange door")
+    must(coordinator_editions,'"TC2_REVERSAL_OLD_ORDERS_NOT_CLEANED_UP"',"TC2 reversal cleanup fence")
+    reversal=read("app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt")
+    for proof in ('"EXIT_CONFIRMED"','"FILLED"','"executed_qty"','"position_before_qty"',
+                  '"reversal_owner_id"','"TC2_REVERSAL_TRIGGER_TOO_FAR_NO_CHASING"'):
+        must(reversal,proof,"TC2 confirmed-flat reversal contract")
     must(coordinator_editions,'exchange quantity cannot be attributed',"NativeFuturesCampaignCoordinator.kt")
     must(futures, "default_symbols = DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
     must(futures, "tuple(approved) != DEFAULT_FUTURES_SYMBOLS", "futures_williams_runtime.py")
-    must(futures, '("LONG", long_specs, long_htf)', "futures_williams_runtime.py")
-    must(futures, '("SHORT", short_specs, short_htf)', "futures_williams_runtime.py")
+    must(futures, '("LONG",long_specs,long_htf)', "futures_williams_runtime.py")
+    must(futures, '("SHORT",short_specs,short_htf)', "futures_williams_runtime.py")
     must(futures, '_env_bool("ALLOW_LONG", True)', "futures_williams_runtime.py")
     must(futures, '_env_bool("ALLOW_SHORT", True)', "futures_williams_runtime.py")
     must(futures, 'result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))', "futures_williams_runtime.py")
@@ -424,19 +430,107 @@ def main() -> None:
         must(indicator_test, needle, "WilliamsIndicatorParityTest.kt")
 
     hierarchy_source = read("app/src/main/java/com/williamsbot/WilliamsWaveHierarchy.kt")
+    must(hierarchy_source, 'williamsRequiredWaveFrames = listOf("1d", "4h", "1h", "15m")',
+         "Wave hierarchy must require all D1/H4/H1/M15 market degrees")
+    must(hierarchy_source, 'asOf - (closed.last().t + duration) < duration',
+         "Every wave passport must use latest genuinely closed bar")
+    must(runtime_source,'for (frame in (williamsRequiredWaveFrames + "6h").distinct())',
+         "Preserve 6h as independent context, not 4h parent")
+    must(runtime_source,'.put("wm1_ao_color_is_mandatory",true)',
+         "TC2 PDF125 expects old-trend AO; PDF131 makes this a qualified countertrend signal")
+    must(runtime_source,"if (wm1AoBlocker==null &&",
+         "WM1 must retain prior-trend AO and price/angulation source gates")
+    python_signals=read("williams_signals.py")
+    must(python_signals,'first_wise_man_ao_blocker(',
+         "TC2 PDF131 AO countertrend qualification must match Kotlin/Python")
+    wm1_tests=read("tests/test_williams_market_geometry.py")
+    must(wm1_tests,"test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao",
+         "Python TC2 WM1 source-qualified AO tests")
+    must(read("app/src/test/java/com/williamsbot/WilliamsWaveHierarchyTest.kt"),
+         "allFourRequiredFramesRejectMissingLatestClosedBarAndIgnoreUnclosedFuture",
+         "D1/H4/H1/M15 no-lookahead freshness tests")
+    must(read("app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt"),
+         "tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry",
+         "Kotlin TC2 WM1 PDF131 source qualification")
     for needle in ("TIME_AND_PRICE_CONTAINMENT", "COMPETING_SENIOR_IMPULSE_UNRESOLVED",
                    "CORRECTION_HISTORY_INCOMPLETE", "MOMENTUM_FADE_BEFORE_PIVOT"):
         must(hierarchy_source, needle, "WilliamsWaveHierarchy.kt")
-    for needle in ("planWilliamsCampaignStop(", "triggeredOpposingSignal(",
+    for needle in ("reviewWilliamsTc2StopTightening(", "triggeredOpposingSignal(",
                    "CORRECTION_PARENT_INVALIDATED", "williamsCorrectionPriceAllowed("):
         must(runtime_source, needle, "StandaloneRuntime.kt causal wave/management integration")
+    trail_review = read("app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt")
+    for needle in ("planWilliamsCampaignStop(", "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE",
+                   "H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP", "CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE",
+                   "wave_hypotheses_can_authorize_orders", "closedWilliamsWaveBars("):
+        must(trail_review,needle,"TC2 H1/H4 evidence for voluntary stop tightening")
+    # Real 25 Oct BTC/SOL/DOGE regressions: do not promote a fresh adverse
+    # last-H1 shock into a same-candle trailing STOP. Audit must remain durable.
+    for needle in (
+        "UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP",
+        "williamsH1CounterImpulseVeto(",
+        "val minDistance=max(2.0*tick,med*0.5)",
+        "h1_full_closed_source",
+        "h4_full_closed_source",
+        "full_source_is_exclusively_closed_at_asof",
+    ):
+        must(trail_review, needle, "TC2 causal H1 stop quality gate")
+    must_not(trail_review, "minOf(med*0.5, mark*0.0015)",
+             "Unsafe 0.15% cap on H1 noise guard")
+    for needle in (
+        "auditStore.recordStopTrailDecision(",
+        "\"PROPOSED_BEFORE_MUTATION\"",
+        "\"EXCHANGE_NOT_CONFIRMED\"",
+        "\"EXCHANGE_EXCEPTION_UNVERIFIED\"",
+        "\"submitted_stop_price\"",
+    ):
+        must(runtime_source, needle, "Durable TC2 stop preflight / signed outcome")
+    store = read("app/src/main/java/com/williamsbot/TradingAuditStore.kt")
+    for needle in (
+        "WILLIAMS_STOP_TRAIL_DECISION_V1",
+        "stopTrailDecisionAuditEvent(",
+        "stopTrailDeferredFingerprint(",
+        "recentStopTrailDecisionEvents(",
+        "stop.optString(\"clientAlgoId\")",
+    ):
+        must(store, needle, "Lossless signed stop audit contract")
+    archive = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
+    must(archive, "stop_trail_decisions_full.json", "Complete TC2 diagnostic export")
+    test_case = read("app/src/test/java/com/williamsbot/WilliamsStopTrailReviewTest.kt")
+    must(test_case, "observedBtcSolDogeAdverseH1ImpulseIsNotPromotedToFreshStructuralStop",
+         "Signed BTC/SOL/DOGE causal H1 regression")
+    must(test_case, "actualTc2VoluntaryReviewDefersAdverseImpulseButNotRecoveredClose",
+         "End-to-end TC2 review shock guard")
+    must(read("app/src/test/java/com/williamsbot/StopTrailDecisionAuditEventTest.kt"),
+         "signedStopIsMatchedAgainstActualSubmittedTickPriceNotFloatArtifacts",
+         "Tick-exact signed Binance stop audit test")
+    must(runtime_source, "TC2_STOP_REVIEW_DEFERRED",
+         "Retain existing Binance STOP when H1/H4 evidence is insufficient")
     must(runtime_source,'exchangeClosed=k.optBoolean("x",false)',"StandaloneRuntime.kt final WS close proof")
     must(runtime_source,"val closed = closedNativeStrategyCandles(live)","StandaloneRuntime.kt closed-only strategy cache")
     must(runtime_source, "val freshSignals = candidate.campaignSignals.filter", "StandaloneRuntime.kt directional hypotheses")
     must(runtime_source, "williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow)", "StandaloneRuntime.kt source-specific H1 validity")
     execution_policy = read("app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt")
-    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "TC2-only new risk policy")
+    must(execution_policy, "WILLIAMS_SOURCE_OBSERVATION_ONLY", "Source lifecycle admission policy")
     must(execution_policy, "H1_SNAPSHOT_STALE", "Structural validity still requires fresh H1 data")
+    must(execution_policy, 'williamsExecutionProfiles = listOf(williamsTc2Profile)', 'TC2-only new exposure authority')
+    must(execution_policy, 'williamsObserverProfiles = listOf(williamsNtdProfile,williamsCourseProfile)',
+         'NTD and Course observation only')
+    must(execution_policy, 'TC2_ONLY_NEW_EXPOSURE_V3', 'Source ownership policy version must revoke old NTD admission')
+    must(coordinator_editions, 'williamsNewExposureBlocker(plan.strategyProfile)==null',
+         'Exchange mutation door must reject NTD and Course entry plans')
+    policy_py = read("williams_execution_policy.py")
+    must(policy_py, 'EXECUTION_PROFILES = (TC2,)', 'Python new-risk policy must match Android')
+    must(policy_py, 'OBSERVER_PROFILES = (NTD, COURSE)', 'NTD and Course must only observe in Python')
+    must(policy_py, 'OWNED_LIFECYCLE_PROFILES = (TC2, NTD)',
+         'Legacy NTD campaign safety management is distinct from admission')
+    must(futures, 'if profile in OWNED_LIFECYCLE_PROFILES:',
+         'Legacy NTD add-on preflight still enforces profit requirement')
+    ntd_execution = read("app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt")
+    for needle in ("NTD_CLOSE_BOUND_CHANGED", "NTD_CLOSE_EXECUTABLE_QUOTE_OUTSIDE_BOUND", "NTD_FIRST_EXTERNAL_FRACTAL_REQUIRED"):
+        must(ntd_execution, needle, "NTD final execution evidence")
+    must(coordinator_editions, 'ntdCloseEntryDoor(plan,adapter)?.let { error(it) }', 'NTD final quote/bound guard')
+    must(futures, 'self._revalidate_ntd_signal(campaign,intent)', 'Python NTD final closed-H1 source guard')
+    must(runtime_source, 'sourceEvidence.filter { it.profile==signal.strategyProfile }', 'No cross-source opposition hybrid')
 
     must(runtime_source, "williamsBookInitialContextRank(", "StandaloneRuntime.kt TC2 H1 book-native initial-entry selection")
     must(runtime_source, "H1_CONTEXT_EVIDENCE_NOT_DURABLE", "StandaloneRuntime.kt source-context provenance")
@@ -500,6 +594,43 @@ def main() -> None:
     must(legacy_runtime, 'if (lossPct >= 0.03)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")
 
+    # UI single-source diagnosis and forced-order retirement are safety
+    # contracts, not merely cosmetic requests. Preserve these through merges.
+    ui = read("app/src/main/java/com/williamsbot/MainActivity.kt")
+    must_not(ui,"TestnetForceTradingCard(","No manual forced order entry UI")
+    must_not(ui,"submitForcedTestnetEntry(","No UI forced entry submission")
+    must_not(ui,"onRunDiagnostics: () -> Unit","No second diagnostics action in Settings")
+    must(ui,"CockpitDiagnosticScreen(","Exactly one full diagnostics workflow")
+    must_not(runtime_source,"fun forceTestnetEntry(","Retire callable forced order mutation")
+    must_not(runtime_source,"fun testnetForceMode(","Retire callable override arming")
+    must(runtime_source,"OPERATOR_FORCED_TRADING_REMOVED","Old clients fail closed")
+    must(runtime_source,'putBoolean("operator_entries_paused", true)',
+         "Migration of persisted forced mode must pause automatic entries")
+    must(runtime_source,"williamsDiagnosticTriage(tests,",
+         "Runtime diagnoses must expose causal prioritized triage")
+    diagnostic_ui = read("app/src/main/java/com/williamsbot/CockpitScreens.kt")
+    must(diagnostic_ui,'CockpitCard("Что требует внимания"', "Diagnostic prioritized UX")
+    must(diagnostic_ui,"execution_allowed", "Triage visible source")
+    diagnostic_zip = read("app/src/main/java/com/williamsbot/DiagnosticsArchive.kt")
+    must(diagnostic_zip,'START_HERE_RU.txt',"Human-readable diagnosis ZIP")
+    must(diagnostic_zip,'diagnostic_triage.json',"Forensic triage JSON")
+    must(diagnostic_zip,'diagnostic_comparison.json',"Cross-run comparison preserved")
+    must(diagnostic_zip,'archive_metadata.json',"ZIP freshness metadata")
+    must(diagnostic_zip,'AtomicMoveNotSupportedException',"Android-safe filesystem fallback")
+    must(ui,'DiagnosticsArchive.compareWithLatest(context,report)',
+         "Compare fresh diagnostic results against saved prior evidence")
+    must(ui,'DiagnosticsArchive.latestReportAtMs(context)==reportAt',
+         "Never export a previous snapshot after archive-write failure")
+    must(diagnostic_ui,'confirmRecovery=true',"Self-heal requires explicit operator confirmation")
+    must(diagnostic_ui,'snapshotFresh',"Stale diagnostic cannot show green execution readiness")
+    must(read("app/src/main/java/com/williamsbot/WilliamsDiagnosticComparison.kt"),
+         "no_longer_reported","Cross-run diagnostics cannot claim auto-repair")
+    must(read("app/src/test/java/com/williamsbot/WilliamsDiagnosticComparisonTest.kt"),
+         "unknownHistoryOrClockRollbackNeverPretendsToRepairChecks",
+         "Missing reports/clock rollback must never fabricate recovery")
+    must(read("app/src/test/java/com/williamsbot/WilliamsDiagnosticTriageTest.kt"),
+         "failsBeforeWarningsAndDoesNotCertifyBooksOrTrading","Triage negative controls")
+
     android = read("app/src/main/java/com/williamsbot/MainActivity.kt")
     for needle in (
         "BuildConfig.VERSION_NAME",
@@ -527,14 +658,19 @@ def main() -> None:
     for needle in (
         "StandaloneRuntime.start(applicationContext)",
         "StandaloneRuntime.autostart(applicationContext)",
-        "StandaloneRuntime.stopTrading()",
+        "if (StandaloneRuntime.stop()) stopSelf()",
+        "BackgroundRuntimePolicy.WAKE_TIMEOUT_MS",
+        "RuntimeContinuityEvidence.refreshProcessExits",
     ):
         must(service, needle, "TradingForegroundService.kt")
     must_not(service, "remote Futures backend", "TradingForegroundService.kt")
     must_not(service, "legacy native Spot runtime", "TradingForegroundService.kt")
+    must_not(service, "StandaloneRuntime.stopTrading()", "TradingForegroundService.kt")
 
     # Device reboot/update recovery must respect the user's persisted opt-in.
     manifest = read("app/src/main/AndroidManifest.xml")
+    for needle in ('android.permission.WAKE_LOCK', 'android:stopWithTask="false"'):
+        must(manifest, needle, "AndroidManifest.xml")
     for needle in (
         "android.permission.RECEIVE_BOOT_COMPLETED",
         'android:name=".TradingBootReceiver"',
@@ -601,7 +737,16 @@ def main() -> None:
     # as well as retaining the explicit manual dispatch option.
     testnet_workflow = read(".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "push:", ".github/workflows/testnet-readonly.yml")
-    must(testnet_workflow, "branches: [futures-williams-campaign]", ".github/workflows/testnet-readonly.yml")
+    # Retain the original permitted Futures campaign branch while allowing
+    # an isolated review branch to prove public Demo connectivity before merge.
+    # This gate verifies an actual branch token, not a brittle full YAML line.
+    demo_branch_line = re.search(r"(?m)^\s*branches:\s*\[([^]]+)\]", testnet_workflow)
+    assert demo_branch_line, "Demo read-only workflow must declare explicit push branches"
+    demo_branches = {part.strip().strip("'\\\"") for part in demo_branch_line.group(1).split(",")}
+    assert "futures-williams-campaign" in demo_branches, (
+        "Authenticated Demo read-only workflow lost its canonical campaign branch"
+    )
+    must(testnet_workflow, "tools/verify_public_futures_demo.py", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "workflow_dispatch:", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "WILLIAMS_TESTNET_API_KEY", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "WILLIAMS_TESTNET_API_SECRET", ".github/workflows/testnet-readonly.yml")
@@ -609,6 +754,10 @@ def main() -> None:
     must(testnet_workflow, "inputs.symbol || 'BTCUSDT'", ".github/workflows/testnet-readonly.yml")
     must(testnet_workflow, "python test_testnet_release_gate.py --read-only", ".github/workflows/testnet-readonly.yml")
     must_not(testnet_workflow, "python test_testnet_release_gate.py --trade", ".github/workflows/testnet-readonly.yml")
+    must(testnet_workflow, "Fail explicit signed Demo acceptance when credentials are missing",
+         "Authenticated manual Testnet gate must not pass with unsigned data")
+    must(testnet_workflow, "github.event_name == 'workflow_dispatch'",
+         "Manual Testnet acceptance requires a separate fail-closed credentials check")
 
     for path in (".github/workflows/python-ci.yml", ".github/workflows/campaign-ci.yml"):
         workflow = read(path)
@@ -631,6 +780,72 @@ def main() -> None:
     workflow = read(".github/workflows/python-ci.yml")
     must(workflow, "futures_williams_runtime.py", ".github/workflows/python-ci.yml")
     must(workflow, "python -m py_compile", ".github/workflows/python-ci.yml")
+
+    # Hard safety conditions are part of every debug/release Android build.
+    # APK compilation is necessary, NEVER a substitute for signed device E2E.
+    leverage_src = read("app/src/main/java/com/williamsbot/FuturesLeveragePolicy.kt")
+    coordinator_src = read("app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
+    settings_src = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
+    ntd_src = read("app/src/main/java/com/williamsbot/WilliamsEditionRules.kt")
+    must(leverage_src, "MAX_CONFIGURED_FUTURES_LEVERAGE = 125",
+         "Operator-selected Futures leverage must not be silently capped at 2x")
+    must(leverage_src, "futuresLeverageBlocker(",
+         "Exchange tiers and isolated stop margin must remain in force")
+    must(coordinator_src, "parseFuturesLeverage(plan.leverage)",
+         "Execution coordinator must reject invalid leverage")
+    must(coordinator_src, "futuresLeverageBlocker(",
+         "Execution coordinator must independently check signed Binance brackets")
+    must_not(coordinator_src, "WILLIAMS_NEW_ENTRY_LEVERAGE_EXCEEDS_2X",
+         "No unauthorized 2x strategy-only leverage cap")
+    must(settings_src, "new_entry_leverage_preflight",
+         "Android cockpit must explain exchange bracket and structural stop verification")
+    must(settings_src, "new_entry_leverage_cap_x",
+         "Android cockpit must display the actual configuration range")
+    for token in (
+        "HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
+        "NTD_H1_HISTORY_GAP",
+        "NTD_ZONE_HISTORY_WINDOW_UNVERIFIED",
+        "zone_book_last_checked_ohlcv",
+        "zone_book_stop_authorized_order",
+    ):
+        must(ntd_src, token, "NTD book-only STOP recovery evidence")
+    must(settings_src, "NTD_BOOK_EXIT_EVIDENCE_QUARANTINED",
+         "Historical book stop must NOT silently invent Binance fill")
+    book_tests = read("app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt")
+    must(book_tests, "ntdFiveZoneRollingHistoryRequiresDurableMatchingCheckpoint",
+         "NTD rolling historical checkpoint regression")
+    coord_tests = read("app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt")
+    must(coord_tests, "selectableTenXLeverageAllowsProtectedPositionWithVerifiedMarginForBothDirections",
+         "User-configured 10x must be available when Binance brackets and stop margin allow it")
+    must(coord_tests, "unsafe125xInitialMarginAndInvalid126xAreRejectedBeforeBinanceOrder",
+         "Even user-selected leverage must be rejected when exchange risk is unsafe")
+    must(read("docs/WILLIAMS_TESTNET_APK_RELEASE_HOLD_2026-10-28_RU.md"),
+         "RELEASE HOLD", "physical Demo acceptance hold must be documented")
+    publish = read(".github/workflows/publish-demo-apk.yml")
+    must(publish, "vars.WILLIAMS_DEMO_RELEASE_APPROVED == 'true'",
+         "Direct APK publication MUST remain disabled without explicit release approval")
+    must(publish, "github.event.workflow_run.conclusion == 'success'",
+         "Only a successful main build may be considered for publication")
+    must(publish, "github.event.workflow_run.head_branch == 'main'",
+         "Never publish a review APK")
+    evidence = read("williams_demo_evidence_gate.py")
+    must(evidence, "def validate_demo_both_directions(",
+         "Real Android/Futures Demo release must require BOTH LONG and SHORT cycles")
+    for requirement in (
+        "LONG_AND_SHORT_BOTH_REQUIRED",
+        "POSITION_CAMPAIGN_OWNERSHIP_UNPROVED",
+        "STOP_REPLACEMENT_UNPROVED",
+        "TRADE_JOURNAL_MISSING",
+        "STRUCTURAL_PASS_REQUIRES_INDEPENDENT_PHYSICAL_BINANCE_ATTESTATION",
+        '"release_approved": False',
+    ):
+        must(evidence, requirement, "Dual direction contract cannot claim signed exchange authenticity")
+    tests = read("tests/test_williams_demo_dual_side_evidence.py")
+    for test in ("test_two_artificial_timelines_only_pass_structure_and_not_a_real_release",
+                 "test_only_long_is_not_full_book_trading_acceptance",
+                 "test_recovery_cannot_replace_protection_silently",
+                 "test_position_from_another_campaign_cannot_be_adopted"):
+        must(tests, test, "Dual Demo safety negatives")
 
     print("WILLIAMS FUTURES RELEASE CONTRACT GATE: PASS")
 

@@ -46,6 +46,46 @@ def test_missing_crossing_and_nan_path_are_explicitly_unverified():
     assert not angulation_evidence("LONG",series,line,line,line)["valid"]
 
 
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_fig_9_5_parallel_after_departure_has_no_opening_angle(short):
+    # Conceptual hand labels from TC2 ch9; not chart-pixel digitizations.
+    series=bars([101,96,93,90,87])
+    jaw=[100,99,96,93,90]
+    if short:
+        series=mirror(series);jaw=[250-v for v in jaw]
+    p=angulation_evidence("SHORT" if short else "LONG",series,jaw,jaw,jaw)
+    assert not p["valid"] and p["reason"]=="PARALLEL_AFTER_MOUTH_EXIT"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_fig_9_11_mouth_touch_invalid_even_if_prior_path_diverges(short):
+    series=bars([101,98,94,89,84])
+    line=[100,99,98,97,96]
+    teeth=[100,99.2,98.4,97.6,96.8]
+    lips=[100,99.5,99,98.5,98]
+    last=series[-1]
+    series[-1]=WaveBar(last.t,96,97,95,96,10)
+    if short:
+        series=mirror(series);line,teeth,lips=([250-v for v in x] for x in (line,teeth,lips))
+    p=angulation_evidence("SHORT" if short else "LONG",series,line,teeth,lips)
+    assert not p["valid"] and p["reason"]=="SIGNAL_BAR_TOUCHES_MOUTH"
+
+
+@pytest.mark.parametrize("short",[False,True])
+def test_tc2_angle_requires_continuous_history_and_reusable_evidence(short):
+    series=bars([101,98,94,89,84])
+    j=[100,99,98,97,96];t=[100,99.2,98.4,97.6,96.8];l=[100,99.5,99,98.5,98]
+    if short:
+        series=mirror(series);j,t,l=([250-v for v in x] for x in (j,t,l))
+    side="SHORT" if short else "LONG"
+    proof=angulation_evidence(side,series,j,t,l,expected_step_ms=H)
+    assert proof["valid"] and proof["first_outside_index"]==1
+    assert proof["outside_gap_growth_pct"]>0
+    assert not angulation_evidence(side,series,j,t,l,expected_step_ms=H//4)["valid"]
+    missing=[WaveBar(b.t+(H if i>=2 else 0),b.o,b.h,b.l,b.c,b.v) for i,b in enumerate(series)]
+    assert angulation_evidence(side,missing,j,t,l,expected_step_ms=H)["reason"]=="CANDLE_PATH_GAP"
+
 @pytest.mark.parametrize("short",[False,True])
 def test_ordered_narrowing_is_satiation_and_does_not_license_new_ntd_cycle(short):
     series=bars([113,114,115,116,117])
@@ -150,9 +190,9 @@ def test_ntd_first_fractal_consumed_when_tick_trigger_not_pivot_clears_teeth(sho
 
 
 @pytest.mark.parametrize("short",[False,True])
-def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
-    # TC2 ch12 PDF pp.156-157. Third AO bar is index 5; older price bar
-    # index 2 has a more protective extreme than the third AO bar itself.
+def test_python_tc2_wm2_initial_signal_bar_stop_is_distinct_from_trailing(short):
+    # TC2 ch12 PDF156 (printed141) distinguishes first-SAO protection
+    # from subsequent 3–5-bar trailing. Third AO bar is index 5.
     highs=[110,112,120,115,117,118,119,119]
     lows=[100,99,90,102,101,103,70,65]
     if short:
@@ -164,7 +204,8 @@ def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
     wm2=_latest_super_ao(df,side="SHORT" if short else "LONG",max_age_bars=8)
     assert wm2 is not None and wm2[0]==5
     assert wm2[1]==(lows[5] if short else highs[5])
-    assert wm2[2]==(max(highs[1:6]) if short else min(lows[1:6]))
+    assert wm2[2]==(highs[5] if short else lows[5])
+    assert wm2[2]!=(max(highs[1:6]) if short else min(lows[1:6]))
     # A later bar's extreme, even one much worse, cannot move initial STOP.
     assert wm2[2] != (max(highs[6:]) if short else min(lows[6:]))
 
@@ -183,7 +224,7 @@ def test_python_tc2_wm2_stop_uses_five_closed_price_bars_like_android(short):
     ("LONG",None,1.0,"WM1_AO_UNVERIFIED"),
 ])
 def test_tc2_first_wise_man_ao_colour_must_oppose_prior_trend(side,now,previous,expected):
-    # TC2 ch9 Russian PDF pp.125, 131-132: momentum is still of old trend.
+    # TC2 PDF125 expects AO old-trend colour; PDF131 explicitly requires countertrend context.
     assert first_wise_man_ao_blocker(side,now,previous)==expected
 
 
@@ -205,6 +246,7 @@ def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatc
     ind.loc[2,"ao"]=float("nan")
     assert signals._latest_reversal(ind,side="LONG") is None
     assert signals._latest_reversal(ind,side="SHORT") is None
+    assert signals._latest_reversal(ind.drop(columns=["ao"]),side="LONG") is None
 
 
 

@@ -1,4 +1,35 @@
 from pathlib import Path
+import re
+from urllib.parse import urlsplit
+
+
+def _is_demo_futures_rest_base(url: str) -> bool:
+    """Compare parsed origin, never an unsafe URL substring."""
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "demo-fapi.binance.com"
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def test_demo_futures_rest_host_does_not_accept_spoofed_origins():
+    assert _is_demo_futures_rest_base("https://demo-fapi.binance.com")
+    for unsafe in (
+        "http://demo-fapi.binance.com",
+        "https://demo-fapi.binance.com.evil.example",
+        "https://demo-fapi.binance.com@evil.example",
+        "https://evil.example/https://demo-fapi.binance.com",
+        "https://demo-fapi.binance.com:4443",
+        "https://demo-fapi.binance.com/orders",
+        "https://demo-fapi.binance.com?redirect=evil.example",
+        "https://demo-fapi.binance.com#fragment",
+        "https://demo-fapi.binance.com\\evil.example",
+    ):
+        assert not _is_demo_futures_rest_base(unsafe), unsafe
+
 
 ROOT = Path(__file__).resolve().parent
 ANDROID = ROOT / "app" / "src" / "main"
@@ -16,7 +47,8 @@ def test_android_starts_native_futures_runtime_from_foreground_service():
     assert "TradingForegroundService.ACTION_START" in main
     assert "StandaloneRuntime.start(applicationContext)" in service
     assert "StandaloneRuntime.autostart(applicationContext)" in service
-    assert "StandaloneRuntime.stopTrading()" in service
+    assert "if (StandaloneRuntime.stop()) stopSelf()" in service
+    assert "StandaloneRuntime.stopTrading()" not in service  # One shutdown, not two signed cancellation passes.
     assert 'android:name=".TradingForegroundService"' in manifest
     assert "Фоновое сопровождение Binance Futures Demo на этом устройстве" in service
 
@@ -89,7 +121,20 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "marketWebSocketFresh() &&" in runtime
     assert 'add("market_websocket_disconnected_or_stale")' in runtime
     assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
-    assert "https://demo-fapi.binance.com" in runtime
+    # Validate the actual Kotlin REST base declaration, not a matching
+    # substring in a comment, a spoofed URL or an unrelated literal.
+    declared_base = re.search(
+        r'\bprivate\s+val\s+baseUrl\s*=\s*"([^"\r\n]+)"',
+        runtime,
+    )
+    assert declared_base is not None, "Futures REST baseUrl declaration missing"
+    assert _is_demo_futures_rest_base(declared_base.group(1))
+    inline_request = re.search(
+        r'\bval\s+requestUrl\s*=\s*"([^"\r\n]+)"\s*\+\s*futuresPath',
+        runtime,
+    )
+    assert inline_request is not None, "Signed Futures REST request URL missing"
+    assert _is_demo_futures_rest_base(inline_request.group(1))
 
 
 def test_android_corrupt_persisted_campaign_state_fails_closed():
@@ -175,28 +220,92 @@ def test_android_reversal_htf_gate_matches_python_campaign_contract():
     assert "return signal_type != SignalType.REVERSAL" in python
 
 
-def test_android_manual_direction_override_is_demo_only_and_keeps_execution_safety_gates():
+def test_android_manual_direction_override_is_removed_fail_closed_and_legacy_orders_recover():
+    """Product requirement: no forced trading UI or exchange admission on old API routes.
+
+    A historical OPERATOR_FORCED_DIRECTION intent still must be reconciled,
+    otherwise removing the feature could orphan a real Binance position/stop.
+    """
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
 
-    assert 'path == "/api/v1/control/testnet-force-mode"' in runtime
-    assert 'path == "/api/v1/control/testnet-force-entry"' in runtime
-    assert 'require(baseUrl == "https://demo-fapi.binance.com")' in runtime
-    assert "require(executionGate.tryReserve(FUTURES_EXECUTION_DOOR_KEY))" in runtime
-    assert 'prefs.getBoolean("force_testnet_mode", false) ||' in runtime
-    assert "executionGate.release(FUTURES_EXECUTION_DOOR_KEY)" in runtime
-    assert "Futures positions/orders/protection must be reconciled" in runtime
-    assert "checkFuturesDailyLoss()" in runtime
-    assert "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended" in runtime
-    assert "FUTURES_ENTRY_SPREAD_BLOCKED" in runtime
-    assert "H1_STRUCTURAL_TRIGGER_ALREADY_CROSSED" in runtime
-    assert 'NativeFuturesCampaignCoordinator.Direction.LONG' in runtime
-    assert 'NativeFuturesCampaignCoordinator.Direction.SHORT' in runtime
-    assert "private fun TestnetForceTradingCard(" in ui
-    assert 'mutableStateOf("SHORT")' in ui
-    assert 'put("direction", direction)' in ui
-    assert 'put("acknowledge", true)' in ui
-    assert "protectiveStop = fmtPrice(stop, rules.tick)" in runtime
+    assert '"/api/v1/control/testnet-force-mode"' in runtime
+    assert '"/api/v1/control/testnet-force-entry"' in runtime
+    assert 'OPERATOR_FORCED_TRADING_REMOVED' in runtime
+    assert 'put("accepted", false)' in runtime
+    assert 'put("enabled", false)' in runtime
+    assert 'fun testnetForceMode(' not in runtime
+    assert 'fun forceTestnetEntry(' not in runtime
+    assert 'private var forceTestnetMode = false' in runtime
+    assert 'putBoolean("force_testnet_mode", false)' in runtime
+    assert 'putBoolean("operator_entries_paused", true)' in runtime
+    assert 'putBoolean("auto_run", false)' in runtime
+    assert 'persistSafetyFlag("reconcile_required", true)' in runtime
+    assert 'OPERATOR_FORCED_DIRECTION' in runtime  # legacy position recovery only
+    assert 'TestnetForceTradingCard(' not in ui
+    assert 'submitForcedTestnetEntry(' not in ui
+    assert 'setTestnetForceMode(' not in ui
+    assert 'onRunDiagnostics: () -> Unit' not in ui  # duplicate Settings card
+    assert 'CockpitDiagnosticScreen(' in ui  # sole diagnostic workspace
+
+
+def test_h1_rollover_defers_entry_before_order_intent_and_leverage_change():
+    """Device 25 Oct 2026 15:00 UTC: recent Binance /klines still ended
+    with the prior hourly candle for a fraction of a second.
+
+    This must be a benign no-order deferral, NOT an orphaned
+    SUBMISSION_UNKNOWN campaign or a false claim of an accepted order.
+    """
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsBookH1EntryPolicyTest.kt")
+    start=runtime.index('val submitH1=fetchCandles(symbol,"1h",220)')
+    mutation=runtime.index("futuresCampaignCoordinator.submitPendingEntry(plan)",start)
+    segment=runtime[start:mutation]
+    assert "val rawH1Result=runCatching" in segment
+    assert "williamsBookH1ObservedBreakoutBlocker(" in segment
+    assert 'H1_CURRENT_BAR_NOT_PUBLISHED_YET_DEFER_ENTRY' in segment
+    assert '.put("safe_rejection",true)' in segment
+    assert '.put("mutation_attempted",false)' in segment
+    assert '.put("order_mutation_attempted",false)' in segment
+    assert "topOfHourUnpublishedH1MustDeferWithoutInventingTriggerHistory" in unit
+    # Do not remove the second independent check inside the coordinator
+    # immediately before an actual Binance Futures STOP order POST.
+    assert "coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }" in runtime
+
+
+def test_diagnostic_reports_nonatomic_state_change_and_missing_wave_frames_by_name():
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert 'DIAG-STATE-RACE' in runtime
+    assert 'coordinatorStateAtStart!=coordinatorStateAtEnd' in runtime
+    assert '.put("snapshot_non_atomic",concurrentCoordinatorTransition)' in runtime
+    assert 'missing/underfilled: $missingDescription' in runtime
+    assert '"15m").map { frame -> symbol to frame }' in runtime
+    # An out-of-sync mixed-time report MUST NOT reopen the execution door.
+    assert '!concurrentCoordinatorTransition && executionReady()' in runtime
+    assert 'williamsDiagnosticGateReasons(' in runtime
+    assert 'gateReadyAtReport &&' in runtime
+    assert '.put("execution_allowed",gateReadyAtReport &&' in runtime
+    assert '.put("new_entries_allowed", gateReadyAtReport &&' in runtime
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsDiagnosticTriageTest.kt")
+    assert 'liveAvaxUnverifiedSignedStopOutranksUiWarningsButNeverConfirmedFailure' in unit
+    assert 'nonAtomicDiagnosticGateAlwaysExplainsBlockedAdmission' in unit
+
+
+def test_wave_diagnostic_distinguishes_ready_working_set_from_complete_archive():
+    runtime=_read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    evidence=_read(ANDROID / "java/com/williamsbot/WilliamsDurableHistoryEvidence.kt")
+    unit=_read(ROOT / "app/src/test/java/com/williamsbot/WilliamsDurableHistoryEvidenceTest.kt")
+    assert '"WAVE-ARCHIVE-01"' in runtime
+    assert 'williamsDurableHistoryEvidence(' in runtime
+    assert '"durable_history_evidence"' in runtime
+    assert 'persistent_history_complete_pairs' in evidence
+    assert 'persistent_history_total_pairs' in evidence
+    assert 'processed_h1_closes' in evidence
+    assert 'full_history_complete' in evidence
+    assert 'worker_counter_can_lag' in evidence
+    assert 'book_wave_accuracy_certified' in evidence
+    assert 'completedSqliteRowsMustNotBeUndercountedByWorkerPassCounter' in unit
+    assert '"WAVE-04"' in runtime
 
 
 def test_android_signed_execution_boundary_rejects_legacy_spot_routes():
@@ -406,8 +515,9 @@ def test_android_book_native_h1_entry_does_not_require_m15_fractal():
     final_check = coordinator.split("finalContextCheckStarted = true", 1)[1].split(
         "orderSubmissionAttempted = true", 1
     )[0]
-    assert 'if(requireBookH1ProofForAutomatedEntries && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
-    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId)" in final_check
+    assert 'if((requireBookH1ProofForAutomatedEntries || isReversal) && plan.signalType!="OPERATOR_FORCED_DIRECTION")' in final_check
+    assert 'if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)' in final_check
+    assert "plan.protectiveStop.toDouble(),clock(),plan.entryClientId,plan.reentryOwnerId," in final_check
     assert "williamsBookH1ObservedBreakoutBlocker(" in runtime
     assert "val recent=futuresMarketData.klines(plan.symbol,\"1h\",2)" in runtime
     assert "val verifier=bookH1EntryVerifier ?: error" in coordinator
@@ -686,7 +796,8 @@ def test_android_super_ao_uses_the_third_rising_bar_and_not_the_oldest_of_three(
     assert "williamsTc2SuperAoInitialStop(" in wm2
     assert "streak == 3" not in wm2
     assert "val structuralStop = williamsTc2SuperAoInitialStop(" in wm2
-    assert '.put("initial_stop_window",5)' in wm2
+    assert '.put("initial_stop_window",1)' in wm2
+    assert 'TC2_SUPER_AO_SIGNAL_BAR' in wm2
     # SHORT context reflection was centralized to reject malformed proofs and
     # allow only the explicitly documented legacy-empty WM3 source context.
     assert "reflectedTc2SetupContext(signal.type, signal.setupContext, reflection)" in runtime
@@ -702,7 +813,7 @@ def test_android_williams_stop_entries_reject_any_intervening_trigger_cross():
     assert "fun triggerStillPending(signalIndex: Int, trigger: Double): Boolean" in long_signals
     assert "for (later in signalIndex + 1..current)" in long_signals
     assert "if (candles[later].h >= trigger) return false" in long_signals
-    assert long_signals.count("triggerStillPending(") == 3  # helper + WM1 + WM2; WM3 has a pure tested selector
+    assert long_signals.count("triggerStillPending(") == 4  # helper + WM1 + WM2 + explicit WM3 causal recheck
     assert "if (triggerStillPending(i, trigger))" in long_signals
     assert "triggerStillPending(signalIndex, trigger))" in long_signals
     assert 'selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)' in long_signals
@@ -769,14 +880,17 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in runtime
 
 
-def test_actions_testnet_gate_skips_when_ci_secrets_absent_without_claiming_test_passed():
+def test_actions_testnet_gate_distinguishes_push_warning_from_manual_signed_acceptance():
     workflow = _read(ROOT / ".github/workflows/testnet-readonly.yml")
     assert "id: check-ci-testnet-credentials" in workflow
     assert "configured=false" in workflow
     assert "Authenticated Futures Demo read-only gate skipped" in workflow
-    assert "No authenticated Futures Demo account check was performed" in workflow
+    assert "No signed Binance Demo verification occurred" in workflow
     assert "if: steps.check-ci-testnet-credentials.outputs.configured == 'true'" in workflow
-    assert "exit 1" not in workflow
+    assert "github.event_name != 'workflow_dispatch'" in workflow
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "Fail explicit signed Demo acceptance when credentials are missing" in workflow
+    assert "exit 1" in workflow
 
 
 
@@ -917,7 +1031,20 @@ def test_android_mtf_context_and_wave_diagnostics_support_bearish_structure():
     assert 'p?.activeLabel == "W5" && c?.activeLabel == "W3"' in enrich
 
 
-def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark():
+def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis():
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    context = runtime.split("private fun h1ContextCampaignSignals(", 1)[1].split(
+        "private fun courseTrimPlan(", 1)[0]
+    assert 'val contractPrice=futuresMarketData.price(symbol)' in context
+    assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
+    assert '},contractPrice,now)==null' in context
+    assert 'futuresMarketData.markPrice' not in context
+    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
+    assert 'futuresMarketData.price(symbol)' in reanchor
+    assert 'futuresMarketData.markPrice' not in reanchor
+
+
+def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     policy = _read(ANDROID / "java/com/williamsbot/WilliamsExecutionPolicy.kt")
     coordinator = _read(ANDROID / "java/com/williamsbot/NativeFuturesCampaignCoordinator.kt")
@@ -929,15 +1056,26 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_mark
     assert "oppositeProfitBlocker==null" in manage
     assert "williamsTc2OppositeExitProfitBlocker(" in policy
     assert "williamsTc2OppositeExitProfitBlocker(" in coordinator
-    assert 'profile!=williamsTc2Profile && (boundaryExit || editionExit.isNotEmpty())' in manage
+    assert '(profile!=williamsCourseProfile || courseProof!=null)' in manage
+    assert 'profile!=williamsTc2Profile && editionExit.isNotEmpty()' in manage
+    assert 'else if(profile==williamsCourseProfile && boundaryExit) "CORRECTION_PARENT_PRICE_INVALIDATED"' not in manage
     assert '"tc2_correction_boundary_advisory"' in manage
     assert 'market_close_authorized",false' in manage
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in policy
     assert 'williamsTc2OppositeExitEvidenceBlocker(' in coordinator
-    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),markNow' in coordinator
+    assert 'managedEntry.optLong("position_open_observed_at_ms"),clock(),contractNow' in coordinator
     assert 'adapterPreflight.markPrice(symbol)' in coordinator
+    assert 'adapterPreflight.contractPrice(symbol)' in coordinator
+    assert 'decision.optString("trigger_price_basis")!="CONTRACT_PRICE"' in policy
     assert "futuresCampaignCoordinator.saveManagementState(" in manage
-    assert "planWilliamsCampaignStop(" in manage
+    # TC2 voluntary stop mutation must now use the H1/H4 audited wrapper.
+    assert "reviewWilliamsTc2StopTightening(" in manage
+    stop_review = _read(ANDROID / "java/com/williamsbot/WilliamsStopTrailReview.kt")
+    assert "planWilliamsCampaignStop(" in stop_review
+    assert "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE" in stop_review
+    assert "H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP" in stop_review
+    assert "CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE" in stop_review
+    assert "existing_exchange_stop_retained_if_blocked" in stop_review
     assert 'ownerProfile in williamsSourceProfiles' in policy
     assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
     assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage

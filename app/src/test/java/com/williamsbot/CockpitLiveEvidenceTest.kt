@@ -10,6 +10,15 @@ import org.junit.Test
  * status=UNVERIFIED_OR_STALE. Never show a green STOP or false FLAT.
  */
 class CockpitLiveEvidenceTest {
+    @Test fun completedExitCannotMasqueradeAsFilledEntryOrProtectedCampaign() {
+        for (order in listOf("EXIT_TERMINAL_POSITION_OPEN", "FILLED", "PARTIALLY_FILLED")) {
+            val exit = intent().put("role", "EXIT").put("order_status", order)
+                .put("executed_qty", "0.22").put("confirmed_position_qty", "0.22")
+            assertFalse(cockpitEntryMayHaveFilled(exit))
+            assertFalse(cockpitSignedStopVerified(exit, status(), now))
+            assertTrue(cockpitEntryMayHaveFilled(JSONObject(exit.toString()).put("role", "ENTRY")))
+        }
+    }
     private val now=1_792_708_039_846L
     private fun intent()=JSONObject()
         .put("symbol","SOLUSDT").put("direction","SHORT")
@@ -30,6 +39,45 @@ class CockpitLiveEvidenceTest {
     )=Status(positions=positions,openPositions=reportedCount,
         snapshotAtMs=snapshotAt,positionsSnapshotAtMs=positionsAt,
         positionsSnapshotOk=snapshotOk)
+
+    @Test fun recoveredStopOnlyDashboardMatchesConfirmedSupervisionButNeverClaimsOwnership() {
+        val proven=JSONObject().put("stop_proof","EXTERNAL_PROTECTED")
+            .put("automatic_trailing_authorized",true)
+            .put("strategy_ownership_verified",false)
+            .put("management_mode","AUTO_VERIFIED_STOP_ONLY")
+        assertTrue(williamsObservedStopCanTrail(proven))
+        assertTrue(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("management_mode","OPERATOR_APPROVED_STOP_ONLY")))
+        // An arbitrary external Binance STOP cannot become a trailing permission.
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("automatic_trailing_authorized",false)))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("management_mode","OBSERVE_ONLY")))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("strategy_ownership_verified",true)))
+        assertFalse(williamsObservedStopCanTrail(JSONObject(proven.toString())
+            .put("stop_proof","STOP_UNCONFIRMED")))
+        assertFalse(williamsObservedStopCanTrail(null))
+    }
+
+    @Test fun diagnostics3PendingStopEntryIsNotYetPositionOrProtectiveStop() {
+        for ((symbol,entry,stop,qty) in listOf(
+            listOf("SOLUSDT","100.39","101.83","1.11"),
+            listOf("BTCUSDT","80123.0","80676.1","0.0024")
+        )) {
+            val pending=JSONObject().put("symbol",symbol).put("direction","SHORT")
+                .put("campaign_status","ENTRY_PENDING").put("order_status","NEW")
+                .put("quantity",qty).put("entry_price",entry)
+                .put("persisted_protective_stop",stop)
+                .put("protection_status","NOT_SUBMITTED").put("executed_qty","0")
+            assertFalse(cockpitEntryMayHaveFilled(pending))
+            assertFalse(cockpitSignedStopVerified(pending,status(
+                positions=emptyList(),reportedCount=0),now))
+            assertTrue(cockpitEntryMayHaveFilled(pending.put("executed_qty","0.0001")))
+            assertTrue(cockpitEntryMayHaveFilled(pending.put("order_status","PARTIALLY_FILLED")
+                .put("executed_qty","0")))
+        }
+    }
 
     @Test fun signedMissingStopNeverConfirmsTheOldPersistedJournal() {
         for(st in listOf(

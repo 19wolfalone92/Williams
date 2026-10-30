@@ -74,6 +74,75 @@ class WilliamsWaveHierarchyTest {
             assertFalse(williamsCorrectionEntryContext(report,"LONG",169*hour,"REVERSAL").allowed)
         }
     }
+    @Test fun h1WaveRhythmCannotBorrowASeniorH4AoScale() {
+        val hour=3_600_000L
+        val h1=(0 until 620).map { i ->
+            val v=100.0+20.0*kotlin.math.sin(i/15.0)
+            WilliamsWaveBar((i+1)*hour,v,v+1,v-1,v,1.0)
+        }
+        val h4=(0 until 155).map { i ->
+            val v=100.0+30.0*kotlin.math.sin(i/9.0)
+            WilliamsWaveBar(i*4*hour,v,v+1,v-1,v,1.0)
+        }
+        val scenario=WilliamsWaveScenario(
+            id="H1:CHILD",frame="1h",direction="UP",label="W3",
+            anchors=listOf(
+                WilliamsWaveAnchor("LOW",95.0,100,100*hour,103*hour),
+                WilliamsWaveAnchor("HIGH",110.0,180,180*hour,183*hour),
+                WilliamsWaveAnchor("LOW",100.0,260,260*hour,263*hour),
+                WilliamsWaveAnchor("HIGH",130.0,420,420*hour,423*hour)
+            ),observedAt=600*hour,legStart=420*hour,
+            legLow=95.0,legHigh=130.0,invalidation=100.0
+        )
+        val method=Class.forName("com.williamsbot.WilliamsWaveHierarchyKt")
+            .getDeclaredMethod("enrichWaveRhythm",WilliamsWaveScenario::class.java,Map::class.java)
+        method.isAccessible=true
+        method.invoke(null,scenario,mapOf("1h" to h1,"4h" to h4))
+        assertEquals("1h",scenario.scaleFrame)
+        assertTrue(scenario.scaleBars>140)
+        assertEquals("WRONG_SCALE",scenario.w4Zero)
+    }
+    @Test fun multipleRealH1PriceExtremeTimesCannotCertifyH4Wave4() {
+        // Same senior 4h high/low appears on several real H1 candles:
+        // assigning a unique price-to-AO lag is fundamentally ambiguous.
+        val h1=(0 until 200).map { i ->
+            WilliamsWaveBar(i*hour,100.0,101.0,99.0,100.0,1.0)
+        }
+        val h4=(0 until 50).map { i ->
+            WilliamsWaveBar(i*4*hour,100.0,101.0,99.0,100.0,1.0)
+        }
+        val anchors=listOf(
+            WilliamsWaveAnchor("LOW",99.0,10,40*hour,44*hour),
+            WilliamsWaveAnchor("HIGH",101.0,14,56*hour,60*hour),
+            WilliamsWaveAnchor("LOW",99.0,18,72*hour,76*hour),
+            WilliamsWaveAnchor("HIGH",101.0,22,88*hour,92*hour),
+            WilliamsWaveAnchor("LOW",99.0,26,104*hour,108*hour)
+        )
+        val scenario=WilliamsWaveScenario(
+            "4h:AMBIGUOUS","4h","UP","W4",anchors,160*hour,
+            104*hour,99.0,101.0,99.0)
+        val method=Class.forName("com.williamsbot.WilliamsWaveHierarchyKt")
+            .getDeclaredMethod("enrichWaveRhythm",WilliamsWaveScenario::class.java,Map::class.java)
+        method.isAccessible=true
+        method.invoke(null,scenario,mapOf("4h" to h4,"1h" to h1))
+        assertEquals("1h",scenario.scaleFrame)
+        assertEquals(120,scenario.scaleBars)
+        assertEquals("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS",scenario.w4Zero)
+        assertNotEquals("CONFIRMED",scenario.thirdMomentum?.optString("status"))
+    }
+
+    @Test fun exactlyOneUnobservedClosedH1CannotSupplyAWaveScenario() {
+        val bars=(0 until 160).map { i ->
+            val p=100.0+20*kotlin.math.sin(i/15.0)
+            WilliamsWaveBar(i*hour,p,p+1,p-1,p,100.0)
+        }
+        val onTime=buildWilliamsWaveHierarchy(mapOf("1h" to bars),160*hour)
+        val stale=buildWilliamsWaveHierarchy(mapOf("1h" to bars),161*hour)
+        assertFalse(onTime.frameErrors.containsKey("1h"))
+        assertEquals("STALE_CLOSED_HISTORY",stale.frameErrors["1h"])
+        assertTrue(stale.scenarios.isEmpty())
+    }
+
     @Test fun fourthWaveOverlapRemainsResearchOnlyDiagonalAlternative() {
         val candles=(0 until 180).map { i ->
             WilliamsWaveBar(i*hour,130.0,131.0,129.0,130.0,1000.0)
@@ -292,6 +361,39 @@ class WilliamsWaveHierarchyTest {
         assertEquals(105.1,plan!!.stop,1e-8)
         assertNull(planWilliamsCampaignStop("LONG",99.0,100.0,90.0,104.0,.1,1,long))
     }
+    @Test fun allFourRequiredFramesRejectMissingLatestClosedBarAndIgnoreUnclosedFuture() {
+        for (frame in williamsRequiredWaveFrames) {
+            val duration=williamsWaveFrames.getValue(frame)
+            val bars=(0 until 45).map { i ->
+                WilliamsWaveBar(i*duration,100.0,101.0,99.0,100.0,50.0)
+            }
+            assertEquals(frame,45,closedWilliamsWaveBars(bars,frame,45*duration).size)
+            val forming=bars+WilliamsWaveBar(45*duration,100.0,900.0,1.0,100.0,300.0)
+            assertEquals(frame,45,closedWilliamsWaveBars(forming,frame,
+                45*duration+duration/2).size)
+            val stale=runCatching {
+                closedWilliamsWaveBars(bars,frame,46*duration)
+            }.exceptionOrNull()
+            assertNotNull("$frame missing a completely closed candle must be stale",stale)
+            assertEquals("STALE_CLOSED_HISTORY",stale!!.message)
+        }
+    }
+
+    @Test fun defaultLiveWaveHierarchyCannotSilentlyOmitH4() {
+        // The formal four-degree chain is D1/H4/H1/M15; H6 remains
+        // separately analyzed without pretending its bars nest inside H4.
+        assertEquals(listOf("1d","4h","1h","15m"),williamsRequiredWaveFrames)
+        val fixture=fixtureCases().getJSONObject(0)
+        val report=buildWilliamsWaveHierarchy(
+            mapOf("1h" to fixtureBars(fixture)),fixture.getLong("as_of"))
+        assertTrue("H4 missing is never silently treated as a complete D1/H4/H1/M15 chain",
+            report.frameErrors.containsKey("4h"))
+        val json=report.toJson()
+        assertEquals(4,json.getJSONArray("chain").length())
+        assertFalse(json.getBoolean("contained_chain_observed"))
+        assertFalse(json.getBoolean("can_place_orders"))
+    }
+
     @Test fun observedFiveFrameChainCannotSkipRequestedH4Evidence() {
         val frames=listOf("1d","6h","1h","15m")
         val scenarios=frames.map { WilliamsWaveScenario(it,it,"UP","W1",emptyList(),100L,1L,90.0,110.0,80.0) }

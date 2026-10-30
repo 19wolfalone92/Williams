@@ -25,7 +25,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 API_TOKEN = os.getenv('MOBILE_API_TOKEN', '').strip()
-VERSION = '4.57.0'
+VERSION = '4.64.5'
 
 app = FastAPI(title='Williams Binance Bot API', version=VERSION)
 hub = WebSocketHub()
@@ -583,6 +583,15 @@ def _start_scanner_background(force=False):
         return True
 
 
+def _safe_runtime_error(stage: str, exc: Exception) -> str:
+    """Expose a diagnostic stage and exception type, never exception arguments.
+
+    Binance/HTTP/transport exceptions may contain API credentials, signed
+    URLs or account details. The status endpoint publishes state.last_error.
+    """
+    return f'{stage}: {type(exc).__name__}'
+
+
 def _runtime_supervisor():
     """Keep the autonomous backend alive without auto-restarting deliberate STOP/KILL."""
     while not supervisor_stop.wait(10):
@@ -598,12 +607,12 @@ def _runtime_supervisor():
                     latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
                     unresolved = bool(state.ensure_multi().unresolved_symbols())
                 except Exception as exc:
-                    state.last_error = f'supervisor probe: {type(exc).__name__}: {exc}'
+                    state.last_error = _safe_runtime_error('supervisor probe', exc)
                     continue
                 if not latched and not unresolved:
                     state.start()
         except Exception as exc:
-            state.last_error = f'supervisor: {type(exc).__name__}: {exc}'
+            state.last_error = _safe_runtime_error('supervisor', exc)
 
 
 def _heartbeat_loop():
@@ -1005,14 +1014,14 @@ def status():
             )
         except Exception as exc:
             state.last_error = (
-                f'position-status: {exc}'
+                _safe_runtime_error('position-status', exc)
             )
 
     balance = None
     try:
         balance = t.available_quote()
     except Exception as exc:
-        state.last_error = f'status-balance: {exc}'
+        state.last_error = _safe_runtime_error('status-balance', exc)
 
     total_pnl = sum(
         float(item['unrealized_pnl'] or 0.0)
@@ -1203,7 +1212,7 @@ def portfolio():
                 'oco_list_client_id': None,
             })
         except Exception as exc:
-            state.last_error = f'portfolio-position: {exc}'
+            state.last_error = _safe_runtime_error('portfolio-position', exc)
 
     unrealized_pnl_usdt = sum(
         float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions

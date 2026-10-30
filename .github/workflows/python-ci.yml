@@ -22,6 +22,10 @@ on:
       - ".github/workflows/**"
   workflow_dispatch:
 
+# Least-privilege GITHUB_TOKEN for checkout; artifact uploads use the runner token.
+permissions:
+  contents: read
+
 concurrency:
   # Each commit validates its exact source tree.
   group: backend-ci-${{ github.ref }}-${{ github.sha }}
@@ -63,6 +67,20 @@ jobs:
         run: |
           set -o pipefail
           python -m pytest -q 2>&1 | tee pytest-output.txt
+
+      - name: Reproduce fifteen sealed Binance H1 paper campaigns (NOT OOS or exchange fill)
+        run: |
+          mkdir -p build/frozen-h1-replay
+          python tools/replay_frozen_h1_five_symbol.py --outdir build/frozen-h1-replay
+
+      - name: Upload fifteen-symbol historical TC2 campaigns and stress results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-frozen-fifteen-h1-trades-and-stress
+          path: build/frozen-h1-replay/
+          if-no-files-found: warn
+          retention-days: 21
 
       - name: Replay genuine historical wave price geometry (NOT human-labelled accuracy)
         run: |
@@ -123,6 +141,30 @@ jobs:
         with:
           name: williams-blind-wave-30-real-h1-review
           path: build/blind-wave-review/
+          if-no-files-found: warn
+          retention-days: 21
+
+      - name: Blind 90 H1 wave snapshots on 15 frozen assets (NOT expert accuracy)
+        run: |
+          mkdir -p build/blind-wave-review-90
+          python tools/benchmark_blind_30_h1_wave_cases.py \
+            --output build/blind-wave-review-90 --all-fifteen --charts
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("build/blind-wave-review-90/model_vs_proxy_results.json").read_text())["metrics"]
+          assert m["snapshot_count"]==90 and len(m["instruments"])==15
+          assert m["independent_expert_annotations"]==0
+          assert m["accuracy_vs_human_expert"] is None
+          assert not m["can_place_orders"] and not m["can_close"]
+          PY
+
+      - name: Upload 15-asset 90-slice wave charts and proxy analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-blind-90-h1-15-asset-no-human-labels
+          path: build/blind-wave-review-90/
           if-no-files-found: warn
           retention-days: 21
 

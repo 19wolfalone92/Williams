@@ -52,6 +52,12 @@ def test_scan_uses_the_verified_h1_startup_cache_limit_and_does_not_force_180_ba
         'val ranked = mutableListOf<BaseAnalysis>()', 1
     )[0]
     assert 'val candles = fetchCandles(symbol, "1h", 150)' in scan_source
-    assert 'runCatching { primaryCandles = fetchCandles(primarySymbol, "1h", 150) }' in RUNTIME
+    # Optimized scanner may reuse the already verified closed 150-bar H1 series.
+    # On partial history, stale candles, or failed exchange-clock freshness,
+    # it must fall back to the original fresh read instead of accepting old data.
+    assert 'primary.size >= 150' in RUNTIME
+    assert 'candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs())' in RUNTIME
+    assert 'primary.takeLast(150) else fetchCandles(primarySymbol, "1h", 150)' in RUNTIME
+    assert 'primaryCandles = if (primary != null' in RUNTIME
     # Position management correctly retains an independent 180-bar requirement.
     assert 'val candles = fetchCandles(symbol, "1h", 180)' not in scan_source

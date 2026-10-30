@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-23",
-  "release": "4.57.0-source-wave-candidate",
+  "updated": "2026-10-25",
+  "release": "4.64.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -137,7 +137,9 @@
         "ntd_balance_line.py",
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [
         "tests/test_williams_book_rules_contract.py::test_ntd_diagnostic_and_edition_scanners_agree_on_local_base",
@@ -232,18 +234,21 @@
       "id": "TC2.WM1.AO_CONTEXT",
       "book": "TC2",
       "pdf_pages": [
-        122,
-        137
+        125,
+        131
       ],
-      "rule": "AO colour on divergent bar is recorded as context; do not invent a mandatory same-bar all-indicator gate.",
+      "rule": "TC2 PDF125 expects prior-trend AO colour on a reversal bar. PDF131 clarifies that absent this AO context the setup is not a genuine countertrend trade: require red for bullish, green for bearish WM1; no AO value-vs-zero substitute.",
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Review every text qualification before declaring normative completeness.",
+      "remaining_evidence": "Source pages PDF125 and PDF131 cross-checked: the former says AO colour is expected; the latter expressly disqualifies setups lacking the prior-trend momentum context. Python/Kotlin strict source gate restored. Full independent figure-labelled examples and ordinal WM1 accuracy remain unproved.",
       "can_place_orders_from_registry": false
     },
     {
@@ -270,18 +275,21 @@
       "id": "TC2.WM2.FIRST_STOP",
       "book": "TC2",
       "pdf_pages": [
-        156,
-        157
+        156
       ],
-      "rule": "If SuperAO appears first, choose book three/five-bar or trend-base initial protection, documented selection.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "rule": "If Super AO presents first, initial stop may use the reversal base or opposite end of its signal price bar. Select the signal-bar variant; 3–5 closed bars describe subsequent trailing.",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/WilliamsSetupRules.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_python_tc2_wm2_initial_signal_bar_stop_is_distinct_from_trailing",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::bearishSuperAoInitialStopIsTheMirroredSignalBarHigh"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Five-bar choice implemented; alternative discretionary stop choice is not uniquely determined by text.",
+      "remaining_evidence": "PDF156/printed141 inspected visually on 2026-10-23. Signal-bar option implemented causally in Python/Kotlin; reversal-base alternative and all historical figures are not certified.",
       "can_place_orders_from_registry": false
     },
     {
@@ -356,7 +364,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "strategy.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -381,15 +391,21 @@
         53,
         54
       ],
-      "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle.",
+      "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle. NTD PDF43: an untriggered valid fractal persists until trigger or a fresher valid fractal; no five-hour/eighty-bar lifetime.",
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_profiles.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_tc2_execution_observers.py::test_ntd_pdf43_old_fractal_lasts_until_trigger_or_new_valid_fractal",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Full independent NTD execution acceptance absent; remains OBSERVE.",
+      "remaining_evidence": "4.60 implements source-owned NTD execution, first-fractal/profitable-cycle authority and final fresh-H1 verification. Independent exhaustive book-figure fixtures, discretionary sleep interpretation and physical Demo acceptance remain unverified.",
       "can_place_orders_from_registry": false
     },
     {
@@ -405,11 +421,16 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized.",
+      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {
@@ -424,11 +445,16 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix.",
+      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {
@@ -449,11 +475,16 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures.",
+      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
       "can_place_orders_from_registry": false
     },
     {
@@ -478,7 +509,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -501,11 +534,20 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_signals.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_futures_order_lifecycle.py::test_ntd_owned_zone_adds_once_and_keeps_protection_after_lost_reply",
+        "tests/test_futures_order_lifecycle.py::test_ntd_profitable_authenticated_cycle_reenters_once",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdZoneAdditionRetainsProtectionAcrossPartialFillLostReplyAndRestart",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::profitableNtdCycleReentersOnlyOnceWithOwnedStopOrCloseEvent",
+        "tests/test_williams_ntd_execution.py::test_shared_closed_event_contract",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedClosedEventContractChecksActualExecutionQuotesAndDeadline"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Full independent profile lifecycle and source-chart replay pending.",
+      "remaining_evidence": "Source-owned native/Python execution, bounded quote checks and transport restart/idempotency cases are implemented. Exhaustive independent chart fixtures and physical Demo acceptance remain open. 90s/0.15% are project limits.",
       "can_place_orders_from_registry": false
     },
     {
@@ -523,7 +565,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_edition_rules.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -541,7 +585,9 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "ntd_balance_line.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
       "tests": [],
       "fixtures": [],
@@ -563,11 +609,17 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_edition_rules.py",
-        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
+        "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
+        "williams_ntd_execution.py",
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_ntd_execution.py::test_preentry_candle_cannot_close_a_fresh_campaign",
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::preentryBarCannotSelectAnExitOrTighterStopForANewPosition",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Chart-angle to percentage-slope choice is a declared heuristic, not an exact original rule.",
+      "remaining_evidence": "Preentry closes cannot authorize an exit. Fresh source-specific exit verification occurs before mutation. Numerical price-vs-Lips speed selection is an explicit interpretation; exhaustive chart/source validation and physical Demo acceptance remain open.",
       "can_place_orders_from_registry": false
     },
     {
@@ -627,9 +679,12 @@
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_edition_rules.py::test_course_airbag_cannot_discard_the_formation_stop_or_admit_a_crossed_boundary",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::courseAirbagPreservesFormationProtectionAndRejectsAlreadyCrossedBoundaries"
+      ],
       "fixtures": [],
-      "remaining_evidence": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review.",
+      "remaining_evidence": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review. Course PDF86-87 visually reread: both formation stop and higher-frame Air Bag are retained. Python initial protection no longer widens the formation boundary; a non-protective combined boundary blocks the entry.",
       "can_place_orders_from_registry": false
     },
     {
@@ -671,12 +726,42 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_course_campaign.py",
-        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt"
+        "app/src/main/java/com/williamsbot/WilliamsCourseCampaign.kt",
+        "williams_course_location.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseLocation.kt"
       ],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Only selected stage/quantity constraints implemented; all price-location predicates not complete.",
-      "can_place_orders_from_registry": false
+      "tests": [
+        "tests/test_williams_course_location.py::test_shared_price_locations_use_the_correct_leg_origin_and_closed_pivots",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::sharedPriceLocationsUseTheCorrectLegOriginAndClosedPivots"
+      ],
+      "fixtures": [
+        "cases/initial_half",
+        "cases/initial_62",
+        "cases/initial_shallow",
+        "cases/initial_deep",
+        "cases/third_half",
+        "cases/third_62",
+        "cases/third_shallow",
+        "cases/third_bad_confirmed_pivot",
+        "cases/extension_exact_110",
+        "cases/extension_below_110",
+        "cases/extension_wrong_origin_would_pass",
+        "cases/fifth_38",
+        "cases/fifth_half",
+        "cases/fifth_shallow",
+        "cases/fifth_deep",
+        "cases/fifth_bad_pivot",
+        "cases/future_pivot",
+        "cases/unordered_pivots",
+        "cases/wrong_side",
+        "cases/wrong_degree",
+        "cases/bare_w2_label",
+        "cases/bare_w4_label",
+        "cases/bare_w5_exit"
+      ],
+      "remaining_evidence": "4.61: mirrored 50-62/38-50 retracement and 110-percent extension predicates use causal source pivots and distinguish active labels from illustrative contract stages. Required terminal/turn qualifiers are reported explicitly. Complete independent degree proof, every entry/exit location, correction integration and Course new-risk execution remain unfinished.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_course_location_contract.json"
     },
     {
       "id": "WAVE.AO.MINIMUM_W4",
@@ -787,12 +872,28 @@
         84
       ],
       "rule": "Full example also trades corrective a,b,c after motive sequence.",
-      "status": "PENDING",
-      "modules": [],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Current stage planner ends at EXIT; complete corrective campaign is not implemented.",
-      "can_place_orders_from_registry": false
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "williams_course_correction.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseCorrection.kt",
+        "williams_market_phase.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_correction.py::test_source_correction_zones_require_causal_evidence_and_distinct_flat_owner",
+        "tests/test_williams_course_correction.py::test_corrective_lifecycle_requires_exact_fills_and_rejects_foreign_or_partial_replays",
+        "app/src/test/java/com/williamsbot/WilliamsCourseCorrectionTest.kt::sharedSourceZonesRequireCausalEvidenceAndDistinctFlatOwner",
+        "app/src/test/java/com/williamsbot/WilliamsCourseCorrectionTest.kt::correctiveLifecycleRequiresExactFillsRejectsForeignOwnersAndIsIdempotent"
+      ],
+      "fixtures": [
+        "cases/a-entry-lower",
+        "cases/b-upper",
+        "cases/motive-not-flat",
+        "cases/future-evidence"
+      ],
+      "remaining_evidence": "Read-only mirrored corrective planner now separates flat motive ownership and 3->1->4->0 abstract units, 50-62% first A retracement, 38-50% B retracement, causal wave proof and exact fill transitions. PDF84 leaving 1 long contradicts the short-sale arithmetic and diagram; discrepancy is explicit. Dynamic first-leg/terminal target identification, stop-and-reverse execution, independent historical source labels and full Demo lifecycle remain unaccepted. 4.62 adds independently gated C terminal/failure observations and signed-flat motive handoff; corrective new-risk entry/stage execution remains incomplete.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_course_correction_contract.json"
     },
     {
       "id": "WAVE.FULL_NESTED_GENEALOGY",
@@ -820,21 +921,34 @@
         155,
         165
       ],
-      "rule": "TC2 includes stop-and-reverse exits: opposing confirmed Wise-Man breakout may flatten current ownership; automatic reverse entry is a distinct, not yet accepted financial action.",
-      "status": "PENDING",
+      "rule": "TC2 opposite confirmed Wise-Man breakout closes the owned campaign; a distinct opposite campaign follows only after a signed full exit, flat position and old STOP cleanup, with fresh H1 evidence, new risk and a new protective STOP.",
+      "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_execution_policy.py",
         "app/src/main/java/com/williamsbot/WilliamsExecutionPolicy.kt",
         "futures_williams_runtime.py",
-        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt",
+        "williams_tc2_reversal.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
       "tests": [
-        "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_mark_before_exit_intent",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill"
+        "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill",
+        "tests/test_williams_tc2_reversal.py::test_shared_two_leg_contract_rejects_unconfirmed_flat_replay_and_price_chasing",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ReversalTest.kt::sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart"
       ],
-      "fixtures": [],
-      "remaining_evidence": "Prior SL-only override was explicitly rescinded on 2026-10-22. Risk-reducing opposite H1 Wise-Man exit implemented with mark/owner guards; the book's subsequent reverse entry and deterministic two-leg Binance Demo lifecycle (partial fill, crash, idempotence) are not yet implemented or accepted.",
-      "can_place_orders_from_registry": false
+      "fixtures": [
+        "cases/valid",
+        "cases/partial-exit",
+        "cases/already-admitted",
+        "cases/trigger-recovered"
+      ],
+      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json"
     },
     {
       "id": "ENGINEERING.RISK_AND_LOT_LIMITS",
@@ -1083,10 +1197,12 @@
       "pdf_pages": [
         53,
         54,
+        58,
+        59,
         82,
         83
       ],
-      "rule": "Five signs: MFI divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, 5/34/5 momentum change. Provisional W5 and 100-140 bars are context; Binance base-volume and AO indicators cannot be asserted to be canonical TC1 MFI. Never an automatic exit.",
+      "rule": "Five signs include divergence, wave-degree target zone, terminal fractal, squat among three price-extreme bars, and 5/34/5 momentum change. TC1 PDF58 describes wave-average volume-based MFI; PDF59 explicitly describes 5/34 as a close approximation, also used in PDF82-83. Report the book-described 5/34 alternative separately, with causal 100–140-bar scale, without certifying canonical MFI, wave degree or an automatic exit.",
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_tc1_terminal_evidence.py",
@@ -1096,17 +1212,176 @@
       ],
       "tests": [
         "tests/test_williams_tc1_terminal_evidence.py::test_course_ao_divergence_does_not_certify_tc1_mfi",
-        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale"
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::pointZeroNeverCertifiedFromFiveProxyBooleansWithoutMfiAndScale",
+        "tests/test_williams_tc1_terminal_evidence.py::test_tc1_itself_describes_a_5_34_alternative_without_certifying_volume_mfi",
+        "app/src/test/java/com/williamsbot/WilliamsTc1FiveBulletsTest.kt::tc1BookDescribed534ApproximationRequiresCausalWaveScaleAndStaysReadOnly"
       ],
       "fixtures": [],
-      "remaining_evidence": "Book PDF53-54/82-83 inspected visually; no externally proven canonical MFI divergences on independently labelled W3/W5 historical graphs. Python/Kotlin use current source-scoped proxies for observation only.",
+      "remaining_evidence": "TC1 PDF53-54/58-59/82-83 terminology reconciled: volume MFI and the author-described 5/34 approximation stay distinguishable. Full independent degree labels, target zones and Squat tick-volume acceptance remain pending.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "book": "COURSE",
+      "pdf_pages": [
+        77,
+        78,
+        79,
+        80,
+        81
+      ],
+      "rule": "A Course wave label alone cannot trim an owned position. Require its actual initial unit, pinned origin, a unique contained terminal five-leg count after entry, causal pivots and source proxy signs; W3 also requires a stronger observed 5/34 peak. Revalidate exact remaining quantity before POST.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_location.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseLocation.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_location.py::test_matched_terminal_reductions_need_the_owned_origin_and_a_real_finer_degree",
+        "tests/test_williams_course_location.py::test_wave_labels_cannot_bypass_price_degree_time_and_momentum_guards",
+        "tests/test_futures_order_lifecycle.py::test_course_real_source_verifier_rechecks_the_exact_trim_at_the_financial_door",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::matchedTerminalReductionsNeedTheOwnedOriginAndARealFinerDegree",
+        "app/src/test/java/com/williamsbot/WilliamsCourseLocationTest.kt::waveLabelsCannotBypassDegreeTimeAndMomentumGuards",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTrimRequiresASourceVerifierBeforeAnyMutationAndImmediatelyBeforePost"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "The 5-hour terminal age window, positive after-cost-reserve trim requirement and kline base-volume proxy are explicit project policies/adaptations. Terminal counts remain provisional; synthetic source cases and 35 frozen historical H1-prefix regressions are not independent Elliott accuracy or physical Futures Demo acceptance. Course new-risk execution remains disabled.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "book": "COURSE",
+      "pdf_pages": [
+        77,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "rule": "Course automatic full exits require an owned source rule: matched W5/C terminal subdivisions or explicit W3/W5/corrective price invalidation. A generic correction-range break or arbitrary reason is not authority. Every rule is rederived before mutations and POST, using CONTRACT price and causal source evidence.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_exit.py",
+        "futures_williams_runtime.py",
+        "williams_execution_policy.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseExit.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_exit.py::test_shared_source_terminal_and_failed_count_cases_require_causal_pinned_evidence",
+        "tests/test_williams_course_exit.py::test_course_policy_rejects_unqualified_exit_reasons",
+        "tests/test_futures_order_lifecycle.py::test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseExitTest.kt::sharedTerminalAndFailedCountCasesRequireCausalPinnedEvidence",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff"
+      ],
+      "fixture_file": "app/src/test/resources/williams_course_exit_contract.json",
+      "fixtures": [
+        "cases/w5_complete",
+        "cases/c_complete",
+        "cases/w3_stall",
+        "cases/w5_stall",
+        "cases/correction_break",
+        "cases/w5_child_missing",
+        "cases/w5_child_ambiguous",
+        "cases/w5_parent_ambiguous",
+        "cases/w5_parent_sign_missing",
+        "cases/w5_child_sign_missing",
+        "cases/w5_future_child",
+        "cases/w5_preentry",
+        "cases/w5_wrong_origin",
+        "cases/w5_history_gap",
+        "cases/w5_parent_error",
+        "cases/w5_child_error",
+        "cases/w5_stale",
+        "cases/c_without_flat",
+        "cases/c_flat_after_entry",
+        "cases/w3_not_reached",
+        "cases/w3_expansion_completed",
+        "cases/w3_boundary_not_broken",
+        "cases/w5_stall_invalidated_live",
+        "cases/w5_stall_other_invalid",
+        "cases/w3_old_peak_still_invalidates"
+      ],
+      "remaining_evidence": "Mirrored artificial source cases and signed-transport models do not certify independent wave genealogy, canonical tick volume, the external Compututorial projections or physical Android/Futures Demo acceptance. Positive after-cost-reserve profit-taking and the 5-hour terminal proposal window are explicit project policies; current failed-count risk exits do not expire with the peak. Course new-risk execution remains disabled.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.SIGNED_FLAT_CORRECTION_HANDOFF",
+      "book": "COURSE",
+      "pdf_pages": [
+        83,
+        84
+      ],
+      "rule": "A separate corrective owner can be proposed only after exact signed exit FILL, signed FLAT and clean old orders. Persist handoff once after recovery and require durable consumption by the subsequent owner; never reverse via an oversized close order.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_exit.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseExit.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_exit.py::test_correction_handoff_requires_all_three_independent_exchange_confirmations",
+        "tests/test_futures_order_lifecycle.py::test_course_terminal_exit_uses_real_source_and_grants_handoff_only_after_exact_clean_flat",
+        "app/src/test/java/com/williamsbot/WilliamsCourseExitTest.kt::correctionHandoffNeedsFilledExitSignedFlatAndCleanOrdersIndependently",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseTerminalExitPreservesExactlyOnceAndRequiresCleanSignedFlatForHandoff"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Exchange proof fields and one-shot ownership are project execution requirements. Handoff publishing cannot place orders. Full automatic Course initial/corrective entries and stage integration still require an independently checked degree/price-location contract; no physical Demo certification.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "book": "COURSE",
+      "pdf_pages": [
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "rule": "Preserve one original contract unit: 3/1/6/10/3/(6 or 8)/0 and a separate opposite-owner 3/1/4/0. Risk caps reject whole later tranches; established targets are not rounded. A full signed attributed fill and protected exact position, rather than current position size, confirm a stage.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_course_quantity.py",
+        "futures_williams_runtime.py",
+        "app/src/main/java/com/williamsbot/WilliamsCourseQuantity.kt",
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt"
+      ],
+      "tests": [
+        "tests/test_williams_course_quantity.py::test_shared_book_proportions_never_round_or_clip_an_established_tranche",
+        "tests/test_williams_course_quantity.py::test_stage_confirmation_requires_its_exact_signed_order_and_protected_position",
+        "tests/test_williams_course_quantity.py::test_the_whole_motive_and_correction_sequences_preserve_one_actual_unit",
+        "tests/test_futures_order_lifecycle.py::test_course_initial_unit_is_minted_only_from_the_exact_signed_fill_and_survives_restart",
+        "app/src/test/java/com/williamsbot/WilliamsCourseQuantityTest.kt::sharedBookProportionsNeverRoundOrClipAnEstablishedTranche",
+        "app/src/test/java/com/williamsbot/WilliamsCourseQuantityTest.kt::stageConfirmationRequiresItsExactSignedOrderAndProtectedPosition",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::courseInitialUnitRequiresTheExactSignedFillAndDoesNotRescaleAfterRestart"
+      ],
+      "fixture_file": "app/src/test/resources/williams_course_quantity_contract.json",
+      "fixtures": [
+        "cases/w3_cannot_clip_to_four",
+        "cases/fractional_unit_cannot_round",
+        "cases/extension_cap_cannot_clip",
+        "cases/w5_exact_162_undefined",
+        "cases/correction_cannot_clip",
+        "cases/changed_common_grid"
+      ],
+      "remaining_evidence": "Exact decimal/lot adaptation and modeled signed-fill/restart tests do not establish source wave genealogy, independently adjudicated chart counts, full Course new-risk admission or physical Android/Futures Demo execution. Initial parent/child degree proof remains unfinished. Existing partial exposure stays protected; Course remains OBSERVE for new risk.",
       "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
     "Independent digitization of all relevant historical book figures",
     "Finish Air Bag tick-offset and higher-frame illustration review",
-    "Complete nested wave/context and Course corrective campaign specification",
+    "Complete nested wave/context proof, dynamic Course corrective targets and execution acceptance",
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
   ],

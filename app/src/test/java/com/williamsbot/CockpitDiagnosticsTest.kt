@@ -6,6 +6,170 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+    @Test fun diagnostic9SixOrphanShortsRemainVisibleWithNoLocalIntentJournal() {
+        val symbols=listOf("DOGEUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
+        val signed=JSONArray()
+        for(symbol in symbols) {
+            signed.put(JSONObject().put("symbol",symbol)
+                .put("direction","SHORT").put("positionAmt","-2")
+                .put("qty","2").put("stop","99")
+                .put("stop_verification_status","EXTERNAL_PROTECTED")
+                .put("strategy_ownership_verified",false))
+        }
+        // In the real archive the six positions are exchange-signed while
+        // the coordinator contains ZERO durable campaign entries.
+        val coordinator=coordinator().put("pending_intent_details",JSONArray())
+        val status=healthy().put("futures_positions",signed)
+            .put("positions_snapshot_at_ms",now-15_526L)
+            .put("positions_snapshot_ok",true)
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+        val detail=check("EXE-12",status,coordinator).optString("detail")
+        assertTrue(detail.contains("6; из signed positions=6"))
+        assertTrue(detail.contains("LTCUSDT"))
+        status.put("positions_snapshot_at_ms",now-2_000L)
+        assertEquals("FAIL",severity("EXE-12",status,coordinator))
+        for(index in 0 until signed.length()) {
+            signed.getJSONObject(index).put("strategy_ownership_verified",true)
+        }
+        assertEquals("PASS",severity("EXE-12",status,coordinator))
+        signed.getJSONObject(0).remove("strategy_ownership_verified")
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+    }
+    @Test fun perSymbolSignedProtectionNeverTurnsOldProofGreen() {
+        val p=JSONObject().put("symbol","DOGEUSDT").put("direction","SHORT")
+            .put("positionAmt","-100").put("qty","100").put("stop","0.07727")
+        val proof=JSONObject().put("symbol","DOGEUSDT").put("direction","SHORT")
+            .put("quantity","-100.0").put("stop","0.07727")
+            .put("stop_proof","EXTERNAL_PROTECTED").put("protection_client_id","W2PS_DOGE_test")
+            .put("observed_at_ms",now-1000)
+        val c=coordinator().put("exchange_protection_observations",JSONArray().put(proof))
+        val status=healthy().put("futures_positions",JSONArray().put(p))
+        assertEquals("PASS",severity("EXE-13",status,c))
+        proof.put("observed_at_ms",now-25_000)
+        assertEquals("NOT_VERIFIED",severity("EXE-13",status,c))
+        assertTrue(check("EXE-13",status,c).optString("detail")
+            .contains("DOGEUSDT=STALE_SIGNED_STOP_PROOF"))
+        proof.put("observed_at_ms",now-500).put("quantity","99")
+        assertEquals("FAIL",severity("EXE-13",status,c))
+        status.put("positions_snapshot_ok",false)
+        assertEquals("NOT_VERIFIED",severity("EXE-13",status,c))
+    }
+    @Test fun diagnostic8RecoveredShortsWithStopsRemainUnownedAndBlocked() {
+        val symbols=listOf("DOGEUSDT","BNBUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
+        val intents=JSONArray()
+        for(symbol in symbols) {
+            intents.put(JSONObject().put("symbol",symbol).put("role","ENTRY")
+                .put("kind","RECOVERED_EXCHANGE_POSITION")
+                .put("order_status","FILLED").put("campaign_status","OPEN_PROTECTED")
+                .put("protection_status","PROTECTED")
+                .put("strategy_ownership_verified",false))
+        }
+        val coordinator=coordinator().put("pending_intent_details",intents)
+        val status=healthy()
+        // Positions can lag signed exchange STOPs. No green autonomous
+        // management may be manufactured by a journal's PROTECTED flag.
+        assertEquals("FAIL",severity("EXE-12",status,coordinator))
+        // No current signed positions: a reconstructed placeholder is unknown
+        // exposure, not proof of a filled Williams order lacking protection.
+        assertEquals("NOT_VERIFIED",severity("EXE-03",status,coordinator))
+        val detail=check("EXE-12",status,coordinator).getString("detail")
+        assertTrue(detail.contains("7"))
+        assertTrue(detail.contains("LTCUSDT"))
+        assertTrue(detail.contains("не разрешение"))
+        for(i in 0 until intents.length()) {
+            intents.getJSONObject(i).put("strategy_ownership_verified",true)
+        }
+        assertEquals("PASS",severity("EXE-12",status,coordinator))
+        coordinator.put("reconciliation_running",true)
+        assertEquals("NOT_VERIFIED",severity("EXE-12",status,coordinator))
+    }
+
+    @Test fun diagnostic11StaleProtectedRecoveryRemainsRiskWarningWithoutForgingEntry() {
+        val p=JSONObject().put("symbol","BTCUSDT").put("direction","SHORT")
+            .put("positionAmt","-0.0035").put("qty","0.0035")
+            .put("stop","80433.4")
+            .put("stop_verification_status","EXTERNAL_PROTECTED")
+            .put("strategy_ownership_verified",false)
+        val signed=JSONObject().put("symbol","BTCUSDT").put("direction","SHORT")
+            .put("quantity","-0.0035").put("stop","80433.4")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id","W2PS_BTCUSDT_D_76650f95")
+            .put("observed_at_ms",now-30_000L)
+        val unowned=JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("direction","SHORT").put("order_status","FILLED")
+            .put("kind","RECOVERED_EXCHANGE_POSITION")
+            .put("campaign_status","POSITION_OPEN")
+            .put("strategy_ownership_verified",false)
+            // Diagnostics #11: local guessed level != externally signed STOP.
+            .put("persisted_protective_stop","80254.4")
+            .put("protection_status","UNRESOLVED_EXTRA_ORDER")
+        val c=coordinator().put("pending_intent_details",JSONArray().put(unowned))
+            .put("reconciliation_running",true)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("exchange_protection_observations",JSONArray().put(signed))
+        val st=healthy().put("futures_positions",JSONArray().put(p))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",st,c))
+        assertTrue(check("EXE-03",st,c).getString("detail")
+            .contains("стратегических исполненных кампаний без защиты=0"))
+        assertTrue(check("EXE-03",st,c).getString("detail")
+            .contains("восстановленных без доказанного ENTRY=1"))
+        // But an old signed STOP is NOT active proof. Keep strict P0 alarm.
+        signed.put("observed_at_ms",now-220_000L)
+        assertEquals("FAIL",severity("EXE-03",st,c))
+        assertEquals("FAIL",severity("EXE-04",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-13",st,c))
+        assertEquals("NOT_VERIFIED",severity("EXE-12",st,c))
+    }
+
+    @Test fun missingClosedTradeEvidenceMustNotPassPnlHistoryCheck() {
+        val status=healthy().put("trade_observations",JSONArray())
+        assertEquals("NOT_VERIFIED",severity("HIST-01",status))
+        status.put("trade_observations",JSONArray().put(JSONObject()
+            .put("symbol","DOGEUSDT").put("status","OPEN_PROTECTED")
+            .put("pnl_complete",false)))
+        assertEquals("NOT_VERIFIED",severity("HIST-01",status))
+    }
+    @Test fun historyForensicsDoesNotInventAvaxClosureOrDoubleCountTwoAuditSources() {
+        val original=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
+            .put("trade_audit_source","FUTURES_CAMPAIGN_SNAPSHOT").put("pnl_complete",false)
+        val supervision=JSONObject().put("symbol","AVAXUSDT").put("status","CLOSED_UNVERIFIED")
+            .put("trade_audit_source","OPERATOR_APPROVED_STOP_ONLY").put("pnl_complete",false)
+        val s=healthy().put("trade_observations",JSONArray().put(original).put(supervision))
+        assertEquals("WARNING",severity("HIST-01",s))
+        val detail=check("HIST-01",s).optString("detail")
+        assertTrue(detail.contains("AVAXUSDT"))
+        assertTrue(detail.contains("неподтверждённых записей закрытия: 2"))
+        s.put("trade_observations",JSONArray().put(JSONObject().put("symbol","AVAXUSDT")
+            .put("status","CLOSED_EXCHANGE_CONFIRMED").put("pnl_complete",true)))
+        assertEquals("PASS",severity("HIST-01",s))
+        s.remove("trade_observations")
+        assertEquals("NOT_VERIFIED",severity("HIST-01",s))
+    }
+    @Test fun androidLifecycleEvidenceNeverTreatsStartAttemptsAsReboots() {
+        val lifecycle=JSONObject()
+            .put("service_start_attempt_count",15)
+            .put("observed_process_exit_count",0)
+            .put("foreground_service_created_count",1)
+        val android=JSONObject().put("lifecycle_evidence",lifecycle)
+        val status=healthy().put("android_runtime",android)
+        assertEquals("NOT_VERIFIED",severity("AND-04",status))
+        lifecycle.put("abnormal_process_exit_count",1)
+        assertEquals("WARNING",severity("AND-04",status))
+        lifecycle.put("abnormal_process_exit_count",0)
+        lifecycle.put("worker_heartbeat_stale_count",1)
+        assertEquals("WARNING",severity("AND-04",status))
+    }
+    @Test fun currentAndroidFlagsCannotCertifyUninterruptedBackgroundOperation() {
+        val s=healthy().put("android_runtime",JSONObject().put("foreground_service_active",true)
+            .put("battery_optimization_ignored",true).put("background_restricted",false)
+            .put("cpu_wake_lock_held",true).put("service_guard_age_ms",1000))
+        assertEquals("NOT_VERIFIED",severity("AND-01",s))
+        s.getJSONObject("android_runtime").put("cpu_wake_lock_held",false)
+        assertEquals("WARNING",severity("AND-01",s))
+        s.getJSONObject("android_runtime").put("cpu_wake_lock_held",true).put("service_guard_age_ms",120_000)
+        assertEquals("WARNING",severity("AND-01",s))
+    }
     private val now = 1_800_000_000_000L
     private fun healthy() = JSONObject().put("running", true).put("rest_market_ready", true)
         .put("market_ws_connected", true).put("user_ws_connected", true)
@@ -22,11 +186,87 @@ class CockpitDiagnosticsTest {
         .put("direction", direction).put("role", "ENTRY").put("kind", "STOP")
         .put("entry_price", 100.0).put("persisted_protective_stop", if (direction == "LONG") 95.0 else 105.0)
         .put("order_status", "NEW").put("campaign_status", "ENTRY_PENDING")
+        .put("last_reconciled_ms",now - 1_000L)
         .put("protection_status", "NOT_SUBMITTED").put("actual_risk_audit_status", "UNKNOWN")
     private fun check(id: String, s: JSONObject, c: JSONObject = coordinator()) =
         CockpitDiagnostics.rows(CockpitDiagnostics.checks(s, c, JSONObject(), now)).single { it.optString("id") == id }
     private fun severity(id: String, s: JSONObject, c: JSONObject = coordinator()) = check(id, s, c).optString("severity")
 
+    @Test fun diagnostics30StopProofAgesWhileRestReconcilesWithoutInventingMissingStop() {
+        val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("positionAmt",0.6).put("qty",0.6).put("stop",101.71)
+            .put("stop_verification_status","OWNED_STOP_SEEN")
+            .put("stop_confirmed_at_ms",now-32_000L)
+        val proof=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
+            .put("quantity","0.60").put("stop","101.71")
+            .put("stop_proof","OWNED_STOP_SEEN")
+            .put("protection_client_id","W2T_SOLUSDT_hc1got0t")
+            .put("observed_at_ms",now-30_000L)
+        val intent=entry().put("campaign_status","OPEN_PROTECTED")
+            .put("protection_status","PROTECTED")
+            .put("strategy_ownership_verified",true)
+            .put("protection_client_id_suffix","hc1got0t")
+            .put("last_reconciled_ms",now-30_000L)
+            .put("actual_risk_audit_status","PASS")
+            .put("actual_all_in_risk_pct",0.0004)
+            .put("actual_risk_audited_at_ms",now-30_000L)
+        val status=healthy().put("execution_enabled",false)
+            .put("futures_positions",JSONArray().put(p))
+        val exchange=coordinator().put("ready_for_new_entry",false)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("reconciliation_running",true)
+            .put("pending_intent_details",JSONArray().put(intent))
+            .put("exchange_protection_observations",JSONArray().put(proof))
+        val readiness=CockpitDiagnostics.readiness(status,exchange,now)
+        assertEquals("NOT_VERIFIED",readiness.getString("protection_state"))
+        assertTrue(readiness.getBoolean("stop_proof_refresh_in_progress"))
+        assertEquals(1,readiness.getJSONArray("unprotected_positions").length())
+        assertFalse(readiness.getBoolean("position_management_ready"))
+        assertFalse(readiness.getBoolean("new_entries_allowed"))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",status,exchange))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",status,exchange))
+        assertEquals("NOT_VERIFIED",severity("RISK-01",status,exchange))
+
+        // An actually absent or mismatched exchange STOP is not excused by
+        // reconciliation. This is the critical difference from a 30s-old
+        // perfectly matching previously signed stop.
+        proof.put("quantity","0.59")
+        assertEquals("FAIL",severity("EXE-03",status,exchange))
+        assertEquals("FAIL",severity("RISK-01",status,exchange))
+        proof.put("quantity","0.60")
+        intent.put("protection_status","REPLACEMENT_PENDING_PROTECTED")
+        assertEquals("FAIL",severity("EXE-03",status,exchange))
+        intent.put("protection_status","PROTECTED")
+        exchange.put("reconciliation_running",false).put("blocker","")
+        assertEquals("FAIL",severity("EXE-04",status,exchange))
+        assertEquals("FAIL",CockpitDiagnostics.readiness(status,exchange,now)
+            .getString("protection_state"))
+
+        // Only a NEW exact Binance observation can change NOT_VERIFIED to
+        // PASS. Never backdate or silently extend the strict 15s proof TTL.
+        proof.put("observed_at_ms",now-2_000L)
+        p.put("stop_confirmed_at_ms",now-2_000L)
+        assertEquals("PASS",severity("EXE-03",status,exchange))
+        assertEquals("PASS",severity("EXE-04",status,exchange))
+        assertEquals("PASS",severity("RISK-01",status,exchange))
+    }
+
+    @Test fun diagnostics27OrphanLinkMustBeExplainedBeforeGenericReconciliationProgress() {
+        val order=JSONObject().put("symbol","LINKUSDT")
+            .put("client_id","W2H_LINKUSDT_061dd0339b76781d06e92b")
+        val c=coordinator().put("reconciliation_running",true)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("ready_for_new_entry",false)
+            .put("external_open_orders",JSONArray().put(order))
+        val reason=CockpitDiagnostics.readiness(healthy(),c,now).getString("new_entries_reason")
+        assertTrue(reason.contains("LINKUSDT"))
+        assertTrue(reason.contains("заявка"))
+        assertTrue(reason.contains("заблокированы"))
+        assertEquals("FAIL",severity("EXE-11",healthy(),c))
+        c.put("external_open_orders",JSONArray())
+        val waiting=CockpitDiagnostics.readiness(healthy(),c,now).getString("new_entries_reason")
+        assertTrue(waiting.contains("сверка"))
+    }
     @Test fun liquidationCheckNeedsFreshMeasuredEvidenceAndReportsAnUnsafeStop() {
         val s = healthy().put("futures_positions", JSONArray().put(JSONObject()
             .put("symbol", "SOLUSDT").put("direction", "LONG").put("qty", 1)))
@@ -174,6 +414,31 @@ class CockpitDiagnosticsTest {
         assertFalse(r.getBoolean("new_entries_allowed"))
         assertTrue(r.getString("new_entries_reason").contains("исполнение"))
     }
+    @Test fun diagnostic3TwoUnfilledShortAlgosNeedFreshReconciliationNotPrematureSL() {
+        val sol=entry("SHORT").put("symbol","SOLUSDT")
+            .put("entry_price",100.39).put("persisted_protective_stop",101.83)
+            .put("executed_qty","0").put("last_reconciled_ms",now-2400)
+        val btc=entry("SHORT").put("symbol","BTCUSDT")
+            .put("entry_price",80123.0).put("persisted_protective_stop",80676.1)
+            .put("executed_qty","0").put("last_reconciled_ms",now-1900)
+        val observed=coordinator().put("pending_intent_details",JSONArray().put(sol).put(btc))
+        assertEquals("PASS",severity("EXE-01",healthy(),observed))
+        assertEquals("WARNING",severity("EXE-01",healthy().put("running",false),observed))
+        assertEquals("WARNING",severity("EXE-01",healthy().put("paused",true),observed))
+        assertEquals("NOT_VERIFIED",severity("EXE-03",healthy(),observed))
+        assertEquals("NOT_VERIFIED",severity("EXE-04",healthy(),observed))
+        assertEquals(2,CockpitDiagnostics.readiness(healthy(),observed,now).getInt("pending_orders"))
+        sol.put("last_reconciled_ms",now-60_001L)
+        assertEquals("NOT_VERIFIED",severity("EXE-01",healthy(),observed))
+        sol.put("last_reconciled_ms",now-2400)
+        btc.put("order_status","SUBMISSION_UNKNOWN")
+        assertEquals("WARNING",severity("EXE-01",healthy(),observed))
+        btc.put("order_status","NEW")
+        sol.put("order_status","PARTIALLY_FILLED")
+        assertEquals("WARNING",severity("EXE-01",healthy(),observed))
+        assertEquals("FAIL",severity("EXE-02",healthy(),observed))
+    }
+
     @Test fun unfilledConditionalEntryIsValidWithoutPreSubmittedProtection() {
         val c = coordinator().put("pending_intent_details", JSONArray().put(entry()))
         assertEquals("PASS", severity("EXE-01", healthy(), c))
@@ -283,6 +548,9 @@ class CockpitDiagnosticsTest {
         assertEquals("PASS",severity("EXE-09",s,c))
         p.put("mark_price",106)
         assertEquals("FAIL",severity("EXE-09",s,c))
+        // Same-age UI can still contain a genuinely inconsistent signed
+        // acknowledgement; that remains FAIL, not a stale-screen excuse.
+        s.put("positions_snapshot_at_ms",now)
         p.put("mark_price",100).put("stop_confirmed_at_ms",now-1)
         assertEquals("FAIL",severity("EXE-08",s,c))
         p.put("stop_confirmed_at_ms",now)
@@ -294,6 +562,59 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("EXE-03",s,c))
     }
 
+    @Test fun diagnostics26NewerSignedStopIsStaleUiWarningNotFalseIdentityFailure() {
+        // The 4.64 diagnostics captured an earlier UI STOP confirmation and
+        // a later identical signed exchange STOP. A fresh but behind display
+        // must NOT be classified as Binance order-identity corruption.
+        val displayAt=now-11_000L
+        val previousConfirmed=now-13_000L
+        val proofAt=now-3_000L
+        val p=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
+            .put("positionAmt","-0.395").put("qty",0.395).put("stop",2368.98)
+            .put("mark_price",2338.67).put("stop_verification_status","EXTERNAL_PROTECTED")
+            .put("stop_confirmed_at_ms",previousConfirmed)
+        val signed=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
+            .put("quantity","-0.395").put("stop","2368.98")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id","external_test_stop")
+            .put("observed_at_ms",proofAt)
+        val s=healthy().put("positions_snapshot_at_ms",displayAt)
+            .put("futures_positions",JSONArray().put(p))
+        val c=coordinator().put("exchange_protection_observations",JSONArray().put(signed))
+        assertEquals("WARNING",severity("EXE-08",s,c))
+        assertTrue(check("EXE-08",s,c).getString("detail").contains("ETHUSDT"))
+        assertEquals("PASS",severity("EXE-03",s,c))
+        // Once the UI consumes this signed observation the warning clears.
+        s.put("positions_snapshot_at_ms",now-2_000L)
+        p.put("stop_confirmed_at_ms",proofAt)
+        assertEquals("PASS",severity("EXE-08",s,c))
+        // Same-generation impossible status remains a real conflict.
+        p.put("stop_verification_status","UNVERIFIED_OR_STALE")
+        assertEquals("FAIL",severity("EXE-08",s,c))
+        p.put("stop_verification_status","EXTERNAL_PROTECTED")
+        // A different signed order price is NOT the same protection proof.
+        signed.put("stop","2369.99")
+        assertEquals("NOT_VERIFIED",severity("EXE-08",s,c))
+        assertEquals("FAIL",severity("EXE-03",s,c))
+    }
+    @Test fun diagnostics26OrphanBinanceConditionalOrderCannotBeIgnoredAsZeroPendingIntents() {
+        val s=healthy()
+        val externalEntry=JSONObject().put("symbol","LINKUSDT")
+            .put("client_id","W2H_LINKUSDT_orphan")
+            .put("kind","EXTERNAL_ALGO_ORDER")
+        val externalStop=JSONObject().put("symbol","ETHUSDT")
+            .put("client_id","W2T_ETHUSDT_external_stop")
+            .put("kind","EXTERNAL_ALGO_ORDER")
+        val c=coordinator().put("external_open_orders",
+            JSONArray().put(externalEntry).put(externalStop))
+            .put("pending_intents",0).put("pending_intent_details",JSONArray())
+        assertEquals("FAIL",severity("EXE-11",s,c))
+        assertTrue(check("EXE-11",s,c).getString("detail").contains("LINKUSDT"))
+        c.put("external_open_orders",JSONArray().put(externalStop))
+        assertEquals("PASS",severity("EXE-11",s,c))
+        c.remove("external_open_orders")
+        assertEquals("NOT_VERIFIED",severity("EXE-11",s,c))
+    }
     @Test fun malformedOrDuplicatedSignedPositionSnapshotIsDetected() {
         val p=JSONObject().put("symbol","SOLUSDT").put("direction","LONG")
             .put("positionAmt","-1").put("qty",1)
@@ -305,12 +626,16 @@ class CockpitDiagnosticsTest {
         assertEquals("FAIL",severity("DATA-05",s))
     }
 
-    @Test fun independentNtdCourseObserversMayNotCreatePendingExposure() {
+    @Test fun onlyVerifiedSourcesMayCreatePendingExposure() {
         val foreign=entry().put("strategy_profile","NTD")
         val c=coordinator().put("pending_intent_details",JSONArray().put(foreign))
         assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("strategy_profile",williamsTc2Profile)
         assertEquals("PASS",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsNtdProfile)
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
+        foreign.put("strategy_profile",williamsCourseProfile)
+        assertEquals("FAIL",severity("STR-10",healthy(),c))
         foreign.put("campaign_status","OPEN_PROTECTED").put("strategy_profile","COURSE")
         assertEquals("PASS",severity("STR-10",healthy(),c))
     }

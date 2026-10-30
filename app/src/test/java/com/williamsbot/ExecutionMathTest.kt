@@ -13,6 +13,16 @@ class ExecutionMathTest {
     }
 
     @Test
+    fun actualOnTickPricesDoNotLoseOrGainAnExtraTick() {
+        assertEquals(79524.7, ExecutionMath.floorToStep(79524.7, 0.1), 0.0)
+        assertEquals(2296.99, ExecutionMath.floorToStep(2296.99, 0.01), 0.0)
+        assertEquals(11.354, ExecutionMath.floorToStep(11.354, 0.001), 0.0)
+        assertEquals(79524.7, ExecutionMath.ceilToStep(79524.7, 0.1), 0.0)
+        assertEquals(2296.99, ExecutionMath.ceilToStep(2296.99, 0.01), 0.0)
+        assertEquals(2.31, ExecutionMath.ceilToStep(2.301, 0.01), 0.0)
+    }
+
+    @Test
     fun quantityNeverRoundsUp() {
         assertEquals(1.23, ExecutionMath.quantityToStep(1.23999, 0.01), 0.0)
     }

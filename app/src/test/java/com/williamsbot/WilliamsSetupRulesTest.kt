@@ -38,27 +38,25 @@ class WilliamsSetupRulesTest {
         val crossed=bars+WilliamsWaveBar(6*3_600_000L,103.0,106.0,102.0,104.0)
         assertNull(selectWilliamsPendingFractal("LONG",crossed,List(crossed.size){104.0},.1))
     }
-    @Test fun superAoThirdBarUsesFiveBarStructureInsteadOfOnlyItsOwnLow() {
+    @Test fun superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow() {
         val h=3_600_000L
         val lows=listOf(100.0,94.0,97.0,99.0,98.0,101.0,102.0)
         val bars=lows.mapIndexed { i,low ->
             WilliamsWaveBar((i+1)*h,low+1.0,low+4.0,low,low+2.0,10.0)
         }
-        // At third AO bar index 4, its own low=98 but the five-price-bar
-        // risk boundary is 94; TC2 ch12 says use lowest of recent 3–5.
+        // TC2 PDF156, printed141: the explicitly permitted signal-bar
+        // initial stop is distinct from later trailing over 3–5 bars.
         val proposed=williamsTc2SuperAoInitialStop("LONG",bars,4,.1)
-        assertEquals(93.9,proposed!!,1e-9)
-        assertTrue(proposed<bars[4].l-.1)
-        assertEquals(96.9,williamsTc2SuperAoInitialStop("LONG",bars,4,.1,3)!!,1e-9)
+        assertEquals(97.9,proposed!!,1e-9)
+        assertTrue(proposed>bars[1].l-.1)
     }
 
-    @Test fun bearishSuperAoInitialStopIsTheMirroredHighestOfFiveH1Bars() {
+    @Test fun bearishSuperAoInitialStopIsTheMirroredSignalBarHigh() {
         val highs=listOf(105.0,114.0,107.0,109.0,108.0,106.0,104.0)
         val bars=highs.mapIndexed { i,high ->
             WilliamsWaveBar((i+1)*3_600_000L,high-2,high,high-4,high-1,10.0)
         }
-        assertEquals(114.1,williamsTc2SuperAoInitialStop("SHORT",bars,4,.1)!!,1e-9)
-        assertEquals(109.1,williamsTc2SuperAoInitialStop("SHORT",bars,4,.1,3)!!,1e-9)
+        assertEquals(108.1,williamsTc2SuperAoInitialStop("SHORT",bars,4,.1)!!,1e-9)
     }
 
     @Test fun superAoStopsCannotLookAheadOrReadUnclosedFuturePriceBars() {
@@ -70,10 +68,97 @@ class WilliamsSetupRulesTest {
         bars[5]=bars[5].copy(l=1.0) // The following H1 candle MUST have no effect.
         bars[6]=bars[6].copy(h=5000.0)
         assertEquals(result,williamsTc2SuperAoInitialStop("LONG",bars,4,.01))
-        assertNull(williamsTc2SuperAoInitialStop("LONG",bars,2,.01))
+        assertNull(williamsTc2SuperAoInitialStop("LONG",bars,-1,.01))
         assertNull(williamsTc2SuperAoInitialStop("LONG",bars,4,0.0))
         assertNull(williamsTc2SuperAoInitialStop("SIDEWAYS",bars,4,.01))
-        assertNull(williamsTc2SuperAoInitialStop("SHORT",bars,4,.01,6))
+        assertNull(williamsTc2SuperAoInitialStop("SHORT",bars,bars.size,.01))
+        bars[4]=bars[4].copy(o=Double.NaN)
+        assertNull(williamsTc2SuperAoInitialStop("LONG",bars,4,.01))
+    }
+
+
+    @Test fun shortFractalUsesActualExchangeLowAndExactlyOneTick() {
+        // Regression from diagnostics 2026-10-26: BTC 79524.8 -> 79524.7
+        // and ETH 2297.00 -> 2296.99, never an extra tick from reflection.
+        fun source(pivot:Double):List<WilliamsWaveBar> {
+            val lows=listOf(pivot+3,pivot+2,pivot,pivot+1,pivot+1.5,pivot+2)
+            return lows.mapIndexed { i,low ->
+                WilliamsWaveBar(i*3_600_000L,low+1,low+4,low,low+2)
+            }
+        }
+        val btc=exactTc2ShortFractalLevels(source(79524.8),2*3_600_000L,2*3_600_000L,4*3_600_000L,.1)!!
+        val eth=exactTc2ShortFractalLevels(source(2297.0),2*3_600_000L,2*3_600_000L,4*3_600_000L,.01)!!
+        assertEquals(79524.7,btc.trigger,0.0)
+        assertEquals(2296.99,eth.trigger,0.0)
+        assertEquals(79531.9,btc.protective,1e-9)
+        assertEquals(2304.01,eth.protective,1e-9)
+        assertTrue(ExecutionMath.isMultiple(btc.trigger,.1))
+        assertTrue(ExecutionMath.isMultiple(eth.trigger,.01))
+    }
+
+    @Test fun shortFractalStopHonoursPlateauAndNeverReadsFutureBars() {
+        val h=3_600_000L
+        val lows=listOf(108.0,105.0,100.0,100.0,104.0,105.0,106.0)
+        val bars=lows.mapIndexed { i,low ->
+            WilliamsWaveBar(i*h,low+2,low+10,low,low+3)
+        }.toMutableList()
+        val actual=exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1)!!
+        assertEquals(99.9,actual.trigger,0.0)
+        assertEquals(115.1,actual.protective,1e-9) // five bars incl. plateau
+        bars[6]=bars[6].copy(h=99999.0)
+        assertEquals(actual,exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1))
+        bars[3]=bars[3].copy(l=100.005)
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,2*h,5*h,.1))
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,2*h,4*h,.1))
+        assertNull(exactTc2ShortFractalLevels(bars,3*h,4*h,5*h,.1))
+    }
+
+
+    @Test fun wm1Wm2SignalPriceBarUsesOriginalDecimalTicksInBothDirections() {
+        // TC2 Russian PDF 125 / 132 / 137 / 139:
+        // the bearish reversal and third bearish AO price bar both sell one
+        // tick below their own low, never a reflected-Double approximation.
+        val btc=WilliamsWaveBar(3_600_000L,79524.5,79524.8,79523.2,79524.7)
+        val buy=exactTc2WiseManPriceBarLevels("LONG",btc,.1)!!
+        val sell=exactTc2WiseManPriceBarLevels("SHORT",btc,.1)!!
+        assertEquals(79524.9,buy.trigger,0.0)
+        assertEquals(79523.1,buy.protective,0.0)
+        assertEquals(79523.1,sell.trigger,0.0)
+        assertEquals(79524.9,sell.protective,0.0)
+        for(v in listOf(buy.trigger,buy.protective,sell.trigger,sell.protective))
+            assertTrue(ExecutionMath.isMultiple(v,.1))
+        val eth=WilliamsWaveBar(7_200_000L,2295.0,2297.0,2294.31,2295.5)
+        assertEquals(2294.30,exactTc2WiseManPriceBarLevels("SHORT",eth,.01)!!.trigger,0.0)
+        assertEquals(2297.01,exactTc2WiseManPriceBarLevels("SHORT",eth,.01)!!.protective,0.0)
+        assertEquals(2297.01,exactTc2WiseManPriceBarLevels("LONG",eth,.01)!!.trigger,0.0)
+        assertEquals(2294.30,exactTc2WiseManPriceBarLevels("LONG",eth,.01)!!.protective,0.0)
+    }
+
+    @Test fun tc2SignalBarPriceProofFailsClosedOnOffGridOrInvalidCandle() {
+        val bar=WilliamsWaveBar(0L,100.0,101.0,99.0,100.5)
+        assertNotNull(exactTc2WiseManPriceBarLevels("SHORT",bar,.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar.copy(l=99.005),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(h=101.005),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(o=102.0),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("LONG",bar.copy(c=Double.NaN),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar.copy(t=-1L),.01))
+        assertNull(exactTc2WiseManPriceBarLevels("SHORT",bar,.0))
+        assertNull(exactTc2WiseManPriceBarLevels("INVALID",bar,.01))
+    }
+
+    @Test fun longSourceFractalExactTick() {
+        val h=3_600_000L
+        val highs=listOf(101.0,102.0,105.0,103.0,102.0,101.0)
+        val bars=highs.mapIndexed { i,high ->
+            WilliamsWaveBar(i*h,high-2.0,high,high-4.0,high-1.0)
+        }
+        val found=exactTc2LongFractalLevels(bars,2*h,2*h,4*h,.1)!!
+        assertEquals(105.1,found.trigger,0.0)
+        assertEquals(96.9,found.protective,0.0)
+        assertNull(exactTc2LongFractalLevels(bars,2*h,2*h,3*h,.1))
+        assertNull(exactTc2LongFractalLevels(bars,2*h,3*h,4*h,.1))
+        val later=bars+WilliamsWaveBar(6*h,100.0,999.0,99.0,100.0)
+        assertEquals(found,exactTc2LongFractalLevels(later,2*h,2*h,4*h,.1))
     }
 
 }

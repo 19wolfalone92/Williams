@@ -12,6 +12,12 @@ internal object RuntimeServiceState {
     @Volatile var active = false
     @Volatile var confirmedAtMs = 0L
     @Volatile var lastError: String? = null
+    @Volatile var wakeLockHeld = false
+    @Volatile var lastGuardElapsedMs = 0L
+    @Volatile var monitorHeartbeatStale = false
+    @Volatile var lastWorkerLoopElapsedMs = 0L
+    @Volatile var lastRecoveryAttemptMs = 0L
+    @Volatile var refreshLease:(()->Unit)? = null
 }
 
 /**
@@ -59,6 +65,7 @@ object AndroidRuntimeHealth {
         val usage = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
         val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
+        val continuity=RuntimeContinuityEvidence.snapshot(context)
 
         val result = JSONObject()
             .put("application_id", context.packageName)
@@ -67,10 +74,26 @@ object AndroidRuntimeHealth {
             .put("foreground_service_active", RuntimeServiceState.active)
             .put("foreground_service_confirmed_at_ms", RuntimeServiceState.confirmedAtMs)
             .put("foreground_service_error", RuntimeServiceState.lastError ?: JSONObject.NULL)
+            .put("cpu_wake_lock_held",RuntimeServiceState.wakeLockHeld)
+            .put("service_guard_elapsed_ms",RuntimeServiceState.lastGuardElapsedMs)
+            .put("runtime_worker_heartbeat_stale",RuntimeServiceState.monitorHeartbeatStale)
+            .put("runtime_worker_last_loop_elapsed_ms",RuntimeServiceState.lastWorkerLoopElapsedMs)
+            .put("runtime_worker_heartbeat_age_ms",
+                if(RuntimeServiceState.lastWorkerLoopElapsedMs>0L)
+                    (android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastWorkerLoopElapsedMs).coerceAtLeast(0L)
+                else JSONObject.NULL)
+            .put("service_guard_age_ms",if(RuntimeServiceState.lastGuardElapsedMs>0)
+                android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastGuardElapsedMs else JSONObject.NULL)
+            .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)
+            .put("continuity",continuity)
+            .put("lifecycle_evidence",RuntimeServiceLifecycleAssessment.summarize(
+                continuity,System.currentTimeMillis()))
             .put("last_boot_startup_failure", RuntimeStartupEvidence.snapshot(context))
             .put("battery_optimization_ignored", ignoring)
             .put("power_save_mode", pm.isPowerSaveMode)
             .put("interactive", pm.isInteractive)
+        if(Build.VERSION.SDK_INT>=33) result.put("low_power_standby_enabled",pm.isLowPowerStandbyEnabled)
+        if(Build.VERSION.SDK_INT>=34) result.put("low_power_standby_exempt",pm.isExemptFromLowPowerStandby)
 
         if (Build.VERSION.SDK_INT >= 28) {
             result.put("background_restricted", am.isBackgroundRestricted)

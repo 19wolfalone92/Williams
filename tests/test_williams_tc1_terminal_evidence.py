@@ -39,3 +39,16 @@ def test_unconfirmed_w5_and_impossible_confirmation_time():
     assert tc1_five_bullet_evidence(h)["status"]=="NO_PROVISIONAL_COMPLETED_FIVE_WAVE_PIVOT"
     h=scenario();h["observed_at"]=149
     assert not tc1_five_bullet_evidence(h)["last_w5_pivot_causally_known"]
+
+def test_tc1_itself_describes_a_5_34_alternative_without_certifying_volume_mfi():
+    h=scenario()
+    result=tc1_five_bullet_evidence(h)
+    alt=result['book_described_5_34_alternative']
+    assert alt['status']=='OBSERVED_BOOK_5_34_APPROXIMATION'
+    assert alt['divergence_observed']
+    assert not alt['canonical_mfi_verified']
+    assert result['checks']['mfi_divergence']=='NOT_VERIFIED'
+    assert not any(alt[k] for k in ('can_place_orders','can_close','can_reverse'))
+    for key,value in [('scale_bars',99),('scale_bars',141),('observed_at',149),('divergence',False),('label','W4')]:
+        invalid=dict(h);invalid[key]=value
+        assert not tc1_five_bullet_evidence(invalid)['book_described_5_34_alternative']['divergence_observed']

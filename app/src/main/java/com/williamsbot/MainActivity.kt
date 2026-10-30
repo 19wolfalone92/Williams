@@ -321,7 +321,8 @@ data class Status(
     val accountSnapshotAtMs: Long = 0L,
     val futuresIntents: List<JSONObject> = emptyList(),
     val operatorSupervisions: List<JSONObject> = emptyList(),
-    val cockpitReadiness: JSONObject = JSONObject()
+    val cockpitReadiness: JSONObject = JSONObject(),
+    val exitReconciliationIntents: List<JSONObject> = emptyList()
 )
 
 data class Candle(
@@ -464,6 +465,7 @@ data class PositionView(
     val stop: Double?,
     val take: Double?,
     val riskPct: Double,
+    val riskPctVerified: Boolean = false,
     val currentPrice: Double? = null,
     val positionValueUsdt: Double = 0.0,
     val allocationPct: Double = 0.0,
@@ -521,6 +523,7 @@ fun WilliamsApp(context: Context) {
     var diagnosticsMessage by remember { mutableStateOf("") }
     var diagnosticReport by remember { mutableStateOf<JSONObject?>(null) }
     var diagnosticsRunning by remember { mutableStateOf(false) }
+    var diagnosticsArchiveReady by remember { mutableStateOf(false) }
     var historicalTrade by rememberSaveable { mutableStateOf<Trade?>(null) }
     var requestedCloseSymbol by remember { mutableStateOf<String?>(null) }
     var requestedSupervisionSymbol by remember { mutableStateOf<String?>(null) }
@@ -745,67 +748,6 @@ fun WilliamsApp(context: Context) {
         }
     }
 
-    fun setTestnetForceMode(enabled: Boolean) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val payload = JSONObject()
-                    .put("enabled", enabled)
-                    .put("acknowledge", true)
-                val response = JSONObject(
-                    api.post("/api/v1/control/testnet-force-mode", payload.toString())
-                )
-                val label = response.optString(
-                    "message",
-                    if (response.optBoolean("enabled", false)) {
-                        "Режим ручного направления TESTNET включён."
-                    } else {
-                        "Режим отключён; Runtime оставлен на паузе."
-                    }
-                )
-                withContext(Dispatchers.Main) { message = label }
-                loadAll(false)
-            } catch (failure: Exception) {
-                withContext(Dispatchers.Main) {
-                    message = failure.message ?: "Не удалось изменить режим TESTNET"
-                }
-                loadAll(false)
-            }
-        }
-    }
-
-    fun submitForcedTestnetEntry(symbol: String, direction: String) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val payload = JSONObject()
-                    .put("symbol", symbol)
-                    .put("direction", direction)
-                    .put("acknowledge", true)
-                val response = JSONObject(
-                    api.post("/api/v1/control/testnet-force-entry", payload.toString())
-                )
-                val detail = response.optString(
-                    "message",
-                    response.optString("blocker", "Нет подробностей от Runtime")
-                )
-                val label = if (response.optBoolean("accepted", false)) {
-                    "$detail • ${response.optString("symbol")} ${response.optString("direction")}, " +
-                        "trigger ${response.optString("trigger_price")}, " +
-                        "SL ${response.optString("protective_stop")}, " +
-                        "risk ${(response.optDouble("risk_pct", 0.0) * 100.0)}%"
-                } else {
-                    "Условный вход не принят: $detail"
-                }
-                withContext(Dispatchers.Main) { message = label }
-                loadAll(false)
-            } catch (failure: Exception) {
-                withContext(Dispatchers.Main) {
-                    message = failure.message ?: "Ошибка принудительного входа TESTNET"
-                }
-                loadAll(false)
-            }
-        }
-    }
-
     fun saveCredentials() {
         scope.launch(Dispatchers.IO) {
             try {
@@ -995,17 +937,41 @@ fun WilliamsApp(context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "DIAGNOSTICS").put("detail", "Run requested").toString()) }
-                val report = api.get("/api/v1/diagnostics?run=true")
-                DiagnosticsArchive.writeLatest(context, report)
+                val report=JSONObject(api.get("/api/v1/diagnostics?run=true"))
+                report.put("diagnostic_comparison",
+                    DiagnosticsArchive.compareWithLatest(context,report))
+                // Archiving failure is a separate error from successful
+                // READ-ONLY diagnostic capture; always display fresh findings.
+                val stored=runCatching {
+                    DiagnosticsArchive.writeLatest(context,report)
+                }
                 withContext(Dispatchers.Main) {
-                    diagnosticReport = JSONObject(report)
-                    diagnosticsMessage = "Проверка завершена: " + diagnosticReport?.optJSONObject("diagnostic_summary")?.optString("overall")
-
+                    diagnosticReport=report
+                    diagnosticsArchiveReady=stored.isSuccess
+                    val label=williamsRuStatus(report.optJSONObject("diagnostic_summary")
+                        ?.optString("overall","NOT_VERIFIED") ?: "NOT_VERIFIED")
+                    diagnosticsMessage=if(stored.isSuccess) {
+                        "Проверка завершена: $label. Полный архив сохранён."
+                    } else {
+                        "Проверка завершена: $label, но архив НЕ СОХРАНЁН: " +
+                            safeDiagnosticText(stored.exceptionOrNull()?.message.orEmpty()) +
+                            ". Экспорт предыдущего архива отключён."
+                    }
                 }
             } catch (e: Exception) {
+                // Preserve last fully captured report when a NEW check fails.
+                // Never paint the old report as fresh: the UI enforces
+                // capture-age limits, and export requires the exact ZIP stamp.
+                val archivedAt=DiagnosticsArchive.latestReportAtMs(context)
                 withContext(Dispatchers.Main) {
-                    diagnosticsMessage =
-                        e.message ?: "Не удалось выполнить диагностику"
+                    val previousAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+                    diagnosticsArchiveReady=previousAt>0L && archivedAt==previousAt
+                    diagnosticsMessage = "НОВАЯ ПРОВЕРКА НЕ ВЫПОЛНЕНА: " +
+                        safeDiagnosticText(e.message ?: "Неизвестная ошибка") +
+                        if(previousAt>0L) {
+                            ". Показан предыдущий снимок от ${cockpitTime(previousAt)} — " +
+                                "его результаты НЕ подтверждают текущее состояние."
+                        } else ". Нет предыдущих результатов."
                 }
             } finally {
                 withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { diagnosticsRunning = false }
@@ -1020,6 +986,11 @@ fun WilliamsApp(context: Context) {
             if (uri == null) return@rememberLauncherForActivityResult
             scope.launch(Dispatchers.IO) {
                 try {
+                    val reportAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+                    require(diagnosticsArchiveReady && reportAt>0L &&
+                        DiagnosticsArchive.latestReportAtMs(context)==reportAt) {
+                        "Последний отчёт не сохранён. Экспорт старого ZIP заблокирован."
+                    }
                     val source = requireNotNull(DiagnosticsArchive.latest(context)) {
                         "Диагностика ещё не создана"
                     }
@@ -1040,8 +1011,10 @@ fun WilliamsApp(context: Context) {
         }
 
     fun exportDiagnostics() {
-        if (DiagnosticsArchive.latest(context) == null) {
-            diagnosticsMessage = "Сначала запустите диагностику."
+        val reportAt=diagnosticReport?.optLong("created_at_ms") ?: 0L
+        if (!diagnosticsArchiveReady || reportAt<=0L ||
+            DiagnosticsArchive.latestReportAtMs(context)!=reportAt) {
+            diagnosticsMessage = "Нет сохранённого ZIP для текущей проверки. Запустите диагностику повторно."
             return
         }
         exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
@@ -1231,7 +1204,8 @@ fun WilliamsApp(context: Context) {
             )
 
             4 -> CockpitDiagnosticScreen(padding, status, diagnosticReport, diagnosticsMessage,
-                onRun = ::runDiagnostics, onExport = ::exportDiagnostics, onSelfHeal = ::selfHeal, running = diagnosticsRunning)
+                onRun = ::runDiagnostics, onExport = ::exportDiagnostics, onSelfHeal = ::selfHeal,
+                running = diagnosticsRunning, archiveReady = diagnosticsArchiveReady)
 
             7 -> CockpitAnalysis(padding, status, candidates) {
                 selectedChartSymbol = it; historicalTrade = null; tab = 1
@@ -1252,7 +1226,6 @@ fun WilliamsApp(context: Context) {
                         CockpitField("Дневной лимит убытка", "3%")
                         Text("Параметры ограничены торговым движком. Изменение экрана графика их не меняет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                     }
-                    TestnetForceTradingCard(status, ::setTestnetForceMode, ::submitForcedTestnetEntry)
                     FuturesLeverageSettingsCard(status, ::saveFuturesLeverage)
                     if (status.executionKillLatched) OutlinedButton(onClick = { criticalSetting = "reset" }, modifier = Modifier.fillMaxWidth()) { Text("Сбросить аварийную блокировку при пустом счёте") }
                 }
@@ -1273,9 +1246,6 @@ fun WilliamsApp(context: Context) {
                 onExportBackup = ::exportBackup,
                 onImportBackup = ::importBackup,
                 backupMessage = backupMessage,
-                onRunDiagnostics = ::runDiagnostics,
-                onExportDiagnostics = ::exportDiagnostics,
-                diagnosticsMessage = diagnosticsMessage,
                 message = message
             )
         }
@@ -1290,6 +1260,7 @@ private fun MoreScreen(
     onConfig: () -> Unit,
     advanced: @Composable () -> Unit = {}
 ) {
+    var advancedExpanded by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -1330,7 +1301,16 @@ private fun MoreScreen(
                 onClick = onConfig
             )
         }
-        item { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { advanced() } }
+        item {
+            OutlinedButton(onClick={advancedExpanded=!advancedExpanded},
+                modifier=Modifier.fillMaxWidth()) {
+                Text(if(advancedExpanded) "Свернуть дополнительные параметры"
+                    else "Дополнительные параметры и управление риском")
+            }
+        }
+        if(advancedExpanded) item {
+            Column(verticalArrangement=Arrangement.spacedBy(12.dp)) { advanced() }
+        }
     }
 }
 
@@ -1353,142 +1333,6 @@ private fun MoreDestinationCard(
             Text(description, style = MaterialTheme.typography.bodyMedium, color = AppColors.textMuted)
             OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(action) }
         }
-    }
-}
-
-@Composable
-private fun TestnetForceTradingCard(
-    status: Status,
-    onSetMode: (Boolean) -> Unit,
-    onSubmitEntry: (String, String) -> Unit
-) {
-    val approvedSymbols = listOf(
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
-    )
-    var symbol by remember { mutableStateOf("SOLUSDT") }
-    var direction by remember { mutableStateOf("SHORT") }
-    var confirmEntry by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (status.forceTestnetMode) AppColors.surface2 else AppColors.surface
-        )
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Принудительная торговля", style = MaterialTheme.typography.titleMedium)
-                ModeChip(
-                    if (status.forceTestnetMode) "ГОТОВ • ДЕМО" else "ТОЛЬКО ДЕМО",
-                    if (status.forceTestnetMode) AppColors.amber else AppColors.primary
-                )
-            }
-            Text(
-                "Ручной выбор LONG или SHORT для поиска ошибок на Futures Demo. Автоматические входы по сигналам отключаются, рыночный сканер и управление открытыми позициями продолжаются.",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.textMuted
-            )
-            Text("Инструмент", style = MaterialTheme.typography.labelLarge)
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                approvedSymbols.forEach { approved ->
-                    FilterChip(
-                        selected = symbol == approved,
-                        onClick = { symbol = approved },
-                        label = { Text(approved.removeSuffix("USDT")) }
-                    )
-                }
-            }
-            Text("Направление", style = MaterialTheme.typography.labelLarge)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = direction == "LONG",
-                    onClick = { direction = "LONG" },
-                    label = { Text("LONG • покупка") }
-                )
-                FilterChip(
-                    selected = direction == "SHORT",
-                    onClick = { direction = "SHORT" },
-                    label = { Text("SHORT • продажа") }
-                )
-            }
-            Text(
-                "Вход остаётся условным STOP по закрытым H1-уровням. Перед отправкой Runtime повторно проверяет направление, структурный стоп, доступный баланс, стартовый риск 0,20% на сделку (жёсткий потолок 0,25%) / 0,60% суммарно, дневной лимит 3%, фильтры биржи и состояние защиты. Это не рыночный вход и не обход аварийных блокировок.",
-                style = MaterialTheme.typography.bodySmall,
-                color = AppColors.textMuted
-            )
-            if (!status.forceTestnetMode) {
-                Button(
-                    onClick = { onSetMode(true) },
-                    enabled = status.running && status.binanceConfigured &&
-                        !status.reconcileRequired && !status.executionKillLatched,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("ВКЛЮЧИТЬ РУЧНОЙ ТЕСТОВЫЙ ВХОД")
-                }
-                Text(
-                    when {
-                        !status.running -> "Сначала запусти Runtime."
-                        status.reconcileRequired || status.executionKillLatched ->
-                            "Сначала восстанови состояние биржи; режим не обходит RECONCILE/KILL."
-                        !status.p0GatePassed ->
-                            "Входы заблокированы P0: " + status.p0GateReason +
-                                ". Исправь первопричину; ручной режим не обходит защитные блокировки."
-                        else ->
-                            "Ручной выбор стороны использует H1-структуру, даже если AI-гипотеза указывает противоположное направление."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (!status.p0GatePassed || status.reconcileRequired || status.executionKillLatched)
-                        AppColors.red else AppColors.amber
-                )
-            } else {
-                Button(
-                    onClick = { confirmEntry = true },
-                    enabled = status.running && !status.paused &&
-                        !status.reconcileRequired && !status.executionKillLatched &&
-                        status.p0GatePassed,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("РАЗМЕСТИТЬ УСЛОВНЫЙ $direction • $symbol")
-                }
-                OutlinedButton(
-                    onClick = { onSetMode(false) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("ВЫКЛЮЧИТЬ РЕЖИМ И ОСТАНОВИТЬ ВХОДЫ") }
-            }
-        }
-    }
-
-    if (confirmEntry) {
-        AlertDialog(
-            onDismissRequest = { confirmEntry = false },
-            title = { Text("Подтвердить $direction $symbol?") },
-            text = {
-                Text(
-                    "Будет рассчитан новый условный H1 STOP по структуре последних закрытых свечей. LONG и SHORT используют разные стороны пробоя и противоположно расположенный защитный стоп. Если уровень уже пройден, данные устарели или любая обязательная проверка не пройдёт, ордер не отправится. Принудительный режим влияет только на выбор направления и работает только на Futures Demo."
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    confirmEntry = false
-                    onSubmitEntry(symbol, direction)
-                }) { Text("ПОДТВЕРДИТЬ ДЕМО-ЗАЯВКУ") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmEntry = false }) { Text("ОТМЕНА") }
-            }
-        )
     }
 }
 
@@ -1657,91 +1501,6 @@ private fun PortfolioCard(
 }
 
 @Composable
-private fun DiagnosticsScreen(
-    padding: PaddingValues,
-    status: Status,
-    onRun: () -> Unit,
-    onSelfHeal: () -> Unit,
-    onExport: () -> Unit,
-    message: String
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)
-    ) {
-        item {
-            Text("Диагностика", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        }
-        item { DiagnosticRow("Цена Binance REST", if (status.price != null) "ГОТОВО • " + fmt(status.price, 6) else "ОШИБКА • нет цены") }
-        item { DiagnosticRow("Баланс USDT", if (status.balance != null) "ГОТОВО • " + fmt(status.balance, 4) else "ОЖИДАНИЕ • нет данных счёта") }
-        item { DiagnosticRow("История свечей", if (status.historyReady) "УСПЕХ" else "ОЖИДАНИЕ • " + russianStatus(status.scannerState)) }
-        item { DiagnosticRow("Рыночный WebSocket", if (status.marketWsConnected) "СОЕДИНЕНО" else "Резервное получение цен через REST") }
-        item { DiagnosticRow("Личный WebSocket", if (status.userWsConnected && !status.userStreamSyncRequired) "СОЕДИНЕНО" else "Резервная сверка счёта через REST") }
-        item {
-            DiagnosticRow(
-                "Сканер",
-                status.scannerState + " • " + status.scannerSymbols + "/" +
-                    status.scannerConfiguredSymbols + " pairs • LONG " +
-                    status.scannerLongCandidates + " / SHORT " +
-                    status.scannerShortCandidates + " • " + status.scanDurationMs + " ms"
-            )
-        }
-        item {
-            DiagnosticRow(
-                "Разрешённые фьючерсные пары",
-                status.scannerUniverse.joinToString(", ").ifBlank { "not available" }
-            )
-        }
-        item {
-            DiagnosticRow(
-                "Направления",
-                "LONG ${if (status.allowLong) "РАЗРЕШЕНО" else "ЗАБЛОКИРОВАНО"} • SHORT " +
-                    "${if (status.allowShort) "РАЗРЕШЕНО" else "ЗАБЛОКИРОВАНО"}"
-            )
-        }
-        item {
-            DiagnosticRow(
-                "Режим фьючерсов",
-                "${status.futuresLeverage}x • ${status.futuresMarginType} • ONE-WAY " +
-                    if (status.futuresForceOneWay) "ОБЯЗАТЕЛЬНО" else "НЕПРАВИЛЬНО"
-            )
-        }
-        item { DiagnosticRow("Исполнение", if (status.p0GatePassed) "ГОТОВО" else "ВХОДЫ ОГРАНИЧЕНЫ • " + russianExecutionBlocker(status.p0GateReason)) }
-        status.error?.let { item { DiagnosticRow("Последняя ошибка", russianExecutionBlocker(it)) } }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onRun) { Text("ЗАПУСТИТЬ ДИАГНОСТИКУ") }
-                OutlinedButton(
-                    onClick = onSelfHeal,
-                    enabled = !status.executionKillLatched && !status.reconcileRequired
-                ) { Text("ВОССТАНОВИТЬ СВЯЗЬ") }
-                OutlinedButton(onClick = onExport) { Text("ЭКСПОРТ СНИМКА") }
-            }
-        }
-        if (message.isNotBlank()) item {
-            Text(message, color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun DiagnosticRow(label: String, value: String) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = AppColors.surface)
-    ) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(label, fontWeight = FontWeight.SemiBold)
-            Text(value, color = AppColors.textMuted)
-        }
-    }
-}
-
-@Composable
 private fun ReconcileBarrierScreen(
     padding: PaddingValues,
     status: Status,
@@ -1790,9 +1549,7 @@ private fun DashboardScreen(
     onKill: () -> Unit,
     onScan: () -> Unit,
     onSettings: () -> Unit,
-    onRecoverDashboard: () -> Unit,
-    onSetTestnetForceMode: (Boolean) -> Unit,
-    onForcedEntry: (String, String) -> Unit
+    onRecoverDashboard: () -> Unit
 ) {
     val best = candidates.firstOrNull()
 
@@ -1890,14 +1647,6 @@ private fun DashboardScreen(
 
         item {
             RiskCard(status)
-        }
-
-        item {
-            TestnetForceTradingCard(
-                status = status,
-                onSetMode = onSetTestnetForceMode,
-                onSubmitEntry = onForcedEntry
-            )
         }
 
         item {
@@ -2777,6 +2526,19 @@ private fun PositionScreen(
             )
         }
 
+        if (status.positions.isNotEmpty() &&
+            (!status.positionsSnapshotOk ||
+                !CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))) {
+            item {
+                Text(
+                    "⚠️ ПОСЛЕДНИЙ ИЗВЕСТНЫЙ СНИМОК BINANCE — НЕ ПОДТВЕРЖДЁН СЕЙЧАС. " +
+                        "Позиции показаны для ориентирования; отсутствие свежего ответа не означает, " +
+                        "что они закрыты. Уровни SL требуют отдельной сверки с биржей.",
+                    color = AppColors.amber,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
         if (status.positions.isEmpty()) {
             item {
                 Card(
@@ -2794,7 +2556,8 @@ private fun PositionScreen(
                             style = MaterialTheme.typography.headlineMedium
                         )
                         Text(
-                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет." else "Нет актуального подтверждения позиций Binance.",
+                            if (status.positionsSnapshotOk && CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L)) "Открытых позиций нет."
+                            else "Нет актуального подтверждения позиций Binance. Это НЕ означает, что позиции закрыты; проверь их на бирже.",
                             color = AppColors.textMuted
                         )
                     }
@@ -2821,7 +2584,7 @@ private fun PositionScreen(
                         ) {
                             Text(
                                 (p.direction.takeIf { it == "LONG" || it == "SHORT" }
-                                    ?: if (p.qty < 0.0) "SHORT" else "LONG") + " " + p.symbol,
+                                    ?: "НАПРАВЛЕНИЕ НЕ ПОДТВЕРЖДЕНО") + " " + p.symbol,
                                 modifier = Modifier.weight(1f).clickable { onSelect(p.symbol) },
                                 style =
                                     MaterialTheme.typography.headlineSmall
@@ -2834,12 +2597,9 @@ private fun PositionScreen(
                                     Alignment.CenterVertically
                             ) {
                                 ModeChip(
-                                    "РИСК " +
-                                        fmt(
-                                            p.riskPct * 100,
-                                            2
-                                        ) +
-                                        "%",
+                                    "РИСК НА ВХОДЕ " + (if (p.riskPctVerified)
+                                            fmt(p.riskPct * 100, 2) + "%"
+                                        else "НЕ ПОДТВЕРЖДЁН"),
                                     AppColors.amber
                                 )
 
@@ -2852,6 +2612,38 @@ private fun PositionScreen(
                                 }
                             }
                         }
+                        val oldOppositeCampaign = status.futuresIntents.firstOrNull { stored ->
+                            stored.optString("symbol") == p.symbol &&
+                                stored.optString("direction") in setOf("LONG", "SHORT") &&
+                                stored.optString("direction") != p.direction &&
+                                stored.optString("campaign_status") in setOf(
+                                    "OPEN_PROTECTED", "POSITION_OPEN", "EXIT_PENDING",
+                                    "ADD_ON_PENDING", "FILL_CONFIRMATION_PENDING"
+                                )
+                        }
+                        if (oldOppositeCampaign != null) {
+                            Text(
+                                "⚠️ BINANCE: ${p.direction} • СТАРАЯ КАМПАНИЯ: " +
+                                    oldOppositeCampaign.optString("direction") +
+                                    ". Это разные состояния. Старая запись НЕ является " +
+                                    "действующей позицией. Автоматическое сопровождение " +
+                                    "заблокировано до подтверждённой сверки.",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        if (p.stop == null || p.stopVerificationStatus == "UNVERIFIED_OR_STALE") {
+                            Text(
+                                "🚨 Защитный STOP на Binance не подтверждён. " +
+                                    "Проверь позицию непосредственно на бирже!",
+                                color = AppColors.amber,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                        InfoRow("Источник направления", "Биржевая позиция Binance • " +
+                            if (status.positionsSnapshotOk &&
+                                CockpitDiagnostics.fresh(status.positionsSnapshotAtMs, System.currentTimeMillis(), 15_000L))
+                                "актуальный подписанный снимок" else "снимок устарел или не подтверждён")
                         InfoRow(
                             "Объём позиции",
                             fmt(p.qty, 6)
@@ -3175,9 +2967,6 @@ private fun SettingsScreen(
     onExportBackup: () -> Unit,
     onImportBackup: () -> Unit,
     backupMessage: String,
-    onRunDiagnostics: () -> Unit,
-    onExportDiagnostics: () -> Unit,
-    diagnosticsMessage: String,
     message: String
 ) {
     val context = LocalContext.current
@@ -3261,6 +3050,8 @@ private fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("Фоновая работа Android", style = MaterialTheme.typography.titleMedium)
+                    InfoRow("Фоновый сервис",if(RuntimeServiceState.active) "Работает" else "Не подтверждён")
+                    InfoRow("Работа CPU при выключенном экране",if(RuntimeServiceState.wakeLockHeld) "Удержание активно" else "Не активно")
                     InfoRow(
                         "Разрешение на работу в режиме сна",
                         if (batteryExemptionGranted) "Разрешено" else "Не подтверждено системой"
@@ -3275,10 +3066,47 @@ private fun SettingsScreen(
                         }
                     )
                     Text(
-                        "Для автономной работы откройте системные настройки приложения и проверьте режим батареи/фоновой активности. Поведение также зависит от производителя телефона; этот статус не заменяет физический тест.",
+                        "При включённом движке сервис удерживает CPU и проверяет автозапуск каждые 30 секунд. " +
+                            "Это увеличивает расход батареи. Сверка Binance и торговые блокировки сохраняются при восстановлении.",
                         style = MaterialTheme.typography.bodySmall,
                         color = AppColors.textMuted
                     )
+                    OutlinedButton(onClick={
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package",context.packageName,null)))
+                        }.onFailure {
+                            runCatching { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                        }
+                    },enabled=!batteryExemptionGranted,modifier=Modifier.fillMaxWidth()) {
+                        Text(if(batteryExemptionGranted) "СОН ANDROID: РАЗРЕШЕНИЕ УЖЕ ДАНО" else "ОТКРЫТЬ НАСТРОЙКИ ПИТАНИЯ ПРИЛОЖЕНИЯ")
+                    }
+                    if(Build.MANUFACTURER.equals("samsung",ignoreCase=true)) {
+                        Text(
+                            "Samsung: Батарея → Ограничения в фоновом режиме → Приложения, которые не переходят в спящий режим. " +
+                                "Добавьте Williams (Debug); в настройках батареи приложения выберите «Без ограничений».",
+                            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        OutlinedButton(onClick={
+                            // Samsung's officially documented deep link requires
+                            // an operator tap; the app NEVER silently changes
+                            // system battery exemptions or root settings.
+                            runCatching {
+                                context.startActivity(Intent(
+                                    "com.samsung.android.sm.ACTION_OPEN_CHECKABLE_LISTACTIVITY"
+                                ).setPackage("com.samsung.android.lool").putExtra("activity_type",2))
+                            }.onFailure {
+                                runCatching { context.startActivity(Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.fromParts("package",context.packageName,null)))
+                                }
+                            }
+                        },modifier=Modifier.fillMaxWidth()) {
+                            Text("SAMSUNG: ПРИЛОЖЕНИЯ БЕЗ РЕЖИМА СНА")
+                        }
+                    }
+                    Text("Принудительная остановка в Android прекращает приложение. После неё откройте Williams снова. " +
+                        "Причины завершения процесса теперь сохраняются в диагностике; непрерывная работа на этом телефоне ещё требует проверки.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                     OutlinedButton(
                         onClick = {
                             runCatching {
@@ -3397,9 +3225,11 @@ private fun SettingsScreen(
                     InfoRow("Риск на сделку", fmt(status.riskPerTrade * 100, 1) + "%")
                     InfoRow("Дневной лимит убытка", fmt(status.maxDailyLoss * 100, 1) + "%")
                     InfoRow("Ограничение количества сделок", "динамический")
-                    InfoRow("Ограничение после убытков", "2 подряд → пауза")
-                    InfoRow("Интервал сканирования", "10 секунд")
-                    InfoRow("Число волновых кандидатов", "8")
+                    InfoRow("Серия убытков", "${status.consecutiveLosses} подряд • защитное ограничение определяет Runtime")
+                    InfoRow("Интервал сканирования", "определяется движком")
+                    Text("Это состояние конфигурации, не команда разрешить торговлю. " +
+                        "Если новые входы ограничены, причина отображается на экране диагностики.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                 }
             }
         }
@@ -3464,57 +3294,6 @@ private fun SettingsScreen(
                                 backupMessage.contains("создан", true) ||
                                 backupMessage.contains("восстановлен", true)
                             ) AppColors.green else AppColors.amber
-                        )
-                    }
-                }
-            }
-        }
-
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = AppColors.surface)
-            ) {
-                Column(
-                    Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(9.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.CheckCircle,
-                            contentDescription = null,
-                            tint = AppColors.violet
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "Самодиагностика",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-                    Text(
-                        "После ввода ключей Williams автоматически проверяет Binance REST/WSS, MTF/Wave, сканер, FSM, БД и торговые фильтры. Торговые заявки диагностика не отправляет.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AppColors.textMuted
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = onRunDiagnostics,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("ПРОВЕРИТЬ")
-                        }
-                        OutlinedButton(
-                            onClick = onExportDiagnostics,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("ЭКСПОРТ")
-                        }
-                    }
-                    if (diagnosticsMessage.isNotBlank()) {
-                        Text(
-                            diagnosticsMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AppColors.green
                         )
                     }
                 }
@@ -4061,6 +3840,19 @@ private fun parsePortfolio(json: JSONObject): PortfolioSummary {
     )
 }
 
+/** Read-only UI interpretation of a confirmed Binance one-way position.
+ * Positive positionAmt = LONG, negative = SHORT, zero/invalid = unknown.
+ * This never assigns strategy ownership or authorizes exchange orders.
+ */
+internal fun signedBinancePositionDirection(position: JSONObject): String? {
+    val qty = position.optString("positionAmt").toBigDecimalOrNull() ?: return null
+    return when (qty.signum()) {
+        1 -> "LONG"
+        -1 -> "SHORT"
+        else -> null
+    }
+}
+
 internal fun parseStatus(json: JSONObject): Status {
     val legacy = json.optJSONObject("position")
     val array = json.optJSONArray("positions")
@@ -4103,13 +3895,23 @@ internal fun parseStatus(json: JSONObject): Status {
             parsed += PositionView(
                 symbol = symbol,
                 qty = quantity,
-                direction = item.optString("direction", "").uppercase(Locale.US),
+                // Signed USD-M one-way positionAmt is the authoritative exchange
+                // direction. Never let a stale local campaign label reverse it.
+                direction = if (item.has("positionAmt")) {
+                    signedBinancePositionDirection(item).orEmpty()
+                } else {
+                    item.optString("direction", "").uppercase(Locale.US).takeIf {
+                        it == "LONG" || it == "SHORT"
+                    }.orEmpty()
+                },
                 entry = entryPrice,
                 stop = item.optDouble("stop_loss", item.optDouble("stop"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 take = item.optDouble("take_profit", item.optDouble("take"))
                     .takeUnless { it.isNaN() || it == 0.0 },
                 riskPct = item.optDouble("risk_pct", 0.0),
+                riskPctVerified = !item.isNull("risk_pct") &&
+                    item.optDouble("risk_pct", 0.0) > 0.0,
                 currentPrice = currentPrice,
                 positionValueUsdt = positionValue,
                 allocationPct = allocation,
@@ -4348,7 +4150,14 @@ internal fun parseStatus(json: JSONObject): Status {
         positionsSnapshotOk = json.optBoolean("positions_snapshot_ok"),
         positionsSnapshotAtMs = json.optLong("positions_snapshot_at_ms"),
         accountSnapshotAtMs = json.optLong("account_snapshot_at_ms"),
-        futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details")),
+        futuresIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details"))
+            .filterNot(::isTerminalFuturesExitIntent),
+        exitReconciliationIntents = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")
+            ?.optJSONArray("exit_reconciliation_details")).ifEmpty {
+            // Older runtime payloads may still mix completed EXITs into activity.
+            CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("pending_intent_details"))
+                .filter(::isTerminalFuturesExitIntent)
+        },
         operatorSupervisions = CockpitDiagnostics.rows(json.optJSONObject("futures_runtime")?.optJSONArray("operator_supervised_positions")),
         cockpitReadiness = json.optJSONObject("cockpit_readiness") ?: JSONObject()
     )
@@ -4473,9 +4282,10 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             score = snap?.optDouble("score", 0.0) ?: 0.0,
             mfeR = x.optDouble("mfe_r", 0.0),
             maeR = x.optDouble("mae_r", 0.0),
-            direction = x.optString("direction").ifBlank {
-                if (x.optString("side").equals("SELL", true)) "SHORT" else "LONG"
-            },
+            // An exchange SELL can also be a LONG exit. A blank historical
+            // direction must remain UNKNOWN instead of silently becoming LONG.
+            direction = x.optString("direction").uppercase(Locale.US)
+                .takeIf { it == "LONG" || it == "SHORT" } ?: "UNKNOWN",
             feeUsdt = x.optDouble("fee_usdt", Double.NaN).takeUnless { it.isNaN() },
             feeKnown = x.optBoolean("fee_known", true),
             initialRiskUsdt = x.optDouble("initial_risk_usdt", Double.NaN).takeUnless { it.isNaN() },

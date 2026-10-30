@@ -38,6 +38,7 @@ class WilliamsBookH1EntryPolicyTest {
         assertNotNull(williamsBookH1ProofBlocker("{}","SHORT",p.getString("signal_id"),
             "SHORT_REVERSAL",williamsTc2Profile,95.0,101.0,now))
         assertNotNull(blocker("LONG",p,95.0,101.0))
+        assertNotNull(blocker("SHORT",JSONObject(p.toString()).apply { remove("trigger_price_basis") },95.0,101.0))
         assertNotNull(blocker("SHORT",p,94.9,101.0))
         assertNotNull(blocker("SHORT",p,95.0,101.0,"NTD_FIVE_DIMENSIONS"))
         assertNotNull(blocker("SHORT",p,95.0,101.0,at=t+5*WILLIAMS_H1_MS))
@@ -107,6 +108,32 @@ class WilliamsBookH1EntryPolicyTest {
         assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,now,closed,listOf(live.copy(h=Double.NaN))))
         // At a new hour an old raw snapshot cannot prove the new bar untouched.
         assertNotNull(williamsBookH1ObservedBreakoutBlocker("LONG",t,105.0,t+2*WILLIAMS_H1_MS,closed,listOf(live)))
+    }
+
+    @Test fun topOfHourUnpublishedH1MustDeferWithoutInventingTriggerHistory() {
+        // Device repro 2026-10-25 15:00:00 UTC: REST /klines can still end
+        // at the old 14:00 H1 bar immediately after exchange time crosses
+        // the 15:00 boundary. This is a benign *no-order* deferral, not
+        // positive evidence for a new unconsumed breakout.
+        val latestClosed=h1Bars()
+        val nowAtRoll=t+2*WILLIAMS_H1_MS+250L
+        val oldRaw=listOf(latestClosed.last())
+        val current=WilliamsWaveBar(t+2*WILLIAMS_H1_MS,
+            100.0,104.0,97.0,100.0,1.0)
+        for ((side,trigger) in listOf("LONG" to 105.0,"SHORT" to 95.0)) {
+            assertEquals("H1_CURRENT_BAR_OBSERVATION_UNVERIFIED",
+                williamsBookH1ObservedBreakoutBlocker(
+                    side,t,trigger,nowAtRoll,latestClosed,oldRaw))
+            assertNull(williamsBookH1ObservedBreakoutBlocker(
+                side,t,trigger,nowAtRoll,latestClosed,
+                listOf(latestClosed.last(),current)))
+            val touched=if(side=="LONG") current.copy(h=106.0)
+                else current.copy(l=94.0)
+            assertEquals("H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED",
+                williamsBookH1ObservedBreakoutBlocker(
+                    side,t,trigger,nowAtRoll,latestClosed,
+                    listOf(latestClosed.last(),touched)))
+        }
     }
 
     @Test fun historyBeginningAfterSignalKnowledgeCannotProveUntouchedBreakout() {

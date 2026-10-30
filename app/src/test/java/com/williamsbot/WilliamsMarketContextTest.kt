@@ -14,6 +14,42 @@ class WilliamsMarketContextTest {
     private fun frames(raw:JSONObject)=williamsMarketPhaseContext(raw).getJSONArray("frames").let { a ->
         (0 until a.length()).map { a.getJSONObject(it) }.associateBy { it.getString("frame") }
     }
+    @Test fun identicalWaveLabelsDoNotEraseCompetingConfirmedPivotOrigins() {
+        val h=3_600_000L
+        fun scenario(id:String,pivot:Double,observedAt:Long=now):JSONObject {
+            val times=listOf(now-12*h,now-8*h,now-4*h)
+            val prices=listOf(95.0,112.0,pivot)
+            return JSONObject().put("scenario_id",id).put("frame","1h")
+                .put("direction","UP").put("active_label","W3").put("active_direction","UP")
+                .put("label","W2").put("invalidation",95.0)
+                .put("leg_low",94.0).put("leg_high",113.0).put("leg_start",times.last())
+                .put("status","PROVISIONAL").put("observed_at",observedAt)
+                .put("anchors",org.json.JSONArray(times.indices.map { i ->
+                    JSONObject().put("kind",if(i%2==0) "LOW" else "HIGH")
+                        .put("extreme_at",times[i]).put("known_at",times[i]+3*h)
+                        .put("price",prices[i])
+                }))
+        }
+        fun row(vararg s:JSONObject)=williamsMarketPhaseContext(JSONObject()
+            .put("as_of",now).put("scenarios",org.json.JSONArray(s.toList())))
+            .getJSONArray("frames").getJSONObject(3)
+        val one=row(scenario("parent_A",102.0))
+        assertEquals("PHASE_CANDIDATE",one.getString("state"))
+        assertEquals(1,one.getInt("distinct_structural_hypotheses"))
+        val duplicate=row(scenario("parent_A",102.0),scenario("same_geometry",102.0))
+        assertEquals("PHASE_CANDIDATE",duplicate.getString("state"))
+        val disputed=row(scenario("parent_A",102.0),scenario("parent_B",103.0))
+        assertEquals("ALTERNATIVES",disputed.getString("state"))
+        assertEquals(2,disputed.getInt("distinct_structural_hypotheses"))
+        assertEquals("SAME_LABEL_DIFFERENT_PIVOTS_OR_INVALIDATION",disputed.getString("ambiguity_reason"))
+        assertTrue(disputed.getBoolean("wave_count_ambiguous"))
+        assertFalse(disputed.getBoolean("wave_degree_confirmed"))
+        assertFalse(disputed.getBoolean("can_place_orders"))
+        // A stale pre-close label is NOT a competing current interpretation.
+        val stale=row(scenario("parent_A",102.0),scenario("stale_B",103.0,now-h))
+        assertEquals("PHASE_CANDIDATE",stale.getString("state"))
+    }
+
     @Test fun everyTimeframeIsObservedEvenWhenNoElliottCountCanBeProven() {
         for(sign in listOf(1,-1)) {
             val raw=buildWilliamsObservedMarketContext(history(sign),now)

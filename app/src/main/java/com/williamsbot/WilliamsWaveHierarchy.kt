@@ -14,7 +14,10 @@ internal val williamsWaveFrames = linkedMapOf(
     "8h" to 28_800_000L, "12h" to 43_200_000L, "1d" to 86_400_000L,
     "1w" to 604_800_000L
 )
-internal val williamsRequiredWaveFrames = listOf("1d", "6h", "1h", "15m")
+// Four nested scales required for the user's wave acceptance: D1 > H4 > H1 > M15.
+// H6 is independently sampled as an ADDITIONAL context, not inserted as a
+// mandatory parent of H4: 6 hours is not an integer multiple of 4 hours.
+internal val williamsRequiredWaveFrames = listOf("1d", "4h", "1h", "15m")
 internal data class WilliamsWaveBar(
     val t: Long, val o: Double, val h: Double, val l: Double, val c: Double, val v: Double = 0.0
 )
@@ -34,7 +37,8 @@ internal data class WilliamsWaveScenario(
     var terminalFractal: Boolean = false, var squat: Boolean = false, var targetZone: Boolean = false,
     val alternatives: MutableList<String> = mutableListOf(),
     var legObservationStart:Long = 0L,
-    var thirdMomentum:JSONObject? = null
+    var thirdMomentum:JSONObject? = null,
+    var observedClosePrice:Double = 0.0
 ) {
     val activeLabel:String get()=when(anchors.size) { 2->"W2";3->"W3";4->"W4";5->"W5";6->"A";7->"B";8->"C";else->"NEXT_SEQUENCE_UNRESOLVED" }
     val activeDirection:String get()=if(activeLabel in listOf("W2","W4","A","C")) {
@@ -53,6 +57,7 @@ internal data class WilliamsWaveScenario(
         .put("momentum_shift", momentumShift).put("terminal_fractal", terminalFractal)
         .put("squat", squat).put("target_zone", targetZone).put("alternatives", JSONArray(alternatives))
         .put("third_momentum",thirdMomentum ?: JSONObject.NULL)
+        .put("observed_close_price",observedClosePrice)
 }
 internal data class WilliamsWaveLink(val parent: String, val child: String, val parentLeg: String, val relationship: String) {
     fun toJson(): JSONObject = JSONObject().put("parent", parent).put("child", child)
@@ -82,6 +87,8 @@ internal data class WilliamsWaveHierarchy(
         }
         return analysisFrames.isNotEmpty() && scenarios.any { it.frame==analysisFrames.first() && path(it.id,0) }
     }
+    /** Cheap causal chain proof; do not serialize all wave hypotheses for entry gates. */
+    fun hasRequiredContainedChain():Boolean = containedChain()
     fun toJson(): JSONObject = JSONObject().put("schema_version", 1).put("as_of", asOf)
         .put("wave_labels", "HYPOTHESES_NOT_CERTAINTY").put("chain", JSONArray(analysisFrames))
         .put("scenarios", JSONArray(scenarios.map { it.toJson() }))
@@ -110,7 +117,11 @@ internal fun closedWilliamsWaveBars(bars: List<WilliamsWaveBar>, frame: String, 
             b.l <= minOf(b.o, b.c) && b.v >= 0) { "INVALID_OHLCV" }
         require(i == 0 || b.t - closed[i-1].t == duration) { "GAPPED_OR_UNORDERED_HISTORY" }
     }
-    require(asOf - (closed.last().t + duration) < duration * 2) { "STALE_CLOSED_HISTORY" }
+    // Never accept a missing entire closed bar as a valid wave observation.
+    // Example: at 12:15 H4 needs 08:00-12:00 H4 fully closed;
+    // the older 04:00-08:00 alone does NOT prove current H4 structure.
+    require(asOf >= closed.last().t + duration &&
+        asOf - (closed.last().t + duration) < duration) { "STALE_CLOSED_HISTORY" }
     return closed
 }
 
@@ -181,9 +192,16 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
     if (h.anchors.size < 4) return
     val start = h.anchors.first().extremeAt
     val stop = h.observedAt
+    // Wave degree belongs to the chart being analyzed. An H1 fourth-wave
+    // hypothesis must never borrow a seemingly perfect 100-140-bar H4 AO
+    // swing to proclaim its own minimum momentum evidence.
     val options = frames.mapNotNull { (frame, bars) ->
+        if(williamsWaveFrames.getValue(frame)>williamsWaveFrames.getValue(h.frame))
+            return@mapNotNull null
         val indexes = bars.indices.filter { bars[it].t >= start && bars[it].t < stop }
-        if (indexes.isEmpty() || indexes.first() < 33 || bars.first().t > start) null else frame to indexes
+        if (indexes.isEmpty() || indexes.first() < 33 || bars.first().t > start ||
+            bars[indexes.first()].t-start>=williamsWaveFrames.getValue(frame))
+            null else frame to indexes
     }
     val choice = options.minWithOrNull(compareBy<Pair<String, List<Int>>> { if (it.second.size in 100..140) 0 else 1 }
         .thenBy { abs(it.second.size - 120) }.thenBy { it.first })
@@ -204,33 +222,52 @@ private fun enrichWaveRhythm(h: WilliamsWaveScenario, frames: Map<String, List<W
                 abs((if(anchor.kind=="HIGH") b.h else b.l)-anchor.price)<=maxOf(1e-9,anchor.price*1e-9) }
         return found.singleOrNull()
     }
+    // W5 price target remains a visible PRICE-only observation even if W3
+    // or W4 oscillator time cannot be uniquely resolved on real child bars.
+    if (p.size >= 6) {
+        val extension = abs(p[3].price-p[0].price)
+        val t1 = p[4].price + sign * extension * .62
+        val t2 = p[4].price + sign * extension
+        h.targetZone = p[5].price in minOf(t1,t2)..maxOf(t1,t2)
+    }
     val thirdIndex=uniquePriceIndex(p[3])
     val fourthIndex=if(p.size>=5) uniquePriceIndex(p[4]) else indexes.last()
     h.thirdMomentum=if(thirdIndex!=null && fourthIndex!=null)
         evaluateWilliamsThirdMomentum(bars,osc,indexes.first(),thirdIndex,fourthIndex,h.direction,
             williamsWaveFrames.getValue(frame)).toJson()
     else williamsThirdMomentumUnavailable("SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS").toJson()
+    // Do not promote a smaller/greater 100-140 window into a W4 certificate.
+    // Wrong degree is decisive even when source extreme timing is ambiguous.
+    if(h.scaleBars !in 100..140) { h.w4Zero="WRONG_SCALE"; return }
+    // A source high/low inside the parent bar can have multiple child-time
+    // matches. That is NOT a timestamped W3 or W4 oscillator peak.
+    if (thirdIndex==null || fourthIndex==null) {
+        h.w4Zero = "SCALE_PRICE_EXTREME_MISSING_OR_AMBIGUOUS"
+        return
+    }
     var thirdEnd = p[3].extremeAt + 5 * williamsWaveFrames.getValue(frame)
     if (p.size >= 5) thirdEnd = minOf(thirdEnd, p[4].extremeAt)
     val w3Indexes = indexes.filter { bars[it].t in p[2].extremeAt..thirdEnd }
-    if (w3Indexes.isEmpty()) { h.w4Zero = "MISSING_W3_MOMENTUM"; return }
-    val w3 = w3Indexes.maxBy { sign * osc[it] }
+    if (w3Indexes.isEmpty() || w3Indexes.any { !osc[it].isFinite() }) {
+        h.w4Zero = "MISSING_W3_MOMENTUM"; return
+    }
+    val thirdPeak = w3Indexes.maxOf { sign * osc[it] }
+    val winners = w3Indexes.filter { sign * osc[it] == thirdPeak }
+    if (winners.size!=1) { h.w4Zero = "AMBIGUOUS_W3_MOMENTUM_PEAK"; return }
+    val w3 = winners.single()
     val end = if (p.size >= 5) p[4].extremeAt else stop
-    val fourthValues = indexes.filter { it > w3 && bars[it].t <= end && osc[it].isFinite() }
-        .map { sign * osc[it] }
-    h.w4Zero = classifyWilliamsFourthAo(
-        sign * osc[w3], fourthValues.minOrNull() ?: Double.NaN, h.scaleBars
-    )
+    val w4Indexes = indexes.filter { it > w3 && bars[it].t <= end }
+    if (w4Indexes.isEmpty() || w4Indexes.any { !osc[it].isFinite() }) {
+        h.w4Zero = "MISSING_W4_MOMENTUM"; return
+    }
+    val fourthValues = w4Indexes.map { sign * osc[it] }
+    h.w4Zero = classifyWilliamsFourthAo(thirdPeak, fourthValues.min(), h.scaleBars)
     if (p.size >= 6) {
         fun peak(a: Long, b: Long): Double? = indexes.filter { bars[it].t in a..b && osc[it].isFinite() }
             .maxOfOrNull { sign * osc[it] }
         val third = peak(p[2].extremeAt, thirdEnd)
         val fifth = peak(p[4].extremeAt, minOf(stop, p[5].extremeAt + 5 * williamsWaveFrames.getValue(frame)))
         h.divergence = third != null && fifth != null && fifth > 0 && fifth < third && sign * (p[5].price-p[3].price) > 0
-        val extension = abs(p[3].price-p[0].price)
-        val t1 = p[4].price + sign * extension * .62
-        val t2 = p[4].price + sign * extension
-        h.targetZone = p[5].price in minOf(t1,t2)..maxOf(t1,t2)
     }
     if (h.w4Zero != "MINIMUM_ONLY") h.alternatives += "W3_EXTENSION_OR_WRONG_DEGREE"
 }
@@ -311,7 +348,8 @@ internal fun williamsHypothesesFromAnchors(
         val direction = if (sign == 1) "UP" else "DOWN"
         val h = WilliamsWaveScenario("$frame:$direction:${p.first().extremeAt}:$n",frame,direction,label,p,
             bars.last().t+duration,p.last().extremeAt,leg.minOf { it.l },leg.maxOf { it.h },inv,
-            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons)
+            if (reasons.isNotEmpty()) "INVALIDATED" else if (diagonalOverlap || w2OriginTouch) "ALTERNATIVE" else "PROVISIONAL",reasons,
+            observedClosePrice=bars.last().c)
         if (w2OriginTouch && reasons.isEmpty()) {
             h.alternatives += "W2_ORIGIN_TOUCH_100_PERCENT_UNCONFIRMED"
         }
@@ -460,6 +498,14 @@ internal fun williamsCorrectionEntryContext(
         return WilliamsCorrectionContext(reason="CORRECTION_REQUIRES_H1_WISE_MAN")
     if (report.frameErrors.isNotEmpty())
         return WilliamsCorrectionContext(reason="CORRECTION_HISTORY_INCOMPLETE")
+    // The real scanner supplies frameCandleCounts for each genuinely sourced
+    // degree. H6-only ancestry is not proof of the requested D1/H4/H1/M15
+    // hierarchy: there must also be a complete four-degree price/time path.
+    // Empty counts are possible only in unit-constructed semantic scenarios
+    // which test the inner correction rule without a market-data scanner.
+    if (report.frameCandleCounts.isNotEmpty() &&
+        !report.hasRequiredContainedChain())
+        return WilliamsCorrectionContext(reason="CORRECTION_REQUIRED_FOUR_DEGREE_CHAIN_UNPROVEN")
     if (signalAt <= 0 || signalAt + 3_600_000L > report.asOf || report.asOf-signalAt > 18_000_000L)
         return WilliamsCorrectionContext(reason="CORRECTION_H1_SIGNAL_NOT_CLOSED_OR_FRESH")
     val approvals=linkedMapOf<String,WilliamsCorrectionContext>()

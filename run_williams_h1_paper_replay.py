@@ -8,6 +8,7 @@ passed to the exchange-free execution simulator.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import math
 import time
@@ -21,11 +22,15 @@ import requests
 from strategy import calculate_indicators, canonical_indicator_config_from_env
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 from williams_paper_replay import PaperReplayConfig, run_williams_paper_replay
+from williams_trade_readiness_audit import audit_williams_h1_trade_quality
 
 FUTURES_REST = "https://fapi.binance.com"
 APPROVED_SYMBOLS = (
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    # Public-data RESEARCH scope only; this never changes Android's
+    # independently configured live-account trading universe.
+    "TRXUSDT", "DOTUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT",
 )
 KLINE_COLUMNS = (
     "open_time", "open", "high", "low", "close", "volume",
@@ -163,14 +168,18 @@ def _market_regime_frame(candles: pd.DataFrame) -> pd.DataFrame:
     # Rolling trailing thresholds avoid using future volatility to classify an older trade.
     low_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.25)
     high_q = volatility.rolling(24 * 90, min_periods=24 * 30).quantile(0.75)
+    # A 20-day replay has NO 30-day trailing trend and NO 90-day
+    # volatility reference. Never misreport absent regime measurements as
+    # a genuine range or "normal volatility" market.
     trend_label = np.select(
-        [trend > 0.05, trend < -0.05],
-        ["TREND_UP_30D", "TREND_DOWN_30D"],
+        [trend.isna(), trend > 0.05, trend < -0.05],
+        ["TREND_30D_HISTORY_UNAVAILABLE", "TREND_UP_30D", "TREND_DOWN_30D"],
         default="RANGE_OR_WEAK_TREND",
     )
     vol_label = np.select(
-        [volatility <= low_q, volatility >= high_q],
-        ["LOW_VOL", "HIGH_VOL"],
+        [volatility.isna() | low_q.isna() | high_q.isna(),
+         volatility <= low_q, volatility >= high_q],
+        ["VOL_REGIME_HISTORY_UNAVAILABLE", "LOW_VOL", "HIGH_VOL"],
         default="NORMAL_VOL",
     )
     return pd.DataFrame({
@@ -215,6 +224,11 @@ def run_symbol_replay(
 ) -> dict:
     if len(candles) < 60:
         raise ValueError(f"{symbol}: need at least 60 closed H1 bars; got {len(candles)}")
+    # Use the symbol's actual tick for both creation and simulated execution.
+    if not math.isfinite(tick_size) or tick_size <= 0:
+        raise ValueError(f"{symbol}: missing/invalid exchange tick size")
+    replay_config = replace(config, tick_size=tick_size)
+    replay_config.validate()
     cfg = canonical_indicator_config_from_env()
     indicators = calculate_indicators(candles, cfg)
     indicators = indicators.iloc[54:].copy()
@@ -230,7 +244,10 @@ def run_symbol_replay(
     )
     # Indicator warmup truncation changes the row coordinates, so all signal event
     # keys are now the indices of the matching closed-candle frame above.
-    equity, trades, metrics = run_williams_paper_replay(candles, signals, config)
+    equity, trades, metrics = run_williams_paper_replay(candles, signals, replay_config)
+    quality_audit = audit_williams_h1_trade_quality(
+        candles, signals, replay_config, baseline=(equity,trades,metrics))
+
 
     regimes = _market_regime_frame(candles)
     if not trades.empty:
@@ -288,10 +305,12 @@ def run_symbol_replay(
         "entry_risk_pct": config.risk_pct_per_entry,
         "fee_rate_per_side": config.fee_rate_per_side,
         "adverse_slippage_rate_per_side": config.slippage_rate_per_side,
-        "tick_size_source": "Binance USD-M current exchangeInfo",
+        "tick_size": tick_size,
+        "tick_size_source": "Caller-supplied USD-M exchangeInfo tick; historical tick regime not verified",
         "ohlc_source": "public Binance USD-M Futures historical klines; closed H1 candles only",
-        "execution_model": "independent causal paper replay; stop-entry, structural stop, no fixed TP; conservative stop-first on intrabar ambiguity",
+        "execution_model": "independent causal paper replay; closed continuous H1; stop-entry, structural stop, no fixed TP; stop-first on intrabar ambiguity; discretionary TC2 opposite market exits require conservative fill profitability after project reserve + modeled fees",
         "trade_metrics": _metrics_for_trades(trades),
+        "read_only_chronological_quality": quality_audit,
         "regime_metrics": regime_summary,
         "quarterly_metrics": quarterly_summary,
         "trades_csv": str(trades_path),
@@ -320,7 +339,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     symbols = [x.strip().upper() for x in args.symbols.split(",") if x.strip()]
     if not symbols or len(set(symbols)) != len(symbols) or any(x not in APPROVED_SYMBOLS for x in symbols):
-        parser.error("--symbols must be a unique subset of the approved ten USD-M contracts")
+        parser.error("--symbols must be a unique subset of the approved fifteen USD-M research contracts")
     start_ms = int(pd.Timestamp(args.start, tz="UTC").timestamp() * 1000)
     end_ms = int(pd.Timestamp(args.end, tz="UTC").timestamp() * 1000)
     config = PaperReplayConfig(
