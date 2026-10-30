@@ -384,6 +384,21 @@ internal fun reconciliationTaskLifecycleHealthy(
     return nowMs - startedAtMs <= maximumDurationMs
 }
 
+/** Independent authenticated display evidence is permitted to VETO new risk,
+ * never to grant it. Requires a working full-position STOP for every signed
+ * live row; a stored campaign's PROTECTED label does not qualify.
+ * Empty rows mean flat only after the caller's successful bracketed signed GET. */
+internal fun signedFuturesPositionStopDisplayHasUnverifiedExposure(rows: JSONArray): Boolean =
+    (0 until rows.length()).any { index ->
+        val row = rows.optJSONObject(index) ?: return@any true
+        val quantity = row.optString("positionAmt").toDoubleOrNull()
+        if(quantity == null || !quantity.isFinite() || quantity == 0.0) return@any true
+        val verified = row.optString("stop_verification_status") in
+            setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN")
+        val stop = row.optString("stop").toDoubleOrNull()
+        !verified || stop == null || !stop.isFinite() || stop <= 0.0
+    }
+
 /** Private-stream readiness is based on successful exchange reconciliation, not event traffic. */
 internal fun userStreamSyncIsFresh(
     connected: Boolean,
@@ -1727,6 +1742,10 @@ private class NativeEngine(
     @Volatile private var futuresAccountSnapshotRefreshError: String? = null
     // Publish bytes and their confirmation time together; a later refresh cannot relabel old rows as fresh.
     @Volatile private var cachedFuturesPositionEnvelope: FuturesPositionDisplayEnvelope? = null
+    // Negative signed evidence only. Never grants a new-entry permission:
+    // one unverified live position blocks NEW exposure until a later complete
+    // signed position/STOP display read proves all current positions protected.
+    @Volatile private var signedStopDisplayUnverified = false
     // An in-flight display REST read must not republish a pre-mutation STOP
     // snapshot after an exchange-confirmed structural stop replacement.
     @Volatile private var futuresPositionSnapshotEpoch = 0L
@@ -2009,6 +2028,7 @@ private class NativeEngine(
             userStreamConnected &&
             !userStreamSyncRequired &&
             signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()) &&
+            !signedStopDisplayUnverified &&
             restAccountReady &&
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
@@ -2039,6 +2059,8 @@ private class NativeEngine(
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
             if (!signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()))
                 add("signed_futures_account_position_stop_reconciliation_stale_or_unknown")
+            if (signedStopDisplayUnverified)
+                add("signed_binance_display_detected_unverified_protection_new_entries_frozen")
             if (!restAccountReady) add("rest_account_not_ready")
             else if (!accountFundedForEntry()) add("futures_account_unfunded_or_zero_usdt")
             if (!dailyRiskBaselineReady()) add("futures_daily_risk_baseline_unverified")
@@ -5321,8 +5343,10 @@ private class NativeEngine(
             check(futuresPositionSnapshotEpoch == snapshotEpoch) {
                 "Futures STOP changed during display refresh; newer exchange evidence is required"
             }
-            if ((cachedFuturesPositionEnvelope?.observedAtMs ?: 0L) <= envelope.observedAtMs)
+            if ((cachedFuturesPositionEnvelope?.observedAtMs ?: 0L) <= envelope.observedAtMs) {
                 cachedFuturesPositionEnvelope = envelope
+                signedStopDisplayUnverified = signedFuturesPositionStopDisplayHasUnverifiedExposure(out)
+            }
             futuresPositionSnapshotRefreshError = null
         }
         return envelope
