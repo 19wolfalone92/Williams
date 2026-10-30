@@ -25,7 +25,7 @@ internal data class FuturesProtectionDisplaySnapshot(
  */
 internal fun readFuturesProtectionDisplaySnapshot(
     readPositions: () -> JSONArray,
-    readOpenAlgos: () -> JSONArray,
+    readOpenAlgosForSymbol: (String) -> JSONArray,
     contractPrice: (String) -> Double,
     trustedObservations: JSONArray,
     intents: JSONArray,
@@ -54,9 +54,23 @@ internal fun readFuturesProtectionDisplaySnapshot(
         return live
     }
     val before = liveRows(readPositions())
-    val algos = readOpenAlgos()
-    check(CockpitDiagnostics.rows(algos).size == algos.length()) {
-        "Malformed signed open algo-order snapshot"
+    // The global no-symbol endpoint carries Binance request weight 40 and can
+    // return a different view from the symbol-scoped protection audit.
+    // Query EXACTLY the live symbols from the first signed position read:
+    // no order identity, symbol or malformed payload is silently discarded.
+    val algos = JSONArray()
+    for (symbol in before.keys) {
+        val signed = readOpenAlgosForSymbol(symbol)
+        check(CockpitDiagnostics.rows(signed).size == signed.length()) {
+            "Malformed signed open algo-order snapshot for $symbol"
+        }
+        for (index in 0 until signed.length()) {
+            val item = signed.getJSONObject(index)
+            check(item.optString("symbol") == symbol) {
+                "Signed $symbol algo-order snapshot contains foreign/missing symbol"
+            }
+            algos.put(item)
+        }
     }
     val activeSupervisions = CockpitDiagnostics.rows(supervisions).filter { it.optString("state") == "ACTIVE" }
     val standardOrders = if (activeSupervisions.isNotEmpty()) readOpenOrders?.invoke() else null
@@ -77,7 +91,8 @@ internal fun readFuturesProtectionDisplaySnapshot(
         val direction = if (amount.signum() > 0) "LONG" else "SHORT"
         val mark = position.optString("markPrice").toDoubleOrNull() ?: Double.NaN
         var contract: Double? = null
-        val stops = CockpitDiagnostics.rows(algos).filter { order ->
+        val signedAlgoRows = CockpitDiagnostics.rows(algos).filter { it.optString("symbol") == symbol }
+        val stops = signedAlgoRows.filter { order ->
             if (order.optString("symbol") != symbol) return@filter false
             if (!order.optString("closePosition").equals("true", true) &&
                 !order.optString("reduceOnly").equals("true", true)) return@filter false
@@ -142,6 +157,16 @@ internal fun readFuturesProtectionDisplaySnapshot(
             .put("automatic_trailing_authorized", owned || supervised)
             .put("management_mode", if (owned) "STRATEGY_OWNED"
                 else if (supervised) supervision!!.getString("mode") else "OBSERVE_ONLY")
+            .put("signed_algo_orders_seen", signedAlgoRows.size)
+            .put("signed_full_stops_seen", stops.size)
+            // Diagnose a missing/invalid proof without treating the persisted
+            // PROTECTED campaign status as evidence that Binance has a STOP.
+            .put("stop_proof_rejection", when {
+                stops.size > 1 -> "MULTIPLE_FULL_STOPS_NEED_OWNER_AND_COVERAGE_REVIEW"
+                stop != null -> JSONObject.NULL
+                signedAlgoRows.isEmpty() -> "NO_OPEN_ALGO_ORDERS_RETURNED_FOR_SYMBOL"
+                else -> "SIGNED_ALGOS_PRESENT_BUT_NOT_FULL_POSITION_PROTECTIVE_STOP"
+            })
             .put("scope", "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"))
     }
     check(CockpitDiagnostics.fresh(startedAt, clock(), ttlMs)) {
