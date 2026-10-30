@@ -85,6 +85,10 @@ object StandaloneRuntime {
         // second NativeEngine while an old server still has a running worker.
         return server?.stop() ?: true
     }
+
+    /** Foreground-service watchdog only: no network call or fresh worker here. */
+    fun requestStalledWorkerRecovery(): String =
+        server?.requestStalledWorkerRecovery() ?: "NO_RUNTIME_SERVER"
 }
 
 /**
@@ -1289,6 +1293,9 @@ private class StandaloneServer(private val context: Context) {
 
     fun stop(): Boolean = engine?.stop()?.optBoolean("stopped", false) ?: true
 
+    fun requestStalledWorkerRecovery(): String =
+        engine?.requestStalledWorkerRecovery() ?: "NO_NATIVE_ENGINE"
+
     fun autostart() {
         if (
             prefs.getBoolean("auto_run", false)
@@ -1708,6 +1715,53 @@ private class NativeEngine(
 
     @Volatile private var worker: Thread? = null
     @Volatile private var lastWorkerLoopElapsedMs=0L
+    // Once per generation. A stalled old worker must terminate before recovery
+    // can create another worker on the same Binance Futures account.
+    @Volatile private var staleWorkerRecoverySignalledGeneration=-1L
+
+    /**
+     * Called only by the foreground service's dedicated lifecycle executor.
+     * A prolonged worker stall with no active financial operations may be
+     * interrupted cooperatively. This does NOT create a replacement thread.
+     * The exiting worker's existing recovery code first reconciles Binance.
+     */
+    @Synchronized
+    fun requestStalledWorkerRecovery():String {
+        val current=backgroundSnapshot()
+        val now=android.os.SystemClock.elapsedRealtime()
+        val owned=worker ?: return "NO_OWNED_WORKER"
+        val busy=executionGate.isReserved(FUTURES_EXECUTION_DOOR_KEY) ||
+            futuresReconciliationRunning || futuresStreamReconcileRunning ||
+            nativeManagementRunning
+        if (!BackgroundRuntimePolicy.mayInterruptStaleWorker(
+                current,now,mutationInFlight=executionGate.isReserved(FUTURES_EXECUTION_DOOR_KEY),
+                reconciliationInFlight=futuresReconciliationRunning || futuresStreamReconcileRunning,
+                managementInFlight=nativeManagementRunning,
+                signalledForGeneration=staleWorkerRecoverySignalledGeneration==current.generation
+            )) return if (busy) "DEFERRED_EXCHANGE_SAFETY_WORK"
+                else "NOT_ELIGIBLE_OR_ALREADY_SIGNALLED"
+        if (owned !== worker || !owned.isAlive || current.generation != runtimeGeneration)
+            return "WORKER_CHANGED"
+        // Fail closed *before* signalling a potentially blocked worker. A failed
+        // durable write is never permission to restart or duplicate orders.
+        reconcileRequired=true
+        if (!persistSafetyFlag("reconcile_required",true))
+            return "RECONCILE_FENCE_PERSIST_FAILED"
+        // Recheck after disk I/O: a protection mutation may have acquired the
+        // execution door in the meantime. Leave the durable fence intact.
+        if (executionGate.isReserved(FUTURES_EXECUTION_DOOR_KEY) ||
+            futuresReconciliationRunning || futuresStreamReconcileRunning ||
+            nativeManagementRunning) return "DEFERRED_EXCHANGE_SAFETY_WORK"
+        if (owned !== worker || !owned.isAlive || current.generation != runtimeGeneration)
+            return "WORKER_CHANGED_AFTER_FENCE"
+        staleWorkerRecoverySignalledGeneration=current.generation
+        scannerState="BLOCKED_RUNTIME_RECOVERY"
+        scannerError="Stalled worker recovery requested; Binance reconciliation required"
+        lastError=scannerError
+        owned.interrupt()
+        return "COOPERATIVE_INTERRUPT_SENT"
+    }
+
     fun backgroundSnapshot():BackgroundRuntimeSnapshot = BackgroundRuntimeSnapshot(
         runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,
         worker?.isAlive==true,runtimeGeneration,lastWorkerLoopElapsedMs)
