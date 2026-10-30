@@ -4,6 +4,21 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 class WilliamsDecisionTraceTest {
+
+    @Test fun diagnosticArchiveDoesNotClaimBearishWaveAoDivergenceAcrossZero() {
+        // Exact directional shape in 4.64.3 BNBUSDT audit:
+        // higher price high, AO first positive and second negative.
+        assertFalse(williamsCausalLocalAoDivergence(
+            true,753.29,753.37,1.3316764705882633,-4.787735294117738))
+        assertTrue(williamsCausalLocalAoDivergence(true,100.0,105.0,8.0,3.0))
+        assertFalse(williamsCausalLocalAoDivergence(true,100.0,105.0,3.0,8.0))
+        assertFalse(williamsCausalLocalAoDivergence(true,100.0,105.0,0.0,-2.0))
+        assertTrue(williamsCausalLocalAoDivergence(false,100.0,95.0,-8.0,-3.0))
+        assertFalse(williamsCausalLocalAoDivergence(false,100.0,95.0,-3.0,2.0))
+        assertFalse(williamsCausalLocalAoDivergence(false,100.0,101.0,-3.0,-2.0))
+        assertFalse(williamsCausalLocalAoDivergence(true,100.0,105.0,Double.NaN,1.0))
+        assertFalse(williamsCausalLocalAoDivergence(false,100.0,95.0,Double.POSITIVE_INFINITY,-1.0))
+    }
     @Test fun pythonAndAndroidUseTheSameClosedCandleEvidenceAndDoNotConsumeFutureBars() {
         val cases=JSONObject(requireNotNull(javaClass.getResource("/williams_decision_trace_contract.json")).readText()).getJSONArray("cases")
         for(i in 0 until cases.length()) {
