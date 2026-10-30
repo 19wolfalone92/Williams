@@ -124,13 +124,13 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     # Validate the actual Kotlin REST base declaration, not a matching
     # substring in a comment, a spoofed URL or an unrelated literal.
     declared_base = re.search(
-        r'\\bprivate\\s+val\\s+baseUrl\\s*=\\s*"([^"\\r\\n]+)"',
+        r'\bprivate\s+val\s+baseUrl\s*=\s*"([^"\r\n]+)"',
         runtime,
     )
     assert declared_base is not None, "Futures REST baseUrl declaration missing"
     assert _is_demo_futures_rest_base(declared_base.group(1))
     inline_request = re.search(
-        r'\\bval\\s+requestUrl\\s*=\\s*"([^"\\r\\n]+)"\\s*\\+\\s*futuresPath',
+        r'\bval\s+requestUrl\s*=\s*"([^"\r\n]+)"\s*\+\s*futuresPath',
         runtime,
     )
     assert inline_request is not None, "Signed Futures REST request URL missing"
