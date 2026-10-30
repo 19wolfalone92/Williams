@@ -1,4 +1,6 @@
 from pathlib import Path
+import re
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent
 ANDROID = ROOT / "app" / "src" / "main"
@@ -89,7 +91,8 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "marketWebSocketFresh() &&" in runtime
     assert 'add("market_websocket_disconnected_or_stale")' in runtime
     assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
-    assert "https://demo-fapi.binance.com" in runtime
+    urls = re.findall(r'https?://[^"\\s]+', runtime)
+    assert any(urlparse(u).hostname == "demo-fapi.binance.com" for u in urls)
 
 
 def test_android_corrupt_persisted_campaign_state_fails_closed():
