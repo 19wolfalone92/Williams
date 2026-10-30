@@ -3,6 +3,21 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 
+/**
+ * Local confirmed-fractal price/AO divergence, not W3/W5 genealogy proof.
+ * Both AO extrema must be on the SAME expected side of the zero line;
+ * comparing a positive W3 peak against a negative later high incorrectly
+ * called an opposite-oscillator-regime change a verified bearish divergence.
+ */
+internal fun williamsCausalLocalAoDivergence(
+    bearish:Boolean, oldPrice:Double, newPrice:Double,
+    oldAo:Double, newAo:Double
+):Boolean {
+    if(!listOf(oldPrice,newPrice,oldAo,newAo).all { it.isFinite() }) return false
+    return if(bearish) newPrice>oldPrice && oldAo>0.0 && newAo>0.0 && newAo<oldAo
+    else newPrice<oldPrice && oldAo<0.0 && newAo<0.0 && newAo>oldAo
+}
+
 /** Evidence only: no mutation API and no calibrated confidence/profit claim. */
 internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<WilliamsWaveBar>,now:Long,
     indicators:JSONObject,signals:JSONArray,hierarchy:JSONObject):JSONObject {
@@ -28,7 +43,9 @@ internal fun buildWilliamsDecisionTrace(symbol:String,profile:String,input:List<
         if(pivots.size==2) {
             val a=pivots[0];val b=pivots[1];val first=oscillator(a.center)!!;val second=oscillator(b.center)!!
             divergences.put(JSONObject().put("direction",if(kind=="HIGH") "BEARISH" else "BULLISH")
-                .put("observed",if(kind=="HIGH") b.price>a.price && second<first else b.price<a.price && second>first)
+                .put("observed",williamsCausalLocalAoDivergence(kind=="HIGH",a.price,b.price,first,second))
+                .put("scope","LOCAL_CONFIRMED_FRACTAL_AO_SAME_ZERO_SIDE_PROXY_NOT_W3_W5_CERTIFICATION")
+                .put("can_place_orders",false).put("can_close",false)
                 .put("first",JSONObject().put("bar_time_ms",bars[a.center].t).put("price",a.price).put("ao",first)
                     .put("confirmed_at_ms",bars[a.confirmation].t+3_600_000L))
                 .put("second",JSONObject().put("bar_time_ms",bars[b.center].t).put("price",b.price).put("ao",second)
