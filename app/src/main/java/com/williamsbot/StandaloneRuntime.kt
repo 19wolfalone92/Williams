@@ -394,6 +394,21 @@ internal fun userStreamSyncIsFresh(
     connected && !syncRequired && lastSuccessfulSyncMs > 0L &&
         nowMs >= lastSuccessfulSyncMs
 
+/** Display-only lifecycle diagnosis. No timeout here cancels an unknown
+ * exchange mutation or authorizes a second concurrent REST reconciliation. */
+internal fun privateStreamReconcileDiagnosticState(
+    connected: Boolean, syncRequired: Boolean, running: Boolean,
+    startedAtMs: Long, lastVerifiedSyncMs: Long, nowMs: Long
+): String = when {
+    running && !reconciliationTaskLifecycleHealthy(true,startedAtMs,nowMs) ->
+        "STALLED_IN_FLIGHT_NO_NEW_ENTRY_AUTHORITY"
+    running -> "SIGNED_RECONCILIATION_IN_FLIGHT"
+    userStreamSyncIsFresh(connected,syncRequired,lastVerifiedSyncMs,nowMs) ->
+        "CURRENT_SOCKET_SYNC_PROVED"
+    !connected -> "PRIVATE_SOCKET_DISCONNECTED"
+    else -> "PRIVATE_SOCKET_NOT_SIGNED_SYNCED"
+}
+
 /** A connected private WebSocket is not sufficient to submit NEW exposure. The
  * periodic signed account/position/STOP reconciliation must also have succeeded
  * recently. A stalled worker or a deferred lock must not indefinitely reuse
@@ -1695,6 +1710,8 @@ private class NativeEngine(
     @Volatile private var userStreamReconcileStartedAtMs = 0L
     @Volatile private var userStreamReconcileFinishedAtMs = 0L
     @Volatile private var userStreamReconcileFailure: String? = null
+    // Read-only phase instrumentation; only matching signed REST generation clears sync.
+    @Volatile private var userStreamReconcilePhase = "NOT_STARTED"
     @Volatile private var lastUserEventMs = 0L
     @Volatile private var lastUserStreamSyncAtMs = 0L
     // GET-only forensic data: never used by the Execution Door, position
@@ -2268,6 +2285,12 @@ private class NativeEngine(
             .put("user_stream_reconcile_finished_at_ms", userStreamReconcileFinishedAtMs)
             .put("user_stream_reconcile_duration_ms", if (userStreamReconcileStartedAtMs > 0L) ((if (futuresStreamReconcileRunning) System.currentTimeMillis() else userStreamReconcileFinishedAtMs) - userStreamReconcileStartedAtMs).coerceAtLeast(0L) else JSONObject.NULL)
             .put("user_stream_reconcile_failure", userStreamReconcileFailure ?: JSONObject.NULL)
+            .put("user_stream_reconcile_phase", userStreamReconcilePhase)
+            .put("user_stream_reconcile_diagnostic_state", privateStreamReconcileDiagnosticState(
+                userStreamConnected,userStreamSyncRequired,futuresStreamReconcileRunning,
+                userStreamReconcileStartedAtMs,lastUserStreamSyncAtMs,System.currentTimeMillis()))
+            .put("user_stream_signed_account_snapshot_at_ms", lastRestReconcileMs)
+            .put("user_stream_reconcile_pending_events", futuresStreamReconcilePending)
             .put("fsm_state", stateMachine.state.name)
             .put("history_warmup_running", historyWarmupRunning)
             .put("history_ready", historyReady)
@@ -7830,6 +7853,7 @@ private class NativeEngine(
                 )) return
             lastUserStreamReconcileAttemptMs = nowMs
             userStreamReconcileStartedAtMs = nowMs
+            userStreamReconcilePhase = "QUEUED"
             userStreamReconcileFailure = null
             futuresStreamReconcileRunning = true
             futuresStreamReconcilePending = false
@@ -7843,6 +7867,7 @@ private class NativeEngine(
                         futuresStreamReconcilePending = false
                         userStreamConnectionGeneration
                     }
+                    userStreamReconcilePhase = "WAITING_FOR_SIGNED_ACCOUNT_RECONCILIATION"
                     val result = reconcileFuturesThroughDoor(
                         "USER_STREAM_RECONCILIATION",
                         allowStopped = true,
@@ -7855,8 +7880,10 @@ private class NativeEngine(
                         // monitoring worker will retry after its bounded backoff.
                         userStreamReconcileFailure =
                             "PRIVATE_SIGNED_REST_SYNC_DEFERRED_ACCOUNT_LOCK; RETRY_PENDING"
+                        userStreamReconcilePhase = "ACCOUNT_LOCK_DEFERRED_NO_SIGNED_PROOF"
                         break
                     }
+                    userStreamReconcilePhase = "SIGNED_SNAPSHOT_RETURNED_NEEDS_VALIDATION"
                     check(futuresSignedSnapshotComplete(result)) {
                         result.optString("blocker", "Futures reconciliation returned not-ok")
                     }
@@ -7872,6 +7899,7 @@ private class NativeEngine(
                             } else {
                                 userStreamReconcileFailure =
                                     "PRIVATE_STREAM_EVENTS_ARRIVED_DURING_SIGNED_SYNC; BOUNDED_RETRY_PENDING"
+                                userStreamReconcilePhase = "PRIVATE_EVENTS_BOUNDED_RETRY_REQUIRED"
                                 false
                             }
                         } else if (!mayCommitUserStreamSync(
@@ -7884,10 +7912,12 @@ private class NativeEngine(
                             // This attempt may finish just as the socket changes. Never let
                             // an old-session REST snapshot clear the current session's latch.
                             userStreamSyncRequired = true
+                            userStreamReconcilePhase = "SOCKET_GENERATION_CHANGED_NO_SYNC_PROOF"
                             false
                         } else {
                             userStreamSyncRequired = false
                             lastUserStreamSyncAtMs = System.currentTimeMillis()
+                            userStreamReconcilePhase = "CURRENT_SOCKET_SIGNED_SYNC_PROVEN"
                             false
                         }
                     }
@@ -7900,6 +7930,7 @@ private class NativeEngine(
                 // Previously this path set the global blocker but left user_stream_last_error
                 // null, hiding the cause of a permanently blocked private-stream sync.
                 userStreamReconcileFailure = failureReason
+                userStreamReconcilePhase = "FAILED_SIGNED_RECONCILIATION"
                 userStreamLastError = failureReason
                 lastError = failureReason
                 setReconcileRequired(failureReason)
