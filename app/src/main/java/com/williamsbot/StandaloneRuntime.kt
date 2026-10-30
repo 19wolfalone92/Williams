@@ -7644,10 +7644,10 @@ private class NativeEngine(
         // if an hourly close occurred during the 60-second fan-out.
         runCatching {
             val primary = ranked.firstOrNull { it.symbol == primarySymbol }?.candles
-            primaryCandles = if (primary != null &&
+            primaryCandles = if (primary != null && primary.size >= 150 &&
                 runCatching { candleSeriesCurrent(primary, "1h", futuresMarketData.exchangeNowMs()) }
                     .getOrDefault(false)
-            ) primary else fetchCandles(primarySymbol, "1h", 150)
+            ) primary.takeLast(150) else fetchCandles(primarySymbol, "1h", 150)
         }
 
         // Never overwrite a safety blocker with READY merely because market data was
