@@ -9,6 +9,30 @@ import org.json.JSONObject
 
 class StandaloneRuntimeReconciliationTest {
     @Test
+    fun signedExchangeStopMismatchVetoesNewRiskWithoutAssumingStopsCanceled() {
+        fun row(stopStatus:String,stop:Any) = JSONObject()
+            .put("symbol","BTCUSDT").put("positionAmt","0.0017")
+            .put("stop_verification_status",stopStatus).put("stop",stop)
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("UNVERIFIED_OR_STALE",JSONObject.NULL))))
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("STOP_UNCONFIRMED",JSONObject.NULL))))
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("OWNED_STOP_SEEN",JSONObject.NULL))))
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("OWNED_STOP_SEEN",-100.0))))
+        assertFalse(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("OWNED_STOP_SEEN",76617.4))))
+        assertFalse(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("EXTERNAL_PROTECTED",76617.4))))
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(
+            JSONArray().put(row("OWNED_STOP_SEEN",76617.4))
+                .put(row("STOP_UNCONFIRMED",JSONObject.NULL))))
+        assertFalse(signedFuturesPositionStopDisplayHasUnverifiedExposure(JSONArray()))
+        assertTrue(signedFuturesPositionStopDisplayHasUnverifiedExposure(JSONArray().put("bad row")))
+    }
+
+    @Test
     fun inFlightRefreshRetainsLastKnownSignedShortWithoutClaimingVerification() {
         val lastSigned = JSONArray().put(
             JSONObject().put("symbol", "ETHUSDT")
