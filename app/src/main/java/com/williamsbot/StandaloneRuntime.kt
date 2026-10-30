@@ -11451,6 +11451,10 @@ private class NativeEngine(
                 "; finished_at_ms=" + streamReconcileFinishedAtMs +
                 "; duration_ms=" + (if (streamReconcileDurationMs >= 0L) streamReconcileDurationMs.toString() else "UNKNOWN") +
                 "; max_running_duration_ms=300000" +
+                "; phase=" + statusSnapshot.optString("user_stream_reconcile_phase", "UNKNOWN") +
+                "; diagnostic_state=" + statusSnapshot.optString("user_stream_reconcile_diagnostic_state", "UNKNOWN") +
+                "; signed_account_snapshot_at_ms=" + statusSnapshot.optLong("user_stream_signed_account_snapshot_at_ms", 0L) +
+                "; pending_private_events=" + statusSnapshot.optBoolean("user_stream_reconcile_pending_events", false) +
                 "; last_failure=" + statusSnapshot.optString("user_stream_reconcile_failure", "none")
         )
         val coordinatorTaskHealthy = reconciliationTaskLifecycleHealthy(
