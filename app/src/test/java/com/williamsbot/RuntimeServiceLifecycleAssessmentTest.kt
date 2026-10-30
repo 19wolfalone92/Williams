@@ -58,6 +58,7 @@ class RuntimeServiceLifecycleAssessmentTest {
             .put(event("WORKER_HEARTBEAT_STALE",10_000))
             .put(event("STALE_WORKER_RECOVERY_DEFERRED",9_000))
             .put(event("STALE_WORKER_INTERRUPT_REQUESTED",8_000))
+            .put(event("WORKER_HEARTBEAT_LOST",7_500))
             .put(event("WORKER_HEARTBEAT_RECOVERED",7_000))
         val result=RuntimeServiceLifecycleAssessment.summarize(continuity(events),now)
         assertEquals(1,result.getInt("stale_worker_interrupt_requested_count"))
@@ -65,6 +66,7 @@ class RuntimeServiceLifecycleAssessmentTest {
         assertEquals(0,result.getInt("stale_worker_recovery_not_ready_count"))
         assertEquals(1,result.getInt("worker_heartbeat_stale_count"))
         assertEquals(1,result.getInt("worker_heartbeat_recovered_count"))
+        assertEquals(1,result.getInt("worker_heartbeat_lost_count"))
         assertEquals("FAULT_OBSERVED",result.getString("assessment"))
         assertFalse(result.getBoolean("continuous_24h_monitoring_verified"))
     }
