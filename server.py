@@ -598,12 +598,12 @@ def _runtime_supervisor():
                     latched = str(t.db.state_get('kill_switch_latched', 'false')).lower() == 'true'
                     unresolved = bool(state.ensure_multi().unresolved_symbols())
                 except Exception as exc:
-                    state.last_error = f'supervisor probe: {type(exc).__name__}: {exc}'
+                    state.last_error = f'supervisor probe: {type(exc).__name__}'
                     continue
                 if not latched and not unresolved:
                     state.start()
         except Exception as exc:
-            state.last_error = f'supervisor: {type(exc).__name__}: {exc}'
+            state.last_error = f'supervisor: {type(exc).__name__}'
 
 
 def _heartbeat_loop():
@@ -1005,14 +1005,14 @@ def status():
             )
         except Exception as exc:
             state.last_error = (
-                f'position-status: {exc}'
+                f'position-status: {type(exc).__name__}'
             )
 
     balance = None
     try:
         balance = t.available_quote()
     except Exception as exc:
-        state.last_error = f'status-balance: {exc}'
+        state.last_error = f'status-balance: {type(exc).__name__}'
 
     total_pnl = sum(
         float(item['unrealized_pnl'] or 0.0)
@@ -1203,7 +1203,7 @@ def portfolio():
                 'oco_list_client_id': None,
             })
         except Exception as exc:
-            state.last_error = f'portfolio-position: {exc}'
+            state.last_error = f'portfolio-position: {type(exc).__name__}'
 
     unrealized_pnl_usdt = sum(
         float(p.get('unrealized_pnl_usdt') or 0.0) for p in positions
