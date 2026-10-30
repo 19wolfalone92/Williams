@@ -145,6 +145,31 @@ class StandaloneRuntimeReconciliationTest {
     }
 
     @Test
+    fun postIncidentPrivateStreamTelemetryCannotMistakeConnectedSocketForRestProof() {
+        val now=1_800_000_000_000L
+        assertEquals("STALLED_IN_FLIGHT_NO_NEW_ENTRY_AUTHORITY",
+            privateStreamReconcileDiagnosticState(true,true,true,
+                now-375_345L,0L,now))
+        assertEquals("SIGNED_RECONCILIATION_IN_FLIGHT",
+            privateStreamReconcileDiagnosticState(true,true,true,
+                now-14_000L,0L,now))
+        assertEquals("PRIVATE_SOCKET_NOT_SIGNED_SYNCED",
+            privateStreamReconcileDiagnosticState(true,true,false,
+                now-375_345L,0L,now))
+        assertEquals("PRIVATE_SOCKET_DISCONNECTED",
+            privateStreamReconcileDiagnosticState(false,true,false,
+                now-375_345L,0L,now))
+        assertEquals("CURRENT_SOCKET_SYNC_PROVED",
+            privateStreamReconcileDiagnosticState(true,false,false,
+                now-375_345L,now-1_000L,now))
+        // Even if syncRequired was briefly released, an in-flight task
+        // older than the deadline must retain the stalled warning.
+        assertEquals("STALLED_IN_FLIGHT_NO_NEW_ENTRY_AUTHORITY",
+            privateStreamReconcileDiagnosticState(true,false,true,
+                now-300_001L,now-20L,now))
+    }
+
+    @Test
     fun reconciliationLifecycleHasAnExplicitTimeout() {
         assertTrue(reconciliationTaskLifecycleHealthy(false, 0L, 500_000L))
         assertTrue(reconciliationTaskLifecycleHealthy(true, 100_000L, 400_000L))
