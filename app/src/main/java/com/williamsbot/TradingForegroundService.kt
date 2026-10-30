@@ -18,6 +18,8 @@ class TradingForegroundService : Service() {
     @Volatile private var destroyed=false
     @Volatile private var stopping=false
     private val starting=AtomicBoolean(false)
+    private val staleRecoveryQueued=AtomicBoolean(false)
+    @Volatile private var nextStaleRecoveryElapsedMs=0L
     @Volatile private var startElapsed=0L
     @Volatile private var nextAttemptElapsed=0L
     @Volatile private var initializationRetryNeeded=false
@@ -109,6 +111,41 @@ class TradingForegroundService : Service() {
                     RuntimeServiceState.monitorHeartbeatStale=stale
                     RuntimeContinuityEvidence.event(applicationContext,
                         if(stale) "WORKER_HEARTBEAT_STALE" else "WORKER_HEARTBEAT_RECOVERED")
+                    if (!stale && RuntimeServiceState.lastError?.startsWith("STALE_WORKER_")==true)
+                        RuntimeServiceState.lastError=null
+                }
+                // A stale worker blocks new orders. Once it is proven idle from
+                // financial mutations, request a cooperative exit on the
+                // lifecycle executor; NEVER start a parallel worker.
+                if (stale && !destroyed && !stopping &&
+                    now>=nextStaleRecoveryElapsedMs &&
+                    staleRecoveryQueued.compareAndSet(false,true)) {
+                    nextStaleRecoveryElapsedMs=now+120_000L
+                    try {
+                        lifecycleWorker.execute {
+                            try {
+                                val result=StandaloneRuntime.requestStalledWorkerRecovery()
+                                val event=when(result) {
+                                    "COOPERATIVE_INTERRUPT_SENT" -> "STALE_WORKER_INTERRUPT_REQUESTED"
+                                    "DEFERRED_EXCHANGE_SAFETY_WORK" -> "STALE_WORKER_RECOVERY_DEFERRED"
+                                    else -> "STALE_WORKER_RECOVERY_NOT_READY"
+                                }
+                                RuntimeContinuityEvidence.event(applicationContext,event)
+                                if (result=="DEFERRED_EXCHANGE_SAFETY_WORK" ||
+                                    result=="RECONCILE_FENCE_PERSIST_FAILED")
+                                    RuntimeServiceState.lastError="STALE_WORKER_"+result
+                            } catch(error:Exception) {
+                                RuntimeStartupEvidence.failure(applicationContext,
+                                    "STALE_WORKER_RECOVERY_FAILED",error)
+                                RuntimeServiceState.lastError=
+                                    "STALE_WORKER_RECOVERY_FAILED:"+error.javaClass.simpleName
+                            } finally {
+                                staleRecoveryQueued.set(false)
+                            }
+                        }
+                    } catch(error:java.util.concurrent.RejectedExecutionException) {
+                        staleRecoveryQueued.set(false)
+                    }
                 }
                 // A live but wedged worker must not be started a second time.
                 // Existing exchange protection/monitor reconciliation remain
