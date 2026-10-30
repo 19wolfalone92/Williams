@@ -97,6 +97,50 @@ class FuturesProtectionDisplaySnapshotTest {
         }
     }
 
+    @Test fun twoLiveSymbolsMustEachHaveAnIndependentSignedStopQuery() {
+        val btc=JSONObject().put("symbol","BNBUSDT").put("positionSide","BOTH")
+            .put("positionAmt","0.21").put("entryPrice","749.24").put("markPrice","754.38")
+        val eth=JSONObject().put("symbol","ETHUSDT").put("positionSide","BOTH")
+            .put("positionAmt","-0.020").put("entryPrice","2249.73").put("markPrice","2235.78")
+        val bnbStop=JSONObject().put("symbol","BNBUSDT").put("positionSide","BOTH")
+            .put("clientAlgoId","BNB_STOP").put("orderType","STOP_MARKET")
+            .put("algoStatus","NEW").put("side","SELL").put("workingType","MARK_PRICE")
+            .put("closePosition",true).put("triggerPrice","742.67")
+        val ethStop=JSONObject().put("symbol","ETHUSDT").put("positionSide","BOTH")
+            .put("clientAlgoId","ETH_STOP").put("orderType","STOP_MARKET")
+            .put("algoStatus","NEW").put("side","BUY").put("workingType","MARK_PRICE")
+            .put("closePosition",true).put("triggerPrice","2341.45")
+        val requested=mutableListOf<String>()
+        val stops=mapOf("BNBUSDT" to bnbStop,"ETHUSDT" to ethStop)
+        fun snapshot(readStop:(String)->JSONArray):FuturesProtectionDisplaySnapshot =
+            readFuturesProtectionDisplaySnapshot(
+                readPositions={JSONArray().put(btc).put(eth)},
+                readOpenAlgosForSymbol=readStop,contractPrice={error("MARK_PRICE only")},
+                trustedObservations=JSONArray(),intents=JSONArray(),clock={1_000_000L}
+            )
+        val result=snapshot { symbol ->
+            requested.add(symbol)
+            JSONArray().put(requireNotNull(stops[symbol]))
+        }
+        assertEquals(listOf("BNBUSDT","ETHUSDT"),requested)
+        assertEquals(2,result.observations.length())
+        for(i in 0 until 2) {
+            val proof=result.observations.getJSONObject(i)
+            assertEquals("EXTERNAL_PROTECTED",proof.getString("stop_proof"))
+            assertEquals(1,proof.getInt("signed_full_stops_seen"))
+            assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+        }
+        try {
+            snapshot { symbol ->
+                if(symbol=="ETHUSDT") throw java.io.IOException("signed GET ETH failed")
+                JSONArray().put(bnbStop)
+            }
+            fail("Accepted one protected symbol after a second symbol failed signed GET")
+        } catch(expected:java.io.IOException) {
+            assertTrue(expected.message.orEmpty().contains("ETH failed"))
+        }
+    }
+
     @Test fun freshStopWithoutDurableOwnershipStaysExternal() {
         for (mutate in listOf<(Fixture) -> Unit>(
             { it.owner.put("strategy_ownership_verified", false) },
