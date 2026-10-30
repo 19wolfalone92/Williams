@@ -109,9 +109,17 @@ class TradingForegroundService : Service() {
                 val stale=BackgroundRuntimePolicy.monitorStale(snapshot,now)
                 if(RuntimeServiceState.monitorHeartbeatStale!=stale) {
                     RuntimeServiceState.monitorHeartbeatStale=stale
-                    RuntimeContinuityEvidence.event(applicationContext,
-                        if(stale) "WORKER_HEARTBEAT_STALE" else "WORKER_HEARTBEAT_RECOVERED")
-                    if (!stale && RuntimeServiceState.lastError?.startsWith("STALE_WORKER_")==true)
+                    // Do not claim that the worker recovered just because it
+                    // EXITED after an interrupt. Recovery requires a live worker
+                    // publishing a new heartbeat; an exit is a distinct event.
+                    val liveAgain=snapshot.running && snapshot.workerAlive &&
+                        snapshot.lastWorkerLoopElapsedMs>0L && !stale
+                    RuntimeContinuityEvidence.event(applicationContext,when {
+                        stale -> "WORKER_HEARTBEAT_STALE"
+                        liveAgain -> "WORKER_HEARTBEAT_RECOVERED"
+                        else -> "WORKER_HEARTBEAT_LOST"
+                    })
+                    if (liveAgain && RuntimeServiceState.lastError?.startsWith("STALE_WORKER_")==true)
                         RuntimeServiceState.lastError=null
                 }
                 // A stale worker blocks new orders. Once it is proven idle from
