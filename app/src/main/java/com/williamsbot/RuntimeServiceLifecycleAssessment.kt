@@ -60,6 +60,7 @@ internal object RuntimeServiceLifecycleAssessment {
             .put("service_autostart_failure_count",eventCounts["SERVICE_AUTOSTART_FAILED"] ?: 0)
             .put("worker_heartbeat_stale_count",eventCounts["WORKER_HEARTBEAT_STALE"] ?: 0)
             .put("worker_heartbeat_recovered_count",eventCounts["WORKER_HEARTBEAT_RECOVERED"] ?: 0)
+            .put("worker_heartbeat_lost_count",eventCounts["WORKER_HEARTBEAT_LOST"] ?: 0)
             .put("stale_worker_interrupt_requested_count",
                 eventCounts["STALE_WORKER_INTERRUPT_REQUESTED"] ?: 0)
             .put("stale_worker_recovery_deferred_count",
