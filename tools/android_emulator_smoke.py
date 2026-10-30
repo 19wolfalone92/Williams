@@ -23,6 +23,26 @@ def adb(*args: str, binary: bool = False) -> str | bytes:
     return result.stdout if binary else result.stdout.decode("utf-8", errors="replace")
 
 
+def adb_evidence(*args: str) -> str:
+    """Bounded recovery for transient emulator ADB disconnects at teardown.
+
+    Never mark a smoke run PASS when logcat/service evidence is still missing.
+    Do not retry UI assertions or an actual detected app crash.
+    """
+    last_failure: Exception | None = None
+    for attempt in range(3):
+        try:
+            return str(adb(*args))
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            last_failure = exc
+            if attempt < 2:
+                subprocess.run(["adb", "reconnect"], capture_output=True, timeout=12,
+                               check=False)
+                time.sleep(2)
+    assert last_failure is not None
+    raise last_failure
+
+
 def run(apk: Path, output: Path) -> dict:
     if str(adb("shell", "getprop", "ro.kernel.qemu")).strip() != "1":
         raise RuntimeError("Disposable emulator required; never operate on a physical phone")
@@ -122,12 +142,12 @@ def run(apk: Path, output: Path) -> dict:
         log = ""
         evidence_failures = []
         try:
-            log = str(adb("logcat", "-d", "-v", "threadtime"))
+            log = adb_evidence("logcat", "-d", "-v", "threadtime")
             (output / "logcat.txt").write_text(log)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             evidence_failures.append("ADB_LOGCAT_" + type(exc).__name__)
         try:
-            services = str(adb("shell", "dumpsys", "activity", "services", PACKAGE))
+            services = adb_evidence("shell", "dumpsys", "activity", "services", PACKAGE)
             (output / "services.txt").write_text(services)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
             evidence_failures.append("ADB_SERVICES_" + type(exc).__name__)
