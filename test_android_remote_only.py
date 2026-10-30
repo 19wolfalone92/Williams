@@ -1,4 +1,35 @@
 from pathlib import Path
+import re
+from urllib.parse import urlsplit
+
+
+def _is_demo_futures_rest_base(url: str) -> bool:
+    """Compare parsed origin, never an unsafe URL substring."""
+    parsed = urlsplit(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "demo-fapi.binance.com"
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def test_demo_futures_rest_host_does_not_accept_spoofed_origins():
+    assert _is_demo_futures_rest_base("https://demo-fapi.binance.com")
+    for unsafe in (
+        "http://demo-fapi.binance.com",
+        "https://demo-fapi.binance.com.evil.example",
+        "https://demo-fapi.binance.com@evil.example",
+        "https://evil.example/https://demo-fapi.binance.com",
+        "https://demo-fapi.binance.com:4443",
+        "https://demo-fapi.binance.com/orders",
+        "https://demo-fapi.binance.com?redirect=evil.example",
+        "https://demo-fapi.binance.com#fragment",
+        "https://demo-fapi.binance.com\\evil.example",
+    ):
+        assert not _is_demo_futures_rest_base(unsafe), unsafe
+
 
 ROOT = Path(__file__).resolve().parent
 ANDROID = ROOT / "app" / "src" / "main"
@@ -90,7 +121,20 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "marketWebSocketFresh() &&" in runtime
     assert 'add("market_websocket_disconnected_or_stale")' in runtime
     assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
-    assert "https://demo-fapi.binance.com" in runtime
+    # Validate the actual Kotlin REST base declaration, not a matching
+    # substring in a comment, a spoofed URL or an unrelated literal.
+    declared_base = re.search(
+        r'\\bprivate\\s+val\\s+baseUrl\\s*=\\s*"([^"\\r\\n]+)"',
+        runtime,
+    )
+    assert declared_base is not None, "Futures REST baseUrl declaration missing"
+    assert _is_demo_futures_rest_base(declared_base.group(1))
+    inline_request = re.search(
+        r'\\bval\\s+requestUrl\\s*=\\s*"([^"\\r\\n]+)"\\s*\\+\\s*futuresPath',
+        runtime,
+    )
+    assert inline_request is not None, "Signed Futures REST request URL missing"
+    assert _is_demo_futures_rest_base(inline_request.group(1))
 
 
 def test_android_corrupt_persisted_campaign_state_fails_closed():
