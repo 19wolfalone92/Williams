@@ -2537,6 +2537,12 @@ internal class NativeFuturesCampaignCoordinator(
             // for every closed campaign (O(n^2)). A malformed row still vetoes
             // finalization globally, exactly as the previous conservative rule.
             val unresolvedExitIndex = buildWilliamsUnresolvedExitIndex(persisted)
+            // A single coordinator/execution-door reconciliation owns this pass.
+            // Cache signed per-symbol algo snapshots across archival owners; a
+            // successful cancellation invalidates the cache immediately. Fresh
+            // account-wide proof is required below before entry admission.
+            val historicalFlatAlgoBySymbol = mutableMapOf<String, JSONArray>()
+            val historicalFlatProtectionIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             // Once Binance reports the symbol flat, prior position intents are terminal.
             for (i in 0 until persisted.length()) {
                 val intent = persisted.optJSONObject(i) ?: continue
@@ -2577,15 +2583,17 @@ internal class NativeFuturesCampaignCoordinator(
                     // serialized I/O and observer work). The final commit below
                     // persists benign migrations/metadata in one batch.
                     //
-                    // Preserve the strict write-before-network rule for every
-                    // newly finalized owner and any owner with a known STOP ID.
+                    // Preserve write-before-network for newly finalized owners.
+                    // Previously closed owners and their known STOP IDs are
+                    // already durable. Rewriting the whole JSON+SQLite ledger
+                    // for every historical owner unnecessarily blocked entries.
                     val tx = intent.optJSONObject("native_stop_replacement")
                     val knownProtectionIds = listOf(
                         intent.optString("protection_client_id"), intent.optString("previous_protection_client_id"),
                         tx?.optString("old_id").orEmpty(), tx?.optString("new_id").orEmpty(),
                         tx?.optString("bridge_id").orEmpty()
                     ).filter { it.isNotBlank() }.toSet()
-                    if (status != "CLOSED_OR_STOPPED" || knownProtectionIds.isNotEmpty()) {
+                    if (status != "CLOSED_OR_STOPPED") {
                         // Crash/ambiguous cancellation must never resurrect an
                         // owner; write terminal state BEFORE any signed cleanup.
                         saveIntents(persisted)
@@ -2593,7 +2601,12 @@ internal class NativeFuturesCampaignCoordinator(
                     // A stop-triggered or manually closed position must not leave a
                     // closePosition algo armed to affect a future campaign on this symbol.
                     if (knownProtectionIds.isNotEmpty()) {
-                        val algos = adapter.openAlgoOrders(symbol)
+                        historicalFlatProtectionIdsBySymbol.getOrPut(symbol) { mutableSetOf() }
+                            .addAll(knownProtectionIds)
+                        val algos = historicalFlatAlgoBySymbol.getOrPut(symbol) {
+                            adapter.openAlgoOrders(symbol)
+                        }
+                        var cancelledOldStop = false
                         for (j in 0 until algos.length()) {
                             val order = algos.optJSONObject(j)
                                 ?: throw IOException("Binance returned a malformed algo-order row during orphan-stop cleanup for $symbol")
@@ -2640,8 +2653,13 @@ internal class NativeFuturesCampaignCoordinator(
                                 "$symbol missing positive Binance algoId; cancellation blocked"
                             }
                             adapter.cancelAlgoOrderById(symbol, algoId)
+                            cancelledOldStop = true
                         }
-                        val remaining = adapter.openAlgoOrders(symbol)
+                        // For an unchanged signed snapshot, querying the same
+                        // flat pair again for each historic campaign is wasteful.
+                        // After any mutation, obtain a fresh signed snapshot.
+                        val remaining = if (cancelledOldStop) adapter.openAlgoOrders(symbol) else algos
+                        historicalFlatAlgoBySymbol[symbol] = remaining
                         if ((0 until remaining.length()).any { j ->
                             remaining.optJSONObject(j)?.optString("clientAlgoId")?.let { it in knownProtectionIds } == true
                         }) {
@@ -2654,6 +2672,21 @@ internal class NativeFuturesCampaignCoordinator(
                             actualRiskAuditBlocked = true
                             actualRiskAuditBlocker = "$symbol flat position has an unresolved native STOP submission identity"
                         }
+                    }
+                }
+            }
+            if (historicalFlatProtectionIdsBySymbol.isNotEmpty()) {
+                // A cached negative match is an optimization only, NOT proof of
+                // final exchange absence: require fresh account-wide signed GET
+                // after all orphan cleanups. Unexpected historical STOP => block.
+                val finalAlgos = adapter.allOpenAlgoOrders()
+                for (j in 0 until finalAlgos.length()) {
+                    val item = finalAlgos.optJSONObject(j)
+                        ?: throw IOException("Malformed final signed Futures algo-order snapshot")
+                    val symbol = item.optString("symbol").uppercase(Locale.US)
+                    val clientId = item.optString("clientAlgoId")
+                    check(clientId !in (historicalFlatProtectionIdsBySymbol[symbol] ?: emptySet<String>())) {
+                        "$symbol historical STOP still open after signed cleanup; new entry blocked"
                     }
                 }
             }
