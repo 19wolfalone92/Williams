@@ -74,6 +74,25 @@ internal fun publicFuturesClockNeedsRefresh(
     return elapsedMs >= 30_000L || kotlin.math.abs(wallElapsedMs - elapsedMs) > 1_000L
 }
 
+/**
+ * Refresh a healthy public Binance time sample well before the strict 30-second
+ * admission TTL. A slow/failed refresh still NEVER extends the old sample.
+ * This is deliberately distinct from publicFuturesClockNeedsRefresh(), which
+ * remains the fail-closed freshness rule for UTC risk and closed candles.
+ */
+internal fun publicFuturesClockNeedsEarlyRenewal(
+    anchorWallMs: Long, anchorMonotonicNs: Long,
+    wallNowMs: Long, monotonicNowNs: Long
+): Boolean = publicFuturesClockNeedsRefresh(
+    anchorWallMs, anchorMonotonicNs, wallNowMs, monotonicNowNs
+) || (monotonicNowNs - anchorMonotonicNs) / 1_000_000L >= 20_000L
+
+/** Reject slow/asymmetric or wall-clock-unstable public time probes. */
+internal fun publicFuturesClockSampleUsable(
+    serverTimeMs: Long, monotonicRttMs: Long, wallElapsedMs: Long
+): Boolean = serverTimeMs > 0L && monotonicRttMs in 0L..3_000L &&
+    kotlin.math.abs(wallElapsedMs - monotonicRttMs) <= 1_000L
+
 internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -104,20 +123,31 @@ internal class BinanceUsdMFuturesMarketData(
 
     /** Exchange clock is authoritative for candle closure and stale-cache decisions. */
     fun exchangeNowMs(): Long {
-        if (publicFuturesClockNeedsRefresh(
+        if (publicFuturesClockNeedsEarlyRenewal(
                 lastServerSyncLocalMs, lastServerSyncMonotonicNs,
                 System.currentTimeMillis(), System.nanoTime())) {
             synchronized(this) {
                 val before = System.currentTimeMillis()
-                if (publicFuturesClockNeedsRefresh(
+                val beforeMono = System.nanoTime()
+                if (publicFuturesClockNeedsEarlyRenewal(
                         lastServerSyncLocalMs, lastServerSyncMonotonicNs,
-                        before, System.nanoTime())) {
+                        before, beforeMono)) {
                     val remote = getObject("$base/fapi/v1/time").optLong("serverTime", 0L)
+                    val afterMono = System.nanoTime()
                     val after = System.currentTimeMillis()
-                    if (remote <= 0L) throw IOException("USD-M Futures server time unavailable")
-                    serverOffsetMs = remote - (before + (after - before) / 2L)
+                    val rttMs = (afterMono - beforeMono) / 1_000_000L
+                    if (!publicFuturesClockSampleUsable(remote, rttMs, after - before)) {
+                        // A retry burst or stalled radio must not certify an
+                        // arbitrary UTC day; keep the old sample expired.
+                        throw IOException("USD-M Futures server clock sample unverified: " +
+                            "rtt_ms=$rttMs; wall_elapsed_ms=${after - before}")
+                    }
+                    // Anchor at receipt, NOT the midpoint. This biases slightly
+                    // behind Binance and cannot prematurely roll the UTC risk day
+                    // forward due to asymmetric mobile network latency.
+                    serverOffsetMs = remote - after
                     lastServerSyncLocalMs = after
-                    lastServerSyncMonotonicNs = System.nanoTime()
+                    lastServerSyncMonotonicNs = afterMono
                 }
             }
         }
