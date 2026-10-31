@@ -71,6 +71,39 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun publicClockRenewalAtTwentySecondsPreventsThirtySecondAdmissionGap() {
+        val wall = 1_800_000_000_000L
+        val mono = 90_000_000_000L
+        fun renew(elapsedMs: Long): Boolean = publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + elapsedMs, mono + elapsedMs * 1_000_000L
+        )
+        assertTrue(!renew(19_999L))
+        assertTrue(renew(20_000L))
+        // The renewal threshold must never turn into a longer risk validity TTL.
+        assertTrue(!publicFuturesClockNeedsRefresh(
+            wall, mono, wall + 20_000L, mono + 20_000_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsRefresh(
+            wall, mono, wall + 30_001L, mono + 30_001_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + 100L, mono + 20_000_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + 10L, mono - 1L
+        ))
+    }
+
+    @Test
+    fun slowOrWallClockUnstablePublicTimeProbeNeverCertifiesRiskClock() {
+        assertTrue(publicFuturesClockSampleUsable(1_800_000_000_000L, 350L, 351L))
+        assertTrue(!publicFuturesClockSampleUsable(0L, 100L, 100L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 3_001L, 3_001L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 500L, 1_600L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, -1L, 0L))
+    }
+
+    @Test
     fun repeatedOfflineGetAttemptsPauseOnlyPublicMarketDataForShortCooldown() {
         var attempts = 0
         val offline = OkHttpClient.Builder().addInterceptor(Interceptor {
