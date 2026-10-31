@@ -128,6 +128,28 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun utcClockProbeDoesNotRetryFourTimesOrBorrowTickerTransportCooldown() {
+        var attempts = 0
+        val failedClock = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            Response.Builder()
+                .request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(503).message("unavailable")
+                .body("{}".toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+        val market = BinanceUsdMFuturesMarketData(failedClock)
+        try {
+            market.exchangeNowMs()
+            throw AssertionError("Failed clock probe must not authorize UTC risk time")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("clock HTTP 503"))
+        }
+        assertEquals(1, attempts)
+        assertTrue(!market.clockSnapshot().optBoolean("fresh"))
+    }
+
+    @Test
     fun repeatedOfflineGetAttemptsPauseOnlyPublicMarketDataForShortCooldown() {
         var attempts = 0
         val offline = OkHttpClient.Builder().addInterceptor(Interceptor {
