@@ -104,6 +104,30 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun sqliteTimelineWithInternalM15GapCannotMasqueradeAsCompleteHistory() {
+        val market = BinanceUsdMFuturesMarketData()
+        val base = 1_800_000_000_000L
+        val m15 = 900_000L
+        val contiguous = (0 until 160).map { base + it * m15 }
+        assertTrue(market.nativeCandleTimelineContiguous(contiguous, "15m"))
+        val missing = contiguous.filterIndexed { index, _ -> index != 80 }
+        assertTrue(!market.nativeCandleTimelineContiguous(missing, "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(listOf(base, base), "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(listOf(base, base + m15, base + m15), "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(emptyList(), "15m"))
+    }
+
+    @Test
+    fun nativeTimelineContinuityUsesCalendarMonthsInsteadOfThirtyDayAssumption() {
+        val market = BinanceUsdMFuturesMarketData()
+        assertTrue(market.nativeCandleTimelineContiguous(listOf(
+            1_767_225_600_000L, // 2026-01-01 UTC
+            1_769_904_000_000L, // 2026-02-01 UTC
+            1_772_323_200_000L  // 2026-03-01 UTC
+        ), "1M"))
+    }
+
+    @Test
     fun repeatedOfflineGetAttemptsPauseOnlyPublicMarketDataForShortCooldown() {
         var attempts = 0
         val offline = OkHttpClient.Builder().addInterceptor(Interceptor {
