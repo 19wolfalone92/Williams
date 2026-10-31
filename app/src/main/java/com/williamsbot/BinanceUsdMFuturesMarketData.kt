@@ -101,6 +101,15 @@ internal class BinanceUsdMFuturesMarketData(
     private val rateGuard: BinanceRateGuard? = null
 ) {
     private val base = "https://demo-fapi.binance.com"
+    // The UTC-day safety pulse must NOT inherit four generic market-GET
+    // retries, which can stall for >30s on a dead mobile radio. One bounded
+    // unsigned GET is retried by the independent 5-second watchdog tick.
+    private val clockHttp = http.newBuilder()
+        .callTimeout(5, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
     @Volatile private var lastServerSyncMonotonicNs = Long.MIN_VALUE
@@ -132,7 +141,7 @@ internal class BinanceUsdMFuturesMarketData(
                 if (publicFuturesClockNeedsEarlyRenewal(
                         lastServerSyncLocalMs, lastServerSyncMonotonicNs,
                         before, beforeMono)) {
-                    val remote = getObject("$base/fapi/v1/time").optLong("serverTime", 0L)
+                    val remote = fetchServerTimeOnce()
                     val afterMono = System.nanoTime()
                     val after = System.currentTimeMillis()
                     val rttMs = (afterMono - beforeMono) / 1_000_000L
@@ -165,6 +174,30 @@ internal class BinanceUsdMFuturesMarketData(
         return openTimes.zipWithNext().all { (left, right) ->
             val end = runCatching { klineCloseTimeMs(left, interval) }.getOrNull()
             end != null && end < Long.MAX_VALUE && right == end + 1L
+        }
+    }
+
+    /**
+     * Single bounded unsigned clock probe. Generic ticker/klines retries and
+     * their transport cooldown cannot starve the independent UTC risk pulse.
+     * Rate-limit cooldown is still respected; no exchange mutation occurs.
+     */
+    private fun fetchServerTimeOnce(): Long {
+        rateGuard?.beforeRequest(maximumWaitMs = 1_000L)
+        val req = Request.Builder().url("$base/fapi/v1/time")
+            .header("Accept", "application/json").get().build()
+        clockHttp.newCall(req).execute().use { response ->
+            rateGuard?.observe(response.headers, response.code)
+            if (!response.isSuccessful) {
+                throw IOException("USD-M Futures clock HTTP ${response.code}; admission time remains unverified")
+            }
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) throw IOException("USD-M Futures clock response is empty")
+            return try {
+                JSONObject(body).optLong("serverTime", 0L)
+            } catch (failure: org.json.JSONException) {
+                throw IOException("Malformed USD-M Futures server-time response", failure)
+            }
         }
     }
 
