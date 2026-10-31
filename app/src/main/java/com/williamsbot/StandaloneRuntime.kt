@@ -4101,7 +4101,9 @@ private class NativeEngine(
                 val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
-                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                if (closed.size >= limit &&
+                    futuresMarketData.nativeCandleTimelineContiguous(closed.map { it.t }, frame) &&
+                    candleSeriesCurrent(closed, frame, exchangeNowMs)) {
                     // A WebSocket warm cache is not proof that the SQLite history
                     // journal is populated. Startup readiness checks both the live
                     // closed-bar count and persisted count; returning here without
@@ -4151,7 +4153,9 @@ private class NativeEngine(
         val persistentCandles = persistent.map {
             CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
-        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame)) {
+        if (persistent.size >= limit &&
+            futuresMarketData.nativeCandleTimelineContiguous(persistentCandles.map { it.t }, frame) &&
+            candleSeriesCurrent(persistentCandles, frame)) {
             candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
             liveCandleCache[liveKey] = persistentCandles.toMutableList()
             return persistentCandles
@@ -4162,6 +4166,7 @@ private class NativeEngine(
         if (cached != null &&
             cached.second.size >= limit &&
             now - cached.first < scanCacheTtlMs &&
+            futuresMarketData.nativeCandleTimelineContiguous(cached.second.map { it.t }, frame) &&
             candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs())
         ) {
             return cached.second.takeLast(limit)
