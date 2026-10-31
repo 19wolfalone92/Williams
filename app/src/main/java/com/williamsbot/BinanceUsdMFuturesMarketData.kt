@@ -93,6 +93,11 @@ internal fun publicFuturesClockSampleUsable(
 ): Boolean = serverTimeMs > 0L && monotonicRttMs in 0L..3_000L &&
     kotlin.math.abs(wallElapsedMs - monotonicRttMs) <= 1_000L
 
+/** Prevent a failed public-time endpoint from stampeding concurrent scanner/UI reads. */
+internal fun publicFuturesClockProbeDue(lastAttemptNs: Long, nowNs: Long): Boolean =
+    lastAttemptNs == Long.MIN_VALUE || nowNs < lastAttemptNs ||
+        nowNs - lastAttemptNs >= 5_000_000_000L
+
 internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -113,6 +118,8 @@ internal class BinanceUsdMFuturesMarketData(
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
     @Volatile private var lastServerSyncMonotonicNs = Long.MIN_VALUE
+    // Bounded clock-probe retries: a dead radio cannot stall every caller.
+    @Volatile private var lastClockProbeAttemptNs = Long.MIN_VALUE
     // Public market-data GETs only. Signed account, STOP and recovery transport
     // use a separate adapter and are never suppressed by this cooldown.
     @Volatile private var transportRetryNotBeforeNs = Long.MIN_VALUE
@@ -141,25 +148,47 @@ internal class BinanceUsdMFuturesMarketData(
                 if (publicFuturesClockNeedsEarlyRenewal(
                         lastServerSyncLocalMs, lastServerSyncMonotonicNs,
                         before, beforeMono)) {
-                    val remote = fetchServerTimeOnce()
-                    val afterMono = System.nanoTime()
-                    val after = System.currentTimeMillis()
-                    val rttMs = (afterMono - beforeMono) / 1_000_000L
-                    if (!publicFuturesClockSampleUsable(remote, rttMs, after - before)) {
-                        // A retry burst or stalled radio must not certify an
-                        // arbitrary UTC day; keep the old sample expired.
-                        throw IOException("USD-M Futures server clock sample unverified: " +
-                            "rtt_ms=$rttMs; wall_elapsed_ms=${after - before}")
+                    val trulyExpired = publicFuturesClockNeedsRefresh(
+                        lastServerSyncLocalMs, lastServerSyncMonotonicNs, before, beforeMono
+                    )
+                    if (!publicFuturesClockProbeDue(lastClockProbeAttemptNs, beforeMono)) {
+                        // Fail immediately on an expired sample instead of sending
+                        // one blocked /time GET per concurrent scanner/UI request.
+                        if (trulyExpired) throw IOException("USD-M Futures clock expired; bounded probe retry pending")
+                    } else {
+                        lastClockProbeAttemptNs = beforeMono
+                        try {
+                            val remote = fetchServerTimeOnce()
+                            val afterMono = System.nanoTime()
+                            val after = System.currentTimeMillis()
+                            val rttMs = (afterMono - beforeMono) / 1_000_000L
+                            if (!publicFuturesClockSampleUsable(remote, rttMs, after - before)) {
+                                throw IOException("USD-M Futures server clock sample unverified: " +
+                                    "rtt_ms=$rttMs; wall_elapsed_ms=${after - before}")
+                            }
+                            // Never overstate server time across an asymmetric
+                            // mobile response; this may safely delay an UTC reset.
+                            serverOffsetMs = remote - after
+                            lastServerSyncLocalMs = after
+                            lastServerSyncMonotonicNs = afterMono
+                        } catch (failure: Exception) {
+                            // Early proactive refresh is opportunistic. Its
+                            // failure cannot invalidate a still-good 30s sample.
+                            // Once it expires, the caller must fail closed.
+                            if (publicFuturesClockNeedsRefresh(
+                                    lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                                    System.currentTimeMillis(), System.nanoTime())) throw failure
+                        }
                     }
-                    // Anchor at receipt, NOT the midpoint. This biases slightly
-                    // behind Binance and cannot prematurely roll the UTC risk day
-                    // forward due to asymmetric mobile network latency.
-                    serverOffsetMs = remote - after
-                    lastServerSyncLocalMs = after
-                    lastServerSyncMonotonicNs = afterMono
                 }
             }
         }
+        // The sample may have expired while a network read was in flight.
+        // No caller receives unverified UTC time for candles or risk decisions.
+        if (publicFuturesClockNeedsRefresh(
+                lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                System.currentTimeMillis(), System.nanoTime())
+        ) throw IOException("USD-M Futures clock expired; exchange UTC unverified")
         return System.currentTimeMillis() + serverOffsetMs
     }
 
