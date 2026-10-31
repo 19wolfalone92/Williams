@@ -154,6 +154,20 @@ internal class BinanceUsdMFuturesMarketData(
         return System.currentTimeMillis() + serverOffsetMs
     }
 
+    /**
+     * SQLite can hold 160 recent candles but still contain an internal hole.
+     * A merely fresh last candle is NOT a valid continuous H1/M15 working set.
+     * Verify real exchange-open boundaries (including calendar months), without
+     * interpolating missing candles or using a forming future bar.
+     */
+    internal fun nativeCandleTimelineContiguous(openTimes: List<Long>, interval: String): Boolean {
+        if (openTimes.isEmpty() || openTimes.any { it < 0L }) return false
+        return openTimes.zipWithNext().all { (left, right) ->
+            val end = runCatching { klineCloseTimeMs(left, interval) }.getOrNull()
+            end != null && end < Long.MAX_VALUE && right == end + 1L
+        }
+    }
+
     val approvedSymbols: Set<String> = APPROVED_FUTURES_SYMBOLS.toSet()
     internal val supportedIntervals: Set<String> = APPROVED_FUTURES_KLINE_INTERVALS.toSet()
 
