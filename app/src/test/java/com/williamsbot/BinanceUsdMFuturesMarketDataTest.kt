@@ -104,6 +104,15 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun clockProbeCooldownUsesMonotonicTimeAndRejectsReplayedAttempt() {
+        val base = 90_000_000_000L
+        assertTrue(publicFuturesClockProbeDue(Long.MIN_VALUE, base))
+        assertTrue(!publicFuturesClockProbeDue(base, base + 4_999_000_000L))
+        assertTrue(publicFuturesClockProbeDue(base, base + 5_000_000_000L))
+        assertTrue(publicFuturesClockProbeDue(base, base - 1L))
+    }
+
+    @Test
     fun sqliteTimelineWithInternalM15GapCannotMasqueradeAsCompleteHistory() {
         val market = BinanceUsdMFuturesMarketData()
         val base = 1_800_000_000_000L
@@ -147,6 +156,15 @@ class BinanceUsdMFuturesMarketDataTest {
         }
         assertEquals(1, attempts)
         assertTrue(!market.clockSnapshot().optBoolean("fresh"))
+        // Repeated scanner/UI calls cannot stampede the unsigned time endpoint
+        // during its bounded retry cooldown, and still receive no UTC authority.
+        try {
+            market.exchangeNowMs()
+            throw AssertionError("An expired clock is never authorized by probe cooldown")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("clock expired"))
+        }
+        assertEquals(1, attempts)
     }
 
     @Test
