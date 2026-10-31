@@ -2667,10 +2667,15 @@ internal class NativeFuturesCampaignCoordinator(
                         }
                         intent.remove("previous_protection_client_id")
                         intent.remove("previous_protective_stop")
-                        if (intent.has("native_stop_replacement") &&
-                            !nativeStopReplacementEngine(adapter, persisted).settleFlat(intent)) {
-                            actualRiskAuditBlocked = true
-                            actualRiskAuditBlocker = "$symbol flat position has an unresolved native STOP submission identity"
+                        if (intent.has("native_stop_replacement")) {
+                            // A replacement resumption can itself query/cancel
+                            // exchange orders. Invalidate this symbol's signed
+                            // snapshot even when settlement reports unresolved.
+                            historicalFlatAlgoBySymbol.remove(symbol)
+                            if (!nativeStopReplacementEngine(adapter, persisted).settleFlat(intent)) {
+                                actualRiskAuditBlocked = true
+                                actualRiskAuditBlocker = "$symbol flat position has an unresolved native STOP submission identity"
+                            }
                         }
                     }
                 }
