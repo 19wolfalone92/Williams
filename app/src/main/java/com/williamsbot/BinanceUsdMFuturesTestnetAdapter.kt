@@ -196,16 +196,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                     sentMonoNs, roundTripMs, wallElapsedMs, exchangeTime
                 )) {
                 serverAnchorMs = exchangeTime
-                // A slow read-only probe may be asymmetric. Using the midpoint
-                // could put a signed timestamp >1000ms AHEAD of Binance time,
-                // which Binance rejects even with a wide recvWindow. Anchor the
-                // response at receipt for slow probes: bias behind the exchange,
-                // bounded by the read-only 10s window. Never authorize writes
-                // from such a sample.
-                anchorMonoNs = if (roundTripMs > 3_000L) receivedMonoNs
-                    else sentMonoNs + durationNs / 2L
-                anchorWallMs = if (roundTripMs > 3_000L) receivedWallMs
-                    else sentWallMs + wallElapsedMs / 2L
+                // Binance validates timestamps at most 1000ms in the future
+                // irrespective of recvWindow. /time's serverTime is sampled
+                // before the HTTP response reaches Android: even a valid 2.4s
+                // RTT makes a midpoint timestamp ~1.2s too far ahead.
+                // Anchor at receipt for ALL RTTs. A lagging timestamp can
+                // safely be rejected by recvWindow, never admitted prematurely.
+                anchorMonoNs = receivedMonoNs
+                anchorWallMs = receivedWallMs
                 lastClockProbeRttMs = roundTripMs
                 timeSynced = true
                 return@synchronized response!!

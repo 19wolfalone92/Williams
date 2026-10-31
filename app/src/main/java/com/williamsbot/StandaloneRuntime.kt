@@ -4101,7 +4101,9 @@ private class NativeEngine(
                 val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
-                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                if (closed.size >= limit &&
+                    futuresMarketData.nativeCandleTimelineContiguous(closed.map { it.t }, frame) &&
+                    candleSeriesCurrent(closed, frame, exchangeNowMs)) {
                     // A WebSocket warm cache is not proof that the SQLite history
                     // journal is populated. Startup readiness checks both the live
                     // closed-bar count and persisted count; returning here without
@@ -4151,7 +4153,9 @@ private class NativeEngine(
         val persistentCandles = persistent.map {
             CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
-        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame)) {
+        if (persistent.size >= limit &&
+            futuresMarketData.nativeCandleTimelineContiguous(persistentCandles.map { it.t }, frame) &&
+            candleSeriesCurrent(persistentCandles, frame)) {
             candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
             liveCandleCache[liveKey] = persistentCandles.toMutableList()
             return persistentCandles
@@ -4162,6 +4166,7 @@ private class NativeEngine(
         if (cached != null &&
             cached.second.size >= limit &&
             now - cached.first < scanCacheTtlMs &&
+            futuresMarketData.nativeCandleTimelineContiguous(cached.second.map { it.t }, frame) &&
             candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs())
         ) {
             return cached.second.takeLast(limit)
@@ -10941,6 +10946,10 @@ private class NativeEngine(
             killLatched, coordinatorState, stateName())
         val executionEnabledSnapshot = executionReady() && !reconciliationObserved &&
             futuresRuntimeStatus.optBoolean("ready_for_new_entry", false)
+        // Evaluate the UTC loss streak once per exported status. Separate reads
+        // could straddle a clock refresh and falsely display zero losses while
+        // diagnostics reported a hard-pause from another snapshot.
+        val lossStreakSnapshot = futuresLossStreakGuard()
 
         return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -11059,10 +11068,10 @@ private class NativeEngine(
                     .put("until_ms",halt.untilMs?:JSONObject.NULL).put("reason",halt.reason?:JSONObject.NULL)
                     .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
             })
-            .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
-            .put("consecutive_losses_available", futuresLossStreakGuard().available)
-            .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
-            .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
+            .put("consecutive_losses", lossStreakSnapshot.consecutiveLosses)
+            .put("consecutive_losses_available", lossStreakSnapshot.available)
+            .put("consecutive_loss_blocker", lossStreakSnapshot.reason ?: JSONObject.NULL)
+            .put("consecutive_loss_cooldown_until_ms", lossStreakSnapshot.cooldownUntilMs ?: JSONObject.NULL)
             .put("consecutive_loss_utc_day_start_ms",
                 if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
                     futuresUtcDayStartMs(futuresMarketData.cachedExchangeNowMs())
@@ -11431,7 +11440,22 @@ private class NativeEngine(
         test("version_consistency", "runtime", BuildConfig.VERSION_NAME.isNotBlank(), "FAIL", "app_version=" + BuildConfig.VERSION_NAME)
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
-        test("execution_gate", "execution", executionReady(), "WARNING", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(",") + "; an intentional entry block is not proof of component failure")
+        // Use the SAME status snapshot as other tests. Re-evaluating a live gate
+        // here could cross the 30s exchange-clock boundary and invent a
+        // consecutive-loss HARD_PAUSE that the exported status cannot confirm.
+        val gateOpenInSnapshot = statusSnapshot.optBoolean("execution_enabled", false)
+        val streakAvailableInSnapshot = statusSnapshot.optBoolean("consecutive_losses_available", false)
+        val streakReasonInSnapshot = statusSnapshot.optString("consecutive_loss_blocker", "")
+        val clockFreshInSnapshot = statusSnapshot.optJSONObject("exchange_clock")
+            ?.optBoolean("fresh", false) == true
+        test("execution_gate", "execution", gateOpenInSnapshot, "WARNING",
+            "execution_ready=" + gateOpenInSnapshot +
+                "; exchange_clock_fresh=" + clockFreshInSnapshot +
+                "; consecutive_losses_available=" + streakAvailableInSnapshot +
+                "; consecutive_loss_blocker=" +
+                (streakReasonInSnapshot.takeUnless { it.isBlank() || it == "null" } ?: "none") +
+                "; coordinator_blocker=" + coordinatorSnapshot.optString("blocker", "UNKNOWN") +
+                "; other entry gates remain authoritative; an intentional block is not component failure")
         val displayedSettings = settings()
         val maxTradesSettingIsHonest = displayedSettings.isNull("max_trades_per_day") &&
             displayedSettings.optString("max_trades_per_day_policy").startsWith("NO_FIXED_COUNT_CAP")

@@ -71,6 +71,103 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun publicClockRenewalAtTwentySecondsPreventsThirtySecondAdmissionGap() {
+        val wall = 1_800_000_000_000L
+        val mono = 90_000_000_000L
+        fun renew(elapsedMs: Long): Boolean = publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + elapsedMs, mono + elapsedMs * 1_000_000L
+        )
+        assertTrue(!renew(19_999L))
+        assertTrue(renew(20_000L))
+        // The renewal threshold must never turn into a longer risk validity TTL.
+        assertTrue(!publicFuturesClockNeedsRefresh(
+            wall, mono, wall + 20_000L, mono + 20_000_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsRefresh(
+            wall, mono, wall + 30_001L, mono + 30_001_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + 100L, mono + 20_000_000_000L
+        ))
+        assertTrue(publicFuturesClockNeedsEarlyRenewal(
+            wall, mono, wall + 10L, mono - 1L
+        ))
+    }
+
+    @Test
+    fun slowOrWallClockUnstablePublicTimeProbeNeverCertifiesRiskClock() {
+        assertTrue(publicFuturesClockSampleUsable(1_800_000_000_000L, 350L, 351L))
+        assertTrue(!publicFuturesClockSampleUsable(0L, 100L, 100L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 3_001L, 3_001L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 500L, 1_600L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, -1L, 0L))
+    }
+
+    @Test
+    fun clockProbeCooldownUsesMonotonicTimeAndRejectsReplayedAttempt() {
+        val base = 90_000_000_000L
+        assertTrue(publicFuturesClockProbeDue(Long.MIN_VALUE, base))
+        assertTrue(!publicFuturesClockProbeDue(base, base + 4_999_000_000L))
+        assertTrue(publicFuturesClockProbeDue(base, base + 5_000_000_000L))
+        assertTrue(publicFuturesClockProbeDue(base, base - 1L))
+    }
+
+    @Test
+    fun sqliteTimelineWithInternalM15GapCannotMasqueradeAsCompleteHistory() {
+        val market = BinanceUsdMFuturesMarketData()
+        val base = 1_800_000_000_000L
+        val m15 = 900_000L
+        val contiguous = (0 until 160).map { base + it * m15 }
+        assertTrue(market.nativeCandleTimelineContiguous(contiguous, "15m"))
+        val missing = contiguous.filterIndexed { index, _ -> index != 80 }
+        assertTrue(!market.nativeCandleTimelineContiguous(missing, "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(listOf(base, base), "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(listOf(base, base + m15, base + m15), "15m"))
+        assertTrue(!market.nativeCandleTimelineContiguous(emptyList(), "15m"))
+    }
+
+    @Test
+    fun nativeTimelineContinuityUsesCalendarMonthsInsteadOfThirtyDayAssumption() {
+        val market = BinanceUsdMFuturesMarketData()
+        assertTrue(market.nativeCandleTimelineContiguous(listOf(
+            1_767_225_600_000L, // 2026-01-01 UTC
+            1_769_904_000_000L, // 2026-02-01 UTC
+            1_772_323_200_000L  // 2026-03-01 UTC
+        ), "1M"))
+    }
+
+    @Test
+    fun utcClockProbeDoesNotRetryFourTimesOrBorrowTickerTransportCooldown() {
+        var attempts = 0
+        val failedClock = OkHttpClient.Builder().addInterceptor(Interceptor { chain ->
+            attempts++
+            Response.Builder()
+                .request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(503).message("unavailable")
+                .body("{}".toResponseBody("application/json".toMediaType()))
+                .build()
+        }).build()
+        val market = BinanceUsdMFuturesMarketData(failedClock)
+        try {
+            market.exchangeNowMs()
+            throw AssertionError("Failed clock probe must not authorize UTC risk time")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("clock HTTP 503"))
+        }
+        assertEquals(1, attempts)
+        assertTrue(!market.clockSnapshot().optBoolean("fresh"))
+        // Repeated scanner/UI calls cannot stampede the unsigned time endpoint
+        // during its bounded retry cooldown, and still receive no UTC authority.
+        try {
+            market.exchangeNowMs()
+            throw AssertionError("An expired clock is never authorized by probe cooldown")
+        } catch (failure: java.io.IOException) {
+            assertTrue(failure.message.orEmpty().contains("clock expired"))
+        }
+        assertEquals(1, attempts)
+    }
+
+    @Test
     fun repeatedOfflineGetAttemptsPauseOnlyPublicMarketDataForShortCooldown() {
         var attempts = 0
         val offline = OkHttpClient.Builder().addInterceptor(Interceptor {
