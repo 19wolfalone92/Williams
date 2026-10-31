@@ -90,6 +90,71 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertTrue(coordinator.status().getBoolean("ready_for_new_entry"))
     }
 
+    @Test fun archivedOwnersWithRememberedStopsReuseSignedSnapshotsWithoutRepeatedJournalWrites() {
+        val journal = Journal()
+        val archived = JSONArray()
+        repeat(80) { n ->
+            archived.put(JSONObject().put("symbol", "BTCUSDT")
+                .put("direction", "LONG").put("intent_role", "ENTRY")
+                .put("client_id", "W2H_OLD_$n")
+                .put("campaign_status", "CLOSED_OR_STOPPED")
+                .put("order_status", "CANCELED")
+                .put("exchange_status", "CANCELED")
+                .put("protection_client_id", "W2PS_OLD_$n")
+                .put("protective_stop", "75"))
+        }
+        journal.writeState("futures_campaign_intents_v2", archived.toString())
+        val before = journal.intentsWriteCount
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val result = coordinator.reconcile()
+        assertTrue(result.toString(), result.getBoolean("ok"))
+        assertTrue(coordinator.status().getBoolean("ready_for_new_entry"))
+        // One account-wide GET + a per-symbol GET + a final signed GET,
+        // NOT one REST request for each of 80 former campaigns.
+        val algoGets = exchange.requests.count { it.method == "GET" &&
+            it.url.encodedPath == "/fapi/v1/openAlgoOrders" }
+        assertTrue("Excessive signed orphan-STOP GETs: $algoGets", algoGets <= 5)
+        assertTrue("Excessive whole-journal writes: ${journal.intentsWriteCount - before}",
+            journal.intentsWriteCount - before <= 8)
+        assertEquals(80, JSONArray(journal.readState("futures_campaign_intents_v2")).length())
+        assertFalse(exchange.requests.any { it.method != "GET" })
+    }
+
+    @Test fun lateHistoricalStopOnFinalSignedAuditMustBlockNewEntries() {
+        val journal = Journal()
+        journal.writeState("futures_campaign_intents_v2",
+            JSONArray().put(JSONObject().put("symbol", "BTCUSDT")
+                .put("direction", "LONG").put("intent_role", "ENTRY")
+                .put("client_id", "W2H_FLAT_OLD").put("campaign_status", "CLOSED_OR_STOPPED")
+                .put("order_status", "CANCELED").put("exchange_status", "CANCELED")
+                .put("protection_client_id", "W2PS_FLAT_OLD")
+                .put("protective_stop", "75")).toString())
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        var algoGets = 0
+        exchange.beforeRequest = { request, _ ->
+            if (request.method == "GET" &&
+                request.url.encodedPath == "/fapi/v1/openAlgoOrders") {
+                algoGets++
+                if (algoGets == 3) {
+                    exchange.algos["101"] = JSONObject()
+                        .put("symbol", "BTCUSDT").put("clientAlgoId", "W2PS_FLAT_OLD")
+                        .put("algoId", "101").put("algoStatus", "NEW")
+                        .put("orderType", "STOP_MARKET")
+                }
+            }
+        }
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        val result = coordinator.reconcile()
+        assertFalse(result.toString(), result.getBoolean("ok"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertTrue(result.optString("blocker").contains("historical STOP still open"))
+        assertEquals(3, algoGets)
+        // An unexpected STOP is evidence for a block, NEVER a reason
+        // to cancel an order without fresh position/ownership proof.
+        assertFalse(exchange.requests.any { it.method != "GET" })
+    }
+
     @Test fun terminalBnbExitIsSeparatedWithoutChangingLedgerOrCallingBinance() {
         val journal = Journal()
         val exit = JSONObject().put("symbol", "BNBUSDT").put("direction", "SHORT")
