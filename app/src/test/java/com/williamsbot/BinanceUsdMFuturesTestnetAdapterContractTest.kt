@@ -491,6 +491,38 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             submitted >= preflightCompleted-30L)
     }
 
+    @Test fun mediumLatencyExchangeTimeNeverSignsBeyondBinancesOneSecondFutureLimit() {
+        var exchangeTimeAtReply = 0L
+        var accountGets = 0
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val payload = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    // Previously the midpoint anchor added ~1200ms to a
+                    // response-time sample at 2400ms RTT: Binance -1021.
+                    Thread.sleep(2_400L)
+                    exchangeTimeAtReply = System.currentTimeMillis()
+                    """{"serverTime":$exchangeTimeAtReply}"""
+                }
+                "/fapi/v3/account" -> {
+                    accountGets++
+                    val stamp = request.url.queryParameter("timestamp")!!.toLong()
+                    assertTrue(
+                        "Signed timestamp must not exceed server time +1000ms even for 2.4s RTT",
+                        stamp <= exchangeTimeAtReply + 1_000L
+                    )
+                    "{}"
+                }
+                else -> throw AssertionError("Unexpected Futures endpoint: ${request.url}")
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(payload.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+        assertEquals(1, accountGets)
+    }
+
     @Test fun monotonicExchangeTimestampTracksSkewAndConcurrentSignedReadsShareOneSync() {
         val calls=java.util.concurrent.atomic.AtomicInteger()
         val skew=25_000L
