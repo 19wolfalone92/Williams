@@ -1556,6 +1556,8 @@ private class NativeEngine(
     }
     private val historyStore = MarketHistoryStore(context)
     private val auditStore = TradingAuditStore(context)
+    // Research-only history, strictly separate from exchange intent storage.
+    private val observerPaperArchive = WilliamsObserverPaperArchive(context)
     private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
@@ -10327,10 +10329,14 @@ private class NativeEngine(
                         prior,candidate.symbol,source,
                         candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
                         traceSignals,passportObservedAt)
+                    // Append first: journal replay after an Android crash
+                    // is idempotent on the archive's event primary keys.
+                    observerPaperArchive.append(candidate.symbol,source,updated)
                     check(executionStore.writeState(key,updated.toString())) {
                         "OBSERVER_PAPER_SQLITE_WRITE_FAILED"
                     }
-                    updated
+                    updated.put("retained_archive_event_count",observerPaperArchive
+                        .snapshot(candidate.symbol,source,1).optLong("retained_event_count"))
                 }
             }.getOrElse { failure ->
                 JSONObject().put("status","OBSERVER_PAPER_UNAVAILABLE")
@@ -12185,6 +12191,20 @@ private class NativeEngine(
                         }
                     })
                 }
+            })
+            .put("observer_paper_archive",JSONObject().apply {
+                for(symbol in coreSymbols.sorted()) put(symbol,JSONObject().apply {
+                    for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                        val data=runCatching {
+                            observerPaperArchive.snapshot(symbol,source,500)
+                        }.getOrElse { failure ->
+                            JSONObject().put("status","OBSERVER_ARCHIVE_UNAVAILABLE")
+                                .put("error_type",failure.javaClass.simpleName)
+                                .put("can_place_orders",false)
+                        }
+                        put(source,data)
+                    }
+                })
             })
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
