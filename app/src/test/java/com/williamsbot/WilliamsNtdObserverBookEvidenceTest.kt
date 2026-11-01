@@ -42,6 +42,10 @@ class WilliamsNtdObserverBookEvidenceTest {
             assertEquals("TEETH_CLOSE_EXIT",event.getString("source_book_exit_rule"))
             assertEquals(100.0,event.getDouble("source_h1_close_price"),0.0)
             assertTrue(event.getBoolean("not_exchange_fill"))
+            assertFalse(event.getBoolean("hypothetical_fill_at_h1_close_guaranteed"))
+            assertTrue(event.getBoolean("funding_not_included"))
+            assertEquals(-10.084, event.getDouble(
+                "estimated_pnl_per_unit_if_filled_exactly_at_h1_close"),1e-8)
             assertFalse(event.getBoolean("can_place_orders"))
             assertNotNull(result.optJSONObject("paper_position"))
             // A re-evaluation on the same H1 close must not duplicate records.
