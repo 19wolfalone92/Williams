@@ -74,8 +74,11 @@ class WilliamsTc1ResearchDiaryTest {
         assertFalse(item.getBoolean("can_place_orders"))
         assertTrue(item.isNull("actual_book_entry_price"))
         assertTrue(item.isNull("actual_book_exit_price"))
+        val next=wave("MINIMUM_ONLY",120).put("as_of",now+hour)
+        next.getJSONArray("scenarios").getJSONObject(0)
+            .put("observed_at",now+hour)
         val duplicate=williamsTc1ResearchAdvance(correct,"BTCUSDT",
-            wave("MINIMUM_ONLY",120),now+hour)
+            next,now+hour)
         assertEquals(1,duplicate.getJSONArray("events").length())
         for(s in listOf("NEAR_ZERO_UNCONFIRMED","NO_ZERO_CROSS",
             "MISSING_W3_MOMENTUM","WRONG_SCALE"))
