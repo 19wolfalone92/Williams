@@ -1,6 +1,5 @@
 package com.williamsbot
 
-import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
@@ -60,16 +59,18 @@ internal class WilliamsObserverPaperArchive(context:Context) :
                     event.optBoolean("hypothetical_only",false) && event.optLong("at_ms")>0L) {
                     "OBSERVER_ARCHIVE_EVENT_SOURCE_UNVERIFIED"
                 }
-                val values=ContentValues().apply {
-                    put("event_id",eventId(event,symbol,profile))
-                    put("symbol",symbol).put("profile",profile)
-                    put("occurred_at_ms",event.getLong("at_ms"))
-                    put("kind",event.optString("event"))
-                    put("signal_id",event.optString("signal_id"))
-                    put("evidence_json",event.toString())
-                }
-                check(insertWithOnConflict("observer_events",null,values,
-                    SQLiteDatabase.CONFLICT_IGNORE)!=-1L) { "OBSERVER_ARCHIVE_INSERT_FAILED" }
+                // The Android insertWithOnConflict(...IGNORE) return value
+                // is -1 for an existing primary key. That is SUCCESSFUL
+                // idempotent replay, not a disk failure.
+                execSQL("""
+                    INSERT OR IGNORE INTO observer_events
+                    (event_id,symbol,profile,occurred_at_ms,kind,signal_id,evidence_json)
+                    VALUES(?,?,?,?,?,?,?)
+                """.trimIndent(),arrayOf<Any>(
+                    eventId(event,symbol,profile),symbol,profile,
+                    event.getLong("at_ms"),event.optString("event"),
+                    event.optString("signal_id"),event.toString()
+                ))
             }
         }
     }
