@@ -51,3 +51,8 @@ def test_true_w5_top_three_squat_remains_observable_as_noncanonical_volume_proxy
                 for b in bars]
     assert terminal_squat_volume_proxy(bars,direction,100,130)
     assert not terminal_squat_volume_proxy(bars,direction,130,130)
+    missing_prev = list(bars)
+    missing_prev[119] = replace(missing_prev[119],h=0.0)
+    assert not terminal_squat_volume_proxy(missing_prev,direction,100,130)
+    missing_prev[119] = replace(bars[119],v=0.0)
+    assert not terminal_squat_volume_proxy(missing_prev,direction,100,130)
