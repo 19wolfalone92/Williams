@@ -41,6 +41,9 @@ internal fun williamsNtdObserverBookEvidence(
     val entryAt=position.optLong("entry_bar_open_ms")
     if(entryAt<=0 || last.t<=entryAt)
         return result.put("ntd_book_evidence_status","NO_POST_ENTRY_CLOSED_BAR")
+    if(result.optInt("source_signal_intervals_unobserved",0)>0)
+        return result.put("ntd_book_evidence_status",
+            "MISSED_H1_SOURCE_DECISIONS_NO_RETROSPECTIVE_BOOK_EXIT")
     if(williamsEditionSignalSeriesBlocker(bars,"1h")!=null ||
         bars.size!=teeth.size || bars.size!=lips.size ||
         bars.size!=ao.size || bars.size!=ac.size ||
