@@ -51,6 +51,47 @@ class WilliamsTc1ResearchDiaryTest {
             hierarchy(now+hour),now+hour).getJSONArray("events").length())
     }
 
+    @Test fun firstEditionW4ZeroCrossNeedsRealCrossAnd100To140BarsAndCausalPivot() {
+        val now=100*hour
+        fun wave(zero:String,scale:Int):JSONObject {
+            val h=hierarchy(now)
+            val scenario=h.getJSONArray("scenarios").getJSONObject(0)
+            val old=scenario.getJSONArray("anchors")
+            scenario.put("anchors",JSONArray((0..4).map { old.getJSONObject(it) }))
+                .put("label","W4").put("w4_zero",zero).put("scale_bars",scale)
+            return h
+        }
+        val correct=williamsTc1ResearchAdvance(null,"BTCUSDT",
+            wave("MINIMUM_ONLY",120),now)
+        val entries=correct.getJSONArray("events")
+        assertEquals(1,entries.length())
+        val item=entries.getJSONObject(0)
+        assertEquals("TC1_H1_W4_AO_ZERO_CROSS_WATCH",item.getString("event"))
+        assertEquals("TC1_PDF61_65",item.getString("source_book"))
+        assertEquals("MINIMUM_ONLY",item.getString("source_ao_zero_status"))
+        assertEquals(120,item.getInt("source_degree_scale_bars"))
+        assertFalse(item.getBoolean("wave_degree_certified"))
+        assertFalse(item.getBoolean("can_place_orders"))
+        assertTrue(item.isNull("actual_book_entry_price"))
+        assertTrue(item.isNull("actual_book_exit_price"))
+        val duplicate=williamsTc1ResearchAdvance(correct,"BTCUSDT",
+            wave("MINIMUM_ONLY",120),now+hour)
+        assertEquals(1,duplicate.getJSONArray("events").length())
+        for(s in listOf("NEAR_ZERO_UNCONFIRMED","NO_ZERO_CROSS",
+            "MISSING_W3_MOMENTUM","WRONG_SCALE"))
+            assertEquals(0,williamsTc1ResearchAdvance(null,"BTCUSDT",
+                wave(s,120),now).getJSONArray("events").length())
+        for(scale in listOf(99,141))
+            assertEquals(0,williamsTc1ResearchAdvance(null,"BTCUSDT",
+                wave("MINIMUM_ONLY",scale),now).getJSONArray("events").length())
+        val tooEarly=wave("MINIMUM_ONLY",120)
+        tooEarly.getJSONArray("scenarios").getJSONObject(0)
+            .getJSONArray("anchors").getJSONObject(4)
+            .put("known_at",now+hour)
+        assertEquals(0,williamsTc1ResearchAdvance(null,"BTCUSDT",
+            tooEarly,now).getJSONArray("events").length())
+    }
+
     @Test fun missingWaveSnapshotAndWrongSourceCannotCreateTradingEvidence() {
         val now=100*hour
         val unavailable=williamsTc1ResearchAdvance(null,"ADAUSDT",hierarchy(now),now+1)
