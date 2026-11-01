@@ -111,6 +111,28 @@ class WilliamsObserverPaperHistoryTest {
         assertEquals("book-1",blocked.getJSONObject("pending").getString("signal_id"))
     }
 
+    @Test fun stopInvalidationBeforeAnyBreakoutCancelsPaperPendingBothWays() {
+        for(side in listOf("LONG","SHORT")) {
+            val first=williamsObserverPaperAdvance(null,"ADAUSDT",williamsNtdProfile,
+                bars(45),signal(side=side),46*h)
+            val invalidation=if(side=="LONG")
+                WilliamsWaveBar(46*h,100.0,105.0,89.0,99.0,100.0)
+                else WilliamsWaveBar(46*h,100.0,111.0,95.0,101.0,100.0)
+            val cancelled=williamsObserverPaperAdvance(first,"ADAUSDT",williamsNtdProfile,
+                bars(45)+invalidation,JSONArray(),47*h)
+            assertNull(cancelled.optJSONObject("pending"))
+            assertNull(cancelled.optJSONObject("paper_position"))
+            assertEquals("PAPER_SETUP_INVALIDATED_BEFORE_ENTRY",events(cancelled).last().getString("event"))
+            // A later breakout cannot resurrect an already broken source setup.
+            val later=if(side=="LONG") WilliamsWaveBar(47*h,100.0,115.0,98.0,103.0,100.0)
+                else WilliamsWaveBar(47*h,100.0,102.0,85.0,97.0,100.0)
+            val resumed=williamsObserverPaperAdvance(cancelled,"ADAUSDT",williamsNtdProfile,
+                bars(45)+invalidation+later,JSONArray(),48*h)
+            assertNull(resumed.optJSONObject("paper_position"))
+            assertFalse(events(resumed).any { it.optString("event")=="PAPER_ENTRY_FILLED_ESTIMATE" })
+        }
+    }
+
     @Test fun previousCandleIsNotEligibleAsASameBarFutureFill() {
         val first=williamsObserverPaperAdvance(null,"SOLUSDT",williamsNtdProfile,
             bars(45).dropLast(1)+WilliamsWaveBar(45*h,100.0,112.0,95.0,100.0,100.0),
