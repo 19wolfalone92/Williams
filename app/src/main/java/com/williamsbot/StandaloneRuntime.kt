@@ -10302,6 +10302,44 @@ private class NativeEngine(
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
         })
         trace.put("edition_observations",observations)
+        // Independent NTD/Course WHAT-IF history. Persist a causal H1
+        // paper diary even when TC2 live execution is paused/blocked.
+        // Never send an observer signal to Futures coordinator or TradeJournal.
+        val observerPaper=JSONObject()
+        for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+            val key=williamsObserverPaperKey(candidate.symbol,source)
+            val observer=(0 until observations.length()).mapNotNull { observations.optJSONObject(it) }
+                .singleOrNull { it.optString("profile")==source }
+            val asOf=candidate.candles.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L
+            val valid=observer?.optString("state") in setOf("FORMATION_OBSERVED","NO_VALID_FORMATION") &&
+                observer?.optLong("as_of_close_ms")==asOf
+            val recorded=runCatching {
+                val prior=executionStore.readState(key)?.let { JSONObject(it) }
+                if(!valid) {
+                    // Keep prior paper position/intents untouched on an
+                    // analyst failure; false zero-signals are not evidence.
+                    (prior?.let { JSONObject(it.toString()) } ?: JSONObject())
+                        .put("status","SOURCE_OBSERVATION_UNVERIFIED")
+                        .put("source_scanner_status",observer?.optString("state") ?: "MISSING")
+                        .put("can_place_orders",false)
+                } else {
+                    val updated=williamsObserverPaperAdvance(
+                        prior,candidate.symbol,source,
+                        candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                        traceSignals,passportObservedAt)
+                    check(executionStore.writeState(key,updated.toString())) {
+                        "OBSERVER_PAPER_SQLITE_WRITE_FAILED"
+                    }
+                    updated
+                }
+            }.getOrElse { failure ->
+                JSONObject().put("status","OBSERVER_PAPER_UNAVAILABLE")
+                    .put("error_type",failure.javaClass.simpleName)
+                    .put("can_place_orders",false)
+            }
+            observerPaper.put(source,recorded)
+        }
+        trace.put("observer_paper_history",observerPaper)
         val traceBooks=trace.getJSONArray("books")
         for(index in 0 until observations.length()) {
             val observation=observations.getJSONObject(index)
@@ -10351,6 +10389,7 @@ private class NativeEngine(
             // Preserve absent/failed observer evidence instead of quietly
             // equating "no signal" with "analyser could not execute".
             .put("edition_observations",observations)
+            .put("observer_paper_history",observerPaper)
             .put("campaign_ready", candidate.campaignReady)
             .put(
                 "campaign_signals",
@@ -12131,6 +12170,22 @@ private class NativeEngine(
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
             .put("unified_strategy_evidence", unifiedEvidence)
+            // Full on-device historical research diary, accessible in ZIP
+            // even if the scanner/UI candidate list is currently empty.
+            .put("observer_paper_history",JSONObject().apply {
+                for(symbol in coreSymbols.sorted()) {
+                    put(symbol,JSONObject().apply {
+                        for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                            val journal=runCatching {
+                                executionStore.readState(williamsObserverPaperKey(symbol,source))
+                                    ?.let { JSONObject(it) }
+                            }.getOrNull()
+                            put(source,journal ?: JSONObject().put("status","NOT_YET_OBSERVED")
+                                .put("can_place_orders",false))
+                        }
+                    })
+                }
+            })
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
             .put("durable_history_evidence",historyEvidence)
