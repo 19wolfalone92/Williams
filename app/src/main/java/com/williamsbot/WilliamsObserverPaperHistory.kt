@@ -87,6 +87,7 @@ internal fun williamsObserverPaperAdvance(
 
     var pending=state.optJSONObject("pending")
     var position=state.optJSONObject("paper_position")
+    var exitWatch=state.optJSONObject("paper_opposite_exit_watch")
     for(bar in incoming) {
         if(pending!=null && bar.t>=pending.getLong("known_at_ms")) {
             val expire=pending.optLong("expires_at_ms",0)
@@ -156,6 +157,33 @@ internal fun williamsObserverPaperAdvance(
                     .put("exit_is_complete_book_rule",false)
                     .put("exchange_fees_or_funding_verified",false))
                 position=null
+                exitWatch=null
+            }
+        }
+        // Opposite source-level observation is a candidate to EXIT at a
+        // particular price. NTD/Course have additional different book
+        // exit rules; record this counterfactual price/time, but preserve
+        // the independent initial-STOP baseline and never call it a
+        // certified author-book exit or a Binance fill.
+        if(position!=null && exitWatch!=null &&
+            bar.t>=exitWatch.getLong("known_at_ms")) {
+            val direction=position.getString("direction")
+            val trigger=exitWatch.getDouble("trigger")
+            val crossed=if(direction=="LONG") bar.l<=trigger else bar.h>=trigger
+            if(crossed) {
+                val raw=if(direction=="LONG") min(bar.o,trigger) else max(bar.o,trigger)
+                val estimated=raw*(if(direction=="LONG") 1-OBSERVER_SLIPPAGE_SIDE else 1+OBSERVER_SLIPPAGE_SIDE)
+                val entry=position.getDouble("entry_price")
+                val signed=if(direction=="LONG") estimated-entry else entry-estimated
+                event("PAPER_OPPOSITE_EXIT_TRIGGER_OBSERVED",bar.t,JSONObject()
+                    .put("signal_id",exitWatch.getString("signal_id"))
+                    .put("owned_entry_signal_id",position.getString("signal_id"))
+                    .put("source_opposing_trigger",trigger)
+                    .put("estimated_exit_price",estimated)
+                    .put("pnl_per_unit_if_exited_before_funding",signed-(entry+estimated)*OBSERVER_FEE_SIDE)
+                    .put("exit_is_complete_book_rule",false)
+                    .put("does_not_close_stop_only_paper_baseline",true))
+                exitWatch=null
             }
         }
     }
@@ -202,8 +230,14 @@ internal fun williamsObserverPaperAdvance(
             continue
         }
         if(position!=null) {
-            event("PAPER_EXIT_HYPOTHESIS_ONLY",lastClose,
-                raw.put("reason","OPPOSING_OR_ADDITIONAL_SOURCE_TRIGGER_NOT_VERIFIED_EXIT"))
+            if(dir!=position.optString("direction") && exitWatch==null) {
+                exitWatch=JSONObject().put("signal_id",sid)
+                    .put("known_at_ms",lastClose).put("trigger",entry)
+                    .put("direction",dir)
+                event("PAPER_OPPOSITE_EXIT_CANDIDATE_ARMED",lastClose,
+                    raw.put("reason","BOOK_EXIT_SEMANTICS_NOT_YET_CERTIFIED"))
+            } else event("PAPER_EXIT_HYPOTHESIS_ONLY",lastClose,
+                raw.put("reason","ALTERNATE_SOURCE_TRIGGER_NOT_VERIFIED_EXIT"))
             continue
         }
         if(pending!=null) {
@@ -224,6 +258,7 @@ internal fun williamsObserverPaperAdvance(
         .put("observation_at_ms",observedAtMs)
         .put("pending",pending ?: JSONObject.NULL)
         .put("paper_position",position ?: JSONObject.NULL)
+        .put("paper_opposite_exit_watch",exitWatch ?: JSONObject.NULL)
         .remove("blocker")
     return result("PAPER_OBSERVING")
 }
