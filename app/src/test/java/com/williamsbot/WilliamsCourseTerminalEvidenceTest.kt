@@ -90,10 +90,13 @@ class WilliamsCourseTerminalEvidenceTest {
         // The MFI ratio of the previous bar is itself undefined with
         // malformed OHLC, even if its volume happens to be positive.
         rows[120]=rows[120].copy(v=300.0)
+        assertTrue(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
+        // Row 119 is OUTSIDE the W5 window. The calculation still needs
+        // its valid OHLCV to classify bar 120 against its predecessor.
         rows[119]=rows[119].copy(h=0.0)
-        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
+        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
         rows[119]=rows[119].copy(h=131.0, v=0.0)
-        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
+        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
         assertFalse(williamsTerminalSquatVolumeProxy(rows,"BAD",100,130))
     }
 
