@@ -16,7 +16,12 @@ from williams_wave_momentum import evaluate_third_momentum, ordered_sum, third_m
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
             "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000}
-REQUIRED_FRAMES = ("1d", "6h", "1h", "15m")
+# Default analytical degrees MUST match Android's WilliamsWaveHierarchy.kt.
+# H6 is extra contextual evidence only: a 6-hour bar cannot nest exactly
+# inside a 4-hour bar. Never substitute H6 for the separately required H4.
+# This is a project-specific chart hierarchy, not a timeframe mandate in
+# any of the four Bill Williams primary sources.
+REQUIRED_FRAMES = ("1d", "4h", "1h", "15m")
 
 
 def wave_bars_from_dataframe(frame):
