@@ -50,9 +50,12 @@ def test_true_w5_top_three_squat_remains_observable_as_noncanonical_volume_proxy
         bars = [replace(b,o=300-b.o,h=300-b.l,l=300-b.h,c=300-b.c)
                 for b in bars]
     assert terminal_squat_volume_proxy(bars,direction,100,130)
+    assert terminal_squat_volume_proxy(bars,direction,120,130)
     assert not terminal_squat_volume_proxy(bars,direction,130,130)
+    # The immediate preceding candle lies OUTSIDE W5, but is still
+    # required to measure the proxy MFI of the first candidate.
     missing_prev = list(bars)
     missing_prev[119] = replace(missing_prev[119],h=0.0)
-    assert not terminal_squat_volume_proxy(missing_prev,direction,100,130)
+    assert not terminal_squat_volume_proxy(missing_prev,direction,120,130)
     missing_prev[119] = replace(bars[119],v=0.0)
-    assert not terminal_squat_volume_proxy(missing_prev,direction,100,130)
+    assert not terminal_squat_volume_proxy(missing_prev,direction,120,130)
