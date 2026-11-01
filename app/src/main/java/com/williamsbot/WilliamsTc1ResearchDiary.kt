@@ -46,8 +46,43 @@ internal fun williamsTc1ResearchAdvance(
     for(i in 0 until scenarios.length()) {
         val scenario=scenarios.optJSONObject(i) ?: continue
         if(scenario.optString("frame")!="1h" ||
-            scenario.optString("label")!="W5" ||
             scenario.optString("status")!="PROVISIONAL") continue
+        val anchors=scenario.optJSONArray("anchors") ?: continue
+        val scenarioId=scenario.optString("scenario_id")
+        if(scenarioId.isBlank() || scenario.optString("direction") !in listOf("UP","DOWN"))
+            continue
+        // TC1 PDF61-65: a fourth-wave zero cross is a *minimum*
+        // oscillator degree clue, not proof of a unique Elliott wave,
+        // a source entry or any trade. A near-zero proxy is not enough.
+        // Pin this evidence to the fifth CONFIRMED pivot and the author's
+        // 100-140 bar scale. Do not relabel developing W3 as finished W4.
+        if(anchors.length()>=5 && scenario.optString("w4_zero")=="MINIMUM_ONLY" &&
+            scenario.optInt("scale_bars") in 100..140) {
+            val pivot=anchors.optJSONObject(4)
+            val id="TC1:W4_ZERO:"+scenarioId
+            val known=pivot?.optLong("known_at") ?: 0L
+            val price=pivot?.optDouble("price",Double.NaN) ?: Double.NaN
+            if(id !in seen && known>0 && known<=asOfMs &&
+                price.isFinite() && price>0) {
+                events.put(JSONObject().put("event","TC1_H1_W4_AO_ZERO_CROSS_WATCH")
+                    .put("at_ms",asOfMs).put("symbol",symbol)
+                    .put("profile",WILLIAMS_TC1_OBSERVER).put("signal_id",id)
+                    .put("wave_hypothesis",scenarioId)
+                    .put("direction",scenario.optString("direction"))
+                    .put("source_pivot_price",price)
+                    .put("source_pivot_known_at_ms",known)
+                    .put("source_book","TC1_PDF61_65")
+                    .put("source_ao_zero_status","MINIMUM_ONLY")
+                    .put("source_degree_scale_bars",scenario.optInt("scale_bars"))
+                    .put("wave_degree_certified",false)
+                    .put("actual_book_entry_price",JSONObject.NULL)
+                    .put("actual_book_exit_price",JSONObject.NULL)
+                    .put("hypothetical_only",true).put("can_place_orders",false))
+                observedCount++
+                seen.add(id)
+            }
+        }
+        if(scenario.optString("label")!="W5") continue
         val proof=williamsTc1FiveBulletEvidence(scenario)
         val id="TC1:"+scenario.optString("scenario_id")
         if(id in seen) continue
