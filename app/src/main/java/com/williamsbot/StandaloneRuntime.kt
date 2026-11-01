@@ -10325,10 +10325,29 @@ private class NativeEngine(
                         .put("source_scanner_status",observer?.optString("state") ?: "MISSING")
                         .put("can_place_orders",false)
                 } else {
-                    val updated=williamsObserverPaperAdvance(
+                    val paper=williamsObserverPaperAdvance(
                         prior,candidate.symbol,source,
                         candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
                         traceSignals,passportObservedAt)
+                    // Same H1 source-specific NTD book planner as legacy
+                    // NTD campaigns, but it ONLY appends research evidence.
+                    // Exit signals are not Binance fills or executable exits.
+                    val updated=if(source==williamsNtdProfile &&
+                        paper.optJSONObject("paper_position")!=null &&
+                        ntdTick.isFinite() && ntdTick>0) {
+                        val raw=candidate.candles
+                        val aa=raw.indices.map { ao(raw,it) }
+                        val cc=aa.indices.map { k ->
+                            if(k>=4) nativeAcFromClosedAo(aa.subList(k-4,k+1))
+                            else Double.NaN
+                        }
+                        williamsNtdObserverBookEvidence(
+                            paper,candidate.symbol,
+                            raw.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                            williamsAlligatorLine(raw,8,5).map { it ?: Double.NaN },
+                            williamsAlligatorLine(raw,5,3).map { it ?: Double.NaN },
+                            aa,cc,ntdTick,passportObservedAt)
+                    } else paper
                     // Append first: journal replay after an Android crash
                     // is idempotent on the archive's event primary keys.
                     observerPaperArchive.append(candidate.symbol,source,updated)
