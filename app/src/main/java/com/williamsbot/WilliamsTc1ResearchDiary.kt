@@ -84,9 +84,8 @@ internal fun williamsTc1ResearchAdvance(
         }
         if(scenario.optString("label")!="W5") continue
         val proof=williamsTc1FiveBulletEvidence(scenario)
-        val id="TC1:"+scenario.optString("scenario_id")
+        val id="TC1:"+scenarioId
         if(id in seen) continue
-        val anchors=scenario.optJSONArray("anchors") ?: continue
         if(anchors.length()!=6) continue
         val terminal=anchors.optJSONObject(5) ?: continue
         val known=terminal.optLong("known_at")
