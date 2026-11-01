@@ -10351,7 +10351,7 @@ private class NativeEngine(
         observerPaper.put(WILLIAMS_TC1_OBSERVER,runCatching {
             val key=williamsTc1ObserverKey(candidate.symbol)
             val prior=executionStore.readState(key)?.let { JSONObject(it) }
-            val updated=williamsTc1ResearchAdvance(prior,candidate.symbol,observedHierarchy,passportObservedAt)
+            val updated=williamsTc1ResearchAdvance(prior,candidate.symbol,observedHierarchy,observedAt)
             if(updated.optString("status")=="TC1_WAVE_EVIDENCE_ONLY_NOT_A_PAPER_EXECUTOR") {
                 observerPaperArchive.append(candidate.symbol,WILLIAMS_TC1_OBSERVER,updated)
                 check(executionStore.writeState(key,updated.toString())) {
