@@ -72,6 +72,8 @@ internal fun williamsTc1ResearchAdvance(
                     .put("source_pivot_price",price)
                     .put("source_pivot_known_at_ms",known)
                     .put("source_book","TC1_PDF61_65")
+                    .put("w4_time_projection",
+                        williamsTc1Wave4TimeProjection(scenario,asOfMs))
                     .put("source_ao_zero_status","MINIMUM_ONLY")
                     .put("source_degree_scale_bars",scenario.optInt("scale_bars"))
                     .put("wave_degree_certified",false)
