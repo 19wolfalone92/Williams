@@ -10347,6 +10347,10 @@ private class NativeEngine(
                             williamsAlligatorLine(raw,8,5).map { it ?: Double.NaN },
                             williamsAlligatorLine(raw,5,3).map { it ?: Double.NaN },
                             aa,cc,ntdTick,passportObservedAt)
+                    } else if(source==williamsCourseProfile) {
+                        williamsCourseObserverLocations(
+                            paper,candidate.symbol,observedHierarchy,
+                            candidate.candles.last().t+WILLIAMS_H1_MS)
                     } else paper
                     // Append first: journal replay after an Android crash
                     // is idempotent on the archive's event primary keys.
