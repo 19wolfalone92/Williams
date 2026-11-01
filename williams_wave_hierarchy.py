@@ -365,9 +365,15 @@ def terminal_squat_volume_proxy(bars, direction, start, end):
         b = bars[i]
         if (not all(isfinite(x) for x in (b.o,b.h,b.l,b.c,b.v))
                 or b.h < max(b.o,b.l,b.c) or b.l > min(b.o,b.c)
-                or b.l <= 0 or b.v < 0
-                or i > 0 and (not isfinite(bars[i-1].v) or bars[i-1].v < 0)):
+                or b.l <= 0 or b.v < 0):
             return False
+        if i > 0:
+            prev = bars[i-1]
+            if (not all(isfinite(x) for x in (prev.o,prev.h,prev.l,prev.c,prev.v))
+                    or prev.l <= 0 or prev.v <= 0
+                    or prev.h < max(prev.o,prev.l,prev.c)
+                    or prev.l > min(prev.o,prev.c)):
+                return False
     def ranked(i):
         return bars[i].h if direction == "UP" else -bars[i].l
     third = sorted((ranked(i) for i in indexes),reverse=True)[2]
