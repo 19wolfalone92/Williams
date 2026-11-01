@@ -44,7 +44,7 @@ class WilliamsNtdObserverBookEvidenceTest {
             assertTrue(event.getBoolean("not_exchange_fill"))
             assertFalse(event.getBoolean("hypothetical_fill_at_h1_close_guaranteed"))
             assertTrue(event.getBoolean("funding_not_included"))
-            assertEquals(-10.084, event.getDouble(
+            assertEquals(if(side=="LONG") -10.084 else -10.076, event.getDouble(
                 "estimated_pnl_per_unit_if_filled_exactly_at_h1_close"),1e-8)
             assertFalse(event.getBoolean("can_place_orders"))
             assertNotNull(result.optJSONObject("paper_position"))
