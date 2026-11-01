@@ -79,6 +79,11 @@ internal fun williamsObserverPaperAdvance(
     // No duplicate signals/fills on repeated scanner calls or APK restarts.
     if(previousAt==newest) return result("PAPER_OBSERVING")
     val incoming=if(previousAt>0L) candles.filter { it.t>previousAt } else listOf(candles.last())
+    // Full OHLC can replay a pending stop and its conservative fill, but
+    // it CANNOT reproduce separate source-extractor decisions that were
+    // never evaluated on each missed H1 close. Keep that gap explicit.
+    state.put("source_signal_intervals_unobserved",if(previousAt>0L)
+        max(0,incoming.size-1) else 0)
     if(previousAt>0L && incoming.firstOrNull()?.t!=previousAt+OBSERVER_HOUR_MS)
         return result("H1_REPLAY_GAP").put("blocker","NONCONSECUTIVE_NEW_BARS")
     if(previousAt>0L && incoming.size>1)
