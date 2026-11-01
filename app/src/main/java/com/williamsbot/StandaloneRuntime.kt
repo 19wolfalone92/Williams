@@ -10345,6 +10345,25 @@ private class NativeEngine(
             }
             observerPaper.put(source,recorded)
         }
+        // TC1 first-edition evidence is not a disguised TC2 paper entry.
+        // Save its separate causally known terminal-wave observations,
+        // with NO fabricated first-edition entry/exit or exchange fill.
+        observerPaper.put(WILLIAMS_TC1_OBSERVER,runCatching {
+            val key=williamsTc1ObserverKey(candidate.symbol)
+            val prior=executionStore.readState(key)?.let { JSONObject(it) }
+            val updated=williamsTc1ResearchAdvance(prior,candidate.symbol,observedHierarchy,passportObservedAt)
+            if(updated.optString("status")=="TC1_WAVE_EVIDENCE_ONLY_NOT_A_PAPER_EXECUTOR") {
+                observerPaperArchive.append(candidate.symbol,WILLIAMS_TC1_OBSERVER,updated)
+                check(executionStore.writeState(key,updated.toString())) {
+                    "TC1_RESEARCH_SQLITE_WRITE_FAILED"
+                }
+            }
+            updated
+        }.getOrElse { failure ->
+            JSONObject().put("status","TC1_RESEARCH_UNAVAILABLE")
+                .put("error_type",failure.javaClass.simpleName)
+                .put("can_place_orders",false)
+        })
         trace.put("observer_paper_history",observerPaper)
         val traceBooks=trace.getJSONArray("books")
         for(index in 0 until observations.length()) {
@@ -12181,10 +12200,11 @@ private class NativeEngine(
             .put("observer_paper_history",JSONObject().apply {
                 for(symbol in coreSymbols.sorted()) {
                     put(symbol,JSONObject().apply {
-                        for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                        for(source in listOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER)) {
                             val journal=runCatching {
-                                executionStore.readState(williamsObserverPaperKey(symbol,source))
-                                    ?.let { JSONObject(it) }
+                                val key=if(source==WILLIAMS_TC1_OBSERVER) williamsTc1ObserverKey(symbol)
+                                    else williamsObserverPaperKey(symbol,source)
+                                executionStore.readState(key)?.let { JSONObject(it) }
                             }.getOrNull()
                             put(source,journal ?: JSONObject().put("status","NOT_YET_OBSERVED")
                                 .put("can_place_orders",false))
@@ -12194,7 +12214,7 @@ private class NativeEngine(
             })
             .put("observer_paper_archive",JSONObject().apply {
                 for(symbol in coreSymbols.sorted()) put(symbol,JSONObject().apply {
-                    for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+                    for(source in listOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER)) {
                         val data=runCatching {
                             observerPaperArchive.snapshot(symbol,source,500)
                         }.getOrElse { failure ->
