@@ -463,14 +463,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
         h.momentum_shift = (len(valid_ao) == 5 and sign * valid_ao[-1] <
                             sign * ordered_sum(valid_ao) / 5 and
                             sign * valid_ao[-1] < sign * valid_ao[-2])
-        terminal = p[min(5, n-1)].index
-        if n >= 6:
-            h.squat = terminal_squat_volume_proxy(bars,h.direction,p[4].index,terminal)
-        else:
-            for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
-                a, b = bars[j-1], bars[j]
-                if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
-                    h.squat = True
+        # TC1 PDF53,82-83 / Course Level III PDF77: an extreme
+        # squat is terminal W5 evidence only after SIX causal pivots.
+        # A squat next to an earlier W1-W4 pivot is not a W5 sign.
+        h.squat = (n >= 6 and terminal_squat_volume_proxy(
+            bars,h.direction,p[4].index,p[5].index))
         out.append(h)
     return out
 
