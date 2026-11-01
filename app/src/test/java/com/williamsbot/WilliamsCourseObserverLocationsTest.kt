@@ -62,8 +62,11 @@ class WilliamsCourseObserverLocationsTest {
 
     @Test fun outOfZoneOrUnobservedH1NeverBecomesAFalseBookEntry() {
         val close=101*h
+        // 160 is NOT an out-of-zone counterexample: it is a legitimate
+        // Course W3_EXTENSION watch (160-115 > 1.1*(130-100)).
+        // 125 is outside BOTH W3 retracement and W3 extension ranges.
         val out=williamsCourseObserverLocations(paper(),"ETHUSDT",
-            hierarchy(close+1,160.0),close)
+            hierarchy(close+1,125.0),close)
         assertEquals(0,out.getJSONArray("events").length())
         assertEquals("NO_SOURCE_CONFIRMED_PRICE_ZONE",out.getString("course_location_status"))
         val stale=williamsCourseObserverLocations(paper(),"ETHUSDT",
