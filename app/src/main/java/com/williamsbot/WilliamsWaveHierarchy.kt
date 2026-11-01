@@ -292,7 +292,13 @@ internal fun williamsTerminalSquatVolumeProxy(
         val b=bars[i]
         listOf(b.o,b.h,b.l,b.c,b.v).any { !it.isFinite() } ||
             b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.c) || b.l<=0 || b.v<0 ||
-            i>0 && (!bars[i-1].v.isFinite() || bars[i-1].v<0)
+            i>0 && run {
+                val previous=bars[i-1]
+                listOf(previous.o,previous.h,previous.l,previous.c,previous.v).any { !it.isFinite() } ||
+                    previous.l<=0 || previous.v<=0 ||
+                    previous.h<maxOf(previous.o,previous.l,previous.c) ||
+                    previous.l>minOf(previous.o,previous.c)
+            }
     }) return false
     fun ranked(i:Int)=if(direction=="UP") bars[i].h else -bars[i].l
     val thirdExtreme=indices.map(::ranked).sortedDescending()[2]
