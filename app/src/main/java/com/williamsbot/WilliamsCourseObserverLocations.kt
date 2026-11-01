@@ -23,6 +23,16 @@ internal fun williamsCourseObserverLocations(
         state.optBoolean("can_place_orders",false)) return state
         .put("course_location_status","INVALID_SOURCE_OWNER")
         .put("can_place_orders",false)
+    // A valid wave hierarchy is not enough: no hypothetical source
+    // decisions may be emitted when the source's OWN H1 paper replay was
+    // blocked by a gap, clock rollback, invalid OHLC or SQLite fault.
+    // The next valid closed H1 starts a new strictly causal observation.
+    if(state.optString("status")!="PAPER_OBSERVING" ||
+        state.optLong("last_closed_h1_at_ms")!=closedH1AtMs ||
+        state.optLong("last_processed_open_ms")!=closedH1AtMs-WILLIAMS_H1_MS ||
+        state.optInt("source_signal_intervals_unobserved",0)!=0)
+        return state.put("course_location_status",
+            "SOURCE_PAPER_H1_REPLAY_UNVERIFIED")
     val asOf=hierarchy.optLong("as_of",0L)
     val frameErrors=hierarchy.optJSONObject("frame_errors")
     if(closedH1AtMs<=0 || asOf<closedH1AtMs ||
