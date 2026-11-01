@@ -97,8 +97,18 @@ internal fun williamsObserverPaperAdvance(
             } else {
                 val dir=pending.getString("direction")
                 val trigger=pending.getDouble("trigger")
+                val stop=pending.getDouble("stop")
                 val hit=if(dir=="LONG") bar.h>=trigger else bar.l<=trigger
-                if(hit) {
+                val invalidated=if(dir=="LONG") bar.l<=stop else bar.h>=stop
+                if(invalidated && !hit) {
+                    // A source setup invalidated BEFORE any breakout cannot
+                    // remain armed for a later H1 reversal. This remains a
+                    // paper-only event; no Binance cancellation is issued.
+                    event("PAPER_SETUP_INVALIDATED_BEFORE_ENTRY",bar.t,JSONObject()
+                        .put("signal_id",pending.getString("signal_id"))
+                        .put("invalidating_stop",stop))
+                    pending=null
+                } else if(hit) {
                     val raw=if(dir=="LONG") max(bar.o,trigger) else min(bar.o,trigger)
                     val fill=raw*(if(dir=="LONG") 1+OBSERVER_SLIPPAGE_SIDE else 1-OBSERVER_SLIPPAGE_SIDE)
                     val stop=pending.getDouble("stop")
