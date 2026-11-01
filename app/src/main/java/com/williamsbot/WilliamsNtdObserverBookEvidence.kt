@@ -66,13 +66,31 @@ internal fun williamsNtdObserverBookEvidence(
     val closeReason=plan.exitReason
     val stop=plan.stop
     if(closeReason in setOf("TEETH_CLOSE_EXIT","LIPS_CLOSE_EXIT")) {
+        val entry=position.optDouble("entry_price",Double.NaN)
+        val direction=position.optString("direction")
+        // NTD source specifies an Alligator CLOSE condition. The H1
+        // closing price is observable only AFTER the candle has closed;
+        // recording a theoretical price level is not proof that a
+        // real market-on-close order could have filled at that price.
+        val theoreticalPnl=if(entry.isFinite() && entry>0 &&
+            last.c.isFinite() && last.c>0) {
+            val gross=if(direction=="LONG") last.c-entry else entry-last.c
+            // Fixed model parameters only; actual exchange fee/funding
+            // requires authenticated fill records.
+            gross-(entry+last.c)*0.0004
+        } else Double.NaN
         events.put(JSONObject()
             .put("event","NTD_BOOK_CLOSE_EXIT_SIGNAL")
             .put("symbol",symbol).put("profile",williamsNtdProfile)
             .put("signal_id",position.optString("signal_id"))
-            .put("direction",position.optString("direction"))
+            .put("direction",direction)
             .put("at_ms",end).put("source_h1_close_ms",end)
             .put("source_h1_close_price",last.c)
+            .put("estimated_pnl_per_unit_if_filled_exactly_at_h1_close",
+                theoreticalPnl.takeIf { it.isFinite() } ?: JSONObject.NULL)
+            .put("assumed_fee_per_side",0.0004)
+            .put("hypothetical_fill_at_h1_close_guaranteed",false)
+            .put("funding_not_included",true)
             .put("source_book_exit_rule",closeReason)
             .put("not_exchange_fill",true)
             .put("hypothetical_only",true).put("exit_is_complete_book_rule",false)
