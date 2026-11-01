@@ -10,6 +10,10 @@ class WilliamsCourseObserverLocationsTest {
 
     private fun paper(profile:String=williamsCourseProfile)=JSONObject()
         .put("symbol","ETHUSDT").put("profile",profile)
+        .put("status","PAPER_OBSERVING")
+        .put("last_processed_open_ms",100*h)
+        .put("last_closed_h1_at_ms",101*h)
+        .put("source_signal_intervals_unobserved",0)
         .put("can_place_orders",false).put("events",JSONArray())
         .put("paper_position",JSONObject.NULL)
 
@@ -58,6 +62,29 @@ class WilliamsCourseObserverLocationsTest {
         assertEquals("ALREADY_OBSERVED",repeated.getString("course_location_status"))
         assertEquals(1,repeated.getJSONArray("events").length())
         assertNull(repeated.optJSONObject("paper_position"))
+    }
+
+    @Test fun failedOrGappedPaperReplayNeverCreatesCourseWaveBookEvents() {
+        val close=101*h
+        val hierarchy=hierarchy(close+1,115.0)
+        for(status in listOf("UNRECOVERABLE_REPLAY_GAP",
+            "CLOSED_H1_HISTORY_UNVERIFIED","H1_REPLAY_GAP")) {
+            val bad=paper().put("status",status)
+            val blocked=williamsCourseObserverLocations(bad,"ETHUSDT",hierarchy,close)
+            assertEquals("SOURCE_PAPER_H1_REPLAY_UNVERIFIED",
+                blocked.getString("course_location_status"))
+            assertEquals(0,blocked.getJSONArray("events").length())
+        }
+        for(gap in listOf(1,2)) {
+            val bad=paper().put("source_signal_intervals_unobserved",gap)
+            val blocked=williamsCourseObserverLocations(bad,"ETHUSDT",hierarchy,close)
+            assertEquals("SOURCE_PAPER_H1_REPLAY_UNVERIFIED",
+                blocked.getString("course_location_status"))
+            assertEquals(0,blocked.getJSONArray("events").length())
+        }
+        val stale=paper().put("last_closed_h1_at_ms",100*h)
+        assertEquals(0,williamsCourseObserverLocations(stale,"ETHUSDT",
+            hierarchy,close).getJSONArray("events").length())
     }
 
     @Test fun outOfZoneOrUnobservedH1NeverBecomesAFalseBookEntry() {
