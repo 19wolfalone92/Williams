@@ -15,8 +15,12 @@ HOUR = FRAME_MS["1h"]
 def test_w1_to_w4_adjacent_squat_is_not_w5_terminal_evidence(mirror):
     bars = [WaveBar(i*HOUR,129.0,131.0,128.0,129.0,100.0)
             for i in range(180)]
-    bars[129] = replace(bars[129],o=150.9,h=151.0,l=150.9,c=150.9,v=300.0)
-    prices = [100.0,110.0,105.0,145.0,120.0]
+    bars[10] = WaveBar(10*HOUR,101.0,102.0,100.0,101.0,100.0)
+    bars[30] = WaveBar(30*HOUR,109.0,110.0,108.0,109.0,100.0)
+    bars[50] = WaveBar(50*HOUR,106.0,107.0,105.0,106.0,100.0)
+    bars[75] = WaveBar(75*HOUR,144.0,145.0,143.0,144.0,100.0)
+    bars[129] = WaveBar(129*HOUR,120.0,120.1,119.9,120.0,300.0)
+    prices = [100.0,110.0,105.0,145.0,119.9]
     indices = [10,30,50,75,129]
     anchors = [WaveAnchor("LOW" if i%2==0 else "HIGH",
                           prices[i],idx,idx*HOUR,(idx+3)*HOUR)
