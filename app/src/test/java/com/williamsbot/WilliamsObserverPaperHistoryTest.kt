@@ -82,6 +82,33 @@ class WilliamsObserverPaperHistoryTest {
         assertTrue(exit.getDouble("pnl_per_unit_before_funding")<0)
     }
 
+    @Test fun independentOppositeExitCandidateIsObservedAtNextCloseButNotPassedOffAsBookExit() {
+        val initial=williamsObserverPaperAdvance(null,"LINKUSDT",williamsNtdProfile,
+            bars(45),signal(),46*h)
+        val entryBar=WilliamsWaveBar(46*h,100.0,112.0,97.0,100.0,100.0)
+        val opened=williamsObserverPaperAdvance(initial,"LINKUSDT",williamsNtdProfile,
+            bars(45)+entryBar,JSONArray(),47*h)
+        assertNotNull(opened.optJSONObject("paper_position"))
+        val next=WilliamsWaveBar(47*h,100.0,105.0,97.0,100.0,100.0)
+        val opposite=signal(side="SHORT",id="NTD-opposition",signalTime=47*h)
+        opposite.getJSONObject(0).put("trigger",95.0)
+        val armed=williamsObserverPaperAdvance(opened,"LINKUSDT",williamsNtdProfile,
+            bars(45)+entryBar+next,opposite,48*h)
+        assertNotNull(armed.optJSONObject("paper_opposite_exit_watch"))
+        assertTrue(events(armed).any { it.optString("event")=="PAPER_OPPOSITE_EXIT_CANDIDATE_ARMED" })
+        val after=WilliamsWaveBar(48*h,100.0,102.0,94.0,100.0,100.0)
+        val crossed=williamsObserverPaperAdvance(armed,"LINKUSDT",williamsNtdProfile,
+            bars(45)+entryBar+next+after,JSONArray(),49*h)
+        val observation=events(crossed).last()
+        assertEquals("PAPER_OPPOSITE_EXIT_TRIGGER_OBSERVED",observation.getString("event"))
+        assertEquals(95.0,observation.getDouble("source_opposing_trigger"),1e-9)
+        assertFalse(observation.getBoolean("exit_is_complete_book_rule"))
+        assertTrue(observation.getBoolean("does_not_close_stop_only_paper_baseline"))
+        assertNotNull("Potential source exit must not fabricate a completed book campaign",
+            crossed.optJSONObject("paper_position"))
+        assertNull(crossed.optJSONObject("paper_opposite_exit_watch"))
+    }
+
     @Test fun nonEntrySignalsArePreservedWithoutInventingInitialPositions() {
         val noPosition=williamsObserverPaperAdvance(null,"ETHUSDT",williamsCourseProfile,
             bars(45),signal(williamsCourseProfile,role="ADD_ON"),46*h)
