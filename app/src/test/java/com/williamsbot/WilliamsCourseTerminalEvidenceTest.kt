@@ -45,6 +45,34 @@ class WilliamsCourseTerminalEvidenceTest {
         }
     }
 
+    @Test fun incompleteW1ToW4NeverInheritsTheAdjacentSquatAsTerminalW5Evidence() {
+        // TC1 pp53,82-83 / Course PDF77: an adjacent green/squat-like
+        // kline does not become one of the W5 top-three *until W5 exists*.
+        // Both mirrored orientations must preserve this source distinction.
+        for(side in listOf("UP","DOWN")) {
+            val source=upwardBars().let { if(side=="UP") it else mirror(it) }
+            val up=listOf(
+                "LOW" to 100.0, "HIGH" to 110.0, "LOW" to 105.0,
+                "HIGH" to 145.0, "LOW" to 120.0
+            )
+            val indexes=listOf(10,30,50,75,129)
+            val anchors=up.mapIndexed { i, (kind, price) ->
+                WilliamsWaveAnchor(
+                    if(side=="UP") kind else if(kind=="LOW") "HIGH" else "LOW",
+                    if(side=="UP") price else 300.0-price,
+                    indexes[i], indexes[i]*hour, (indexes[i]+3)*hour
+                )
+            }
+            // Bar 129 has volume up/range down compared with 128.
+            val a=source[128];val z=source[129]
+            assertTrue(z.v>a.v && (z.h-z.l)/z.v < (a.h-a.l)/a.v)
+            val incomplete=williamsHypothesesFromAnchors("1h",source,anchors)
+            assertTrue(incomplete.any { it.label=="W4" })
+            assertTrue("Incomplete Elliott counts must never export a W5 terminal-squat sign",
+                incomplete.all { !it.squat })
+        }
+    }
+
     @Test fun missingInvalidOrZeroVolumeCannotInventTheSquat() {
         val rows=upwardBars().toMutableList()
         rows[120]=rows[120].copy(o=154.8,l=154.6,c=154.8,v=300.0)
