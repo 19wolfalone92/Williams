@@ -52,6 +52,19 @@ class WilliamsNtdObserverBookEvidenceTest {
         }
     }
 
+    @Test fun missedSourceHourlyScansCannotBeBackfilledAsCertainBookExits() {
+        val rows=bars(48)
+        val state=paper("LONG",46*hour,48*hour)
+            .put("source_signal_intervals_unobserved",2)
+        val evidence=williamsNtdObserverBookEvidence(state,"BTCUSDT",rows,
+            List(rows.size){101.0},List(rows.size){102.0},
+            List(rows.size){0.0},List(rows.size){0.0},0.1,49*hour)
+        assertEquals("MISSED_H1_SOURCE_DECISIONS_NO_RETROSPECTIVE_BOOK_EXIT",
+            evidence.getString("ntd_book_evidence_status"))
+        assertEquals(0,evidence.getJSONArray("events").length())
+        assertFalse(evidence.getBoolean("can_place_orders"))
+    }
+
     @Test fun noPostEntryBarOrUnverifiedCandleOrForeignSourceCanCreateExit() {
         val rows=bars(48)
         val teeth=List(rows.size){101.0}
