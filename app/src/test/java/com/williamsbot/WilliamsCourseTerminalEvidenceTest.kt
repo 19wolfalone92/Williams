@@ -50,10 +50,18 @@ class WilliamsCourseTerminalEvidenceTest {
         // kline does not become one of the W5 top-three *until W5 exists*.
         // Both mirrored orientations must preserve this source distinction.
         for(side in listOf("UP","DOWN")) {
-            val source=upwardBars().let { if(side=="UP") it else mirror(it) }
+            val authentic=upwardBars().toMutableList()
+            // Match the synthetic anchors to *real* price extrema on
+            // their respective bars, not arbitrary unrelated labels.
+            authentic[10]=WilliamsWaveBar(10*hour,101.0,102.0,100.0,101.0,100.0)
+            authentic[30]=WilliamsWaveBar(30*hour,109.0,110.0,108.0,109.0,100.0)
+            authentic[50]=WilliamsWaveBar(50*hour,106.0,107.0,105.0,106.0,100.0)
+            authentic[75]=WilliamsWaveBar(75*hour,144.0,145.0,143.0,144.0,100.0)
+            authentic[129]=WilliamsWaveBar(129*hour,120.0,120.1,119.9,120.0,300.0)
+            val source=if(side=="UP") authentic else mirror(authentic)
             val up=listOf(
                 "LOW" to 100.0, "HIGH" to 110.0, "LOW" to 105.0,
-                "HIGH" to 145.0, "LOW" to 120.0
+                "HIGH" to 145.0, "LOW" to 119.9
             )
             val indexes=listOf(10,30,50,75,129)
             val anchors=up.mapIndexed { i, (kind, price) ->
