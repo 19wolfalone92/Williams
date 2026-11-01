@@ -75,6 +75,37 @@ internal class WilliamsObserverPaperArchive(context:Context) :
         }
     }
 
+    /**
+     * Write the complete research ledger without a 10+ MB in-memory JSON.
+     * Unlike the bounded diagnostics UI, every archived event is included.
+     * Intended only for an explicitly requested diagnostic ZIP.
+     *
+     * NDJSON remains line-addressable for offline future TC1/NTD/Course
+     * analysis, and contains no account secrets or real exchange fills.
+     */
+    @Synchronized
+    fun streamAllEvidenceNdjson(writer:java.io.Writer):Long {
+        var rows=0L
+        readableDatabase.rawQuery("""
+            SELECT evidence_json FROM observer_events
+            ORDER BY occurred_at_ms ASC,event_id ASC
+        """.trimIndent(),null).use { cursor ->
+            while(cursor.moveToNext()) {
+                val row=JSONObject(cursor.getString(0))
+                require(row.optString("profile") in
+                    setOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER) &&
+                    row.optBoolean("hypothetical_only",false)) {
+                    "OBSERVER_EXPORT_SOURCE_OR_HYPOTHETICAL_PROOF_INVALID"
+                }
+                writeDiagnosticsJsonStreaming(row,writer)
+                writer.write("\n")
+                rows++
+            }
+        }
+        writer.flush()
+        return rows
+    }
+
     /** Bounded export view, not a bounded retention policy. */
     @Synchronized
     fun snapshot(symbol:String,profile:String,limit:Int=250):JSONObject {
