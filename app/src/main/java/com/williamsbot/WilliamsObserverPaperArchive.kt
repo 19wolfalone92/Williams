@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.security.MessageDigest
 
 /**
- * Append-only on-device NTD/Course paper study archive.
+ * Append-only on-device TC1/NTD/Course observer study archive.
  *
  * Separate SQLite database from exchange intents, fills, risk and TradeJournal.
  * Never reports Binance orders/executions. Replaying after a crash is safe
@@ -49,7 +49,7 @@ internal class WilliamsObserverPaperArchive(context:Context) :
 
     @Synchronized
     fun append(symbol:String,profile:String,snapshot:JSONObject) {
-        require(profile in setOf(williamsNtdProfile,williamsCourseProfile))
+        require(profile in setOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER))
         require(snapshot.optString("symbol")==symbol && snapshot.optString("profile")==profile)
         val rows=snapshot.optJSONArray("events") ?: JSONArray()
         writableDatabase.transaction {
@@ -79,7 +79,7 @@ internal class WilliamsObserverPaperArchive(context:Context) :
     @Synchronized
     fun snapshot(symbol:String,profile:String,limit:Int=250):JSONObject {
         require(symbol.matches(Regex("[A-Z0-9]{4,20}")) &&
-            profile in setOf(williamsNtdProfile,williamsCourseProfile))
+            profile in setOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER))
         require(limit in 1..5_000)
         val db=readableDatabase
         val count=db.rawQuery(
