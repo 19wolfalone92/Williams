@@ -370,13 +370,14 @@ internal fun williamsHypothesesFromAnchors(
         val lastAo = osc.takeLast(5).filter { it.isFinite() }
         h.momentumShift = lastAo.size == 5 && sign * lastAo.last() < sign * lastAo.average() &&
             sign * lastAo.last() < sign * lastAo[lastAo.lastIndex-1]
-        val terminal = p[minOf(5,n-1)].index
-        h.squat = if (n>=6) williamsTerminalSquatVolumeProxy(
-            bars,direction,p[4].index,terminal
-        ) else (maxOf(1,terminal-1)..minOf(bars.lastIndex,terminal+1)).any { j ->
-            val a=bars[j-1];val b=bars[j]
-            a.v>0 && b.v>a.v && (b.h-b.l)/b.v < (a.h-a.l)/a.v
-        }
+        // TC1 PDF53,82-83 and Course Level III p2 (PDF77) require
+        // an extreme squat INSIDE an observed fifth wave, not any squat
+        // adjacent to a W1/W2/W3/W4 pivot. Five completed motive legs
+        // require six causally confirmed price anchors. Smaller labels
+        // must not inherit an invented terminal fifth-wave sign.
+        h.squat = n>=6 && williamsTerminalSquatVolumeProxy(
+            bars,direction,p[4].index,p[5].index
+        )
         out += h
     }
     return out
