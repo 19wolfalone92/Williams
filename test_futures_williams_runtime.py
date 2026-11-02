@@ -64,6 +64,7 @@ def test_tc2_three_bearish_price_bars_create_short_add_on():
 def test_super_ao_recovers_original_third_bar_after_scanner_gap():
     ind = pd.DataFrame({
         "ao_green_streak": [0, 1, 2, 3, 4, 5],
+        "ao": [0, 1, 2, 3, 4, 5],
         "close": [100, 101, 102, 103, 104, 105],
         "high": [101, 102, 103, 104, 105, 106],
         "low": [99, 100, 101, 102, 103, 104],
@@ -80,6 +81,7 @@ def test_super_ao_recovers_original_third_bar_after_scanner_gap():
 def test_super_ao_does_not_require_fractal_gate():
     ind = pd.DataFrame({
         "ao_red_streak": [0, 1, 2, 3],
+        "ao": [0, -1, -2, -3],
         "close": [100, 99, 98, 97],
         "high": [101, 100, 99, 98],
         "low": [99, 98, 97, 96],
@@ -93,6 +95,7 @@ def test_super_ao_does_not_require_fractal_gate():
 def test_short_super_ao_can_be_first_wise_man():
     ind = pd.DataFrame({
         "ao_red_streak": [0, 1, 2, 3],
+        "ao": [0, -1, -2, -3],
         "close": [100, 99, 98, 97],
         "high": [101, 100, 99, 98],
         "low": [99, 98, 97, 96],
