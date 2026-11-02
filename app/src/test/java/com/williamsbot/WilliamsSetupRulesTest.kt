@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsSetupRulesTest {
+    @Test fun tc2Wm1CloseAtExactlyHalfIsNotABookReversalForEitherSide() {
+        // Trading Chaos 2, ch9 PDF122, figures 9.1/9.2:
+        // bullish close STRICTLY in upper half, bearish in lower half.
+        // At the midpoint neither direction has sufficient price proof.
+        val midpoint = WilliamsWaveBar(3_600_000L,94.0,99.0,90.0,94.5)
+        val up = midpoint.copy(c=94.50001)
+        val below = midpoint.copy(c=94.49999)
+        val alligator = listOf(100.0,101.0,102.0)
+        assertFalse(validWilliamsReversalBar("LONG",midpoint,91.0,alligator,1.0))
+        assertTrue(validWilliamsReversalBar("LONG",up,91.0,alligator,1.0))
+        assertFalse(validWilliamsReversalBar("LONG",below,91.0,alligator,1.0))
+        fun mirror(bar:WilliamsWaveBar)=bar.copy(o=250.0-bar.o,
+            h=250.0-bar.l,l=250.0-bar.h,c=250.0-bar.c)
+        val mirrorMouth=alligator.map { 250.0-it }
+        assertFalse(validWilliamsReversalBar("SHORT",mirror(midpoint),159.0,mirrorMouth,1.0))
+        assertTrue(validWilliamsReversalBar("SHORT",mirror(up),159.0,mirrorMouth,1.0))
+        assertFalse(validWilliamsReversalBar("SHORT",mirror(below),159.0,mirrorMouth,1.0))
+    }
+
     @Test fun divergentBarPiercingTheMouthIsRejectedInBothDirections() {
         val valid=WilliamsWaveBar(0,91.0,94.0,88.0,93.0)
         val pierced=valid.copy(h=97.0,c=95.0)
