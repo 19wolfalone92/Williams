@@ -168,6 +168,52 @@ def _angulation(ind: pd.DataFrame, index: int, *, window: int = 5, side: str | N
     return proof["score"], proof["valid"]
 
 
+def _tc2_reversal_bar_price_proof(ind: pd.DataFrame, index: int, side: str) -> bool:
+    """TC2 chapter 9 PDF122, figures 9.1/9.2: price-only WM1 proof.
+
+    Never accept a cached signal flag without verifying the original
+    closed OHLC candle, the preceding extreme and STRICT half-range close.
+    Angulation and AO are separate mandatory gates. Both sides are mirrored.
+    """
+    required = {"open", "high", "low", "close"}
+    if side not in {"LONG", "SHORT"} or index < 1 or index >= len(ind) or not required.issubset(ind.columns):
+        return False
+    try:
+        row = ind.iloc[index]
+        o, h, l, c = (float(row[k]) for k in ("open", "high", "low", "close"))
+        previous = float(ind.iloc[index - 1]["low" if side == "LONG" else "high"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    if not all(math.isfinite(v) for v in (o, h, l, c, previous)):
+        return False
+    if min(o, l, c, previous) <= 0 or h <= l or h < max(o, c) or l > min(o, c):
+        return False
+    if side == "LONG":
+        return l < previous and 2 * c > h + l
+    return h > previous and 2 * c < h + l
+
+
+def _tc2_ao_streak_price_proof(ind: pd.DataFrame, third: int, last: int, side: str) -> bool:
+    """TC2 chapter 10 PDF137: three real, successive *changes* of AO.
+
+    The cached green/red streak cannot substitute for AO evidence. Confirm
+    the exact third signal-bar index AND every intervening same-colour bar;
+    unavailable/NaN AO fails closed (no simulated retrospective fills).
+    """
+    if side not in {"LONG", "SHORT"} or "ao" not in ind.columns or third < 3 or last < third:
+        return False
+    try:
+        values = [float(v) for v in ind.iloc[third - 3:last + 1]["ao"]]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    if len(values) != last - (third - 3) + 1 or not all(math.isfinite(v) for v in values):
+        return False
+    return all(
+        (now > prior if side == "LONG" else now < prior)
+        for prior, now in zip(values, values[1:])
+    )
+
+
 def _latest_reversal(
     ind: pd.DataFrame,
     *,
@@ -180,6 +226,8 @@ def _latest_reversal(
     start = max(0, len(ind) - max(2, int(max_age_bars)))
     for i in range(len(ind) - 1, start - 1, -1):
         if bool(ind.iloc[i].get(column, False)):
+            if not _tc2_reversal_bar_price_proof(ind, i, side):
+                continue
             row = ind.iloc[i]
             score, valid = _angulation(ind, i, side=side)
             if not valid:
@@ -221,7 +269,7 @@ def _latest_super_ao(
         # third bar while it remains inside the signal-age window.
         if streak >= 3:
             third_i = i - (streak - 3)
-            if third_i < start:
+            if third_i < start or not _tc2_ao_streak_price_proof(ind, third_i, i, side):
                 continue
             signal_row = ind.iloc[third_i]
             trigger_base = float(
