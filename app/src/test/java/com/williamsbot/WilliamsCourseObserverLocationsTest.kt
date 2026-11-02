@@ -64,6 +64,46 @@ class WilliamsCourseObserverLocationsTest {
         assertNull(repeated.optJSONObject("paper_position"))
     }
 
+    @Test fun fifthWaveTerminalRequiresSixRealCausalAnchorsInBothDirections() {
+        val close=101*h
+        for(side in listOf("UP","DOWN")) {
+            val p=listOf(100.0,110.0,105.0,130.0,120.0,140.0)
+            val anchors=JSONArray()
+            for(i in 0..5) anchors.put(JSONObject()
+                .put("kind",if((i%2==0)==(side=="UP")) "LOW" else "HIGH")
+                .put("price",if(side=="UP") p[i] else 300-p[i])
+                .put("extreme_at",(30+i*10)*h)
+                .put("known_at",(33+i*10)*h))
+            val scenario=JSONObject().put("frame","1h").put("label","W5")
+                .put("status","PROVISIONAL").put("direction",side)
+                .put("scenario_id","1h:"+side+":true-W5")
+                .put("observed_at",close+1).put("anchors",anchors)
+                .put("scale_bars",120).put("target_zone",true)
+                .put("divergence",true).put("terminal_fractal",true)
+                .put("squat",true)
+            fun run(wave:JSONObject)=williamsCourseObserverLocations(
+                paper(),"ETHUSDT",JSONObject().put("as_of",close+1)
+                    .put("frame_errors",JSONObject())
+                    .put("scenarios",JSONArray().put(wave)),close)
+            val valid=run(scenario).getJSONArray("events")
+            assertEquals(1,valid.length())
+            val e=valid.getJSONObject(0)
+            assertEquals("COURSE_H1_W5_TERMINAL_EXIT_WATCH",e.getString("event"))
+            assertEquals(if(side=="UP") "LONG" else "SHORT",e.getString("direction"))
+            assertFalse(e.getBoolean("book_exit_confirmed"))
+            assertFalse(e.getBoolean("wave_degree_certified"))
+            assertFalse(e.getBoolean("can_place_orders"))
+            val future=JSONObject(scenario.toString())
+            future.getJSONArray("anchors").getJSONObject(5)
+                .put("known_at",close+2*h)
+            assertEquals(0,run(future).getJSONArray("events").length())
+            val badKind=JSONObject(scenario.toString())
+            badKind.getJSONArray("anchors").getJSONObject(3)
+                .put("kind","FRACTAL_UNKNOWN")
+            assertEquals(0,run(badKind).getJSONArray("events").length())
+        }
+    }
+
     @Test fun failedOrGappedPaperReplayNeverCreatesCourseWaveBookEvents() {
         val close=101*h
         val hierarchy=hierarchy(close+1,115.0)
