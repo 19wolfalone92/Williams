@@ -1,6 +1,7 @@
 """Edition-specific, tightening-only Williams exits (no exchange mutations)."""
 from decimal import Decimal, InvalidOperation
 from math import isfinite
+from numbers import Integral
 
 
 def zone_trailing_activation(ind, side, opened_at=0):
@@ -70,7 +71,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
     if any(not all(isfinite(v) and v > 0 for v in (b.h, b.l)) or b.h < b.l for b in bars):
         return None
     if opened_at <= 0 or any(
-        not isinstance(b.t, int) or b.t < 0 or b.t % 3_600_000
+        not isinstance(b.t, Integral) or int(b.t) < 0 or int(b.t) % 3_600_000
         for b in bars
     ) or any(b.t-a.t != 3_600_000 for a,b in zip(bars,bars[1:])):
         return None
