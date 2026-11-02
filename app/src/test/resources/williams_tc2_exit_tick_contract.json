@@ -1,0 +1,101 @@
+{
+  "schema": "TC2_EXIT_STOP_TICK_CONTRACT_V1",
+  "source": "Trading Chaos 2nd ed. chapter 12; PDF165, printed p.150; independent on-grid price-bar extrema",
+  "note": "Synthetic cross-language boundary cases; no proof of broker execution or full figure coverage.",
+  "direct": [
+    {
+      "side": "LONG",
+      "extreme": "79524.8",
+      "tick": "0.1",
+      "expected": "79524.7"
+    },
+    {
+      "side": "SHORT",
+      "extreme": "2297.00",
+      "tick": "0.01",
+      "expected": "2297.01"
+    },
+    {
+      "side": "LONG",
+      "extreme": "56.21",
+      "tick": "0.01",
+      "expected": "56.20"
+    },
+    {
+      "side": "SHORT",
+      "extreme": "56.21",
+      "tick": "0.01",
+      "expected": "56.22"
+    },
+    {
+      "side": "LONG",
+      "extreme": "79524.85",
+      "tick": "0.1",
+      "expected": null
+    },
+    {
+      "side": "SHORT",
+      "extreme": "2297.005",
+      "tick": "0.01",
+      "expected": null
+    },
+    {
+      "side": "LONG",
+      "extreme": "0",
+      "tick": "0.01",
+      "expected": null
+    },
+    {
+      "side": "SHORT",
+      "extreme": "56.21",
+      "tick": "0",
+      "expected": null
+    }
+  ],
+  "five_bar": [
+    {
+      "side": "LONG",
+      "old_stop": "79520.0",
+      "entry": "79530.0",
+      "mark": "79600.0",
+      "tick": "0.1",
+      "highs": [
+        "79527.8",
+        "79528.8",
+        "79529.8",
+        "79530.8",
+        "79531.8"
+      ],
+      "lows": [
+        "79524.8",
+        "79525.8",
+        "79526.8",
+        "79527.8",
+        "79528.8"
+      ],
+      "expected": "79524.7"
+    },
+    {
+      "side": "SHORT",
+      "old_stop": "2301.0",
+      "entry": "2295.0",
+      "mark": "2280.0",
+      "tick": "0.01",
+      "highs": [
+        "2297.00",
+        "2296.90",
+        "2296.80",
+        "2296.70",
+        "2296.60"
+      ],
+      "lows": [
+        "2295.00",
+        "2294.90",
+        "2294.80",
+        "2294.70",
+        "2294.60"
+      ],
+      "expected": "2297.01"
+    }
+  ]
+}
