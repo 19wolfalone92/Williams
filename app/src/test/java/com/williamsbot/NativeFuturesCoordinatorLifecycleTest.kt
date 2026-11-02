@@ -511,6 +511,66 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun roundedSignedEntryPriceCannotLeaveFilledLongOrShortWithoutBinanceStop() {
+        // Regression: a strict 1e-8 comparison against the exchange's
+        // positionRisk entryPrice previously threw before STOP_MARKET POST,
+        // as observed in LTCUSDT Nov 02 diagnostics.
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val pending = plan(direction)
+            assertTrue(coordinator.submitPendingEntry(pending).getBoolean("accepted"))
+            exchange.fill()
+            // Signed order avgPrice is unchanged. Binance positionRisk can
+            // round independently within a validated tick of 0.1 here.
+            exchange.entry += if (direction.name == "LONG") 0.04 else -0.04
+            val protection = coordinator.reconcile()
+            assertTrue(protection.toString(), protection.getBoolean("ok"))
+            assertEquals("OPEN_PROTECTED", coordinator.state.name)
+            assertEquals(1, exchange.algos.values.count {
+                it.optString("closePosition") == "true" &&
+                    it.optString("algoStatus") == "NEW"
+            })
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("PROTECTED", owner.getString("protection_status"))
+            assertEquals(exchange.entry.toString(), owner.getString("actual_entry_price"))
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun materialSignedEntryPriceConflictIsExplicitlyQuarantinedWithoutStopOrNewEntry() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            val originalEntry = exchange.entry
+            exchange.entry += if (direction.name == "LONG") 0.4 else -0.4
+            val conflict = coordinator.reconcile()
+            assertFalse(conflict.toString(), conflict.getBoolean("ok"))
+            assertEquals("POSITION_UNPROTECTED", coordinator.state.name)
+            assertTrue(conflict.toString(),
+                conflict.optString("blocker").contains("SIGNED_ENTRY_PRICE_CONFLICT_ON"))
+            assertEquals(0, exchange.algos.values.count { it.optString("closePosition") == "true" })
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            assertEquals("ENTRY_FILL_PRICE_MISMATCH_UNVERIFIED",
+                coordinator.status().getJSONArray("exchange_protection_observations")
+                    .getJSONObject(0).getString("stop_proof"))
+            exchange.entry = originalEntry
+            val recovered = coordinator.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertEquals("OPEN_PROTECTED", coordinator.state.name)
+            assertEquals(1, exchange.algos.values.count {
+                it.optString("closePosition") == "true" &&
+                    it.optString("algoStatus") == "NEW"
+            })
+        }
+    }
+
     @Test fun bookH1W2HStopsMustBePlacedAndConfirmedAfterBothLongAndShortFills() {
         // Production book H1 client IDs start with W2H_ (not W2E_).
         // Before the regression fix the live Binance position was detected
