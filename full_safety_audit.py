@@ -545,12 +545,18 @@ finding(
     else "FAIL",
     "Futures runtime does not bypass new-first protection replacement"
 )
+tc2_exit_policy = read_text(ROOT / "williams_exit_policy.py")
 finding(
     "PASS" if "plan_williams_stop(" in futures_runtime
-    and "min(b.l for b in bars[-window:])-tick" in read_text(ROOT / "williams_exit_policy.py")
-    and "max(b.h for b in bars[-window:])+tick" in read_text(ROOT / "williams_exit_policy.py")
+    and 'min(b.l for b in bars[-window:]) if long else max(b.h for b in bars[-window:])' in tc2_exit_policy
+    and 'offer(extreme,"CONFIRMED_H1_FRACTAL")' in tc2_exit_policy
+    and "def tc2_exact_structural_stop(" in tc2_exit_policy
+    and "source % step != 0" in tc2_exit_policy
+    and "Decimal(str(source_extreme))" in tc2_exit_policy
+    and "floor(raw/tick" not in tc2_exit_policy
+    and "ceil(raw/tick" not in tc2_exit_policy
     else "FAIL",
-    "Structural trailing uses lowest-low / highest-high extremes"
+    "TC2 structural trailing derives lowest-low/highest-high and decimal-exact one-tick STOP"
 )
 
 bc_text = read_text(ROOT / "binance_client.py")
