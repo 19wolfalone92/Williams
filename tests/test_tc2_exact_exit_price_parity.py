@@ -79,3 +79,21 @@ def test_numpy_integer_h1_times_are_valid_but_float_times_are_not():
     assert plan_williams_stop("LONG", 90., 100., 90., 130., .1, 1, rows)
     rows[2].t=float(rows[2].t)
     assert plan_williams_stop("LONG", 90., 100., 90., 130., .1, 1, rows) is None
+
+
+def test_shared_python_android_source_tick_contract():
+    import json
+    from pathlib import Path
+    corpus = json.loads((Path(__file__).resolve().parents[1] /
+        "app/src/test/resources/williams_tc2_exit_tick_contract.json").read_text())
+    assert corpus["schema"] == "TC2_EXIT_STOP_TICK_CONTRACT_V1"
+    for row in corpus["direct"]:
+        got = tc2_exact_structural_stop(row["side"],float(row["extreme"]),float(row["tick"]))
+        assert got == (None if row["expected"] is None else float(row["expected"])), row
+    for row in corpus["five_bar"]:
+        source = bars([float(v) for v in row["highs"]],[float(v) for v in row["lows"]])
+        result = plan_williams_stop(row["side"],float(row["old_stop"]),
+            float(row["entry"]),None,float(row["mark"]),float(row["tick"]),
+            1,source,window=5)
+        assert result == {"stop":float(row["expected"]),
+                          "reason":"TC2_LAST_5_CLOSED_BARS"}, row
