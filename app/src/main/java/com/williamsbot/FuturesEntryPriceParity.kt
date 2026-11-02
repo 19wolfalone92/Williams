@@ -17,10 +17,10 @@ internal fun futuresEntryPriceMatchesSignedFill(
     exchangePriceTick: BigDecimal?
 ): Boolean {
     if (signedFillVwap == null || signedPositionEntry == null ||
-        exchangePriceTick == null || signedFillVwap.signum() <= 0 ||
-        signedPositionEntry.signum() <= 0 || exchangePriceTick.signum() <= 0) return false
+        signedFillVwap.signum() <= 0 || signedPositionEntry.signum() <= 0) return false
     val difference = signedFillVwap.subtract(signedPositionEntry).abs()
     if (difference.signum() == 0) return true
+    if (exchangePriceTick == null || exchangePriceTick.signum() <= 0) return false
     // The 0.05% cap prevents a coarse-tick symbol from masking a genuine
     // foreign manual fill or stale campaign. Reject unavailable filter data.
     return difference <= exchangePriceTick &&
