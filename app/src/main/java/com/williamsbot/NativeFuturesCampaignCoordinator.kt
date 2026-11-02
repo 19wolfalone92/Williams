@@ -1269,6 +1269,7 @@ internal class NativeFuturesCampaignCoordinator(
             var hasPendingExit = false
             var hasPendingAddition = false
             var anyUnprotected = false
+            val entryPriceConflicts = mutableListOf<String>()
             val requiredSafetyExits = JSONArray()
             var actualRiskAuditBlocked = reversedCampaignSymbols.isNotEmpty()
             var actualRiskAuditBlocker: String? =
@@ -1736,15 +1737,49 @@ internal class NativeFuturesCampaignCoordinator(
                     check(entered.signum() > 0 && (entered - exited).compareTo(liveQuantity) == 0 && remainingQty.compareTo(liveQuantity)==0) {
                         "$symbol exchange quantity cannot be attributed to campaign entry/exit fills"
                     }
-                    val fillPrice = remainingCost.divide(remainingQty,java.math.MathContext.DECIMAL128).toDouble()
-                    val positionPrice = position.optString("entryPrice").toDoubleOrNull()
-                    check(fillPrice != null && fillPrice.isFinite() && fillPrice > 0 &&
-                        positionPrice != null && positionPrice.isFinite() &&
-                        kotlin.math.abs(fillPrice - positionPrice) <= maxOf(1e-8, fillPrice * 1e-8)) {
-                        "$symbol position entry price conflicts with the campaign fill"
+                    val signedFillVwap = remainingCost.divide(remainingQty,java.math.MathContext.DECIMAL128)
+                    val exchangePositionEntry = position.optString("entryPrice").toBigDecimalOrNull()
+                    // Missing or material price differences must not throw out
+                    // the account-wide reconciliation before OTHER positions'
+                    // stops are inspected. Quantization is narrowly tolerated
+                    // only after signed exact order/fill IDs, direction, and
+                    // the full remaining position quantity matched above.
+                    val exactMatch = signedFillVwap.signum() > 0 &&
+                        exchangePositionEntry != null &&
+                        exchangePositionEntry.signum() > 0 &&
+                        signedFillVwap.compareTo(exchangePositionEntry) == 0
+                    val tick = if (exactMatch) null else runCatching {
+                        val symbols = adapter.exchangeInfo().getJSONArray("symbols")
+                        val instrument = (0 until symbols.length()).mapNotNull { symbols.optJSONObject(it) }
+                            .singleOrNull { it.optString("symbol") == symbol }
+                            ?: error("Exchange PRICE_FILTER symbol not unique")
+                        val filters = instrument.getJSONArray("filters")
+                        (0 until filters.length()).mapNotNull { filters.optJSONObject(it) }
+                            .singleOrNull { it.optString("filterType") == "PRICE_FILTER" }
+                            ?.optString("tickSize")?.toBigDecimalOrNull()
+                    }.getOrNull()
+                    if (!exactMatch && !futuresEntryPriceMatchesSignedFill(
+                            signedFillVwap,exchangePositionEntry,tick)) {
+                        val reason = "$symbol signed entry VWAP does not match Binance position entry " +
+                            "within a verified PRICE_FILTER tick: ownership/risk require manual reconciliation; " +
+                            "no automatic STOP or exit mutation for this ambiguous campaign"
+                        anyUnprotected = true
+                        actualRiskAuditBlocked = true
+                        actualRiskAuditBlocker = reason
+                        lastBlocker = reason
+                        entryPriceConflicts.add(symbol)
+                        protectionObservations.put(JSONObject()
+                            .put("symbol",symbol).put("direction",direction)
+                            .put("quantity",position.optString("positionAmt"))
+                            .put("observed_at_ms",clock())
+                            .put("stop_proof","ENTRY_FILL_PRICE_MISMATCH_UNVERIFIED")
+                            .put("strategy_ownership_verified",false)
+                            .put("automatic_trailing_authorized",false)
+                            .put("management_mode","OBSERVE_ONLY"))
+                        continue
                     }
                     verifiedOwner.put("confirmed_position_qty", liveQuantity.toPlainString())
-                        .put("actual_entry_price", positionPrice.toString())
+                        .put("actual_entry_price", exchangePositionEntry!!.toPlainString())
                 }
                 if (matchingIntent?.has("native_stop_replacement") == true) {
                     val owner = checkNotNull(matchingIntent)
@@ -2745,6 +2780,13 @@ internal class NativeFuturesCampaignCoordinator(
                     actualRiskAuditBlocker, exchangePositions, persisted, clock()
                 )
             verifiedRiskCapManagementAtMs = if (verifiedOverCap) clock() else 0L
+            if (entryPriceConflicts.isNotEmpty()) {
+                // Preserve the causal P0 blocker even if a later symbol in
+                // this scan emitted a different reconciliation warning.
+                lastBlocker = "SIGNED_ENTRY_PRICE_CONFLICT_ON: " +
+                    entryPriceConflicts.joinToString(",") +
+                    "; verify exchange fills, open STOPs and account before resuming trading"
+            }
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
                 actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
