@@ -225,14 +225,20 @@
         124
       ],
       "rule": "Increasing separation of price-edge path from Jaw/Teeth from last mouth passage; parallel paths fail.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_market_geometry.py",
         "app/src/main/java/com/williamsbot/WilliamsMarketGeometry.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_fig_9_5_parallel_after_departure_has_no_opening_angle",
+        "tests/test_williams_market_geometry.py::test_tc2_fig_9_11_mouth_touch_invalid_even_if_prior_path_diverges",
+        "tests/test_williams_market_geometry.py::test_tc2_angle_requires_continuous_history_and_reusable_evidence",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2AngulationBookCounterexamplesRejectParallelAndMouthTouch",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2AngulationClosedCandleContinuityAndEvidenceAreRequired"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Numeric slope formalization still needs complete figure-by-figure acceptance.",
+      "remaining_evidence": "Python/Kotlin mirrored hand-constructed qualitative figure 9.5 and 9.11 counterexamples and closed-bar continuity are bounded tested; numerical slope/distance thresholds are engineering interpretations, NOT author formulas. Independent expert-labelled all actual figures and 95% decision agreement are NOT proven.",
       "can_place_orders_from_registry": false
     },
     {
@@ -243,17 +249,19 @@
         131
       ],
       "rule": "TC2 PDF125 expects prior-trend AO colour on a reversal bar. PDF131 clarifies that absent this AO context the setup is not a genuine countertrend trade: require red for bullish, green for bearish WM1; no AO value-vs-zero substitute.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
       "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_ao_colour_must_oppose_prior_trend",
         "tests/test_williams_market_geometry.py::test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao",
-        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry"
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1Pdf125And131RequireOldTrendAoForCountertrendEntry",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2Wm1AoMustStillRunAgainstTheCountertrendEntryForBothSides"
       ],
       "fixtures": [],
-      "remaining_evidence": "Source pages PDF125 and PDF131 cross-checked: the former says AO colour is expected; the latter expressly disqualifies setups lacking the prior-trend momentum context. Python/Kotlin strict source gate restored. Full independent figure-labelled examples and ordinal WM1 accuracy remain unproved.",
+      "remaining_evidence": "TC2 PDF125 versus PDF131 old-trend colour interpretation checked in both directions with source-mapped Python/Kotlin boundary fixtures. Full independent historical chart classification and actual countertrend campaign performance are not proven.",
       "can_place_orders_from_registry": false
     },
     {
@@ -312,14 +320,19 @@
         147
       ],
       "rule": "Unbuffered fractal extreme must be outside currently displayed displaced Teeth at activation.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/WilliamsBookH1EntryPolicy.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_fractal_inside_at_formation_can_become_valid_without_backdating",
+        "tests/test_tc2_execution_observers.py::test_book_figure_11_2_five_six_and_nine_bar_groups_wait_for_two_right_bars",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2FractalMustBreakBeyondCurrentTeethEvenWhenPivotWasInside",
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::wm3CannotConfirmAcrossMissingOrNonAlignedHoursForEitherSide"
+      ],
       "fixtures": [],
-      "remaining_evidence": "More exact source figures, including eligibility changing after formation.",
+      "remaining_evidence": "TC2 chapter 11, figures 11.1/11.2 source geometry and current displaced Teeth gate have mirrored bounded tests including changing eligibility, 5/6/9 bar plateau and causality. Every author figure digitization, real exchange breakout timing and STOP on Futures Demo remain unproven.",
       "can_place_orders_from_registry": false
     },
     {
