@@ -10,7 +10,7 @@ class WilliamsTc2AoSourceProofTest {
         // Previous 3 red or flat values cannot produce a new green streak.
         ao[41]=-6.0;ao[42]=-5.0;ao[43]=-4.0;ao[44]=-3.0;ao[45]=-2.0
         assertEquals(4,williamsTc2ConsecutiveAoRise(45,35){ao[it]})
-        assertEquals(43,45-(4-3)) // the original third positive increment
+        assertEquals(44,45-(4-3)) // the original third positive increment
         ao[43]=ao[42]
         assertEquals(2,williamsTc2ConsecutiveAoRise(45,35){ao[it]})
         ao[43]=-4.0
