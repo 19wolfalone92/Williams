@@ -81,3 +81,45 @@ def test_tc2_wm2_uses_source_exact_price_bar_for_actual_signal(monkeypatch,side,
     assert len(got)==1
     assert got[0].trigger_price==(2297.01 if side=="LONG" else 2294.30)
     assert got[0].protective_reference==(2294.30 if side=="LONG" else 2297.01)
+
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_tc2_wm3_actual_source_fractal_and_plateau_stop_are_decimal_exact(side):
+    highs=[101.,102.,105.,103.,102.,103.,104.]
+    lows =[100., 99., 95., 97., 98., 99.,100.]
+    open_=[100.5,100.5,100.,100.,100.,100.5,101.]
+    close=[100.5,100.5,101.,100.,100.,101.,101.]
+    if side=="SHORT":
+        old_h,old_l=highs,lows
+        highs=[220-v for v in old_l]
+        lows=[220-v for v in old_h]
+        open_=[220-v for v in open_]
+        close=[220-v for v in close]
+    ind=pd.DataFrame({
+        "open":open_,"high":highs,"low":lows,"close":close,
+        "fractal_up":[False,False,side=="LONG",False,False,False,False],
+        "fractal_down":[False,False,side=="SHORT",False,False,False,False],
+        "confirmed_up_level":[math.nan]*4+[105.0]+[math.nan]*2,
+        "confirmed_down_level":[math.nan]*4+[115.0]+[math.nan]*2,
+        "teeth_current":[104. if side=="LONG" else 116.]*7,
+    })
+    if side=="LONG":
+        got=rules.extract_long_signal_specs("BTCUSDT",ind,timeframe="1h",tick_size=.1)
+        expected=(105.1,94.9)
+    else:
+        got=rules.extract_short_signal_specs("BTCUSDT",ind,timeframe="1h",tick_size=.1)
+        expected=(114.9,125.1)
+    fractals=[x for x in got if x.signal_type==SignalType.FRACTAL]
+    assert len(fractals)==1
+    assert (fractals[0].trigger_price,fractals[0].protective_reference)==expected
+    # An off-grid pivot is not a valid Binance PRICE_FILTER source. Neither
+    # side may silently project it onto a neighboring tick.
+    if side=="LONG":
+        ind.loc[2,"high"]=105.005
+    else:
+        ind.loc[2,"low"]=114.995
+    assert rules._latest_confirmed_fractal(ind,side=side,
+        current_teeth=104. if side=="LONG" else 116.,
+        current_close=101. if side=="LONG" else 119.,
+        tick_size=.1) is None
