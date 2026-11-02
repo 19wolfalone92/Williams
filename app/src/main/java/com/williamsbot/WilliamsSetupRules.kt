@@ -9,8 +9,8 @@ internal fun validWilliamsReversalBar(
         (mouth+listOf(bar.o,bar.h,bar.l,bar.c,previousExtreme,angulation)).any { !it.isFinite() } ||
         minOf(bar.o,bar.l,bar.c)<=0 || bar.h<=bar.l || bar.h<maxOf(bar.o,bar.c) ||
         bar.l>minOf(bar.o,bar.c) || angulation<=0) return false
-    return if (direction=="LONG") bar.l<previousExtreme && bar.c>=(bar.h+bar.l)/2 && bar.h<mouth.min()
-        else bar.h>previousExtreme && bar.c<=(bar.h+bar.l)/2 && bar.l>mouth.max()
+    // TC2 PDF122 (figures 9.1/9.2): close must be strictly INSIDE the\n    // upper/lower half. An exact midrange close proves neither reversal.\n    return if (direction=="LONG") bar.l<previousExtreme && bar.c>(bar.h+bar.l)/2 && bar.h<mouth.min()
+        else bar.h>previousExtreme && bar.c<(bar.h+bar.l)/2 && bar.l>mouth.max()
 }
 
 internal data class WilliamsPendingFractal(
