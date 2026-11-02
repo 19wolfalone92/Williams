@@ -200,6 +200,7 @@ def test_python_tc2_wm2_initial_signal_bar_stop_is_distinct_from_trailing(short)
     df=pd.DataFrame({
         "high":highs,"low":lows,
         ("ao_red_streak" if short else "ao_green_streak"):[0,0,0,1,2,3,4,5],
+        "ao":[0,0,0]+[-x for x in range(1,6)] if short else [0,0,0,1,2,3,4,5],
     })
     wm2=_latest_super_ao(df,side="SHORT" if short else "LONG",max_age_bars=8)
     assert wm2 is not None and wm2[0]==5
@@ -237,10 +238,14 @@ def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatc
         "ao":[0.0,2.0,3.0,3.5],
         "high":[100.,102.,104.,105.],
         "low":[98.,100.,101.,102.],
+        "open":[99.,101.,103.,103.],
+        "close":[99.,101.,102.,103.],
     })
     assert signals._latest_reversal(ind,side="SHORT") is not None
     assert signals._latest_reversal(ind,side="LONG") is None
     ind.loc[2,"ao"]=1.0
+    ind.loc[2,"low"]=99.0  # new low below previous bar 100
+    ind.loc[2,"close"]=103.0  # strict upper-half close
     assert signals._latest_reversal(ind,side="LONG") is not None
     assert signals._latest_reversal(ind,side="SHORT") is None
     ind.loc[2,"ao"]=float("nan")
@@ -270,3 +275,50 @@ def test_short_wm1_signal_uses_same_configured_horizon_as_long_wm1(monkeypatch):
     assert len(first)==1
     assert first[0].expires_at_ms==signals._expiry(at,"1h",6)
     assert first[0].expires_at_ms!=signals._expiry(at,"1h",20)
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_tc2_wm1_strict_midpoint_raw_ohlc_rejects_cached_reversal_flag(side):
+    import williams_signals as signals
+    rows=pd.DataFrame({
+        "open":[100.,98.],
+        "high":[102.,99.],
+        "low":[96.,89.],
+        "close":[100.,94.],
+        "bullish_reversal_bar":[False,True],
+        "bearish_reversal_bar":[False,True],
+    })
+    # Use a true new extreme and close at the exact midpoint.
+    if side=="LONG":
+        rows.loc[0,"low"]=90.
+        rows.loc[1,"low"]=89.
+        rows.loc[1,"high"]=99.
+        rows.loc[1,"close"]=94.
+    else:
+        rows.loc[0,"high"]=101.
+        rows.loc[1,"high"]=105.
+        rows.loc[1,"low"]=95.
+        rows.loc[1,"open"]=102.
+        rows.loc[1,"close"]=100.  # midpoint of 95,105
+    assert not signals._tc2_reversal_bar_price_proof(rows,1,side)
+    rows.loc[1,"close"]+= (0.01 if side=="LONG" else -0.01)
+    assert signals._tc2_reversal_bar_price_proof(rows,1,side)
+    rows.loc[1,"close"]-= (0.01 if side=="LONG" else -0.01)
+    rows.loc[1,"close"]-= (0.01 if side=="LONG" else -0.01)
+    assert not signals._tc2_reversal_bar_price_proof(rows,1,side)
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_tc2_wm2_ordinal_ao_values_must_prove_cached_streak(side):
+    from williams_signals import _tc2_ao_streak_price_proof
+    ao=[0.,0.,0.,1.,2.,3.,4.,5.]
+    if side=="SHORT":
+        ao=[-v for v in ao]
+    df=pd.DataFrame({"ao":ao,"ao_green_streak":[0,0,0,1,2,3,4,5],
+                     "ao_red_streak":[0,0,0,1,2,3,4,5]})
+    assert _tc2_ao_streak_price_proof(df,5,7,side)
+    assert not _tc2_ao_streak_price_proof(df.drop(columns=["ao"]),5,7,side)
+    df.loc[4,"ao"]=df.loc[3,"ao"]
+    assert not _tc2_ao_streak_price_proof(df,5,7,side)
+    df.loc[4,"ao"]=float("nan")
+    assert not _tc2_ao_streak_price_proof(df,5,7,side)
