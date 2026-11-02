@@ -43,18 +43,18 @@ def test_unknown_binance_tick_never_invents_positive_buffer_or_stop(tick):
     # Even a cached signal must never create a fictitious tick when Binance
     # PRICE_FILTER has not been obtained or is corrupt.
     df=pd.DataFrame({
-        "open":[100.0,101.0,101.0,102.0],
-        "high":[101.0,102.0,102.0,103.0],
-        "low":[99.0,100.0,100.0,101.0],
-        "close":[100.0,101.0,101.0,102.0],
-        "fractal_up":[False,False,True,False],
-        "fractal_down":[False,False,False,True],
-        "teeth_current":[100.0]*4,
+        "open":[100.0,101.0,101.0,102.0,102.0],
+        "high":[101.0,102.0,102.0,103.0,103.0],
+        "low":[99.0,100.0,100.0,101.0,101.0],
+        "close":[100.0,101.0,101.0,102.0,102.0],
+        "fractal_up":[False,False,True,False,False],
+        "fractal_down":[False,False,False,True,False],
+        "teeth_current":[100.0]*5,
     })
     assert rules._verified_exchange_tick(tick) is None
     assert rules.extract_long_signal_specs("BTCUSDT",df,timeframe="1h",tick_size=tick)==[]
     assert rules.extract_short_signal_specs("BTCUSDT",df,timeframe="1h",tick_size=tick)==[]
-    assert rules.extract_ntd_first_fractal_specs("BTCUSDT",df,side="LONG",timeframe="1h",tick_size=tick)==[]
+    assert rules.extract_ntd_fractal_signal_specs("BTCUSDT",df,side="LONG",timeframe="1h",tick_size=tick)==[]
 
 
 @pytest.mark.parametrize("side,signal_type", [
