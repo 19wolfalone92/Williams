@@ -1744,10 +1744,13 @@ internal class NativeFuturesCampaignCoordinator(
                     // stops are inspected. Quantization is narrowly tolerated
                     // only after signed exact order/fill IDs, direction, and
                     // the full remaining position quantity matched above.
+                    val nearExactTolerance = maxOf(
+                        java.math.BigDecimal("0.00000001"),
+                        signedFillVwap.abs().multiply(java.math.BigDecimal("0.00000001")))
                     val exactMatch = signedFillVwap.signum() > 0 &&
                         exchangePositionEntry != null &&
                         exchangePositionEntry.signum() > 0 &&
-                        signedFillVwap.compareTo(exchangePositionEntry) == 0
+                        signedFillVwap.subtract(exchangePositionEntry).abs() <= nearExactTolerance
                     val tick = if (exactMatch) null else runCatching {
                         val symbols = adapter.exchangeInfo().getJSONArray("symbols")
                         val instrument = (0 until symbols.length()).mapNotNull { symbols.optJSONObject(it) }
