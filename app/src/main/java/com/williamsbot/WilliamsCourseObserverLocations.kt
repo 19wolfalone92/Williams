@@ -90,7 +90,12 @@ internal fun williamsCourseObserverLocations(
         // Distinct exhaustion watch; four proxies are NOT equivalent to
         // source-validated complete Elliott degree or a market exit.
         if(s.optString("label")=="W5" &&
-            s.optJSONArray("anchors")?.length()==6) {
+            s.optJSONArray("anchors")?.length()==6 &&
+            // The four flags alone never prove a completed five-wave
+            // geometry. Reuse the actual book-source anchor validator
+            // (pivot kind, sequential origin, known-after-extreme,
+            // no future pivots, price grammar) before journalling.
+            williamsCourseCausalAnchors(s,asOf)?.size==6) {
             val signs=williamsCourseFourSignEvidence(s)
             if(signs.optString("status")=="FOUR_PROXY_FLAGS_OBSERVED_NOT_CERTIFIED") {
                 val anchor=s.getJSONArray("anchors").getJSONObject(5)
