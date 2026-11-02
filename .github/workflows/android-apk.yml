@@ -68,35 +68,24 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
           validate-wrappers: false
-      - name: Restore or generate debug signing key
+      # The only user-installable APK must always use the same signing identity.
+      # A generated CI keystore would make updates fail with
+      # INSTALL_FAILED_UPDATE_INCOMPATIBLE on an existing phone.
+      - name: Restore persistent debug signing key (required)
         env:
           DEBUG_KEYSTORE_B64: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_B64 }}
           DEBUG_KEYSTORE_PASSWORD_SECRET: ${{ secrets.WILLIAMS_DEBUG_KEYSTORE_PASSWORD }}
         run: |
           set -euo pipefail
-          mkdir -p build
-          if [ -n "${DEBUG_KEYSTORE_B64:-}" ] && [ -n "${DEBUG_KEYSTORE_PASSWORD_SECRET:-}" ]; then
-            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
-            printf '%s' "$DEBUG_KEYSTORE_PASSWORD_SECRET" > build/williams-debug-password.txt
-            printf 'WILLIAMS_DEBUG_KEYSTORE_PASSWORD=%s\n' "$DEBUG_KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
-            echo "Using repository-provided debug signing key."
-          else
-            PASSWORD="${DEBUG_KEYSTORE_PASSWORD_SECRET:-williams-debug-ci}"
-            "$JAVA_HOME/bin/keytool" -genkeypair \
-              -alias williams-debug \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 3650 \
-              -storetype PKCS12 \
-              -keystore build/williams-debug.p12 \
-              -storepass "$PASSWORD" \
-              -keypass "$PASSWORD" \
-              -dname "CN=Williams CI Debug,O=Williams,OU=CI" \
-              -noprompt
-            printf 'WILLIAMS_DEBUG_KEYSTORE_PASSWORD=%s\n' "$PASSWORD" >> "$GITHUB_ENV"
-            echo "Generated ephemeral CI debug signing key because no persistent key secret is configured."
+          if [ -z "${DEBUG_KEYSTORE_B64:-}" ] || [ -z "${DEBUG_KEYSTORE_PASSWORD_SECRET:-}" ]; then
+            echo "::error::Persistent Williams debug signing secrets are missing. Refusing to publish an incompatible APK."
+            exit 1
           fi
+          mkdir -p build
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > build/williams-debug.p12
+          printf 'WILLIAMS_DEBUG_KEYSTORE_PASSWORD=%s\n' "$DEBUG_KEYSTORE_PASSWORD_SECRET" >> "$GITHUB_ENV"
           chmod 600 build/williams-debug.p12
+          echo "Restored persistent Williams debug signing identity."
       - name: Validate debug signing configuration
         run: |
           set -euo pipefail
@@ -181,6 +170,14 @@ jobs:
           test -n "$KEYSTORE_SHA"
           test -n "$APK_SHA"
           test "$(printf '%s' "$KEYSTORE_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          # Pinned *public certificate fingerprint*, NOT a private key.
+          # Guards accidental debug signer rotation and phone update failures.
+          EXPECTED_SIGNER_SHA256="c177bba354724c24e9668864720e9bfdb2cb545964702903a1fa306060912de9"
+          ACTUAL_SIGNER_SHA256="$(printf '%s' "$APK_SHA" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+          if [ "$ACTUAL_SIGNER_SHA256" != "$EXPECTED_SIGNER_SHA256" ]; then
+            echo "::error::APK signing identity changed: refusing to distribute an APK that cannot upgrade existing installations."
+            exit 1
+          fi
           "$APKSIGNER" verify --verbose "$APK"
       - name: Generate SHA-256 checksums
         run: |
