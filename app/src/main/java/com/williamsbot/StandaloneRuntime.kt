@@ -8989,9 +8989,8 @@ private class NativeEngine(
         // trigger, risk approval, and exchange-side protection.
         // WM2: the trigger belongs to the third AO rising bar, not the first
         // bar found while walking backward. Super AO is independent of WM3/fractals.
-        var streak = 0
-        for (i in candles.lastIndex downTo 35) {
-            if (ao(candles, i) > ao(candles, i - 1)) streak++ else break
+        val streak = williamsTc2ConsecutiveAoRise(candles.lastIndex, 35) { i ->
+            ao(candles, i)
         }
         if (streak >= 3) {
             val signalIndex = candles.lastIndex - (streak - 3)
