@@ -98,6 +98,31 @@ object DiagnosticsArchive {
                 addJson(zip,"sqlite_health.json",report.optJSONObject("sqlite_health") ?: org.json.JSONObject())
                 add(zip,"strategy.log",renderTests(report,"strategy"))
                 addJson(zip,"williams_sources.json",report.optJSONObject("unified_strategy_evidence") ?: org.json.JSONObject())
+                // Dedicated study files, separate from REAL Futures fills.
+                // Bounded UI previews are NOT the complete NTD/Course/TC1
+                // history. Stream the full append-only SQLite archive into
+                // one NDJSON entry with no giant Java heap copy.
+                addJson(zip,"observer_paper_history.json",
+                    report.optJSONObject("observer_paper_history") ?: org.json.JSONObject())
+                addJson(zip,"observer_paper_archive_recent.json",
+                    report.optJSONObject("observer_paper_archive") ?: org.json.JSONObject())
+                zip.putNextEntry(ZipEntry("observer_paper_full_history.ndjson"))
+                val paperWriter=java.io.BufferedWriter(
+                    java.io.OutputStreamWriter(zip,Charsets.UTF_8),8192)
+                val paperArchive=WilliamsObserverPaperArchive(context)
+                val paperCount=try {
+                    paperArchive.streamAllEvidenceNdjson(paperWriter)
+                } finally { paperArchive.close() }
+                paperWriter.flush() // NEVER close: the ZIP must stay open.
+                zip.closeEntry()
+                addJson(zip,"observer_paper_full_history_metadata.json",
+                    org.json.JSONObject()
+                        .put("schema","OBSERVER_ARCHIVE_EXPORT_V1")
+                        .put("record_count",paperCount)
+                        .put("export_complete",true)
+                        .put("format","NDJSON")
+                        .put("hypothetical_only",true)
+                        .put("contains_exchange_orders",false))
                 addJson(zip,"event_compaction.json",report.optJSONObject("event_compaction") ?: org.json.JSONObject())
                 addJson(zip,"unresolved_diagnostic_checks.json",
                     report.optJSONArray("unresolved_diagnostic_checks") ?: org.json.JSONArray())

@@ -45,12 +45,58 @@ class WilliamsCourseTerminalEvidenceTest {
         }
     }
 
+    @Test fun incompleteW1ToW4NeverInheritsTheAdjacentSquatAsTerminalW5Evidence() {
+        // TC1 pp53,82-83 / Course PDF77: an adjacent green/squat-like
+        // kline does not become one of the W5 top-three *until W5 exists*.
+        // Both mirrored orientations must preserve this source distinction.
+        for(side in listOf("UP","DOWN")) {
+            val authentic=upwardBars().toMutableList()
+            // Match the synthetic anchors to *real* price extrema on
+            // their respective bars, not arbitrary unrelated labels.
+            authentic[10]=WilliamsWaveBar(10*hour,101.0,102.0,100.0,101.0,100.0)
+            authentic[30]=WilliamsWaveBar(30*hour,109.0,110.0,108.0,109.0,100.0)
+            authentic[50]=WilliamsWaveBar(50*hour,106.0,107.0,105.0,106.0,100.0)
+            authentic[75]=WilliamsWaveBar(75*hour,144.0,145.0,143.0,144.0,100.0)
+            authentic[129]=WilliamsWaveBar(129*hour,120.0,120.1,119.9,120.0,300.0)
+            val source=if(side=="UP") authentic else mirror(authentic)
+            val up=listOf(
+                "LOW" to 100.0, "HIGH" to 110.0, "LOW" to 105.0,
+                "HIGH" to 145.0, "LOW" to 119.9
+            )
+            val indexes=listOf(10,30,50,75,129)
+            val anchors=up.mapIndexed { i, (kind, price) ->
+                WilliamsWaveAnchor(
+                    if(side=="UP") kind else if(kind=="LOW") "HIGH" else "LOW",
+                    if(side=="UP") price else 300.0-price,
+                    indexes[i], indexes[i]*hour, (indexes[i]+3)*hour
+                )
+            }
+            // Bar 129 has volume up/range down compared with 128.
+            val a=source[128];val z=source[129]
+            assertTrue(z.v>a.v && (z.h-z.l)/z.v < (a.h-a.l)/a.v)
+            val incomplete=williamsHypothesesFromAnchors("1h",source,anchors)
+            assertTrue(incomplete.any { it.label=="W4" })
+            assertTrue("Incomplete Elliott counts must never export a W5 terminal-squat sign",
+                incomplete.all { !it.squat })
+        }
+    }
+
     @Test fun missingInvalidOrZeroVolumeCannotInventTheSquat() {
         val rows=upwardBars().toMutableList()
         rows[120]=rows[120].copy(o=154.8,l=154.6,c=154.8,v=300.0)
         assertTrue(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
         rows[120]=rows[120].copy(v=Double.NaN)
         assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",100,130))
+        // The MFI ratio of the previous bar is itself undefined with
+        // malformed OHLC, even if its volume happens to be positive.
+        rows[120]=rows[120].copy(v=300.0)
+        assertTrue(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
+        // Row 119 is OUTSIDE the W5 window. The calculation still needs
+        // its valid OHLCV to classify bar 120 against its predecessor.
+        rows[119]=rows[119].copy(h=0.0)
+        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
+        rows[119]=rows[119].copy(h=131.0, v=0.0)
+        assertFalse(williamsTerminalSquatVolumeProxy(rows,"UP",120,130))
         assertFalse(williamsTerminalSquatVolumeProxy(rows,"BAD",100,130))
     }
 

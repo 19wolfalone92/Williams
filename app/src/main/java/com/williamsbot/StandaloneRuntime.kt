@@ -1556,6 +1556,8 @@ private class NativeEngine(
     }
     private val historyStore = MarketHistoryStore(context)
     private val auditStore = TradingAuditStore(context)
+    // Research-only history, strictly separate from exchange intent storage.
+    private val observerPaperArchive = WilliamsObserverPaperArchive(context)
     private val executionAccumulator = ExecutionAccumulator()
     private val stateMachine = TradingStateMachine(
         onTransition = { from, to, reason ->
@@ -10302,6 +10304,90 @@ private class NativeEngine(
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
         })
         trace.put("edition_observations",observations)
+        // Independent NTD/Course WHAT-IF history. Persist a causal H1
+        // paper diary even when TC2 live execution is paused/blocked.
+        // Never send an observer signal to Futures coordinator or TradeJournal.
+        val observerPaper=JSONObject()
+        for(source in listOf(williamsNtdProfile,williamsCourseProfile)) {
+            val key=williamsObserverPaperKey(candidate.symbol,source)
+            val observer=(0 until observations.length()).mapNotNull { observations.optJSONObject(it) }
+                .singleOrNull { it.optString("profile")==source }
+            val asOf=candidate.candles.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L
+            val valid=observer?.optString("state") in setOf("FORMATION_OBSERVED","NO_VALID_FORMATION") &&
+                observer?.optLong("as_of_close_ms")==asOf
+            val recorded=runCatching {
+                val prior=executionStore.readState(key)?.let { JSONObject(it) }
+                if(!valid) {
+                    // Keep prior paper position/intents untouched on an
+                    // analyst failure; false zero-signals are not evidence.
+                    (prior?.let { JSONObject(it.toString()) } ?: JSONObject())
+                        .put("status","SOURCE_OBSERVATION_UNVERIFIED")
+                        .put("source_scanner_status",observer?.optString("state") ?: "MISSING")
+                        .put("can_place_orders",false)
+                } else {
+                    val paper=williamsObserverPaperAdvance(
+                        prior,candidate.symbol,source,
+                        candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                        traceSignals,passportObservedAt)
+                    // Same H1 source-specific NTD book planner as legacy
+                    // NTD campaigns, but it ONLY appends research evidence.
+                    // Exit signals are not Binance fills or executable exits.
+                    val updated=if(source==williamsNtdProfile &&
+                        paper.optJSONObject("paper_position")!=null &&
+                        ntdTick.isFinite() && ntdTick>0) {
+                        val raw=candidate.candles
+                        val aa=raw.indices.map { ao(raw,it) }
+                        val cc=aa.indices.map { k ->
+                            if(k>=4) nativeAcFromClosedAo(aa.subList(k-4,k+1))
+                            else Double.NaN
+                        }
+                        williamsNtdObserverBookEvidence(
+                            paper,candidate.symbol,
+                            raw.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                            williamsAlligatorLine(raw,8,5).map { it ?: Double.NaN },
+                            williamsAlligatorLine(raw,5,3).map { it ?: Double.NaN },
+                            aa,cc,ntdTick,passportObservedAt)
+                    } else if(source==williamsCourseProfile) {
+                        williamsCourseObserverLocations(
+                            paper,candidate.symbol,observedHierarchy,
+                            candidate.candles.last().t+WILLIAMS_H1_MS)
+                    } else paper
+                    // Append first: journal replay after an Android crash
+                    // is idempotent on the archive's event primary keys.
+                    observerPaperArchive.append(candidate.symbol,source,updated)
+                    check(executionStore.writeState(key,updated.toString())) {
+                        "OBSERVER_PAPER_SQLITE_WRITE_FAILED"
+                    }
+                    updated.put("retained_archive_event_count",observerPaperArchive
+                        .snapshot(candidate.symbol,source,1).optLong("retained_event_count"))
+                }
+            }.getOrElse { failure ->
+                JSONObject().put("status","OBSERVER_PAPER_UNAVAILABLE")
+                    .put("error_type",failure.javaClass.simpleName)
+                    .put("can_place_orders",false)
+            }
+            observerPaper.put(source,recorded)
+        }
+        // TC1 first-edition evidence is not a disguised TC2 paper entry.
+        // Save its separate causally known terminal-wave observations,
+        // with NO fabricated first-edition entry/exit or exchange fill.
+        observerPaper.put(WILLIAMS_TC1_OBSERVER,runCatching {
+            val key=williamsTc1ObserverKey(candidate.symbol)
+            val prior=executionStore.readState(key)?.let { JSONObject(it) }
+            val updated=williamsTc1ResearchAdvance(prior,candidate.symbol,observedHierarchy,observedAt)
+            if(updated.optString("status")=="TC1_WAVE_EVIDENCE_ONLY_NOT_A_PAPER_EXECUTOR") {
+                observerPaperArchive.append(candidate.symbol,WILLIAMS_TC1_OBSERVER,updated)
+                check(executionStore.writeState(key,updated.toString())) {
+                    "TC1_RESEARCH_SQLITE_WRITE_FAILED"
+                }
+            }
+            updated
+        }.getOrElse { failure ->
+            JSONObject().put("status","TC1_RESEARCH_UNAVAILABLE")
+                .put("error_type",failure.javaClass.simpleName)
+                .put("can_place_orders",false)
+        })
+        trace.put("observer_paper_history",observerPaper)
         val traceBooks=trace.getJSONArray("books")
         for(index in 0 until observations.length()) {
             val observation=observations.getJSONObject(index)
@@ -10351,6 +10437,7 @@ private class NativeEngine(
             // Preserve absent/failed observer evidence instead of quietly
             // equating "no signal" with "analyser could not execute".
             .put("edition_observations",observations)
+            .put("observer_paper_history",observerPaper)
             .put("campaign_ready", candidate.campaignReady)
             .put(
                 "campaign_signals",
@@ -12131,6 +12218,37 @@ private class NativeEngine(
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
             .put("unified_strategy_evidence", unifiedEvidence)
+            // Full on-device historical research diary, accessible in ZIP
+            // even if the scanner/UI candidate list is currently empty.
+            .put("observer_paper_history",JSONObject().apply {
+                for(symbol in coreSymbols.sorted()) {
+                    put(symbol,JSONObject().apply {
+                        for(source in listOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER)) {
+                            val journal=runCatching {
+                                val key=if(source==WILLIAMS_TC1_OBSERVER) williamsTc1ObserverKey(symbol)
+                                    else williamsObserverPaperKey(symbol,source)
+                                executionStore.readState(key)?.let { JSONObject(it) }
+                            }.getOrNull()
+                            put(source,journal ?: JSONObject().put("status","NOT_YET_OBSERVED")
+                                .put("can_place_orders",false))
+                        }
+                    })
+                }
+            })
+            .put("observer_paper_archive",JSONObject().apply {
+                for(symbol in coreSymbols.sorted()) put(symbol,JSONObject().apply {
+                    for(source in listOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER)) {
+                        val data=runCatching {
+                            observerPaperArchive.snapshot(symbol,source,500)
+                        }.getOrElse { failure ->
+                            JSONObject().put("status","OBSERVER_ARCHIVE_UNAVAILABLE")
+                                .put("error_type",failure.javaClass.simpleName)
+                                .put("can_place_orders",false)
+                        }
+                        put(source,data)
+                    }
+                })
+            })
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
             .put("durable_history_evidence",historyEvidence)

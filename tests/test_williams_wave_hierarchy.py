@@ -359,7 +359,10 @@ def test_four_frame_history_distinguishes_completed_w3_from_active_w4_before_adm
         total=payload["mirror_sum"]
         frames={f:[replace(b,o=total-b.o,h=total-b.l,l=total-b.h,c=total-b.c) for b in bars]
                 for f,bars in frames.items()}
-    report=build_wave_hierarchy(frames,payload["as_of"])
+    # Legacy book experiment is intentionally scoped to 1d/6h/1h/15m.
+    # It must NOT silently change production's 1d/H4/H1/M15 default.
+    legacy_four=("1d","6h","1h","15m")
+    report=build_wave_hierarchy(frames,payload["as_of"],analysis_frames=legacy_four)
     assert not report.frame_errors
     assert report.to_dict()["contained_chain_observed"]
     h1=pd.DataFrame([{"open":b.o,"high":b.h,"low":b.l,"close":b.c,"volume":b.v} for b in frames["1h"]],
@@ -386,11 +389,11 @@ def test_four_frame_history_distinguishes_completed_w3_from_active_w4_before_adm
                    for s in report.scenarios if s.status=="PROVISIONAL")
     assert any(s.frame=="6h" and s.label=="W3" for s in report.scenarios)
     # Missing junior evidence must revoke the very same real candle permission.
-    missing=build_wave_hierarchy({f:bars for f,bars in frames.items() if f!="15m"},payload["as_of"])
+    missing=build_wave_hierarchy({f:bars for f,bars in frames.items() if f!="15m"},payload["as_of"],analysis_frames=legacy_four)
     assert not correction_entry_context(missing,side,signal.signal_bar_time_ms,signal.signal_type.value)["allowed"]
     # Future higher and lower candles cannot change this already-known path.
     future={f:bars+[replace(bars[-1],t=bars[-1].t+FRAME_MS[f],h=float("nan"))] for f,bars in frames.items()}
-    assert build_wave_hierarchy(future,payload["as_of"]).to_dict()==report.to_dict()
+    assert build_wave_hierarchy(future,payload["as_of"],analysis_frames=legacy_four).to_dict()==report.to_dict()
 
 
 def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
@@ -418,6 +421,24 @@ def test_overlapping_fourth_keeps_non_executable_diagonal_hypothesis():
     assert "W4_BREACHES_W3_OR_W4_END" in invalid.invalid_reasons
     ordinary=count(points[:4]+[("LOW",125.,100)]+points[5:])
     assert ordinary.status=="PROVISIONAL"
+
+
+def test_production_default_cannot_use_h6_to_fabricate_missing_h4():
+    from williams_wave_hierarchy import REQUIRED_FRAMES
+    assert REQUIRED_FRAMES == ("1d","4h","1h","15m")
+    report=correction_report()
+    # A hand-built legacy H6 scenario can still be inspected, but not
+    # certified as the required H4 by the live/default parity ledger.
+    assert report.analysis_frames == REQUIRED_FRAMES
+    assert report.to_dict()["chain"] == ["1d","4h","1h","15m"]
+    assert not report.to_dict()["contained_chain_observed"]
+    fixture = rhythm_bars()
+    live = build_wave_hierarchy({"1h":fixture},len(fixture)*HOUR)
+    assert live.frame_errors["4h"] == "INSUFFICIENT_CLOSED_HISTORY"
+    assert "6h" not in live.frame_errors
+    assert live.to_dict()["chain"] == ["1d","4h","1h","15m"]
+    assert not live.to_dict()["contained_chain_observed"]
+    assert not live.to_dict()["can_place_orders"]
 
 
 def test_observed_five_frame_chain_cannot_skip_requested_h4_evidence():

@@ -292,7 +292,13 @@ internal fun williamsTerminalSquatVolumeProxy(
         val b=bars[i]
         listOf(b.o,b.h,b.l,b.c,b.v).any { !it.isFinite() } ||
             b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.c) || b.l<=0 || b.v<0 ||
-            i>0 && (!bars[i-1].v.isFinite() || bars[i-1].v<0)
+            i>0 && run {
+                val previous=bars[i-1]
+                listOf(previous.o,previous.h,previous.l,previous.c,previous.v).any { !it.isFinite() } ||
+                    previous.l<=0 || previous.v<=0 ||
+                    previous.h<maxOf(previous.o,previous.l,previous.c) ||
+                    previous.l>minOf(previous.o,previous.c)
+            }
     }) return false
     fun ranked(i:Int)=if(direction=="UP") bars[i].h else -bars[i].l
     val thirdExtreme=indices.map(::ranked).sortedDescending()[2]
@@ -370,13 +376,14 @@ internal fun williamsHypothesesFromAnchors(
         val lastAo = osc.takeLast(5).filter { it.isFinite() }
         h.momentumShift = lastAo.size == 5 && sign * lastAo.last() < sign * lastAo.average() &&
             sign * lastAo.last() < sign * lastAo[lastAo.lastIndex-1]
-        val terminal = p[minOf(5,n-1)].index
-        h.squat = if (n>=6) williamsTerminalSquatVolumeProxy(
-            bars,direction,p[4].index,terminal
-        ) else (maxOf(1,terminal-1)..minOf(bars.lastIndex,terminal+1)).any { j ->
-            val a=bars[j-1];val b=bars[j]
-            a.v>0 && b.v>a.v && (b.h-b.l)/b.v < (a.h-a.l)/a.v
-        }
+        // TC1 PDF53,82-83 and Course Level III p2 (PDF77) require
+        // an extreme squat INSIDE an observed fifth wave, not any squat
+        // adjacent to a W1/W2/W3/W4 pivot. Five completed motive legs
+        // require six causally confirmed price anchors. Smaller labels
+        // must not inherit an invented terminal fifth-wave sign.
+        h.squat = n>=6 && williamsTerminalSquatVolumeProxy(
+            bars,direction,p[4].index,p[5].index
+        )
         out += h
     }
     return out

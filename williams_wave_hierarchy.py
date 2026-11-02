@@ -16,7 +16,12 @@ from williams_wave_momentum import evaluate_third_momentum, ordered_sum, third_m
 FRAME_MS = {"1m":60_000,"3m":180_000,"5m":300_000,"15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
             "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
             "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000}
-REQUIRED_FRAMES = ("1d", "6h", "1h", "15m")
+# Default analytical degrees MUST match Android's WilliamsWaveHierarchy.kt.
+# H6 is extra contextual evidence only: a 6-hour bar cannot nest exactly
+# inside a 4-hour bar. Never substitute H6 for the separately required H4.
+# This is a project-specific chart hierarchy, not a timeframe mandate in
+# any of the four Bill Williams primary sources.
+REQUIRED_FRAMES = ("1d", "4h", "1h", "15m")
 
 
 def wave_bars_from_dataframe(frame):
@@ -365,9 +370,15 @@ def terminal_squat_volume_proxy(bars, direction, start, end):
         b = bars[i]
         if (not all(isfinite(x) for x in (b.o,b.h,b.l,b.c,b.v))
                 or b.h < max(b.o,b.l,b.c) or b.l > min(b.o,b.c)
-                or b.l <= 0 or b.v < 0
-                or i > 0 and (not isfinite(bars[i-1].v) or bars[i-1].v < 0)):
+                or b.l <= 0 or b.v < 0):
             return False
+        if i > 0:
+            prev = bars[i-1]
+            if (not all(isfinite(x) for x in (prev.o,prev.h,prev.l,prev.c,prev.v))
+                    or prev.l <= 0 or prev.v <= 0
+                    or prev.h < max(prev.o,prev.l,prev.c)
+                    or prev.l > min(prev.o,prev.c)):
+                return False
     def ranked(i):
         return bars[i].h if direction == "UP" else -bars[i].l
     third = sorted((ranked(i) for i in indexes),reverse=True)[2]
@@ -463,14 +474,11 @@ def hypotheses_from_anchors(frame: str, bars: list[WaveBar],
         h.momentum_shift = (len(valid_ao) == 5 and sign * valid_ao[-1] <
                             sign * ordered_sum(valid_ao) / 5 and
                             sign * valid_ao[-1] < sign * valid_ao[-2])
-        terminal = p[min(5, n-1)].index
-        if n >= 6:
-            h.squat = terminal_squat_volume_proxy(bars,h.direction,p[4].index,terminal)
-        else:
-            for j in range(max(1, terminal-1), min(len(bars), terminal+2)):
-                a, b = bars[j-1], bars[j]
-                if a.v > 0 and b.v > a.v and (b.h-b.l)/b.v < (a.h-a.l)/a.v:
-                    h.squat = True
+        # TC1 PDF53,82-83 / Course Level III PDF77: an extreme
+        # squat is terminal W5 evidence only after SIX causal pivots.
+        # A squat next to an earlier W1-W4 pivot is not a W5 sign.
+        h.squat = (n >= 6 and terminal_squat_volume_proxy(
+            bars,h.direction,p[4].index,p[5].index))
         out.append(h)
     return out
 
