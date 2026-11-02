@@ -201,14 +201,19 @@
         124
       ],
       "rule": "New lower low and upper-half close for LONG, inverse for SHORT; reversal bar away from Alligator mouth.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_wm1_strict_midpoint_raw_ohlc_rejects_cached_reversal_flag",
+        "tests/test_tc2_exact_signal_grid.py::test_tc2_price_bar_exact_one_tick_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::tc2Wm1CloseAtExactlyHalfIsNotABookReversalForEitherSide",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::wm1Wm2SignalPriceBarUsesOriginalDecimalTicksInBothDirections"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Need all source figures digitized; not only synthetic detections.",
+      "remaining_evidence": "Exact upper/lower-half reversal, previous high/low, original Binance tick and mirrored synthetic checks pass in Python/Kotlin; all author chart figures and real Futures Demo stop-entry/STOP confirmation are NOT independently certified.",
       "can_place_orders_from_registry": false
     },
     {
@@ -261,14 +266,20 @@
         138
       ],
       "rule": "Third successive AO colour in intended direction; price trigger one tick beyond its corresponding bar.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_market_geometry.py::test_tc2_wm2_ordinal_ao_values_must_prove_cached_streak",
+        "tests/test_tc2_exact_signal_grid.py::test_tc2_wm2_uses_source_exact_price_bar_for_actual_signal",
+        "app/src/test/java/com/williamsbot/WilliamsTc2AoSourceProofTest.kt::thirdActualChangeNotThirdPositiveAoAndNoZeroLineRequirement",
+        "app/src/test/java/com/williamsbot/WilliamsTc2AoSourceProofTest.kt::mirroredShortGreenStreakUsesSameThirdBar",
+        "app/src/test/java/com/williamsbot/WilliamsSetupRulesTest.kt::wm1Wm2SignalPriceBarUsesOriginalDecimalTicksInBothDirections"
+      ],
       "fixtures": [],
-      "remaining_evidence": "All flat/zero/broken-sequence source examples still need exhaustive causal fixtures.",
+      "remaining_evidence": "Three real AO colour changes and exact third signal-bar price pass mirrored Python/Kotlin boundary tests; arbitrary full historical source-figure annotations and signed Binance Demo order fills are still not proven.",
       "can_place_orders_from_registry": false
     },
     {
@@ -341,14 +352,19 @@
         165
       ],
       "rule": "Structural stop behind three or five price bars; choose one documented comfort policy and only tighten.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_exit_policy.py",
         "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_tc2_exact_exit_price_parity.py::test_shared_python_android_source_tick_contract",
+        "tests/test_tc2_no_automatic_breakeven.py::test_book_five_bar_stop_still_tightens_in_both_directions",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitTickContractTest.kt::fiveClosedBarBookTrailMatchesPythonOnExactExchangeTicks",
+        "app/src/test/java/com/williamsbot/FuturesStopTrailPolicyTest.kt::tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Physical Android/Binance trailing chain remains unverified.",
+      "remaining_evidence": "Mirrorable original candle extremes, exact decimal tick, incomplete/unaligned candle failures and 3/5-bar unit tests now linked; physical Binance Demo signed STOP placement/replacement and all original charts remain unverified.",
       "can_place_orders_from_registry": false
     },
     {
