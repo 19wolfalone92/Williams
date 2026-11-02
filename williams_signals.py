@@ -390,7 +390,9 @@ def _latest_confirmed_fractal(
         return None
 
     start = 0 if max_age_bars is None else max(0, len(ind) - max(3, int(max_age_bars)))
-    tick = max(float(tick_size), 0.0)
+    tick = _verified_exchange_tick(tick_size)
+    if tick is None:
+        return None
     center_col = "confirmed_up_center_index" if direction == "LONG" else "confirmed_down_center_index"
     group_start_col = "confirmed_up_group_start_index" if direction == "LONG" else "confirmed_down_group_start_index"
     for confirmation_i in range(len(ind) - 1, start - 1, -1):
@@ -428,12 +430,16 @@ def _latest_confirmed_fractal(
         if not all(math.isfinite(float(v)) and float(v) > 0 for v in structural_extremes):
             continue  # Never infer a structural SL by silently dropping a missing extreme.
         trigger_base = float(center["high"] if direction == "LONG" else center["low"])
-        trigger = trigger_base + tick if direction == "LONG" else trigger_base - tick
+        trigger = _source_exact_one_tick(trigger_base, tick, above=direction == "LONG")
+        if trigger is None:
+            continue
         protective = float(
             pd.to_numeric(group["low" if direction == "LONG" else "high"], errors="coerce").min()
             if direction == "LONG"
             else pd.to_numeric(group["high"], errors="coerce").max()
         )
+        if _source_exact_one_tick(protective, tick, above=direction == "SHORT") is None:
+            continue
         teeth = float(row.get("teeth_current", row.get("teeth_shifted", 0.0)) or 0.0)
 
         if current_teeth is not None:
@@ -1169,9 +1175,9 @@ def extract_long_signal_specs(
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
         # Formation can be anywhere; trigger validity belongs to current
         # price/Teeth.  At arm time the trigger must still be above Teeth.
-        trigger = trigger_base + tick
-        current_trigger_valid = trigger > max(current_teeth, 0.0)
-        if current_close < trigger and current_trigger_valid:
+        levels = _tc2_exact_price_bar_levels("LONG", trigger_base, protective, tick)
+        if levels is not None and current_close < levels[0] and levels[0] > max(current_teeth, 0.0):
+            trigger, protective_stop = levels
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
             specs.append(
@@ -1185,9 +1191,9 @@ def extract_long_signal_specs(
                     # knowable only when the second right-hand bar closes.
                     signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
-                    protective_reference=protective - tick,
+                    protective_reference=protective_stop,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or (protective - tick)),
+                    invalidation_price=float(wave_invalidation_price or protective_stop),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bullish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
@@ -1345,9 +1351,9 @@ def extract_short_signal_specs(
     fractal = _latest_confirmed_fractal(ind, side="SHORT", current_teeth=current_teeth, current_close=current_close, tick_size=tick)
     if fractal is not None:
         confirmation_i, center_i, trigger_base, protective, teeth = fractal
-        trigger = trigger_base - tick
-        current_trigger_valid = current_teeth > 0 and trigger < current_teeth
-        if current_close > trigger and current_trigger_valid:
+        levels = _tc2_exact_price_bar_levels("SHORT", trigger_base, protective, tick)
+        if levels is not None and current_close > levels[0] and current_teeth > 0 and levels[0] < current_teeth:
+            trigger, protective_stop = levels
             row = ind.iloc[center_i]
             confirmation_time = _row_time_ms(ind.iloc[confirmation_i])
             specs.append(
@@ -1361,9 +1367,9 @@ def extract_short_signal_specs(
                     # earlier timestamp, so Wise-Men sequencing cannot look ahead.
                     signal_bar_time_ms=confirmation_time,
                     trigger_price=trigger,
-                    protective_reference=protective + tick,
+                    protective_reference=protective_stop,
                     trigger_buffer_ticks=1,
-                    invalidation_price=float(wave_invalidation_price or (protective + tick)),
+                    invalidation_price=float(wave_invalidation_price or protective_stop),
                     teeth_at_detection=float(teeth),
                     alligator_bullish=bool(current.get("bearish_alligator", False)),
                     alligator_awake=bool(current.get("alligator_awake", False)),
