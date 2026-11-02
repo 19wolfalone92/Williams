@@ -95,6 +95,41 @@ class WilliamsTc1ResearchDiaryTest {
             tooEarly,now).getJSONArray("events").length())
     }
 
+    @Test fun bookW5WatchCannotBeInventedByMalformedFutureOrWrongDirectionPivots() {
+        val now=100*hour
+        val good=hierarchy(now)
+        assertEquals(1,williamsTc1ResearchAdvance(null,"SOLUSDT",good,now)
+            .getJSONArray("events").length())
+        val altered=JSONObject(good.toString())
+        altered.getJSONArray("scenarios").getJSONObject(0)
+            .getJSONArray("anchors").getJSONObject(3)
+            .put("known_at",now+hour)
+        assertEquals(0,williamsTc1ResearchAdvance(null,"SOLUSDT",altered,now)
+            .getJSONArray("events").length())
+        val malformed=JSONObject(good.toString())
+        malformed.getJSONArray("scenarios").getJSONObject(0)
+            .getJSONArray("anchors").getJSONObject(4)
+            .put("kind","UNCONFIRMED")
+        assertEquals(0,williamsTc1ResearchAdvance(null,"SOLUSDT",malformed,now)
+            .getJSONArray("events").length())
+        val wrongDirection=JSONObject(good.toString())
+        wrongDirection.getJSONArray("scenarios").getJSONObject(0)
+            .put("direction","DOWN")
+        assertEquals(0,williamsTc1ResearchAdvance(null,"SOLUSDT",wrongDirection,now)
+            .getJSONArray("events").length())
+        val oldSnapshot=JSONObject(good.toString())
+        oldSnapshot.getJSONArray("scenarios").getJSONObject(0)
+            .put("observed_at",now-hour)
+        assertEquals(0,williamsTc1ResearchAdvance(null,"SOLUSDT",oldSnapshot,now)
+            .getJSONArray("events").length())
+        val nonmonotonic=JSONObject(good.toString())
+        nonmonotonic.getJSONArray("scenarios").getJSONObject(0)
+            .getJSONArray("anchors").getJSONObject(4)
+            .put("extreme_at",15*hour)
+        assertEquals(0,williamsTc1ResearchAdvance(null,"SOLUSDT",nonmonotonic,now)
+            .getJSONArray("events").length())
+    }
+
     @Test fun missingWaveSnapshotAndWrongSourceCannotCreateTradingEvidence() {
         val now=100*hour
         val unavailable=williamsTc1ResearchAdvance(null,"ADAUSDT",hierarchy(now),now+1)
