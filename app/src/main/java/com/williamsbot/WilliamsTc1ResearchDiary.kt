@@ -12,6 +12,35 @@ import org.json.JSONObject
  */
 internal const val WILLIAMS_TC1_OBSERVER = "TC1_FIRST_EDITION_RESEARCH"
 
+/** Verify source timestamps and direction instead of trusting a `PROVISIONAL`
+ * JSON tag from an upstream scanner. TC1 permits overlap alternatives;
+ * this checks CAUSALITY only, not uniqueness of Elliott degree. */
+private fun tc1SourcePivotsCausal(s:JSONObject,asOf:Long):Boolean {
+    if(s.optLong("observed_at")!=asOf || asOf<=0L ||
+        s.optString("frame")!="1h" || s.optString("status")!="PROVISIONAL")
+        return false
+    val anchors=s.optJSONArray("anchors") ?: return false
+    if(anchors.length() !in 5..6) return false
+    val first=when(s.optString("direction")) {
+        "UP"->"LOW"; "DOWN"->"HIGH"; else->return false
+    }
+    var prevExtreme=0L
+    var prevKnown=0L
+    for(i in 0 until anchors.length()) {
+        val a=anchors.optJSONObject(i) ?: return false
+        val price=a.optDouble("price",Double.NaN)
+        val extreme=a.optLong("extreme_at")
+        val known=a.optLong("known_at")
+        val kind=if(i%2==0) first else if(first=="LOW") "HIGH" else "LOW"
+        if(!price.isFinite() || price<=0.0 || extreme<=prevExtreme ||
+            known<=prevKnown || known<=extreme || known>asOf ||
+            a.optString("kind")!=kind) return false
+        prevExtreme=extreme
+        prevKnown=known
+    }
+    return true
+}
+
 internal fun williamsTc1ObserverKey(symbol:String):String {
     require(symbol.matches(Regex("[A-Z0-9]{4,20}")))
     return "williams_tc1_research_v1_"+symbol
@@ -49,7 +78,8 @@ internal fun williamsTc1ResearchAdvance(
             scenario.optString("status")!="PROVISIONAL") continue
         val anchors=scenario.optJSONArray("anchors") ?: continue
         val scenarioId=scenario.optString("scenario_id")
-        if(scenarioId.isBlank() || scenario.optString("direction") !in listOf("UP","DOWN"))
+        if(scenarioId.isBlank() || scenario.optString("direction") !in listOf("UP","DOWN") ||
+            !tc1SourcePivotsCausal(scenario,asOfMs))
             continue
         // TC1 PDF61-65: a fourth-wave zero cross is a *minimum*
         // oscillator degree clue, not proof of a unique Elliott wave,
