@@ -69,3 +69,13 @@ def test_full_fractal_is_decimal_exact_and_not_retroactive():
     assert plan_williams_stop("LONG",90.0,100.0,90.0,130.0,.1,H1,points,window=None) is None
     points[3].l=103.2
     assert plan_williams_stop("LONG",90.0,100.0,90.0,130.0,.1,H1,points[:-2],window=None) is None
+
+
+def test_numpy_integer_h1_times_are_valid_but_float_times_are_not():
+    import numpy as np
+    rows=bars([103.,104.,105.,106.,107.],[99.,100.,101.,102.,103.])
+    for b in rows:
+        b.t=np.int64(b.t)
+    assert plan_williams_stop("LONG", 90., 100., 90., 130., .1, 1, rows)
+    rows[2].t=float(rows[2].t)
+    assert plan_williams_stop("LONG", 90., 100., 90., 130., .1, 1, rows) is None
