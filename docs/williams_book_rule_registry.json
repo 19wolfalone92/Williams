@@ -390,16 +390,23 @@
         73
       ],
       "rule": "Alligator displaced SMMA13/8,8/5,5/3; AO SMA5-SMA34 median; AC AO-SMA5(AO).",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "strategy.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "test_williams_indicator_fidelity.py::test_alligator_decision_lines_match_forward_shifted_chart_values",
+        "test_williams_indicator_fidelity.py::test_futures_canonical_indicator_contract_rejects_period_drift",
+        "test_williams_indicator_fidelity.py::test_trade_count_proxy_is_explicit_and_never_claimed_as_canonical_mfi",
+        "app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt::smmaUsesTheFirstPeriodSmaAsItsSeed",
+        "app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt::displayedLineAtCurrentCandleUsesOnlyPastSmmaValue",
+        "app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt::awesomeOscillatorUsesExactlyThirtyFourAndFiveMedianPrices"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Boundary/seed parity is implemented; full historical figure parity not complete.",
+      "remaining_evidence": "SMA5/34 median AO, SMMA displaced alligator line/seed and lookahead-free source windows have bounded Python/Kotlin regression coverage; Binance kline/trade-count MFI is explicitly a proxy, not Profitunity tick MFI. Independent digitized historical book indicator figures and live Demo are not certified.",
       "can_place_orders_from_registry": false
     },
     {
