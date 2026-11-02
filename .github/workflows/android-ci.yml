@@ -47,11 +47,17 @@ jobs:
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug --stacktrace
 
-      - name: Upload debug APK
+      # This job is for static and unit validation only. Its Gradle default
+      # debug key is ephemeral and does NOT match the stable installer signer.
+      # Publishing the output here used to offer a second, non-upgradeable
+      # APK for the same com.williamsbot.debug package.
+      - name: Report validation-only build
         if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: williams-futures-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 14
+        run: |
+          {
+            echo "### Android CI (validation only)"
+            echo "Unit tests and debug compilation passed."
+            echo ""
+            echo "Do not install this job's local APK: it is not an update artifact."
+            echo "Download the signed APK from **Build Android APK** workflow only."
+          } >> "$GITHUB_STEP_SUMMARY"
