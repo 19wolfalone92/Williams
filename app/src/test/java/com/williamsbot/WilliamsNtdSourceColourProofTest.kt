@@ -8,6 +8,39 @@ import org.junit.Test
  * NTD figures 5-4 through 5-23 and 6-3 through 6-18 (PDF57–82).
  */
 class WilliamsNtdSourceColourProofTest {
+    @Test fun nativeNtdSourceScannerDoesNotDivergeFromReadOnlyAoAcBookProof() {
+        val h=3_600_000L
+        val n=48
+        val bars=(1..n).map { i ->
+            WilliamsWaveBar(i*h,100.0,105.0,95.0,100.0,100.0)
+        }
+        val jaw=List(n){100.0}
+        val teeth=List(n){100.0}
+        val lips=List(n){100.0}
+        for(side in listOf("LONG","SHORT")) {
+            val factor=if(side=="LONG") 1.0 else -1.0
+            val ao=MutableList(n){0.0}
+            val ac=MutableList(n){0.0}
+            val tailAo=listOf(0.7,0.6,0.4,0.5)
+            val tailAc=listOf(0.8,0.5,0.6,0.7)
+            for(k in 0 until 4) {
+                ao[n-4+k]=factor*tailAo[k]
+                ac[n-4+k]=factor*tailAc[k]
+            }
+            assertEquals("AO_SAUCER",williamsNtdLastClosedAoFormation(ao,side))
+            assertEquals("AC_SIGNAL",williamsNtdLastClosedAcFormation(ac,side))
+            val actual=williamsNtdSetups(side,bars,jaw,teeth,lips,
+                ao,ac,0.1,exitMode=true,includePendingAo=false)
+            val aoEvents=actual.filter { it.kind=="AO_SAUCER" }
+            val acEvents=actual.filter { it.kind=="AC_SIGNAL" }
+            assertEquals(side+": "+actual.toString(),1,aoEvents.size)
+            assertEquals(side+": "+actual.toString(),1,acEvents.size)
+            assertEquals(n-1,aoEvents.single().knownIndex)
+            assertEquals(n-1,acEvents.single().knownIndex)
+            assertEquals(if(side=="LONG") 105.1 else 94.9,aoEvents.single().trigger,0.0)
+        }
+    }
+
     private fun contract()=JSONObject(requireNotNull(
         javaClass.getResource("/williams_ntd_source_colour_contract.json")).readText())
 
