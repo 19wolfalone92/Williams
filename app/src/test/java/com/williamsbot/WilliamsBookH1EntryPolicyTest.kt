@@ -6,6 +6,31 @@ import org.junit.Test
 import java.time.Instant
 
 class WilliamsBookH1EntryPolicyTest {
+    @Test fun tc2BookH1AcceptsEachFirstPresentingWiseManWithoutOtherFamilies() {
+        // TC2 PDF156–157 (printed pp.141–142): a valid fractal OR Super AO
+        // may initiate a new campaign without a previous reversal bar.
+        // This is a source H1 proof, NOT evidence Binance accepted the STOP.
+        for(direction in listOf("LONG","SHORT")) {
+            for(family in listOf("REVERSAL","SUPER_AO","FRACTAL")) {
+                val type=if(direction=="SHORT") "SHORT_"+family else family
+                val signalId="TC2:ETHUSDT:$type:$t"
+                val entry=if(direction=="LONG") 105.0 else 95.0
+                val stop=if(direction=="LONG") 99.0 else 101.0
+                val proof=williamsBookH1Proof(signalId,direction,type,
+                    williamsTc2Profile,t,entry,stop,0.1)
+                val onlyThisWiseMan=JSONObject()
+                    .put("book_h1_entry",proof).toString()
+                assertNull("$direction $family",williamsBookH1ProofBlocker(
+                    onlyThisWiseMan,direction,signalId,type,
+                    williamsTc2Profile,entry,stop,now))
+                if(family=="FRACTAL") {
+                    assertNull("$direction $family",williamsBookFractalTeethBlocker(
+                        type,direction,entry,100.0,0.1))
+                }
+            }
+        }
+    }
+
     private val t=Instant.parse("2026-10-19T07:00:00Z").toEpochMilli()
     private val now=t+WILLIAMS_H1_MS+30_000L
     private fun proof(side:String,profile:String=williamsTc2Profile):JSONObject =
