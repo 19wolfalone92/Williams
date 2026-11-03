@@ -554,7 +554,9 @@ def extract_ntd_ao_signal_specs(
     direction = str(side or "").upper()
     if direction not in {"LONG", "SHORT"} or ind is None or len(ind) < 3:
         return []
-    required = {"ao", "ao_green", "ao_red", "high", "low", "close"}
+    # Cached ao_green/ao_red booleans are NOT primary source evidence.
+    # NTD book colour means an actual change of the closed AO histogram.
+    required = {"ao", "high", "low", "close"}
     if not required.issubset(ind.columns):
         return []
 
@@ -583,8 +585,17 @@ def extract_ntd_ao_signal_specs(
     if trigger is None or (is_long and close >= trigger) or (not is_long and close <= trigger):
         return []
 
-    green = ind["ao_green"].fillna(False).astype(bool).to_numpy()
-    red = ind["ao_red"].fillna(False).astype(bool).to_numpy()
+    # Derive all colours from immutable numeric AO including historical
+    # twin-peak/saucer candidates; a stale "true" flag must never mint an
+    # observation. NaN or two equal values imply no colour, not a signal.
+    green = [
+        i > 0 and math.isfinite(ao[i]) and math.isfinite(ao[i - 1])
+        and ao[i] > ao[i - 1] for i in range(len(ao))
+    ]
+    red = [
+        i > 0 and math.isfinite(ao[i]) and math.isfinite(ao[i - 1])
+        and ao[i] < ao[i - 1] for i in range(len(ao))
+    ]
     matches: list[tuple[SignalType, str]] = []
 
     # AO Saucer: three consecutive bars form green-red-green above zero
