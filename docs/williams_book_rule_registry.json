@@ -344,14 +344,19 @@
         157
       ],
       "rule": "Any first-presenting Wise Man can initiate; do not demand simultaneous WM1+WM2+WM3.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_profiles.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_tc2_first_presenting_source_2026.py::test_tc2_each_first_presenting_wise_man_can_generate_own_initial_entry",
+        "tests/test_tc2_first_presenting_source_2026.py::test_tc2_first_presenting_prefers_earlier_still_pending_signal_over_later_family",
+        "app/src/test/java/com/williamsbot/WilliamsBookH1EntryPolicyTest.kt::tc2BookH1AcceptsEachFirstPresentingWiseManWithoutOtherFamilies",
+        "app/src/test/java/com/williamsbot/WilliamsBookH1EntryPolicyTest.kt::tc2UsesExactH1TriggerInBothDirections"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Every source sequence has not been transcribed into independent fixtures.",
+      "remaining_evidence": "TC2 PDF156–157 (printed pp.141–142) explicitly permits WM1, WM2 or WM3 as first valid presenting signal, with independent H1 book STOP proof. All 6 mirrored Python/Kotlin first-presenting configurations have bounded unit tests. Native exchange execution, competing actual conditional order fills, original full author chart digitization, and stop/reversal on Demo are NOT certified.",
       "can_place_orders_from_registry": false
     },
     {
