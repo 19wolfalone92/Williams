@@ -360,18 +360,11 @@ internal fun williamsNtdSetups(side:String,bars:List<WilliamsWaveBar>,jaw:List<D
             context=JSONObject().put("formation_index",f.center).put("ntd_initial",initial))
     }
     val a=ao.map { sign*it }; val c=ac.map { sign*it };val i=n-1
-    if (a.takeLast(3).all { it.isFinite() }) {
-        val peaks=(maxOf(1,i-30) until i).filter { a[it]<0 && a[it]<a[it-1] && a[it]<a[it+1] }
-        val second=peaks.lastOrNull()
-        // Do not skip an intervening unsuitable AO trough: the two peaks
-        // must be consecutive confirmed extremes of this same negative wave.
-        val first=if(second==i-1) peaks.dropLast(1).lastOrNull() else null
-        when {
-            first!=null && second!=null && a[first]<a[second] && a[i]>a[i-1] &&
-                (first..i).all { a[it].isFinite() && a[it]<0 } -> add("AO_TWIN_PEAKS",i)
-            a[i-2]>0 && a[i-1]>0 && a[i]>0 && a[i-2]>a[i-1] && a[i]>a[i-1] -> add("AO_SAUCER",i)
-            a[i-1]<0 && a[i]>0 -> add("AO_ZERO_LINE",i)
-        }
+    // The native NTD source generator and read-only observer MUST share the
+    // same author-rule AO formation, tested against the Python AO corpus.
+    // No hidden colour cache or different Twin Peaks detector is permitted.
+    williamsNtdLastClosedAoFormation(ao,side)?.let { kind ->
+        add(kind,i)
     }
     // NTD PDF63-67: failure to break the signal bar on the very next
     // candle does not delete the AO stop. Preserve the original causal

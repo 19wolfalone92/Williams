@@ -50,6 +50,17 @@ internal fun williamsNtdObserverBookEvidence(
         !tick.isFinite() || tick<=0)
         return result.put("ntd_book_evidence_status","INDICATORS_OR_PRICE_HISTORY_UNVERIFIED")
 
+    // Book AO/AC formations are recorded as independently derived hypotheses.
+    // This is NOT a market/STOP execution, an exchange fill or authority to
+    // add a position. Existing NTD paper-management events are unchanged.
+    result.put("ntd_last_closed_ao_source_formation",
+        williamsNtdLastClosedAoFormation(ao,position.optString("direction")) ?: "NONE")
+        .put("ntd_last_closed_ac_source_formation",
+            williamsNtdLastClosedAcFormation(ac,position.optString("direction")) ?: "NONE")
+        .put("ntd_oscillator_source_h1_close_at_ms",end)
+        .put("ntd_oscillator_signal_exchange_confirmed",false)
+        .put("can_place_orders",false)
+
     val state=result.optJSONObject("ntd_book_management_state") ?: JSONObject()
     val plan=williamsNtdManagementPlan(position.getString("direction"),bars,
         teeth,lips,ao,ac,tick,entryAt,state)

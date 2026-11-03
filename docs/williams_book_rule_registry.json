@@ -454,20 +454,32 @@
         60
       ],
       "rule": "AO saucer uses same-side three-bar momentum-colour sequence and its signal price bar.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
         "williams_ntd_execution.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt",
+        "app/src/main/java/com/williamsbot/WilliamsNtdSourceColourProof.kt"
       ],
       "tests": [
         "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
-        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels",
+        "tests/test_ntd_book_source_ao_ac_2026.py::test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_flags",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::originalAoSourceColoursMatchPythonWithMirroredBookSetups",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::nativeNtdSourceScannerDoesNotDivergeFromReadOnlyAoAcBookProof"
       ],
-      "fixtures": [],
-      "remaining_evidence": "All figure and zero/flat-colour variants not completely digitized. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
-      "can_place_orders_from_registry": false
+      "fixtures": [
+        "ao/saucer_long",
+        "ao/saucer_short",
+        "ao/saucer_many_long",
+        "ao/saucer_many_short",
+        "ao/flat_equal_long",
+        "ao/flat_equal_short"
+      ],
+      "remaining_evidence": "Original NTD pp.57-62 source conditions (minimum three AO bars, source-derived colour and zero-line side), Python/Kotlin 32-case shared boundary contract and native observer are bounded tested. Not all book figure price series were digitized; no actual NTD exchange fills (NTD is observe-only).",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_ntd_source_colour_contract.json"
     },
     {
       "id": "NTD.AO.ZERO_CROSS",
@@ -478,20 +490,30 @@
         64
       ],
       "rule": "AO zero crossing uses actual closed sign transition and corresponding price trigger.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
         "williams_ntd_execution.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt",
+        "app/src/main/java/com/williamsbot/WilliamsNtdSourceColourProof.kt"
       ],
       "tests": [
         "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
-        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels",
+        "tests/test_ntd_book_source_ao_ac_2026.py::test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_flags",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::originalAoSourceColoursMatchPythonWithMirroredBookSetups",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::nativeNtdSourceScannerDoesNotDivergeFromReadOnlyAoAcBookProof"
       ],
-      "fixtures": [],
-      "remaining_evidence": "Exact zero touches and edition-specific conventions need full source matrix. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
-      "can_place_orders_from_registry": false
+      "fixtures": [
+        "ao/zero_cross_long",
+        "ao/zero_cross_short",
+        "ao/zero_touch_long",
+        "ao/zero_touch_short"
+      ],
+      "remaining_evidence": "Original NTD pp.58-64 exact closed AO negative-to-positive or inverse crossing and strict zero-touch exclusions bounded-tested in Python/Kotlin against common fixture. Full figure digitization and signed exchange fill proof not present; NTD remains observe-only.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_ntd_source_colour_contract.json"
     },
     {
       "id": "NTD.AO.TWIN_PEAKS",
@@ -508,20 +530,32 @@
         73
       ],
       "rule": "Same-side peaks, second nearer zero, no intervening zero crossing.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
         "williams_ntd_execution.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt",
+        "app/src/main/java/com/williamsbot/WilliamsNtdSourceColourProof.kt"
       ],
       "tests": [
         "tests/test_williams_ntd_execution.py::test_shared_ao_stop_lifetime",
-        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels"
+        "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::sharedAoSignalsSurviveUnhitBarsButNeverColourRecoveryOrConsumedLevels",
+        "tests/test_ntd_book_source_ao_ac_2026.py::test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_flags",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::originalAoSourceColoursMatchPythonWithMirroredBookSetups",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::nativeNtdSourceScannerDoesNotDivergeFromReadOnlyAoAcBookProof"
       ],
-      "fixtures": [],
-      "remaining_evidence": "Every plateau/zero timing example still pending independent figure fixtures. Unhit AO lifecycle is covered by 24 mirrored shared cases (NTD PDF63-67); discretionary blue-light price reanchoring remains separate and unimplemented.",
-      "can_place_orders_from_registry": false
+      "fixtures": [
+        "ao/twin_peaks_long",
+        "ao/twin_peaks_short",
+        "ao/twin_wrong_intervening_long",
+        "ao/twin_wrong_intervening_short",
+        "ao/twin_wrong_prev_peak_long",
+        "ao/twin_wrong_prev_peak_short"
+      ],
+      "remaining_evidence": "Original NTD pp.60-66: mirrored two confirmed same-side troughs/crests, second nearer zero, zero-touch and intervening peak counterexamples bounded-tested in Python/Kotlin; unreadable historical price charts and active NTD order execution deliberately not certified.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_ntd_source_colour_contract.json"
     },
     {
       "id": "NTD.AC.COUNTS",
@@ -542,17 +576,38 @@
         87
       ],
       "rule": "Two colour confirmations with acceleration, three against; zero crossing alone is not AC entry.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_signals.py",
         "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
         "williams_ntd_execution.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt",
+        "app/src/main/java/com/williamsbot/WilliamsNtdSourceColourProof.kt"
       ],
-      "tests": [],
-      "fixtures": [],
-      "remaining_evidence": "Complete zero-line exception matrix pending.",
-      "can_place_orders_from_registry": false
+      "tests": [
+        "tests/test_ntd_book_source_ao_ac_2026.py::test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_flags",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::acAboveBelowAndSecondThirdZeroCrossMatchPython",
+        "app/src/test/java/com/williamsbot/WilliamsNtdSourceColourProofTest.kt::nativeNtdSourceScannerDoesNotDivergeFromReadOnlyAoAcBookProof"
+      ],
+      "fixtures": [
+        "ac/with_long",
+        "ac/against_long",
+        "ac/cross2_long",
+        "ac/cross3_long",
+        "ac/bare_zero_cross_long",
+        "ac/flat_colour_long",
+        "ac/two_green_below_long",
+        "ac/with_short",
+        "ac/against_short",
+        "ac/cross2_short",
+        "ac/cross3_short",
+        "ac/bare_zero_cross_short",
+        "ac/flat_colour_short",
+        "ac/two_green_below_short"
+      ],
+      "remaining_evidence": "Original NTD pp.74-82: both directions, 2-with/3-against AC bars and second/third crossing-zero exceptions source tested in Python, native Kotlin and hypothetical observer. Complete source-figure chart annotations and real fills not demonstrated.",
+      "can_place_orders_from_registry": false,
+      "fixture_file": "app/src/test/resources/williams_ntd_source_colour_contract.json"
     },
     {
       "id": "NTD.ZONE.ADDITIONS",
