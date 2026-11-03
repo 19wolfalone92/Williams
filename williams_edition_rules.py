@@ -6,6 +6,7 @@ and the higher-frame two-bar Air Bag. Volumes are explicit kline proxies.
 """
 from dataclasses import dataclass, field
 from math import isfinite
+from decimal import Decimal, InvalidOperation
 from typing import Sequence
 
 from williams_wave_hierarchy import WaveBar
@@ -307,37 +308,146 @@ def market_on_close_reason(signal_at,frame_ms,now,reference,mark,max_age_ms=90_0
     return None
 
 
-def ntd_management_plan(side,bars,teeth,lips,ao,ac,tick,opened_at,state=None):
-    """NTD PDF115-120. Fast Lips selection takes effect on the NEXT bar.
+def _ntd_source_exact_zone_stop(extreme, tick, sign):
+    """NTD PDF94–96: one *actual* Binance PRICE_FILTER tick beyond source H1 bar.
 
-    Chart angles depend on zoom; fast movement is explicitly formalized as a
-    favourable 5-bar percentage-price slope steeper than the Lips slope.
-    Five joint zone bars permanently select the one-bar protective ratchet.
+    No float rounding: an off-grid source low/high cannot be silently shifted
+    to make a plausible book STOP. This is a research-level proposal only.
     """
-    state=dict(state or {})
-    n=len(bars); sign=1 if side=="LONG" else -1
-    if side not in {"LONG","SHORT"} or n<6 or not valid_edition_bars(bars) or tick<=0 or opened_at<=0:
-        return {"state":state,"exit_reason":"","stop":None}
-    if any(len(v)!=n for v in (teeth,lips,ao,ac)):
-        return {"state":state,"exit_reason":"","stop":None}
-    if bars[-1].t+3_600_000<=opened_at:
-        return {"state":state,"exit_reason":"","stop":None}
-    run=0
+    if sign not in {1, -1}:
+        return None
+    try:
+        price, step = Decimal(str(extreme)), Decimal(str(tick))
+        if not (price.is_finite() and step.is_finite()) or price <= 0 or step <= 0 or price % step:
+            return None
+        level = price - step if sign == 1 else price + step
+        return float(level) if level > 0 and level.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError, OverflowError):
+        return None
+
+
+def _ntd_zone_candle_fingerprint(bar):
+    return "|".join(str(float(v)) for v in (bar.o, bar.h, bar.l, bar.c, bar.v))
+
+
+def ntd_management_plan(side,bars,teeth,lips,ao,ac,tick,opened_at,state=None):
+    """Read-only NTD source exit and sticky fifth-zone STOP advisory.
+
+    NTD pp.94–96: after five consecutive AO+AC zone bars, start one tick
+    beyond that fifth candle; tighten after each subsequent CLOSED candle
+    regardless of AO/AC colour. A historical stop hit is ambiguous on OHLC
+    alone, so never fabricate an actual Binance fill or continuation.
+
+    This mirrors native Kotlin williamsNtdManagementPlan; an exchange STOP
+    can be proved only by authenticated Binance order records.
+    """
+    state = dict(state or {})
+    empty = lambda: {"state":state, "exit_reason":"", "stop":None}
+    n = len(bars)
+    sign = 1 if side == "LONG" else -1
+    h1 = 3_600_000
+    if (side not in {"LONG", "SHORT"} or n < 6 or
+            not valid_edition_bars(bars) or
+            not isinstance(tick, (int, float)) or not isfinite(tick) or tick <= 0 or
+            opened_at <= 0 or any(len(v) != n for v in (teeth,lips,ao,ac))):
+        return empty()
+    if (any(b.t <= 0 or b.t % h1 for b in bars) or
+            any(b.t-a.t != h1 for a,b in zip(bars,bars[1:]))):
+        state["zone_book_evidence"] = "NTD_H1_HISTORY_GAP"
+        return empty()
+    if bars[-1].t + h1 <= opened_at:
+        return empty()
+
+    # A previous observer position cannot lend its STOP and wave source time
+    # to a newly opened paper campaign.
+    old_activation = int(state.get("zone_active_at",0) or 0)
+    if old_activation and old_activation + h1 <= opened_at:
+        for key in ("zone_active_at","zone_book_stop","zone_book_stop_source_time_ms",
+                    "zone_book_last_checked_at_ms","zone_book_last_checked_ohlcv",
+                    "zone_historical_stop_touch_at_ms","zone_book_evidence"):
+            state.pop(key,None)
+
+    run = 0
     for i in range(1,n):
-        if bars[i].t+3_600_000<=opened_at:continue
-        run=run+1 if all(isfinite(v) for v in (ao[i],ao[i-1],ac[i],ac[i-1])) and sign*(ao[i]-ao[i-1])>0 and sign*(ac[i]-ac[i-1])>0 else 0
-        if run>=5:state.setdefault("zone_active_at",bars[i].t)
-    stop=None;reason=""
-    if state.get("zone_active_at",0)>0:
-        stop=bars[-1].l-tick if sign==1 else bars[-1].h+tick
-    else:
-        activated=int(state.get("lips_selected_at",0) or 0)
-        use_lips=0<activated<bars[-1].t
-        line=lips[-1] if use_lips else teeth[-1]
-        if isfinite(line) and line>0 and sign*(bars[-1].c-line)<0:
-            reason="LIPS_CLOSE_EXIT" if use_lips else "TEETH_CLOSE_EXIT"
-        if not activated and isfinite(lips[-6]) and isfinite(lips[-1]) and lips[-6]>0:
-            price_slope=sign*(bars[-1].c/bars[-6].c-1)
-            lips_slope=sign*(lips[-1]/lips[-6]-1)
-            if price_slope>max(0,lips_slope):state["lips_selected_at"]=bars[-1].t
-    return {"state":state,"exit_reason":reason,"stop":stop}
+        if bars[i].t + h1 <= opened_at:
+            continue
+        run = (run + 1 if
+            all(isfinite(v) for v in (ao[i],ao[i-1],ac[i],ac[i-1])) and
+            sign*(ao[i]-ao[i-1]) > 0 and sign*(ac[i]-ac[i-1]) > 0 else 0)
+        if run >= 5 and not state.get("zone_active_at"):
+            state["zone_active_at"] = bars[i].t
+
+    if state.get("zone_active_at",0):
+        activation = int(state["zone_active_at"])
+        activation_i = next((i for i,b in enumerate(bars) if b.t==activation),-1)
+        replay_stop = None
+        replay_source = activation
+
+        if activation_i>=0:
+            replay_start=activation_i
+        else:
+            # The earlier fifth bar has rolled out of the local H1 window.
+            # A bare persisted stop is not acceptable proof of its source.
+            checked_at=int(state.get("zone_book_last_checked_at_ms",0) or 0)
+            cursor=next((i for i,b in enumerate(bars) if b.t==checked_at),-1)
+            stored=state.get("zone_book_stop")
+            candle=bars[cursor] if cursor>=0 else None
+            if (candle is None or
+                state.get("zone_book_last_checked_ohlcv")!=
+                    _ntd_zone_candle_fingerprint(candle) or
+                not isinstance(stored,(int,float)) or not isfinite(stored) or
+                stored<=0 or
+                _ntd_source_exact_zone_stop(stored,tick,-sign) is None):
+                state["zone_book_evidence"]="NTD_ZONE_HISTORY_WINDOW_UNVERIFIED"
+                return empty()
+            replay_stop=float(stored)
+            replay_source=int(state.get("zone_book_stop_source_time_ms",checked_at))
+            replay_start=cursor+1
+
+        for i in range(replay_start,n):
+            bar=bars[i]
+            if ((activation_i<0 or i>replay_start) and replay_stop is not None and
+                    (bar.l <= replay_stop if sign==1 else bar.h >= replay_stop)):
+                state["zone_historical_stop_touch_at_ms"]=bar.t
+                state["zone_book_evidence"]="HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE"
+                state["zone_book_stop_authorized_order"]=False
+                return empty()
+
+            extreme=bar.l if sign==1 else bar.h
+            candidate=_ntd_source_exact_zone_stop(extreme,tick,sign)
+            if candidate is None:
+                state["zone_book_evidence"]="NTD_BOOK_PRICE_OFF_EXCHANGE_TICK_GRID"
+                state["zone_book_stop_authorized_order"]=False
+                return empty()
+            if replay_stop is None or sign*(candidate-replay_stop)>0:
+                replay_stop=candidate
+                replay_source=bar.t
+
+        prior=state.get("zone_book_stop")
+        if isinstance(prior,(int,float)) and isfinite(prior) and prior>0 and (
+                sign*(replay_stop-float(prior))<0):
+            state["zone_book_evidence"]="NTD_REPLAY_CONFLICTS_WITH_PERSISTED_STOP"
+            state["zone_book_stop_authorized_order"]=False
+            return empty()
+        state.update(
+            zone_book_stop=replay_stop,
+            zone_book_stop_source_time_ms=replay_source,
+            zone_book_last_checked_at_ms=bars[-1].t,
+            zone_book_last_checked_ohlcv=_ntd_zone_candle_fingerprint(bars[-1]),
+            zone_book_evidence=("REPLAYED_COMPLETE_CLOSED_H1_PATH" if activation_i>=0
+                  else "REPLAYED_FROM_DURABLE_CLOSED_BAR_CHECKPOINT"),
+            zone_book_rule="NTD_PDF94_96_FIVE_SAME_COLOUR_STICKY_CLOSED_BAR",
+            zone_book_stop_authorized_order=False)
+        return {"state":state,"exit_reason":"","stop":replay_stop}
+
+    activated=int(state.get("lips_selected_at",0) or 0)
+    use_lips=0<activated<bars[-1].t
+    line=lips[-1] if use_lips else teeth[-1]
+    reason=("LIPS_CLOSE_EXIT" if use_lips else "TEETH_CLOSE_EXIT") if (
+        isfinite(line) and line>0 and sign*(bars[-1].c-line)<0) else ""
+    if (not activated and isfinite(lips[-6]) and isfinite(lips[-1]) and lips[-6]>0):
+        price_slope=sign*(bars[-1].c/bars[-6].c-1)
+        lips_slope=sign*(lips[-1]/lips[-6]-1)
+        if price_slope>max(0,lips_slope):
+            state["lips_selected_at"]=bars[-1].t
+    return {"state":state,"exit_reason":reason,"stop":None}
