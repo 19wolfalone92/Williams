@@ -49,9 +49,8 @@ def get_ao(values,side,flags="correct"):
 def test_ntd_ao_saucer_respects_real_numerical_colour_not_cached_flags(side,flags):
     # Figure 5-4/5-15: at least one colour-changing trough with a new AO
     # confirming the reversal; cached green/red flags are not source truth.
-    values=[0.7,0.6,0.4,0.5] if side=="LONG" else [-0.7,-0.6,-0.4,-0.5]
-    # frame() mirrors SHORT, so LONG oscillator values are reused for SHORT:
-    values=[0.7,0.6,0.4,0.5] if side=="LONG" else [0.7,0.6,0.4,0.5]
+    # frame() mirrors AO sign for SHORT so same source magnitudes suffice.
+    values=[0.7,0.6,0.4,0.5]
     observed=get_ao(values,side,flags)
     assert len(observed)==1
     assert observed[0].signal_type==SignalType.AO_SAUCER
@@ -83,16 +82,10 @@ def test_ntd_ao_twin_peaks_rejects_forged_current_green_and_zero_between_peaks(s
 
 
 @pytest.mark.parametrize("side",["LONG","SHORT"])
-@pytest.mark.parametrize("oscillator,expected",[
-    ([-0.40,-0.50,-0.20,-0.10],False),  # three rising, against-side -> should qualify
-    ([-0.40,-0.50,-0.20,0.10],True),  # crossed above zero on second rising AC
-])
-def test_ntd_ac_crossing_zero_is_not_a_standalone_signal(side,oscillator,expected):
-    # Exact source fixture is asserted below; this test ensures numerical
-    # crossing alone does not authorize a colourless signal.
-    values=oscillator if side=="LONG" else [-v for v in oscillator]
-    rows=frame(values,side,signal="ac")
-    # No signal when no previous opposite-colour bar
+def test_ntd_ac_zero_cross_alone_cannot_create_an_entry(side):
+    # Two or three directional bars must follow a confirmed colour reversal.
+    # A numerical zero crossing with an all-green/all-red run but without a
+    # visible opposite-colour base never counts as a new source formation.
     only_cross=frame([-0.5,-0.2,0.1,0.2],side,signal="ac")
     assert extract_ntd_ac_signal_specs("BTCUSDT",only_cross,side=side,
         timeframe="1h",tick_size=.1)==[]
