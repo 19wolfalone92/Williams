@@ -113,3 +113,32 @@ def test_ntd_ac_source_number_of_colours_and_signal_bar_tick(side,signal_kind,va
     altered.loc[len(df)-1,"ac"]=altered.loc[len(df)-2,"ac"]
     assert extract_ntd_ac_signal_specs(
         "BTCUSDT",altered,side=side,timeframe="1h",tick_size=.1)==[]
+
+
+def test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_flags():
+    import json
+    from pathlib import Path
+    corpus=json.loads((Path(__file__).resolve().parents[1] /
+        "app/src/test/resources/williams_ntd_source_colour_contract.json").read_text())
+    assert corpus["schema"]=="NTD_AO_AC_SOURCE_COLOUR_CONTRACT_V1"
+    assert len(corpus["ao"])>=16 and len(corpus["ac"])>=16
+    for case in corpus["ao"]:
+        values=[float(v) for v in case["values"]]
+        # The actual signed AO values are already mirrored in shared fixture.
+        # Labels are deliberately inverted. No raw numeric confirmation means
+        # the source status must not be accepted from stale cache flags.
+        ind=frame(values,"LONG",signal="ao",flags="inverted")
+        observed=extract_ntd_ao_signal_specs("ETHUSDT",ind,
+            side=case["side"],timeframe="1h",tick_size=.1,
+            include_pending_ao=False)
+        actual=observed[0].signal_type.value if observed else None
+        assert actual==case["expected"],case
+        assert len(observed)<=1
+    for case in corpus["ac"]:
+        values=[float(v) for v in case["values"]]
+        ind=frame(values,"LONG",signal="ac")
+        observed=extract_ntd_ac_signal_specs("ETHUSDT",ind,
+            side=case["side"],timeframe="1h",tick_size=.1)
+        actual=observed[0].signal_type.value if observed else None
+        assert actual==case["expected"],case
+        assert len(observed)<=1
