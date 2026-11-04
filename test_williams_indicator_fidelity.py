@@ -142,7 +142,8 @@ def test_wm3_consumers_use_actual_confirmation_and_whole_plateau_stop():
     assert len(specs) == 1
     assert specs[0].signal_bar_time_ms == ind.iloc[6]["open_time_ms"]
     assert specs[0].trigger_price == 12.1
-    assert specs[0].protective_reference == 10.0
+    assert specs[0].protective_reference == 9.9  # exact source STOP below NTD plateau low
+    assert specs[0].strategy_profile == "NTD_FIVE_DIMENSIONS"
 
 
 def test_alligator_decision_lines_match_forward_shifted_chart_values():
