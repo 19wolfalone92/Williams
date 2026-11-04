@@ -1726,7 +1726,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill() {
+    @Test fun confirmedBookOppositeExitFlattensEvenLosingOwnedPositionWithStopHeldUntilFill() {
         val h=3_600_000L
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             var time=System.currentTimeMillis()-4*h
@@ -1742,10 +1742,12 @@ class NativeFuturesCoordinatorLifecycleTest {
             val signalAt=time-2*h
             val observed=time-1_000L
             val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
-            // Book-opposite signal can flatten only once old campaign is
-            // in genuine positive mark-to-entry territory after cost reserves.
+            // TC2 p.154/158: no positive-PnL prerequisite. The CLOSED
+            // H1 Wise-Man trigger, not a loss amount, controls the exit.
             val trigger=if(direction.name=="LONG") 110.0 else 90.0
             exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
+            // A price that has NOT crossed the opposite stop is insufficient.
+            exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
             val signalId="BOOK:OPPOSITE:"+direction.name
             val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
                 .put("basis","CLOSED_BAR_EXTREME")
@@ -1764,27 +1766,24 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("observed_at_ms",observed).put("opposition_check",decision))
             coordinator.saveManagementState("BTCUSDT",clientId,management)
             val postsBefore=exchange.posts("/fapi/v1/order")
-            // Even a fully confirmed opposite Wise-Man breakout cannot
-            // cause an early loss-taking market exit. Keep the exchange SL.
-            val premature=coordinator.closePosition("BTCUSDT",direction,"1",
-                "W2X_PREMATURE_"+direction.name,reason)
-            assertFalse(premature.toString(),premature.optBoolean("ok",false))
-            assertEquals("TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE",
-                premature.optString("blocker"))
+            // No MARKET exit before the *actual CONTRACT* crosses the
+            // opposing H1 stop; preserve the original exchange STOP.
+            val notTriggered=coordinator.closePosition("BTCUSDT",direction,"1",
+                "W2X_NOT_TRIGGERED_"+direction.name,reason)
+            assertFalse(notTriggered.toString(),notTriggered.optBoolean("ok",false))
+            assertEquals("TC2_OPPOSITE_EXIT_TRIGGER_NOT_CURRENT_AND_PROVEN",
+                notTriggered.optString("blocker"))
             assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
             assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
-            exchange.mark=if(direction.name=="LONG") 108.0 else 92.0
-            exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
-            val markOnly=coordinator.closePosition("BTCUSDT",direction,"1",
-                "W2X_MARK_ONLY_"+direction.name,reason)
-            assertFalse(markOnly.toString(),markOnly.optBoolean("ok",false))
-            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
-            exchange.contract=if(direction.name=="LONG") 108.0 else 92.0
+            // At this price the original LONG / SHORT is actually LOSING.
+            // Triggered opposite exit must be allowed, but only after all
+            // signed owner, exact quantity and signal checks have succeeded.
+            exchange.contract=if(direction.name=="LONG") 99.0 else 101.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
-                "W2X_BOOK_"+direction.name,reason)
+                "W2X_BOOK_AT_LOSS_"+direction.name,reason)
             assertTrue(result.toString(),result.optBoolean("ok",false))
             assertEquals(postsBefore+1,exchange.posts("/fapi/v1/order"))
             assertEquals(0.0,exchange.quantity,0.0)
