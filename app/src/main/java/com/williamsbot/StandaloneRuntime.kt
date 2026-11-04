@@ -6720,7 +6720,12 @@ private class NativeEngine(
                         (if(dir=="LONG") quote<=opposing.triggerPrice else quote>=opposing.triggerPrice)
                 }==true)
             val exchangeEntryForExit=row.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
-            val oppositeProfitBlocker=if(profile in williamsSourceProfiles)
+            // TC2 ch.12 (PDF pp.153-165) authorizes an opposite Wise Man
+            // breakout even if the old campaign is not profitable. The
+            // project's positive-after-cost overlay is NOT a TC2 exit rule.
+            // Keep it for independent non-TC2 research profiles only.
+            val oppositeProfitBlocker=if(profile in williamsSourceProfiles &&
+                profile!=williamsTc2Profile)
                 williamsTc2OppositeExitProfitBlocker(dir,exchangeEntryForExit,mark,
                     2.0*feeBufferPerSidePct+maxSlippagePct,rules.tick) else null
             val actionableOpposing = opposing?.takeIf {
@@ -6747,7 +6752,7 @@ private class NativeEngine(
                         .put("signal_id",opposing.signalId).put("source",opposing.strategyProfile)
                         .put("observed_at_ms",futuresMarketData.exchangeNowMs())
                         .put("profit_exit_blocker",oppositeProfitBlocker ?: JSONObject.NULL)
-                        .put("policy_note","OPPOSITE_SETUP_IS_WARNING_UNTIL_PROFITABLE_BOOK_EXIT")
+                        .put("policy_note","OPPOSITE_EXIT_REQUIRES_AUTHENTICATED_TRIGGER_NOT_PROFIT")
                         .put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
