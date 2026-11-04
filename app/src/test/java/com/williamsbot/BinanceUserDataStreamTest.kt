@@ -29,7 +29,7 @@ class BinanceUserDataStreamTest {
 
 
     @Test
-    fun failingPrivateListenKeyPreservesRealNetworkErrorInReconnectingHealth() {
+    fun failingPrivateListenKeyRetainsCategoryWithoutDisclosingTransportDetail() {
         val disconnects = LinkedBlockingQueue<String>()
         val http = OkHttpClient.Builder().addInterceptor {
             throw java.io.IOException("demo-fapi private transport unreachable")
@@ -43,13 +43,28 @@ class BinanceUserDataStreamTest {
             stream.start()
             val initialFailure = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
             val reconnectStatus = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
-            assertTrue(initialFailure.contains("demo-fapi private transport unreachable"))
-            assertTrue(reconnectStatus.contains("demo-fapi private transport unreachable"))
+            assertTrue(initialFailure.contains("PRIVATE_STREAM_IO_FAILURE:IOException"))
+            assertTrue(reconnectStatus.contains("PRIVATE_STREAM_IO_FAILURE:IOException"))
+            assertFalse(initialFailure.contains("demo-fapi private transport unreachable"))
+            assertFalse(reconnectStatus.contains("demo-fapi private transport unreachable"))
             assertFalse(reconnectStatus == "reconnecting")
             assertFalse(stream.isConnected())
         } finally {
             stream.stop()
         }
+    }
+
+    @Test fun secretsInPrivateTransportExceptionsNeverReachHealthOrZip() {
+        val poisoned = java.io.IOException(
+            "wss://demo-fstream.binance.com/private/ws?listenKey=SECRET&signature=SECRET"
+        )
+        val safe = futuresPrivateStreamFailureCategory(poisoned)
+        assertTrue(safe.contains("PRIVATE_STREAM_IO_FAILURE"))
+        assertFalse(safe.contains("listenKey"))
+        assertFalse(safe.contains("SECRET"))
+        assertFalse(safe.contains("demo-fstream"))
+        assertTrue(futuresPrivateStreamFailureCategory(java.net.SocketTimeoutException("token=hidden"))
+            .contains("TIMEOUT"))
     }
 
     @Test
