@@ -174,8 +174,20 @@ class BinanceUserDataStream(
                                 return
                             }
                             connected = true
-                            delayMs = 1000L
-                            onConnection(true, null)
+                            // A caller callback can fail during concurrent Android
+                            // shutdown/recovery. Never let it crash OkHttp's
+                            // callback thread or certify a half-open session.
+                            try {
+                                onConnection(true, null)
+                                delayMs = 1000L
+                            } catch (failure: Exception) {
+                                connected = false
+                                reconnectCause.compareAndSet(null,
+                                    "PRIVATE_STREAM_CONNECTION_CALLBACK_FAILED:" +
+                                        failure.javaClass.simpleName)
+                                webSocket.cancel()
+                                closed.countDown()
+                            }
                         }
 
                         override fun onMessage(webSocket: WebSocket, text: String) {
