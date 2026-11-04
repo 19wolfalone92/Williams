@@ -453,10 +453,11 @@
         "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::sourceFractalTriggerAndProtectionAreExactlyOneExchangeTick",
         "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::hundredLaterClosedHoursDoNotExpireUntouchedSourceFractal",
         "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::offGridSourceAndOffGridStructuralStopFailClosed",
-        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::sourceFractalBreakoutWhileOfflineNeverArmsStaleStop"
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::sourceFractalBreakoutWhileOfflineNeverArmsStaleStop",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_profile_cannot_add_second_tick_to_already_protected_fractal"
       ],
       "fixtures": [],
-      "remaining_evidence": "NTD original PDF43 (first outside confirmed fractal; persists until crossed or superseded) is bounded-tested via mirrored Python/Kotlin original H1 sources. One PRICE_FILTER tick beyond both the initial price extreme and structural stop, two-right-bar confirmation, >100 H1 aging, off-grid source and offline breakout are covered. Author chart exhaustive digitization, discretionary sleeping-Alligator interpretation and signed Binance Demo STOP/entry/recovery still unverified.",
+      "remaining_evidence": "NTD original PDF43: first external confirmed fractal with two closed right H1 bars, stable untriggered price, exact original one PRICE_FILTER tick for entry AND STOP. Python raw, wrapped profile (no double stop tick) and native Android mirror are bounded-tested; post-confirmation breakout and malformed grid fail closed. All actual source figures, sleeping Alligator discretionary interpretation and signed Binance Demo STOP lifecycle remain unverified.",
       "can_place_orders_from_registry": false
     },
     {
