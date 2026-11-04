@@ -4542,22 +4542,29 @@ private class NativeEngine(
             val startedAt = System.currentTimeMillis()
             try {
                 performScan()
-                // The campaign scanner may deliberately finish in PARTIAL_BLOCKED,
-                // FAILED, or BLOCKED_*; do not overwrite that decision with READY.
-                if (scannerState == "RUNNING") scannerState = "READY"
-                if (scannerState == "READY") {
-                    scannerError = null
-                    lastError = null
-                }
+                // End-state publication belongs to the synchronized finally
+                // block. Publishing READY while scanning=true produced a real
+                // exported diagnostic contradiction (2026-11-04: READY, 10/10,
+                // scanning=true) even though the completed cached scan was healthy.
             } catch (x: Exception) {
                 scannerState = "FAILED"
                 scannerError = x.javaClass.simpleName + ": " + (x.message ?: "")
                 lastError = scannerError
             } finally {
-                lastScanDurationMs = System.currentTimeMillis() - startedAt
-                lastScanAt = System.currentTimeMillis()
-                scanning = false
-                scanLastProgressAt = System.currentTimeMillis()
+                synchronized(this) {
+                    val finishedAt = System.currentTimeMillis()
+                    lastScanDurationMs = finishedAt - startedAt
+                    lastScanAt = finishedAt
+                    scanLastProgressAt = finishedAt
+                    scanning = false
+                    // The campaign scanner may deliberately finish as
+                    // PARTIAL_BLOCKED, FAILED or READY_BLOCKED. Preserve it.
+                    if (scannerState == "RUNNING") scannerState = "READY"
+                    if (scannerState == "READY") {
+                        scannerError = null
+                        lastError = null
+                    }
+                }
             }
         }.also {
             it.isDaemon = true
@@ -10873,6 +10880,7 @@ private class NativeEngine(
         }
     }
 
+    @Synchronized
     private fun scannerSnapshot(): JSONObject =
         JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
@@ -11713,24 +11721,38 @@ private class NativeEngine(
                 "; event age is informational because an idle account may produce no private events"
         )
         test("history_ready", "database", historyReady, "WARN", if (historyReady) "Market history is ready" else "history_state=" + historyState + "; error=" + (historyLastError ?: "pending"))
-        val scannerProgressAgeMs = (System.currentTimeMillis() - scanLastProgressAt).coerceAtLeast(0L)
-        val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()
-        val scannerComplete = scannerState in setOf("READY", "READY_BLOCKED") &&
-            !scanning && scannerUniverseMatches &&
-            scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size
+        // A scanner transition must be observed atomically. The previous
+        // diagnostic mixed independent @Volatile READY/scanning/progress reads:
+        // a concurrently finishing scan was falsely warned as unhealthy.
+        val scannerView = scannerSnapshot()
+        val scanObservedState = scannerView.optString("scanner_state")
+        val scanObservedRunning = scannerView.optBoolean("scanning")
+        val scanObservedProgress = scannerView.optInt("progress_symbols")
+        val scanObservedCount = scannerView.optInt("symbols_scanned")
+        // scan_symbols is an array of strings, not JSONObject records.
+        val observedSymbolsArray = scannerView.optJSONArray("scan_symbols")
+        val observedSymbols = if (observedSymbolsArray == null) emptyList() else
+            (0 until observedSymbolsArray.length()).map { observedSymbolsArray.optString(it) }
+        val scanObservedAt = scannerView.optLong("last_progress_at")
+        val scannerProgressAgeMs = (System.currentTimeMillis() - scanObservedAt).coerceAtLeast(0L)
+        val scannerUniverseMatches = observedSymbols.size == coreSymbols.size &&
+            observedSymbols.toSet() == coreSymbols.toSet()
+        val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&
+            !scanObservedRunning && scannerUniverseMatches &&
+            scanObservedProgress == coreSymbols.size && scanObservedCount == coreSymbols.size
         val scannerStartupGrace = scanStartedAt > 0L &&
             System.currentTimeMillis() >= scanStartedAt &&
             System.currentTimeMillis() - scanStartedAt <= 15_000L
-        val scannerActivelyProgressing = scannerState == "RUNNING" && scanning && scannerUniverseMatches &&
-            scanProgressSymbols in 0..coreSymbols.size &&
-            (scannerProgressAgeMs <= 60_000L || (scanProgressSymbols == 0 && scannerStartupGrace))
+        val scannerActivelyProgressing = scanObservedState == "RUNNING" && scanObservedRunning && scannerUniverseMatches &&
+            scanObservedProgress in 0..coreSymbols.size &&
+            (scannerProgressAgeMs <= 60_000L || (scanObservedProgress == 0 && scannerStartupGrace))
         test(
             "scanner_state", "scanner", scannerComplete || scannerActivelyProgressing,
-            scannerFailureSeverity(running, historyReady, scanning, scannerState),
-            "state=" + scannerState + "; complete=" + scannerComplete +
-                "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scanRunId +
-                "; progress=" + scanProgressSymbols + "/" + scanSymbols.size +
-                "; last_symbols_scanned=" + lastSymbolsScanned + "; age_ms=" + scannerProgressAgeMs
+            scannerFailureSeverity(running, historyReady, scanObservedRunning, scanObservedState),
+            "state=" + scanObservedState + "; complete=" + scannerComplete +
+                "; universe_matches=" + scannerUniverseMatches + "; run_id=" + scannerView.optString("run_id") +
+                "; progress=" + scanObservedProgress + "/" + observedSymbols.size +
+                "; last_symbols_scanned=" + scanObservedCount + "; age_ms=" + scannerProgressAgeMs
         )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
         test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=0.03; baseline readiness is checked separately by daily_risk_baseline")

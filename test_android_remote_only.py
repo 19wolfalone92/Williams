@@ -872,11 +872,18 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
 
     # Assert the real production diagnostic contract. The old embedded diagnostic
     # self-test was removed when readiness moved into the regular runtime snapshot.
-    assert "val scannerUniverseMatches = scanSymbols.size == coreSymbols.size && scanSymbols.toSet() == coreSymbols.toSet()" in runtime
-    assert 'val scannerComplete = scannerState in setOf("READY", "READY_BLOCKED") &&' in runtime
-    assert "!scanning && scannerUniverseMatches" in runtime
-    assert "scanProgressSymbols == coreSymbols.size && lastSymbolsScanned == coreSymbols.size" in runtime
+    # Read-only diagnostic fields now come from one synchronized scanner
+    # snapshot. READY must never be published before scanning=false.
+    assert "@Synchronized\n    private fun scannerSnapshot(): JSONObject" in runtime
+    assert "val scannerView = scannerSnapshot()" in runtime
+    assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
+    assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
+    assert "!scanObservedRunning && scannerUniverseMatches" in runtime
+    assert "scanObservedProgress == coreSymbols.size && scanObservedCount == coreSymbols.size" in runtime
     assert "scannerProgressAgeMs <= 60_000L" in runtime
+    assert 'scanObservedState == "RUNNING" && scanObservedRunning' in runtime
+    transition=runtime.split("val finishedAt = System.currentTimeMillis()",1)[1].split("scanLastProgressAt = finishedAt",1)[1]
+    assert transition.index("scanning = false") < transition.index('scannerState = "READY"')
     assert 'scannerState == "READY" || (scannerState == "RUNNING"' not in runtime
 
 
