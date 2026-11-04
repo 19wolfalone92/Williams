@@ -19,17 +19,23 @@ import java.util.concurrent.TimeUnit
 class BinanceUserDataStreamTest {
     private class TestSocket(private val original: Request) : WebSocket {
         @Volatile var cancelled = false
+        @Volatile var lastCloseCode = 0
+        @Volatile var lastCloseReason = ""
         override fun request(): Request = original
         override fun queueSize(): Long = 0L
         override fun send(text: String): Boolean = true
         override fun send(bytes: ByteString): Boolean = true
-        override fun close(code: Int, reason: String?): Boolean = true
+        override fun close(code: Int, reason: String?): Boolean {
+            lastCloseCode = code
+            lastCloseReason = reason.orEmpty()
+            return true
+        }
         override fun cancel() { cancelled = true }
     }
 
 
     @Test
-    fun failingPrivateListenKeyPreservesRealNetworkErrorInReconnectingHealth() {
+    fun failingPrivateListenKeyRetainsCategoryWithoutDisclosingTransportDetail() {
         val disconnects = LinkedBlockingQueue<String>()
         val http = OkHttpClient.Builder().addInterceptor {
             throw java.io.IOException("demo-fapi private transport unreachable")
@@ -43,13 +49,28 @@ class BinanceUserDataStreamTest {
             stream.start()
             val initialFailure = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
             val reconnectStatus = requireNotNull(disconnects.poll(5L, TimeUnit.SECONDS))
-            assertTrue(initialFailure.contains("demo-fapi private transport unreachable"))
-            assertTrue(reconnectStatus.contains("demo-fapi private transport unreachable"))
+            assertTrue(initialFailure.contains("PRIVATE_STREAM_IO_FAILURE:IOException"))
+            assertTrue(reconnectStatus.contains("PRIVATE_STREAM_IO_FAILURE:IOException"))
+            assertFalse(initialFailure.contains("demo-fapi private transport unreachable"))
+            assertFalse(reconnectStatus.contains("demo-fapi private transport unreachable"))
             assertFalse(reconnectStatus == "reconnecting")
             assertFalse(stream.isConnected())
         } finally {
             stream.stop()
         }
+    }
+
+    @Test fun secretsInPrivateTransportExceptionsNeverReachHealthOrZip() {
+        val poisoned = java.io.IOException(
+            "wss://demo-fstream.binance.com/private/ws?listenKey=SECRET&signature=SECRET"
+        )
+        val safe = futuresPrivateStreamFailureCategory(poisoned)
+        assertTrue(safe.contains("PRIVATE_STREAM_IO_FAILURE"))
+        assertFalse(safe.contains("listenKey"))
+        assertFalse(safe.contains("SECRET"))
+        assertFalse(safe.contains("demo-fstream"))
+        assertTrue(futuresPrivateStreamFailureCategory(java.net.SocketTimeoutException("token=hidden"))
+            .contains("TIMEOUT"))
     }
 
     @Test
@@ -110,6 +131,49 @@ class BinanceUserDataStreamTest {
         } finally {
             stream.stop()
         }
+    }
+
+    @Test fun failingConnectedCallbackInvalidatesSocketAndRetriesWithoutClaimingReady() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val callbacks = java.util.concurrent.atomic.AtomicInteger()
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" },
+            { connected, _ ->
+                if (connected && callbacks.incrementAndGet() == 1)
+                    throw IllegalStateException("secret-not-to-log")
+            }, { },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, first) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            first.onOpen(old, socketResponse(old.request()))
+            assertTrue(old.cancelled)
+            assertFalse(stream.isConnected())
+            val (next, second) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            second.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+            org.junit.Assert.assertEquals(2, callbacks.get())
+        } finally { stream.stop() }
+    }
+
+    @Test fun invalidOrOversizedPeerClosingReasonCannotCrashPrivateSocketWorker() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" }, { _, _ -> }, { },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(old, socketResponse(old.request()))
+            // 1006 is reserved and can be observed in a synthetic transport
+            // callback, but MUST NOT be used as an outgoing OkHttp close code.
+            listener.onClosing(old, 1006, "private listenKey=NEVER_ECHO".repeat(100))
+            org.junit.Assert.assertEquals(1000, old.lastCloseCode)
+            org.junit.Assert.assertEquals("client_reconnect", old.lastCloseReason)
+            val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            nextListener.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+        } finally { stream.stop() }
     }
 
     @Test

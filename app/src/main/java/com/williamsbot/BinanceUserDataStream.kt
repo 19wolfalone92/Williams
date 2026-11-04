@@ -31,6 +31,19 @@ internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean =
     event.optString("e") in setOf("listenKeyExpired", "serverShutdown")
 
 /**
+ * An exception message can contain the private WebSocket URL with a listenKey,
+ * or a signed HTTP request. Preserve the actionable FAILURE CATEGORY only.
+ * No raw transport/peer text may enter persistent diagnostics or exports.
+ */
+internal fun futuresPrivateStreamFailureCategory(failure: Throwable): String = when (failure) {
+    is java.net.UnknownHostException -> "PRIVATE_STREAM_DNS_FAILURE"
+    is java.net.SocketTimeoutException -> "PRIVATE_STREAM_TIMEOUT"
+    is javax.net.ssl.SSLException -> "PRIVATE_STREAM_TLS_FAILURE"
+    is java.io.IOException -> "PRIVATE_STREAM_IO_FAILURE:" + failure.javaClass.simpleName
+    else -> "PRIVATE_STREAM_FAILURE:" + failure.javaClass.simpleName
+}
+
+/**
  * USDⓈ-M Futures Demo user-data stream.
  *
  * A Futures listenKey is created and renewed over the Futures REST API. User events
@@ -161,8 +174,20 @@ class BinanceUserDataStream(
                                 return
                             }
                             connected = true
-                            delayMs = 1000L
-                            onConnection(true, null)
+                            // A caller callback can fail during concurrent Android
+                            // shutdown/recovery. Never let it crash OkHttp's
+                            // callback thread or certify a half-open session.
+                            try {
+                                onConnection(true, null)
+                                delayMs = 1000L
+                            } catch (failure: Exception) {
+                                connected = false
+                                reconnectCause.compareAndSet(null,
+                                    "PRIVATE_STREAM_CONNECTION_CALLBACK_FAILED:" +
+                                        failure.javaClass.simpleName)
+                                webSocket.cancel()
+                                closed.countDown()
+                            }
                         }
 
                         override fun onMessage(webSocket: WebSocket, text: String) {
@@ -182,8 +207,7 @@ class BinanceUserDataStream(
                                 runCatching { onEvent(event) }
                                     .onFailure {
                                         connected = false
-                                        val detail = "event_handler_failed: " +
-                                            (it.message ?: it.javaClass.simpleName)
+                                        val detail = "event_handler_failed:" + it.javaClass.simpleName
                                         reconnectCause.compareAndSet(null, detail)
                                         onConnection(false, detail)
                                         // A failed account/order event means the local view can no
@@ -206,8 +230,8 @@ class BinanceUserDataStream(
                                 }
                             } else if (message.has("code") || message.has("error")) {
                                 connected = false
-                                val detail = "Futures user stream error: " +
-                                    message.optString("msg", message.optString("error", "unknown"))
+                                val detail = "PRIVATE_STREAM_EXCHANGE_ERROR_CODE:" +
+                                    message.optInt("code", -1)
                                 reconnectCause.compareAndSet(null, detail)
                                 onConnection(false, detail)
                                 closed.countDown()
@@ -222,11 +246,16 @@ class BinanceUserDataStream(
                         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            val detail = "closing: " + code + ": " +
-                                (reason.ifBlank { "none" })
+                            val detail = "closing:" + code
                             reconnectCause.compareAndSet(null, detail)
                             onConnection(false, detail)
-                            webSocket.close(code, reason)
+                            // Peer-supplied status/reason are NOT safe arguments for
+                            // OkHttp's outgoing close: 1005/1006/1015 and an
+                            // oversized reason throw IllegalArgumentException on
+                            // the callback thread, which can crash the whole app.
+                            // Reply with a known-valid code and short local reason.
+                            runCatching { webSocket.close(1000, "client_reconnect") }
+                                .onFailure { webSocket.cancel() }
                             // A peer may never deliver onClosed after onClosing
                             // (mobile radio loss, stalled TCP close handshake).
                             // Release this session NOW; reconnect will first
@@ -237,8 +266,7 @@ class BinanceUserDataStream(
                         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            val detail = "closed: " + code + ": " +
-                                (reason.ifBlank { "none" })
+                            val detail = "closed:" + code
                             reconnectCause.compareAndSet(null, detail)
                             onConnection(false, detail)
                             closed.countDown()
@@ -247,7 +275,7 @@ class BinanceUserDataStream(
                         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                             if (!acceptsCallback(generation)) return
                             connected = false
-                            val detail = t.message ?: t.javaClass.simpleName
+                            val detail = futuresPrivateStreamFailureCategory(t)
                             reconnectCause.compareAndSet(null, detail)
                             onConnection(false, detail)
                             closed.countDown()
@@ -273,7 +301,7 @@ class BinanceUserDataStream(
                 break
             } catch (failure: Throwable) {
                 connected = false
-                val detail = failure.message ?: failure.javaClass.simpleName
+                val detail = futuresPrivateStreamFailureCategory(failure)
                 reconnectCause.compareAndSet(null, detail)
                 onConnection(false, detail)
             } finally {
@@ -323,7 +351,7 @@ class BinanceUserDataStream(
             return call.execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 check(response.isSuccessful) {
-                    "Futures listenKey request failed (HTTP " + response.code + "): " + body.take(240)
+                    "Futures listenKey request failed (HTTP " + response.code + ")"
                 }
                 body
             }
