@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import android.annotation.SuppressLint
 import android.app.Application
 import android.content.Context
 import android.os.Process
@@ -56,6 +57,9 @@ internal object AndroidCrashEvidence {
         }
     }
 
+    // On a fatal process exit apply() may never flush. One tiny synchronous
+    // write is intentional and only attempted in the crashing thread.
+    @SuppressLint("ApplySharedPref")
     private fun record(context: Context, failure: Throwable) {
         val safe = fingerprint(failure)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
