@@ -86,6 +86,7 @@ object AndroidRuntimeHealth {
                 android.os.SystemClock.elapsedRealtime()-RuntimeServiceState.lastGuardElapsedMs else JSONObject.NULL)
             .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)
             .put("continuity",continuity)
+            .put("fatal_java_crash", AndroidCrashEvidence.snapshot(context))
             .put("lifecycle_evidence",RuntimeServiceLifecycleAssessment.summarize(
                 continuity,System.currentTimeMillis()))
             .put("last_boot_startup_failure", RuntimeStartupEvidence.snapshot(context))
