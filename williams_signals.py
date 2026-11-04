@@ -976,7 +976,11 @@ def extract_ntd_fractal_signal_specs(
         teeth = float(confirmation.get("teeth_current", confirmation.get("teeth_shifted", 0.0)) or 0.0)
         if not all(math.isfinite(v) and v > 0 for v in (level, teeth)):
             continue
-        trigger = level + tick if is_long else level - tick
+        # Native Android computes the original +1/-1 exchange tick with
+        # BigDecimal, never a rounded float or silently off-grid source bar.
+        trigger = _source_exact_one_tick(level, tick, above=is_long)
+        if trigger is None:
+            continue
         current_teeth=float(ind.iloc[-1].get("teeth_current",ind.iloc[-1].get("teeth_shifted",0.0)) or 0.0)
         if not math.isfinite(current_teeth) or current_teeth<=0 or (
             trigger<=current_teeth if is_long else trigger>=current_teeth
@@ -1012,7 +1016,8 @@ def extract_ntd_fractal_signal_specs(
             if is_long
             else pd.to_numeric(group["high"], errors="coerce").max()
         )
-        if not math.isfinite(protective) or protective <= 0:
+        protective_stop = _source_exact_one_tick(protective, tick, above=not is_long)
+        if protective_stop is None or (trigger <= protective_stop if is_long else trigger >= protective_stop):
             continue
         return [SignalSpec.new(
             symbol=symbol,
@@ -1022,7 +1027,7 @@ def extract_ntd_fractal_signal_specs(
             timeframe=timeframe,
             signal_bar_time_ms=signal_time,
             trigger_price=trigger,
-            protective_reference=protective,
+            protective_reference=protective_stop,
             trigger_buffer_ticks=1,
             teeth_at_detection=teeth,
             alligator_bullish=bool(confirmation.get("bullish_alligator", False)),
