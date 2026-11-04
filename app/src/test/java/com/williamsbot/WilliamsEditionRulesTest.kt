@@ -5,6 +5,43 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun ntdSourceJawRecordAndSignalBarMustUseExactExchangePriceGrid() {
+        // New Trading Dimensions original PDF 103-108, figures 8-7 to 8-20:
+        // a read-right-to-left base plus one outside-Jaw record may signal.
+        // An off-grid source or structural STOP is never a Binance order.
+        for(side in listOf("LONG","SHORT")) {
+            val short=side=="SHORT"
+            fun series(highs:List<Double>,low:Double):List<WilliamsWaveBar> {
+                return highs.mapIndexed { i,h ->
+                    val base=WilliamsWaveBar((i+1L)*WILLIAMS_H1_MS,
+                        (h+low)/2.0,h,low,(h+low)/2.0,100.0)
+                    if(!short) base else base.copy(
+                        o=300.0-base.o,h=300.0-base.l,
+                        l=300.0-base.h,c=300.0-base.c)
+                }
+            }
+            val jaw=List(5){if(short) 294.0 else 6.0}
+            val teeth=List(5){if(short) 295.0 else 5.0}
+            val lips=List(5){if(short) 296.0 else 4.0}
+            val osc=(1..5).map { if(short) -it.toDouble() else it.toDouble() }
+            fun plan(heights:List<Double>,low:Double,tick:Double=0.1)=
+                williamsNtdBalanceLineSetup(side,series(heights,low),
+                    jaw,teeth,lips,osc,osc,tick)
+            val normal=listOf(14.0,13.0,12.0,11.0,10.0)
+            val valid=requireNotNull(plan(normal,8.0))
+            assertEquals(side,if(short) 288.9 else 11.1,valid.trigger,0.0)
+            assertEquals(side,if(short) 292.1 else 7.9,valid.stop,0.0)
+            assertEquals(4,valid.context.getInt("base_index"))
+            assertEquals(3,valid.context.getJSONArray("record_indices").getInt(0))
+            assertNull("Off-grid signal: "+side,
+                plan(listOf(14.0,13.0,12.0,11.05,10.0),8.0))
+            assertNull("Off-grid STOP: "+side,plan(normal,8.05))
+            for(invalid in listOf(0.0,-0.1,Double.NaN,Double.POSITIVE_INFINITY)) {
+                assertNull(side+" tick "+invalid,plan(normal,8.0,invalid))
+            }
+        }
+    }
+
     @Test fun courseAirbagPreservesFormationProtectionAndRejectsAlreadyCrossedBoundaries() {
         assertEquals(95.0,williamsCourseInitialProtection("LONG",95.0,90.0,100.0)!!,1e-10)
         assertEquals(97.0,williamsCourseInitialProtection("LONG",95.0,97.0,100.0)!!,1e-10)
