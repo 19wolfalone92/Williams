@@ -952,7 +952,8 @@ def test_ntd_external_fractal_is_initial_entry_and_requires_untriggered_breakout
     assert signals[0].role == SignalRole.ENTRY
     assert signals[0].signal_bar_time_ms == times[6]
     assert math.isclose(signals[0].trigger_price, 105.1)
-    assert math.isclose(signals[0].protective_reference, 99.0)
+    assert math.isclose(signals[0].protective_reference, 98.9)  # one original tick below source low
+    assert signals[0].strategy_profile == "NTD_FIVE_DIMENSIONS"
 
     # If any post-confirmation candle already touched the trigger, do not
     # resurrect that old conditional order after a scan/process gap.

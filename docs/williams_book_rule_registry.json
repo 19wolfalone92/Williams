@@ -433,20 +433,31 @@
         54
       ],
       "rule": "First external fractal starts the cycle after sleep; other dimensions follow that cycle. NTD PDF43: an untriggered valid fractal persists until trigger or a fresher valid fractal; no five-hour/eighty-bar lifetime.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_profiles.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
         "williams_ntd_execution.py",
-        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
+        "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt",
+        "williams_signals.py"
       ],
       "tests": [
         "tests/test_tc2_execution_observers.py::test_ntd_pdf43_old_fractal_lasts_until_trigger_or_new_valid_fractal",
         "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf43OldFractalPersistsUntilTriggerOrNewValidFractal",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner"
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdInitialFractalAndEveryPendingDimensionUseTheRealProtectedOwner",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_first_confirmed_fractal_parity_matches_android_one_price_tick",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_original_fractal_survives_one_hundred_genuine_untriggered_h1_bars",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_fractal_off_grid_bar_or_structural_extreme_cannot_mint_stop",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_fractal_breakout_after_confirmation_disarms_old_order",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_no_exchange_price_filter_never_invents_fractal_entry",
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::sourceFractalTriggerAndProtectionAreExactlyOneExchangeTick",
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::hundredLaterClosedHoursDoNotExpireUntouchedSourceFractal",
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::offGridSourceAndOffGridStructuralStopFailClosed",
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt::sourceFractalBreakoutWhileOfflineNeverArmsStaleStop",
+        "tests/test_ntd_first_fractal_exact_2026.py::test_ntd_profile_cannot_add_second_tick_to_already_protected_fractal"
       ],
       "fixtures": [],
-      "remaining_evidence": "4.60 implements source-owned NTD execution, first-fractal/profitable-cycle authority and final fresh-H1 verification. Independent exhaustive book-figure fixtures, discretionary sleep interpretation and physical Demo acceptance remain unverified.",
+      "remaining_evidence": "NTD original PDF43: first external confirmed fractal with two closed right H1 bars, stable untriggered price, exact original one PRICE_FILTER tick for entry AND STOP. Python raw, wrapped profile (no double stop tick) and native Android mirror are bounded-tested; post-confirmation breakout and malformed grid fail closed. All actual source figures, sleeping Alligator discretionary interpretation and signed Binance Demo STOP lifecycle remain unverified.",
       "can_place_orders_from_registry": false
     },
     {

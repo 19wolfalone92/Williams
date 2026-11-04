@@ -10,7 +10,8 @@ import pandas as pd
 import pytest
 
 from campaign_model import SignalType
-from williams_signals import extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs
+from williams_signals import (extract_ntd_ao_signal_specs, extract_ntd_ac_signal_specs,
+    extract_ntd_zone_add_on_specs)
 
 H1=3_600_000
 
@@ -134,6 +135,7 @@ def test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_
         actual=observed[0].signal_type.value if observed else None
         assert actual==case["expected"],case
         assert len(observed)<=1
+        assert all(v.strategy_profile=="NTD_FIVE_DIMENSIONS" for v in observed)
     for case in corpus["ac"]:
         values=[float(v) for v in case["values"]]
         ind=frame(values,"LONG",signal="ac")
@@ -142,3 +144,33 @@ def test_shared_original_ao_ac_source_contract_matches_kotlin_and_rejects_stale_
         actual=observed[0].signal_type.value if observed else None
         assert actual==case["expected"],case
         assert len(observed)<=1
+        assert all(v.strategy_profile=="NTD_FIVE_DIMENSIONS" for v in observed)
+
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_ntd_raw_zone_observer_never_inherits_executable_tc2_identity(side):
+    sign=1 if side=="LONG" else -1
+    highs=[102.0,103.0,104.0]
+    lows=[98.0,99.0,100.0]
+    close=[100.0,101.0,102.0]
+    if side=="SHORT":
+        old_h,old_l=highs,lows
+        highs=[300-v for v in old_l]
+        lows=[300-v for v in old_h]
+        close=[300-v for v in close]
+    ind=pd.DataFrame({
+        "open_time_ms":[H1,2*H1,3*H1],
+        "open":close,"high":highs,"low":lows,"close":close,
+        "ao":[0.0,sign*1.0,sign*2.0],
+        "ac":[0.0,sign*1.0,sign*2.0],
+        "long_fractal_outside":[side=="LONG"]*3,
+        "short_fractal_outside":[side=="SHORT"]*3,
+        "teeth_current":[99.0 if side=="LONG" else 201.0]*3,
+    })
+    signals=extract_ntd_zone_add_on_specs(
+        "BTCUSDT",ind,side=side,timeframe="1h",tick_size=.1)
+    assert len(signals)==1
+    assert signals[0].signal_type==SignalType.ZONE_ADD_ON
+    assert signals[0].strategy_profile=="NTD_FIVE_DIMENSIONS"
+    assert signals[0].execution_semantics=="MARKET_ON_CLOSE"
