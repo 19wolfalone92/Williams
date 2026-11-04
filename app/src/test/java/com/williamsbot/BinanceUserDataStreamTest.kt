@@ -19,11 +19,17 @@ import java.util.concurrent.TimeUnit
 class BinanceUserDataStreamTest {
     private class TestSocket(private val original: Request) : WebSocket {
         @Volatile var cancelled = false
+        @Volatile var lastCloseCode = 0
+        @Volatile var lastCloseReason = ""
         override fun request(): Request = original
         override fun queueSize(): Long = 0L
         override fun send(text: String): Boolean = true
         override fun send(bytes: ByteString): Boolean = true
-        override fun close(code: Int, reason: String?): Boolean = true
+        override fun close(code: Int, reason: String?): Boolean {
+            lastCloseCode = code
+            lastCloseReason = reason.orEmpty()
+            return true
+        }
         override fun cancel() { cancelled = true }
     }
 
@@ -125,6 +131,26 @@ class BinanceUserDataStreamTest {
         } finally {
             stream.stop()
         }
+    }
+
+    @Test fun invalidOrOversizedPeerClosingReasonCannotCrashPrivateSocketWorker() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" }, { _, _ -> }, { },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(old, socketResponse(old.request()))
+            // 1006 is reserved and can be observed in a synthetic transport
+            // callback, but MUST NOT be used as an outgoing OkHttp close code.
+            listener.onClosing(old, 1006, "private listenKey=NEVER_ECHO".repeat(100))
+            org.junit.Assert.assertEquals(1000, old.lastCloseCode)
+            org.junit.Assert.assertEquals("client_reconnect", old.lastCloseReason)
+            val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            nextListener.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+        } finally { stream.stop() }
     }
 
     @Test
