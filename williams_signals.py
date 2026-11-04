@@ -694,6 +694,7 @@ def extract_ntd_ao_signal_specs(
     signal_type, reason = min(matches, key=lambda item: priority[item[0]])
     return [SignalSpec.new(
         symbol=symbol,
+        strategy_profile="NTD_FIVE_DIMENSIONS",
         side=order_side,
         signal_type=signal_type,
         role=SignalRole.ADD_ON,
@@ -807,6 +808,7 @@ def extract_ntd_ac_signal_specs(
     signal_time = _row_time_ms(row)
     return [SignalSpec.new(
         symbol=symbol,
+        strategy_profile="NTD_FIVE_DIMENSIONS",
         side=order_side,
         signal_type=SignalType.AC_SIGNAL,
         role=SignalRole.ADD_ON,
@@ -883,6 +885,7 @@ def extract_ntd_zone_add_on_specs(
         return []
     return [SignalSpec.new(
         symbol=symbol,
+        strategy_profile="NTD_FIVE_DIMENSIONS",
         side=order_side,
         signal_type=SignalType.ZONE_ADD_ON,
         role=SignalRole.ADD_ON,
@@ -1021,6 +1024,7 @@ def extract_ntd_fractal_signal_specs(
             continue
         return [SignalSpec.new(
             symbol=symbol,
+            strategy_profile="NTD_FIVE_DIMENSIONS",
             side="BUY" if is_long else "SELL",
             signal_type=SignalType.FRACTAL,
             role=SignalRole.ENTRY,
