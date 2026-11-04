@@ -4203,21 +4203,16 @@ internal class NativeFuturesCampaignCoordinator(
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
                         .put("blocker",blocker).put("symbol",symbol)
-                val liveEntry=liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull()
-                    ?: Double.NaN
-                val profitBlocker=williamsTc2OppositeExitProfitBlocker(
-                    direction.name,liveEntry,markNow)
-                if(profitBlocker!=null)
-                    return@synchronized JSONObject().put("ok",false).put("state",state.name)
-                        .put("safe_rejection",true).put("mutation_attempted",false)
-                        .put("blocker",profitBlocker).put("symbol",symbol)
-                // MARK is not the executable exit quote. A LONG closes at BID,
-                // a SHORT closes at ASK. Preserve the exchange STOP and reject
-                // optional profit-taking if the actual quote does not clear
-                // the conservative fee/slippage reserve.
+                // TC2 ch.12 PDF 153-165: a triggered opposing Wise Man is
+                // an EXIT/REVERSAL even when the old campaign has a loss.
+                // Never turn an engineering profit-only overlay into a
+                // fabricated book veto. Retain all signed owner/quantity,
+                // H1/CONTRACT trigger, reduce-only and STOP safety checks.
+                // Bid/ask must still be sane before any exchange mutation;
+                // a MARK snapshot alone is not an executable quote.
                 val (bidNow,askNow)=adapterPreflight.bestBidAsk(symbol)
-                val quoteBlocker=williamsOppositeExitBidAskBlocker(
-                    direction.name,liveEntry,bidNow,askNow)
+                val quoteBlocker=williamsTc2OppositeExitQuoteBlocker(
+                    direction.name,markNow,bidNow,askNow)
                 if(quoteBlocker!=null)
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
