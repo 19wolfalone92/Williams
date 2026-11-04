@@ -18,6 +18,34 @@ def mirror(series,total=300):
 
 @pytest.mark.parametrize("adverse,toward,needed,level",[(False,False,1,11.1),(False,True,2,12.1),(True,False,2,12.1),(True,True,4,14.1)])
 @pytest.mark.parametrize("short",[False,True])
+@pytest.mark.parametrize("short",[False,True])
+def test_ntd_book_balance_line_source_requires_exact_price_filter_tick(short):
+    # NTD original PDF103-108, figures 8-7 through 8-20:
+    # read right to left, base plus one valid record outside the Jaw.
+    highs=[14.0,13.0,12.0,11.0,10.0]
+    side="SHORT" if short else "LONG"
+    def source(hi=None,low=8.0):
+        series=bars(highs if hi is None else hi,[low]*5)
+        if short:series=mirror(series)
+        return series
+    jaw=([294.0]*5 if short else [6.0]*5)
+    teeth=([295.0]*5 if short else [5.0]*5)
+    lips=([296.0]*5 if short else [4.0]*5)
+    ao=([-float(i) for i in range(1,6)] if short else [float(i) for i in range(1,6)])
+    def plan(series,tick=.1):
+        return ntd_balance_line_setup(side,series,jaw,teeth,lips,ao,ao,tick)
+    correct=plan(source())
+    assert correct is not None
+    assert correct.trigger==(288.9 if short else 11.1)
+    assert correct.stop==(292.1 if short else 7.9)
+    assert correct.context["base_index"]==4
+    assert correct.context["record_indices"]==[3]
+    assert plan(source([14,13,12,11.05,10])) is None
+    assert plan(source(low=8.05)) is None
+    for invalid in [0.0,-0.1,float("nan"),float("inf")]:
+        assert plan(source(),invalid) is None
+
+
 def test_balance_line_base_record_count_and_adverse_zone_doubling(adverse,toward,needed,level,short):
     series=bars([14,13,12,11,10],[8]*5)
     jaw=[15]*4+[6] if toward else [6]*5
