@@ -339,7 +339,7 @@ class WilliamsEditionRulesTest {
         val highs=listOf(110.0,111.0,112.0,113.0,114.0,115.0,118.0,119.0)
         val original=lows.indices.map {i->
             val price=(highs[i]+lows[i])/2
-            WilliamsWaveBar(i*hour,price,highs[i],lows[i],price,100.0)
+            WilliamsWaveBar((i+1)*hour,price,highs[i],lows[i],price,100.0)
         }
         for(side in listOf("LONG","SHORT")) {
             val mirror=side=="SHORT"
@@ -360,12 +360,12 @@ class WilliamsEditionRulesTest {
             val five=plan(6,JSONObject())
             assertTrue(five.state.optLong("zone_active_at",0L)>0)
             assertEquals(if(mirror)150.1 else 99.9,five.stop!!,0.0)
-            assertEquals(5*hour,five.state.getLong("zone_book_stop_source_time_ms"))
+            assertEquals(6*hour,five.state.getLong("zone_book_stop_source_time_ms"))
             val advanced=plan(7,five.state)
             assertEquals(if(mirror)148.1 else 101.9,advanced.stop!!,0.0)
             val improvement=plan(8,advanced.state)
             assertEquals(if(mirror)147.1 else 102.9,improvement.stop!!,0.0)
-            assertEquals(7*hour,improvement.state.getLong("zone_book_stop_source_time_ms"))
+            assertEquals(8*hour,improvement.state.getLong("zone_book_stop_source_time_ms"))
             assertFalse(improvement.state.getBoolean("zone_book_stop_authorized_order"))
             // Complete closed-H1 replay must rebuild the same proof when
             // the process or local in-memory management state is lost.
@@ -384,7 +384,7 @@ class WilliamsEditionRulesTest {
             assertNull(blocked.stop)
             assertEquals("HISTORICAL_BOOK_STOP_TOUCHED_RECONCILE_EXCHANGE",
                 blocked.state.getString("zone_book_evidence"))
-            assertEquals(6*hour,blocked.state.getLong("zone_historical_stop_touch_at_ms"))
+            assertEquals(7*hour,blocked.state.getLong("zone_historical_stop_touch_at_ms"))
             assertFalse(blocked.state.getBoolean("zone_book_stop_authorized_order"))
             // A H1 gap cannot count as a continuous five-colour campaign.
             val missing=bars.take(3)+bars.drop(4)
@@ -393,7 +393,7 @@ class WilliamsEditionRulesTest {
             assertNull(missingPlan.stop)
             assertEquals("NTD_H1_HISTORY_GAP",missingPlan.state.getString("zone_book_evidence"))
             // State from a prior closed campaign must not arm a new entry.
-            val reset=williamsNtdManagementPlan(side,bars,line,line,ao,ac,.1,6*hour,improvement.state)
+            val reset=williamsNtdManagementPlan(side,bars,line,line,ao,ac,.1,7*hour,improvement.state)
             assertNull(reset.stop)
             assertFalse(reset.state.has("zone_active_at"))
         }
@@ -412,7 +412,7 @@ class WilliamsEditionRulesTest {
 
     @Test fun ntdPdf116TeethWickIsNotACloseOnlyExitForLongOrShort() {
         val hour=3_600_000L
-        val base=(0..5).map {i->WilliamsWaveBar(i*hour,101.0,103.0,98.0,101.0,100.0)}
+        val base=(0..5).map {i->WilliamsWaveBar((i+1)*hour,101.0,103.0,98.0,101.0,100.0)}
         for(side in listOf("LONG","SHORT")) {
             val mirror=side=="SHORT"
             val bars=if(mirror) base.map { it.copy(o=200-it.o,h=200-it.l,
@@ -438,7 +438,7 @@ class WilliamsEditionRulesTest {
             val mirror=side=="SHORT"
             val original=(0..14).map { i ->
                 val p=(highs[i]+lows[i])/2
-                WilliamsWaveBar(i*hour,p,highs[i],lows[i],p,100.0)
+                WilliamsWaveBar((i+1)*hour,p,highs[i],lows[i],p,100.0)
             }
             val bars=if(mirror) original.map {it.copy(o=250-it.o,h=250-it.l,
                 l=250-it.h,c=250-it.c)} else original
@@ -460,7 +460,7 @@ class WilliamsEditionRulesTest {
             assertEquals(if(mirror)140.1 else 109.9,resumed.stop!!,0.0)
             assertEquals("REPLAYED_FROM_DURABLE_CLOSED_BAR_CHECKPOINT",
                 resumed.state.getString("zone_book_evidence"))
-            assertEquals(14*hour,resumed.state.getLong("zone_book_last_checked_at_ms"))
+            assertEquals(15*hour,resumed.state.getLong("zone_book_last_checked_at_ms"))
             val altered=bars.drop(6).toMutableList()
             altered[1]=altered[1].copy(c=altered[1].c+.1)
             val quarantined=plan(altered,6,durable.state)
