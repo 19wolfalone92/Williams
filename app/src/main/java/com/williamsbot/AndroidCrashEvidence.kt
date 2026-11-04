@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.Context
 import android.os.Process
 import android.os.SystemClock
+import androidx.core.content.edit
 import org.json.JSONObject
 import java.lang.Thread.UncaughtExceptionHandler
 
@@ -62,12 +63,12 @@ internal object AndroidCrashEvidence {
     @SuppressLint("ApplySharedPref")
     private fun record(context: Context, failure: Throwable) {
         val safe = fingerprint(failure)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString("exception_type", safe.exceptionType)
-            .putString("first_app_frame", safe.appFrame)
-            .putLong("at_ms", System.currentTimeMillis())
-            .putLong("elapsed_ms", SystemClock.elapsedRealtime())
-            .commit()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit(commit = true) {
+            putString("exception_type", safe.exceptionType)
+            putString("first_app_frame", safe.appFrame)
+            putLong("at_ms", System.currentTimeMillis())
+            putLong("elapsed_ms", SystemClock.elapsedRealtime())
+        }
     }
 
     fun snapshot(context: Context): JSONObject {
