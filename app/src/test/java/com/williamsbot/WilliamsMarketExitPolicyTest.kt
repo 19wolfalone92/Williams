@@ -64,8 +64,9 @@ class WilliamsMarketExitPolicyTest {
         assertNotNull(williamsTc2OppositeExitEvidenceBlocker(owner,decision.toString(),
             "BTCUSDT","LONG","TAKE_PROFIT",opened,now,95.0))
     }
-    @Test fun tc2BookContrarySignalsRemainAdvisoryUntilPositiveAfterExecutionReserve() {
-        // Falling price with an existing SHORT campaign is NOT an opposite-loss exit.
+    @Test fun nonBookProfitOverlayRemainsOnlyForLegacyNtdAndCourseResearch() {
+        // Kept as a separately named project overlay; TC2 book-verified
+        // opposite exits MUST NOT call this positive-PnL veto.
         for(side in listOf("LONG","SHORT")) {
             val losingMark=if(side=="LONG") 95.0 else 105.0
             assertEquals("TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE",
@@ -82,6 +83,22 @@ class WilliamsMarketExitPolicyTest {
         }
         assertNull(williamsMarketExitBlocker(williamsTc2Profile,"MANUAL_EXIT"))
     }
+    @Test fun tc2BookOppositeExitDoesNotRequireProfitButRequiresSaneQuote() {
+        for(side in setOf("LONG","SHORT")) {
+            // An opposite Wise Man may close at a LOSS; TC2 ch12 PDF154/158.
+            assertNull(williamsTc2OppositeExitQuoteBlocker(side,99.0,98.8,99.2))
+            assertNull(williamsTc2OppositeExitQuoteBlocker(side,105.0,104.8,105.2))
+            assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+                williamsTc2OppositeExitQuoteBlocker(side,99.0,100.0,90.0))
+            assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+                williamsTc2OppositeExitQuoteBlocker(side,99.0,Double.NaN,100.0))
+            assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+                williamsTc2OppositeExitQuoteBlocker(side,Double.NaN,90.0,91.0))
+        }
+        assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+            williamsTc2OppositeExitQuoteBlocker("SIDEWAYS",100.0,99.0,101.0))
+    }
+
     @Test fun stopMoveLabelsSeparateTheProjectOverlayFromBookStops() {
         assertTrue(williamsStopMoveLabel("TC2_LAST_5_CLOSED_BARS").contains("5 закрытыми H1"))
         assertTrue(williamsStopMoveLabel("COST_BUFFERED_BREAKEVEN_1R").contains("правило проекта"))
