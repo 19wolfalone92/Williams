@@ -96,3 +96,27 @@ def test_ntd_fractal_breakout_after_confirmation_disarms_old_order(side):
 @pytest.mark.parametrize("tick",[0.0,-0.1,float("nan"),float("inf")])
 def test_ntd_no_exchange_price_filter_never_invents_fractal_entry(side,tick):
     assert scan(source_frame(side),side,tick)==[]
+
+
+
+@pytest.mark.parametrize("side,entry,stop",[
+    ("LONG",105.1,94.9),("SHORT",194.9,205.1),
+])
+def test_ntd_profile_cannot_add_second_tick_to_already_protected_fractal(side,entry,stop):
+    from williams_profiles import extract_profile_signals
+    ind=source_frame(side,50)
+    ind["volume"]=100.0
+    ind["jaw_current"]=99.0 if side=="LONG" else 201.0
+    ind["lips_current"]=99.0 if side=="LONG" else 201.0
+    ind["ao"]=0.0
+    ind["ac"]=0.0
+    ind["long_fractal_outside"]=side=="LONG"
+    ind["short_fractal_outside"]=side=="SHORT"
+    result=extract_profile_signals("LTCUSDT",ind,profile="NTD_FIVE_DIMENSIONS",
+        side=side,timeframe="1h",tick_size=.1,exit_mode=True)
+    fractals=[x for x in result if x.signal_type==SignalType.FRACTAL]
+    assert len(fractals)==1
+    assert fractals[0].trigger_price==entry
+    assert fractals[0].protective_reference==stop
+    assert fractals[0].strategy_profile=="NTD_FIVE_DIMENSIONS"
+    assert fractals[0].signal_id.startswith("NTD_FIVE_DIMENSIONS:")
