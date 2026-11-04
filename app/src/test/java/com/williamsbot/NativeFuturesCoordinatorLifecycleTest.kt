@@ -1726,7 +1726,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun confirmedBookOppositeExitFlattensEvenLosingOwnedPositionWithStopHeldUntilFill() {
+    @Test fun confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill() {
         val h=3_600_000L
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             var time=System.currentTimeMillis()-4*h
