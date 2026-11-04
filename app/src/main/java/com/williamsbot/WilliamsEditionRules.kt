@@ -130,12 +130,14 @@ internal fun williamsNtdBalanceLineSetup(
     }
     val required=needed?:return null
     if (records.size<required) return null
-    val target=records.last();val trigger=extreme(target)+sign*tick
+    val target=records.last()
+    val trigger=williamsBookExactPriceTick(extreme(target),tick,above=sign==1) ?: return null
     val mouth=if (sign==1) maxOf(jaw.last(),teeth.last(),lips.last()) else minOf(jaw.last(),teeth.last(),lips.last())
     if (trigger<=0 || (requireMouth && (mouth<=0 || sign*(trigger-mouth)<=0)) || (base until n).any { sign*(extreme(it)-trigger)>=0 }) return null
     val window=bars.subList(maxOf(0,base-4),base+1)
-    val stop=if (sign==1) window.minOf { it.l }-tick else window.maxOf { it.h }+tick
-    if (stop<=0 || sign*(trigger-stop)<=0) return null
+    val stopSource=if (sign==1) window.minOf { it.l } else window.maxOf { it.h }
+    val stop=williamsBookExactPriceTick(stopSource,tick,above=sign!=1) ?: return null
+    if (sign*(trigger-stop)<=0) return null
     return WilliamsEditionSetup("BALANCE_LINE",side,n-1,trigger,stop,stop,JSONObject()
         .put("formation_key","${bars[base].t}:${bars[target].t}:$required").put("base_index",base).put("record_indices",JSONArray(records)).put("required_extremes",required)
         .put("adverse_zone",adverse).put("signal_index",target),role="ADD_ON")
