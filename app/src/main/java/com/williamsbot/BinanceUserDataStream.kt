@@ -237,7 +237,13 @@ class BinanceUserDataStream(
                             val detail = "closing:" + code
                             reconnectCause.compareAndSet(null, detail)
                             onConnection(false, detail)
-                            webSocket.close(code, reason)
+                            // Peer-supplied status/reason are NOT safe arguments for
+                            // OkHttp's outgoing close: 1005/1006/1015 and an
+                            // oversized reason throw IllegalArgumentException on
+                            // the callback thread, which can crash the whole app.
+                            // Reply with a known-valid code and short local reason.
+                            runCatching { webSocket.close(1000, "client_reconnect") }
+                                .onFailure { webSocket.cancel() }
                             // A peer may never deliver onClosed after onClosing
                             // (mobile radio loss, stalled TCP close handshake).
                             // Release this session NOW; reconnect will first
