@@ -66,6 +66,16 @@ object AndroidRuntimeHealth {
 
         val ignoring = pm.isIgnoringBatteryOptimizations(context.packageName)
         val continuity=RuntimeContinuityEvidence.snapshot(context)
+        // Record bounded process memory evidence: a Java CRASH with high RSS
+        // is NOT itself proof of OOM. These measurements help distinguish
+        // heap pressure from an unrelated unhandled exception next time.
+        val heap = Runtime.getRuntime()
+        val memory = JSONObject()
+            .put("java_heap_used_bytes", (heap.totalMemory() - heap.freeMemory()).coerceAtLeast(0L))
+            .put("java_heap_committed_bytes", heap.totalMemory())
+            .put("java_heap_limit_bytes", heap.maxMemory())
+            .put("native_heap_allocated_bytes", android.os.Debug.getNativeHeapAllocatedSize())
+            .put("large_memory_class_mb", am.largeMemoryClass)
 
         val result = JSONObject()
             .put("application_id", context.packageName)
@@ -87,6 +97,7 @@ object AndroidRuntimeHealth {
             .put("service_last_recovery_attempt_at_ms",RuntimeServiceState.lastRecoveryAttemptMs)
             .put("continuity",continuity)
             .put("fatal_java_crash", AndroidCrashEvidence.snapshot(context))
+            .put("memory_health", memory)
             .put("lifecycle_evidence",RuntimeServiceLifecycleAssessment.summarize(
                 continuity,System.currentTimeMillis()))
             .put("last_boot_startup_failure", RuntimeStartupEvidence.snapshot(context))
