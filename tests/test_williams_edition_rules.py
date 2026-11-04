@@ -16,8 +16,6 @@ def mirror(series,total=300):
     return [replace(b,o=total-b.o,h=total-b.l,l=total-b.h,c=total-b.c) for b in series]
 
 
-@pytest.mark.parametrize("adverse,toward,needed,level",[(False,False,1,11.1),(False,True,2,12.1),(True,False,2,12.1),(True,True,4,14.1)])
-@pytest.mark.parametrize("short",[False,True])
 @pytest.mark.parametrize("short",[False,True])
 def test_ntd_book_balance_line_source_requires_exact_price_filter_tick(short):
     # NTD original PDF103-108, figures 8-7 through 8-20:
@@ -46,6 +44,8 @@ def test_ntd_book_balance_line_source_requires_exact_price_filter_tick(short):
         assert plan(source(),invalid) is None
 
 
+@pytest.mark.parametrize("adverse,toward,needed,level",[(False,False,1,11.1),(False,True,2,12.1),(True,False,2,12.1),(True,True,4,14.1)])
+@pytest.mark.parametrize("short",[False,True])
 def test_balance_line_base_record_count_and_adverse_zone_doubling(adverse,toward,needed,level,short):
     series=bars([14,13,12,11,10],[8]*5)
     jaw=[15]*4+[6] if toward else [6]*5
