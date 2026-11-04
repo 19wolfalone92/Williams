@@ -257,14 +257,14 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     assert calls[-1][2] == {}
 
 
-def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
+# A source-valid Binance H1 must start at a UTC hour boundary. Old\n# tests used 1_700_000_000_000 (unaligned), an impossible exchange candle.\nNTD_ALIGNED_H1_START = (1_700_000_000_000 // 3_600_000) * 3_600_000\n\n\ndef test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     # Rising trend followed by a completed close below the chart-aligned Teeth.
     n = 55
     close = [100.0 + i for i in range(n)]
     close[-2] = 90.0
     frame = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000+i*3_600_000 for i in range(55)],
+        "open_time_ms": [NTD_ALIGNED_H1_START+i*3_600_000 for i in range(55)],
         "open": [x + 0.2 for x in close],
         "high": [x + 1.0 for x in close],
         "low": [x - 1.0 for x in close],
@@ -294,7 +294,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 80.0,
         "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
-        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":1_700_000_000_000},
+        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":NTD_ALIGNED_H1_START},
     })()
 
     result = runtime._trail(campaign)
@@ -309,7 +309,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
     close = [200.0 - i for i in range(n)]
     close[-2] = 210.0
     frame = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000+i*3_600_000 for i in range(55)],
+        "open_time_ms": [NTD_ALIGNED_H1_START+i*3_600_000 for i in range(55)],
         "open": [x - 0.2 for x in close],
         "high": [x + 1.0 for x in close],
         "low": [x - 1.0 for x in close],
@@ -339,7 +339,7 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "SELL", "current_stop_price": 220.0,
         "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
-        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":1_700_000_000_000},
+        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":NTD_ALIGNED_H1_START},
     })()
 
     result = runtime._trail(campaign)
@@ -350,9 +350,9 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
 def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     n = 55
-    close = [100.0 + (i * 0.1) ** 3 for i in range(n)]
+    # Valid Binance H1 OHLC levels must be on the 0.1 PRICE_FILTER grid.\n    close = [round(100.0 + (i * 0.1) ** 3, 1) for i in range(n)]
     frame = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000+i*3_600_000 for i in range(55)],
+        "open_time_ms": [NTD_ALIGNED_H1_START+i*3_600_000 for i in range(55)],
         "open": [x - 0.5 for x in close],
         "high": [x + 1.0 for x in close],
         "low": [x - 1.0 for x in close],
@@ -380,7 +380,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
     campaign = type("C", (), {
         "symbol": "BTCUSDT", "side": "BUY", "current_stop_price": 100.0,
         "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
-        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":1_700_000_000_000},
+        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":NTD_ALIGNED_H1_START},
     })()
 
     runtime._trail(campaign)
@@ -394,7 +394,7 @@ def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypa
 def test_ntd_teeth_exit_uses_close_beyond_line_not_only_a_fresh_crossing(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     frame = pd.DataFrame({
-        "open_time_ms": [1_700_000_000_000+i*3_600_000 for i in range(55)],
+        "open_time_ms": [NTD_ALIGNED_H1_START+i*3_600_000 for i in range(55)],
         "open": [100.0] * 55,
         "high": [101.0] * 55,
         "low": [99.0] * 55,
@@ -435,7 +435,7 @@ def test_ntd_teeth_exit_uses_close_beyond_line_not_only_a_fresh_crossing(monkeyp
         campaign = type("C", (), {
             "symbol": "BTCUSDT", "side": side, "current_stop_price": 80.0 if side == "BUY" else 120.0,
             "execution_timeframe": "1h", "state": CampaignState.TREND_ACTIVE,
-        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":1_700_000_000_000},
+        "tags": {"strategy_profile":"NTD_FIVE_DIMENSIONS","position_open_observed_at_ms":NTD_ALIGNED_H1_START},
         })()
         assert runtime._trail(campaign)["reason"] == "TEETH_CLOSE_EXIT"
 
