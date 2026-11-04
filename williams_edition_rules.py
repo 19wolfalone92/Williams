@@ -96,6 +96,26 @@ def edition_fractals(bars: Sequence[WaveBar]) -> list[EditionFractal]:
     return sorted(out,key=lambda p:(p.center,p.kind))
 
 
+def _edition_exact_source_tick(extreme, tick, *, above: bool):
+    """One actual Binance PRICE_FILTER tick beyond an exact closed-bar extreme.
+
+    Original NTD/Course source bar values must be representable on the
+    exchange grid. Research-only; a resulting price is NOT exchange order
+    acceptance or a protective STOP proof.
+    """
+    try:
+        value = Decimal(str(extreme))
+        step = Decimal(str(tick))
+        if not value.is_finite() or not step.is_finite() or value <= 0 or step <= 0:
+            return None
+        if value % step != 0:
+            return None
+        result = value + step if above else value - step
+        return float(result) if result > 0 and result.is_finite() else None
+    except (InvalidOperation, OverflowError, TypeError, ValueError):
+        return None
+
+
 def ntd_balance_line_setup(side, bars, jaw, teeth, lips, ao, ac, tick, require_mouth=True):
     """Read right to left. Count successive record extrema, not arbitrary bars.
 
@@ -127,15 +147,18 @@ def ntd_balance_line_setup(side, bars, jaw, teeth, lips, ao, ac, tick, require_m
     if needed is None or len(records)<needed:
         return None
     target=records[-1]
-    trigger=extreme(target)+sign*tick
+    trigger=_edition_exact_source_tick(extreme(target),tick,above=sign==1)
+    if trigger is None:
+        return None
     mouth=max(jaw[-1],teeth[-1],lips[-1]) if sign==1 else min(jaw[-1],teeth[-1],lips[-1])
     if trigger<=0 or (require_mouth and (mouth<=0 or sign*(trigger-mouth)<=0)):
         return None
     if any(sign*(extreme(i)-trigger)>=0 for i in range(base,n)):
         return None
     window=bars[max(0,base-4):base+1]
-    stop=min(b.l for b in window)-tick if sign==1 else max(b.h for b in window)+tick
-    if stop<=0 or sign*(trigger-stop)<=0:return None
+    protective_extreme=min(b.l for b in window) if sign==1 else max(b.h for b in window)
+    stop=_edition_exact_source_tick(protective_extreme,tick,above=sign!=1)
+    if stop is None or sign*(trigger-stop)<=0:return None
     return EditionSetup("BALANCE_LINE",side,n-1,trigger,stop,stop,
         {"formation_key":f"{bars[base].t}:{bars[target].t}:{needed}","base_index":base,"record_indices":records,"required_extremes":needed,
          "adverse_zone":adverse,"signal_index":target})
