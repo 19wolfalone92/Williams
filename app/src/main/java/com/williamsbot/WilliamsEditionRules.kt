@@ -431,11 +431,18 @@ internal fun williamsNtdManagementPlan(side:String,bars:List<WilliamsWaveBar>,te
     if(side !in listOf("LONG","SHORT") || n<6 || !validWilliamsEditionBars(bars) ||
         !tick.isFinite() || tick<=0 || openedAt<=0 ||
         listOf(teeth,lips,ao,ac).any { it.size!=n }) return WilliamsNtdManagement(s)
-    // A missing candle must not become an invented fifth consecutive zone bar.
-    // The runtime checks this too, but the book planner is independently safe.
-    if(bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS })
+    // Even equally spaced but non-hour-aligned candles are NOT Binance H1
+    // closes. Python's independent source model already rejects these; the
+    // native observer must fail closed on precisely the same H1 evidence.
+    if(bars.any { it.t<=0L || it.t%WILLIAMS_H1_MS!=0L } ||
+        bars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS })
         return WilliamsNtdManagement(s.put("zone_book_evidence","NTD_H1_HISTORY_GAP"))
     if(bars.last().t+WILLIAMS_H1_MS<=openedAt) return WilliamsNtdManagement(s)
+    // Lips is a campaign-specific *exit mode*. A previous campaign's steep
+    // movement must never force a new position to exit at the faster Lips line.
+    // It only becomes eligible again after this campaign proves its own slope.
+    val oldLips=s.optLong("lips_selected_at",0L)
+    if(oldLips>0L && oldLips+WILLIAMS_H1_MS<=openedAt) s.remove("lips_selected_at")
     // A persisted exit state from an older position cannot arm a freshly
     // opened campaign, even if a local journal was accidentally reused.
     if(s.optLong("zone_active_at",0L)>0L &&

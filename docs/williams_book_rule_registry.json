@@ -716,7 +716,7 @@
         120
       ],
       "rule": "Edition-specific Teeth/Lips exits and five-zone priority.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
@@ -726,10 +726,18 @@
       "tests": [
         "tests/test_williams_ntd_execution.py::test_preentry_candle_cannot_close_a_fresh_campaign",
         "app/src/test/java/com/williamsbot/WilliamsNtdExecutionTest.kt::preentryBarCannotSelectAnExitOrTighterStopForANewPosition",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation"
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::ntdAdditionProfitAndBookExitProofAreRecheckedBeforeAnyNewMutation",
+        "tests/test_ntd_teeth_lips_source_2026.py::test_ntd_fast_lips_is_selected_only_from_completed_source_and_acts_next_bar",
+        "tests/test_ntd_teeth_lips_source_2026.py::test_ntd_teeth_is_close_only_and_not_intrabar_crossing",
+        "tests/test_ntd_teeth_lips_source_2026.py::test_ntd_fast_lips_does_not_transfer_into_new_position_with_old_journal",
+        "tests/test_ntd_teeth_lips_source_2026.py::test_ntd_source_rejects_equally_spaced_but_utc_misaligned_h1",
+        "app/src/test/java/com/williamsbot/WilliamsNtdTeethLipsSourceTest.kt::fastLipsNeedsCompletedSelectionThenOneMoreClosedH1",
+        "app/src/test/java/com/williamsbot/WilliamsNtdTeethLipsSourceTest.kt::teethSourceDoesNotExitOnWickAndDoesOnCompletedClose",
+        "app/src/test/java/com/williamsbot/WilliamsNtdTeethLipsSourceTest.kt::previousCampaignLipsStateCannotForceFreshOwnerExit",
+        "app/src/test/java/com/williamsbot/WilliamsNtdTeethLipsSourceTest.kt::equallySpacedButNonUtcAlignedH1CannotSupplyBookExitProof"
       ],
       "fixtures": [],
-      "remaining_evidence": "Preentry closes cannot authorize an exit. Fresh source-specific exit verification occurs before mutation. Numerical price-vs-Lips speed selection is an explicit interpretation; exhaustive chart/source validation and physical Demo acceptance remain open.",
+      "remaining_evidence": "NTD PDF115–120, fig 9-2–9-6: Teeth close-only, Lips only for a numerically defined fast-market regime beginning NEXT completed H1, mirrored LONG/SHORT, no wick exits or inherited previous-campaign mode and no UTC-misaligned candles. Python/Kotlin source-geometry boundary evidence is bounded, but numerical price-vs-Lips angle is an engineering proxy for visual book judgement, historical figure verdicts and authenticated exchange exit/STOP acceptance remain unproven.",
       "can_place_orders_from_registry": false
     },
     {

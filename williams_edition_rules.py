@@ -380,6 +380,16 @@ def ntd_management_plan(side,bars,teeth,lips,ao,ac,tick,opened_at,state=None):
         return empty()
     if bars[-1].t + h1 <= opened_at:
         return empty()
+    # Lips exit is selected for this campaign ONLY. A stale journal reused
+    # after an old position was closed cannot impose its previous fast-market
+    # mode on an entirely new campaign without new closed-bar slope evidence.
+    try:
+        old_lips = int(state.get("lips_selected_at", 0) or 0)
+    except (ValueError, TypeError, OverflowError):
+        old_lips = 0
+        state.pop("lips_selected_at", None)
+    if old_lips > 0 and old_lips + h1 <= opened_at:
+        state.pop("lips_selected_at", None)
 
     # A previous observer position cannot lend its STOP and wave source time
     # to a newly opened paper campaign.
