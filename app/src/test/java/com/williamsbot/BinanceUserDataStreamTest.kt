@@ -133,6 +133,29 @@ class BinanceUserDataStreamTest {
         }
     }
 
+    @Test fun failingConnectedCallbackInvalidatesSocketAndRetriesWithoutClaimingReady() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val callbacks = java.util.concurrent.atomic.AtomicInteger()
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" },
+            { connected, _ ->
+                if (connected && callbacks.incrementAndGet() == 1)
+                    throw IllegalStateException("secret-not-to-log")
+            }, { },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, first) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            first.onOpen(old, socketResponse(old.request()))
+            assertTrue(old.cancelled)
+            assertFalse(stream.isConnected())
+            val (next, second) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            second.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+            org.junit.Assert.assertEquals(2, callbacks.get())
+        } finally { stream.stop() }
+    }
+
     @Test fun invalidOrOversizedPeerClosingReasonCannotCrashPrivateSocketWorker() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
         val stream = BinanceUserDataStream(listenKeyClient(),
