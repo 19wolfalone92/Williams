@@ -128,8 +128,12 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     }
 }
 
-/** TC2 ch12 + NTD ch9: an opposing Wise-Man setup is NOT an obligation
- * to realize a loss. Opposing-signal discretionary exits are admitted only
+/** NON-BOOK optional profit overlay retained ONLY for the separate
+ * NTD/Course research exit implementations. This is not a TC2 rule:
+ * TC2 ch.12 PDF 153-165 explicitly exits/reverses on the triggered
+ * opposing signal without requiring an old campaign to be profitable.
+ *
+ * NTD/Course legacy discretionary exits are admitted only
  * while there is a conservative, exchange-confirmed positive mark-to-entry
  * buffer after estimated round-trip fees and slippage. The project uses 0.35%
  * (2 * 0.10% per-side fee reserve + 0.15% execution slippage); it is NOT a
@@ -174,6 +178,25 @@ internal fun williamsOppositeExitBidAskBlocker(
     val executable=if(side=="LONG") bid else ask
     return if(williamsTc2OppositeExitProfitBlocker(side,entry,executable,tick=tick)==null) null
         else "WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK"
+}
+
+/**
+ * TC2 ch.12 PDF 154,155,158,161: a *proven* opposing breakout can close
+ * a losing or profitable campaign. Bid/ask transport still must be valid;
+ * no book instruction requires positive net PnL before an opposite exit.
+ *
+ * This is a PRICE-SANITY veto, never permission to close. The coordinator
+ * separately requires fresh signed account ownership, matching quantities,
+ * persisted H1 Wise-Man evidence, current CONTRACT trigger, and protected
+ * reduce-only execution.
+ */
+internal fun williamsTc2OppositeExitQuoteBlocker(
+    direction: String, freshMark: Double, bid: Double, ask: Double
+): String? {
+    if(direction !in setOf("LONG","SHORT") ||
+        listOf(freshMark,bid,ask).any { !it.isFinite() || it<=0.0 } ||
+        bid>ask) return "TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED"
+    return null
 }
 
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
