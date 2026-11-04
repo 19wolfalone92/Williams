@@ -147,9 +147,13 @@ def extract_profile_signals(symbol,ind,*,profile,side,timeframe,tick_size,exit_m
         if s.signal_type==SignalType.ZONE_ADD_ON and s.execution_semantics=="MARKET_ON_CLOSE" else s for s in specs]
     specs=[replace(s,signal_id=f"{s.symbol}:{timeframe}:{s.side}:BALANCE_LINE:{s.setup_context['formation_key']}")
         if s.signal_type==SignalType.BALANCE_LINE else s for s in specs]
-    # A single-tick buffer also protects AO/AC/fractal signal-bar extrema.
+    # NTD first-fractal extractor now proves the exact one-tick protected
+    # source extreme itself (the same as native BigDecimal). NEVER apply a
+    # second tick here. AO/AC/zone hypotheses still carry an original bare
+    # candle reference and therefore need precisely one protective offset.
+    # TC2 is returned before this wrapper and has its own source proof.
     specs=[replace(s,protective_reference=s.protective_reference+(-tick_size if side=="LONG" else tick_size))
-        if s.signal_type not in {SignalType.BALANCE_LINE,SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT} else s for s in specs]
+        if s.signal_type not in {SignalType.FRACTAL,SignalType.BALANCE_LINE,SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT} else s for s in specs]
     if profile==NTD and timeframe=="1h":
         from williams_execution_policy import h1_signal_expiry
         specs=[replace(s,expires_at_ms=h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,NTD))
