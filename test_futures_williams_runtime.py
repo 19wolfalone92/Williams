@@ -257,7 +257,12 @@ def test_structural_trail_uses_min_low_for_long_and_max_high_for_short(monkeypat
     assert calls[-1][2] == {}
 
 
-# A source-valid Binance H1 must start at a UTC hour boundary. Old\n# tests used 1_700_000_000_000 (unaligned), an impossible exchange candle.\nNTD_ALIGNED_H1_START = (1_700_000_000_000 // 3_600_000) * 3_600_000\n\n\ndef test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
+# A source-valid Binance H1 must start at a UTC hour boundary. Old
+# tests used 1_700_000_000_000 (unaligned), an impossible exchange candle.
+NTD_ALIGNED_H1_START = (1_700_000_000_000 // 3_600_000) * 3_600_000
+
+
+def test_teeth_close_exit_uses_only_closed_bars_for_long(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     # Rising trend followed by a completed close below the chart-aligned Teeth.
     n = 55
@@ -350,7 +355,8 @@ def test_teeth_close_exit_uses_only_closed_bars_for_short(monkeypatch):
 def test_ntd_five_same_colour_bars_activate_persistent_one_bar_trailing(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "NTD_FIVE_DIMENSIONS")
     n = 55
-    # Valid Binance H1 OHLC levels must be on the 0.1 PRICE_FILTER grid.\n    close = [round(100.0 + (i * 0.1) ** 3, 1) for i in range(n)]
+    # Valid Binance H1 OHLC levels must be on the 0.1 PRICE_FILTER grid.
+    close = [round(100.0 + (i * 0.1) ** 3, 1) for i in range(n)]
     frame = pd.DataFrame({
         "open_time_ms": [NTD_ALIGNED_H1_START+i*3_600_000 for i in range(55)],
         "open": [x - 0.5 for x in close],
