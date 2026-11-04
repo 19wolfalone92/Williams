@@ -658,16 +658,24 @@
         96
       ],
       "rule": "Fifth same-zone bar activates one-bar protective ratchet; later colour change does not cancel it.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "williams_edition_rules.py",
         "app/src/main/java/com/williamsbot/WilliamsEditionRules.kt",
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_ntd_book_fifth_zone_replay.py::test_stop_ratchets_through_other_colour_without_widening",
+        "tests/test_ntd_book_fifth_zone_replay.py::test_prior_derived_stop_touch_is_ambiguous_not_a_closed_exchange_trade",
+        "tests/test_ntd_book_fifth_zone_replay.py::test_off_grid_bar_or_missing_valid_tick_cannot_mint_book_stop",
+        "tests/test_ntd_book_fifth_zone_replay.py::test_after_candles_roll_out_durable_matching_checkpoint_is_required",
+        "tests/test_ntd_book_fifth_zone_replay.py::test_missing_h1_timestamp_is_not_five_consecutive_closed_price_bars",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdPdf117FiveSameColoursArmsStickyOneTickExitBothWays",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdFiveZoneRollingHistoryRequiresDurableMatchingCheckpoint"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Physical exchange stop ratchet not demonstrated for NTD.",
+      "remaining_evidence": "NTD original PDF91–96 zone colour/5th bar and monotone one-closed-bar trail verified with mirrored source-candle Python/Kotlin boundary tests; off-grid bars, historical stop-touch uncertainty and rolling history checkpoint fail closed. NTD is observation-only; signed Binance Demo STOP exchange replacement and every author figure are not independently certified.",
       "can_place_orders_from_registry": false
     },
     {
@@ -678,16 +686,22 @@
         108
       ],
       "rule": "First qualifying reference bar relative to Jaw decides one/two extremes; adverse zone doubles to two/four.",
-      "status": "IMPLEMENTED_PARTIAL",
+      "status": "BOUNDED_TESTED",
       "modules": [
         "ntd_balance_line.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdBalanceLine.kt",
         "williams_ntd_execution.py",
         "app/src/main/java/com/williamsbot/WilliamsNtdExecution.kt"
       ],
-      "tests": [],
+      "tests": [
+        "tests/test_williams_edition_rules.py::test_balance_line_base_record_count_and_adverse_zone_doubling",
+        "tests/test_williams_edition_rules.py::test_balance_line_higher_bars_after_a_base_do_not_move_the_order_or_resurrect_a_crossed_level",
+        "tests/test_williams_edition_rules.py::test_ntd_book_balance_line_source_requires_exact_price_filter_tick",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::sourceRuleExamplesHaveTheSameLevelsAndDirectionsAsPython",
+        "app/src/test/java/com/williamsbot/WilliamsEditionRulesTest.kt::ntdSourceJawRecordAndSignalBarMustUseExactExchangePriceGrid"
+      ],
       "fixtures": [],
-      "remaining_evidence": "Known book figure tests exist; full source-path and initial-stop semantics not accepted.",
+      "remaining_evidence": "NTD source PDF103–108 figures 8-7–8-20 (read right-to-left; base plus one/two highs or lows depending on reference Jaw; two/four adverse-zone count) has mirrored Python/Kotlin source-price tests. Both trigger and protective extreme must be exactly on Binance PRICE_FILTER tick; stale/malformed source is rejected. Full digitization of all author diagrams and live exchange execution not certified.",
       "can_place_orders_from_registry": false
     },
     {
