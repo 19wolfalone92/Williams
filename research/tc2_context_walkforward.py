@@ -14,6 +14,7 @@ import json
 import math
 import statistics
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 HOUR = 3_600_000
@@ -352,6 +353,15 @@ def evaluate(root:Path)->dict:
         return result
     train=[x for x in all_events if x["decision_at"]<TRAIN_END]
     oos=[x for x in all_events if x["decision_at"]>=OOS_START]
+    # These are FIXED calendar partitions, never selected by observing
+    # future returns. Report every losing and winning sector, not just
+    # an attractive aggregate. The final month is censored on Nov 5.
+    by_symbol={sym:summarize([x for x in oos if x["symbol"]==sym])
+               for sym in SYMBOLS}
+    month_keys=("2026-09","2026-10","2026-11")
+    by_month={m:summarize([x for x in oos
+        if datetime.fromtimestamp(x["decision_at"]/1000,timezone.utc)
+            .strftime("%Y-%m")==m]) for m in month_keys}
     return {
         "schema":"WILLIAMS_TC2_H1_H4_D1_WALKFORWARD_PROXY_AUDIT_V1",
         "as_of_utc":"2026-11-05T06:00:00Z",
@@ -370,6 +380,12 @@ def evaluate(root:Path)->dict:
         "instrument_count":len(SYMBOLS),"frame_bar_counts":inputs,
         "all_event_count":len(all_events),
         "development":summarize(train),"holdout":summarize(oos),
+        "holdout_by_symbol_all_ten_no_selection":by_symbol,
+        "holdout_by_calendar_month_all_no_selection":by_month,
+        "holdout_months_predeclared":list(month_keys),
+        "holdout_events_all_accounted_for":(
+            sum(v["all_candidates"] for v in by_symbol.values())==len(oos)
+            and sum(v["all_candidates"] for v in by_month.values())==len(oos)),
         "warnings":["WM1 numeric proxy is not visually certified book angulation",
             "WM3 20-hour pending expiry is a research assumption, NOT a TC2 author rule",
             "NO real campaign ownership, reverse pyramid, funding, liquidation, bid/ask or exchange receipts",
