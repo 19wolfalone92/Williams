@@ -33,6 +33,7 @@ private fun tc2ShadowReplayHorizon(
     trailingBars:Int?=null
 ):JSONObject {
     val result=JSONObject().put("status","PENDING_FORWARD_H1")
+        .put("paper_replay_version",2)
         .put("horizon_hours",hours).put("replay_method","NEXT_FULL_H1_BARS_NO_PARTIAL_BAR")
         .put("actual_binance_fills",false).put("includes_trailing_stop",trailingBars!=null)
         .put("holding_existing_signed_stop_static",trailingBars==null)
@@ -59,6 +60,24 @@ private fun tc2ShadowReplayHorizon(
     val qty=entry.optDouble("signed_quantity_abs",Double.NaN)
     if(listOf(openPrice,book,stop,qty).any { !it.isFinite() || it<=0.0 } ||
         sign*(book-stop)<=0.0) return result.put("status","INVALID_SIGNED_STOP_OR_PRICES")
+    // At an intrahour opposite exit, the OLD signed protective STOP can
+    // execute before OR after the contrary trigger within that SAME H1.
+    // Full-hour OHLC cannot establish the order. Retrospective scoring
+    // must NOT credit a hold as possible if both levels were reached.
+    // This is EX-POST research eligibility, not a pre-trade filter.
+    val decisionHourOpen=(at/TC2_SHADOW_HOUR_MS)*TC2_SHADOW_HOUR_MS
+    val firstHour=closed.singleOrNull { it.t==decisionHourOpen }
+        ?: return result.put("status","DECISION_HOUR_CLOSED_H1_MISSING_OR_DUPLICATED")
+    if(listOf(firstHour.o,firstHour.h,firstHour.l,firstHour.c)
+            .any { !it.isFinite() || it<=0.0 } ||
+        firstHour.h<maxOf(firstHour.o,firstHour.l,firstHour.c) ||
+        firstHour.l>minOf(firstHour.o,firstHour.h,firstHour.c))
+        return result.put("status","DECISION_HOUR_CLOSED_H1_INVALID")
+    if(if(sign>0.0) firstHour.l<=stop else firstHour.h>=stop)
+        return result.put("status","DECISION_HOUR_STOP_AND_EXIT_ORDER_UNPROVEN")
+            .put("decision_hour_open_ms",decisionHourOpen)
+            .put("did_not_credit_ambiguous_hold",true)
+            .put("can_modify_stop",false)
     var close=rows.last().c
     var reason="HORIZON_CLOSED_BAR_MARK"
     var stoppedAt=0L
@@ -228,7 +247,12 @@ internal fun williamsTc2ExitShadowAdvance(
             "outcome_${h}h_trail3" to 3,
             "outcome_${h}h_trail5" to 5
         )) {
-            if(e.optJSONObject(key)?.optString("status")=="MATURED") continue
+            // Re-run all pre-v2 stored outcomes. The old replay skipped
+            // the decision hour entirely and could count impossible holds
+            // where Binance STOP and contrary H1 price both touched.
+            val oldResult=e.optJSONObject(key)
+            if(oldResult?.optString("status")=="MATURED" &&
+                oldResult.optInt("paper_replay_version",0)>=2) continue
             val outcome=tc2ShadowReplayHorizon(e,bars,atMs,h,trailing)
             if(outcome.optString("status")!="PENDING_FORWARD_H1")
                 e.put(key,outcome)
@@ -314,6 +338,8 @@ internal fun williamsTc2ExitShadowAdvance(
         .put("can_modify_stop",false).put("can_reverse",false)
         .put("comparison_limits",JSONArray(listOf(
             "FIRST_DECISION_H1_PARTIAL_BAR_EXCLUDED",
+            "DECISION_HOUR_BOTH_STOP_AND_OPPOSITE_TOUCH_FAILS_CLOSED_NO_INTRABAR_ORDER",
+            "PRE_V2_MATURED_OUTCOMES_RECOMPUTED_WITH_DECISION_HOUR_GUARD",
             "STATIC_ORIGINAL_STOP_AND_CAUSAL_3_5_CLOSED_H1_TRAIL_SEPARATELY",
             "PAPER_TRAILING_NEVER_WRITES_BINANCE_STOP",
             "ACTUAL_H1_TRAILING_EXECUTION_FILLS_UNVERIFIED",
