@@ -9976,13 +9976,27 @@ private class NativeEngine(
         val candidates=h1OppositionCandidates(symbol,closed,tick,profile)
         val assessment=assessWilliamsScenarioOpposition(direction.name,openedAt,candidates.map { scenarioSignal(it) },
             closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },contractPrice,now)
-        val evidence=assessment.opposition
+        // An H1 price level may have triggered while the Android process
+        // was offline, then been invalidated by a subsequent CLOSED H1 bar.
+        // The generic first-terminal-event record is correct for canceling
+        // pending entries, but is NOT fresh authority to exit the old trade.
+        // This is a source/price-integrity gate, NOT a speculative wave veto.
+        val rawOpposition=assessment.opposition
+        val freshProof=if(profile==williamsTc2Profile && rawOpposition!=null)
+            tc2OppositeExitLifecycle(rawOpposition.signal,rawOpposition.event,
+                closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
+            else null
+        val evidence=rawOpposition?.takeIf { freshProof?.valid!=false }
         check(executionStore.writeState("decision_h1_opposition_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("scope_started_at_ms",openedAt).put("direction",direction.name)
             .put("trigger_price_basis","CONTRACT_PRICE").put("contract_price",contractPrice)
             .put("opposition",evidence?.toJson() ?: JSONObject.NULL)
-            .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) { "H1_EXIT_PROOF_NOT_DURABLE" }
-        if(assessment.uncertain.isNotEmpty()) return null
+            .put("opposition_revalidation",freshProof?.toJson() ?: JSONObject.NULL)
+            .put("stale_opposition_observed",if(freshProof?.valid==false)
+                rawOpposition?.toJson() ?: JSONObject.NULL else JSONObject.NULL)
+            .put("uncertain",JSONArray(assessment.uncertain.map { it.toJson() })).toString())) {
+                "H1_EXIT_PROOF_NOT_DURABLE" }
+        if(assessment.uncertain.isNotEmpty() || freshProof?.valid==false) return null
         return candidates.firstOrNull { it.signalId==evidence?.signal?.id }
     }
 

@@ -28,6 +28,12 @@
                 "observed_at_ms": 35999999000,
                 "trigger_price_basis": "CONTRACT_PRICE",
                 "uncertain": [],
+                "opposition_revalidation": {
+                  "status": "FRESH_CONFIRMED_OPPOSITE",
+                  "reason": "CURRENT_CONTRACT_TRIGGER",
+                  "closed_h1_after_first_trigger": 0,
+                  "may_override_exchange_stop": false
+                },
                 "opposition": {
                   "signal_id": "REVERSAL_BOOK_SHORT",
                   "direction": "SHORT",
@@ -102,6 +108,12 @@
                 "observed_at_ms": 35999999000,
                 "trigger_price_basis": "CONTRACT_PRICE",
                 "uncertain": [],
+                "opposition_revalidation": {
+                  "status": "FRESH_CONFIRMED_OPPOSITE",
+                  "reason": "CURRENT_CONTRACT_TRIGGER",
+                  "closed_h1_after_first_trigger": 0,
+                  "may_override_exchange_stop": false
+                },
                 "opposition": {
                   "signal_id": "REVERSAL_BOOK_LONG",
                   "direction": "LONG",

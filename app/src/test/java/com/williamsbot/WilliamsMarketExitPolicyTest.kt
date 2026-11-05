@@ -41,6 +41,10 @@ class WilliamsMarketExitPolicyTest {
         val decision=JSONObject().put("direction","LONG").put("scope_started_at_ms",opened)
             .put("trigger_price_basis","CONTRACT_PRICE")
             .put("observed_at_ms",observed).put("opposition",opposite)
+            .put("opposition_revalidation",JSONObject()
+                .put("status","FRESH_CONFIRMED_OPPOSITE")
+                .put("reason","CLOSED_H1_SIGNAL_REMAINS_VALID")
+                .put("may_override_exchange_stop",false))
             .put("uncertain",org.json.JSONArray())
         val proof=JSONObject().put("reason","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
             .put("signal_id","BOOK:WM1:SELL").put("observed_at_ms",observed)
@@ -51,6 +55,15 @@ class WilliamsMarketExitPolicyTest {
             williamsTc2OppositeExitEvidenceBlocker(o,d.toString(),"BTCUSDT",
                 "LONG","OPPOSITE_WILLIAMS_LEVEL_TRIGGERED",opened,at,mark)
         assertNull(blocked())
+        // A stale/unverified TC2 signal cannot regain exit authority by
+        // re-crossing its old trigger, even with a fresh CONTRACT quote.
+        assertEquals("TC2_OPPOSITE_EXIT_LIFECYCLE_NOT_VERIFIED",
+            blocked(d=JSONObject(decision.toString()).apply { remove("opposition_revalidation") }))
+        assertEquals("TC2_OPPOSITE_EXIT_LIFECYCLE_NOT_VERIFIED",
+            blocked(d=JSONObject(decision.toString()).put("opposition_revalidation",JSONObject()
+                .put("status","NO_EXIT_AUTHORITY")
+                .put("reason","OPPOSITE_SIGNAL_INVALIDATED_AFTER_FIRST_TRIGGER")
+                .put("may_override_exchange_stop",false))))
         assertNotNull(blocked(d=JSONObject(decision.toString())
             .put("uncertain",org.json.JSONArray().put(JSONObject().put("state","AMBIGUOUS")))))
         assertNotNull(blocked(mark=100.0))
