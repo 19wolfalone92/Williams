@@ -1608,9 +1608,17 @@ private class NativeEngine(
     private val scanExecutor = Executors.newFixedThreadPool(12)
     // Research HTTP/SQLite/wave analysis must NEVER delay a signed reduce-only
     // exit or exchange STOP management on the position-management thread.
-    private val tc2ExitResearchExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "williams-tc2-exit-research").apply { isDaemon = true }
-    }
+    // A stock single-thread executor has an UNBOUNDED queue. A backlog of
+    // high-frame history/3-frame wave research on 10 pairs must never grow
+    // unchecked in Android RAM or starve the real STOP/exit engine.
+    private val tc2ExitResearchExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1,1,0L,java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(16),
+        java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable, "williams-tc2-exit-research").apply { isDaemon = true }
+        },
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     private val tc2ExitResearchEnqueued =
         java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->

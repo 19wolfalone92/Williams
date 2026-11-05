@@ -29,13 +29,17 @@ internal data class Tc2ExitShadowCandidate(
 )
 
 private fun tc2ShadowReplayHorizon(
-    entry:JSONObject, closed:List<WilliamsWaveBar>, asOf:Long, hours:Int
+    entry:JSONObject, closed:List<WilliamsWaveBar>, asOf:Long, hours:Int,
+    trailingBars:Int?=null
 ):JSONObject {
     val result=JSONObject().put("status","PENDING_FORWARD_H1")
+        .put("paper_replay_version",2)
         .put("horizon_hours",hours).put("replay_method","NEXT_FULL_H1_BARS_NO_PARTIAL_BAR")
-        .put("actual_binance_fills",false).put("includes_trailing_stop",false)
-        .put("holding_existing_signed_stop_static",true)
-    if(hours<=0 || asOf<=0L) return result.put("status","INVALID_HORIZON")
+        .put("actual_binance_fills",false).put("includes_trailing_stop",trailingBars!=null)
+        .put("holding_existing_signed_stop_static",trailingBars==null)
+        .put("trailing_bars",trailingBars ?: JSONObject.NULL)
+    if(hours<=0 || asOf<=0L || trailingBars!=null && trailingBars !in setOf(3,5))
+        return result.put("status","INVALID_HORIZON_OR_TRAIL")
     val at=entry.optLong("decision_at_ms",0L)
     val from=(at/TC2_SHADOW_HOUR_MS+1)*TC2_SHADOW_HOUR_MS
     val until=from+hours*TC2_SHADOW_HOUR_MS
@@ -56,18 +60,64 @@ private fun tc2ShadowReplayHorizon(
     val qty=entry.optDouble("signed_quantity_abs",Double.NaN)
     if(listOf(openPrice,book,stop,qty).any { !it.isFinite() || it<=0.0 } ||
         sign*(book-stop)<=0.0) return result.put("status","INVALID_SIGNED_STOP_OR_PRICES")
+    // At an intrahour opposite exit, the OLD signed protective STOP can
+    // execute before OR after the contrary trigger within that SAME H1.
+    // Full-hour OHLC cannot establish the order. Retrospective scoring
+    // must NOT credit a hold as possible if both levels were reached.
+    // This is EX-POST research eligibility, not a pre-trade filter.
+    val decisionHourOpen=(at/TC2_SHADOW_HOUR_MS)*TC2_SHADOW_HOUR_MS
+    val firstHour=closed.singleOrNull { it.t==decisionHourOpen }
+        ?: return result.put("status","DECISION_HOUR_CLOSED_H1_MISSING_OR_DUPLICATED")
+    if(listOf(firstHour.o,firstHour.h,firstHour.l,firstHour.c)
+            .any { !it.isFinite() || it<=0.0 } ||
+        firstHour.h<maxOf(firstHour.o,firstHour.l,firstHour.c) ||
+        firstHour.l>minOf(firstHour.o,firstHour.h,firstHour.c))
+        return result.put("status","DECISION_HOUR_CLOSED_H1_INVALID")
+    if(if(sign>0.0) firstHour.l<=stop else firstHour.h>=stop)
+        return result.put("status","DECISION_HOUR_STOP_AND_EXIT_ORDER_UNPROVEN")
+            .put("decision_hour_open_ms",decisionHourOpen)
+            .put("did_not_credit_ambiguous_hold",true)
+            .put("can_modify_stop",false)
     var close=rows.last().c
     var reason="HORIZON_CLOSED_BAR_MARK"
     var stoppedAt=0L
     var maxAdverse=0.0
+    var activeStop=stop
+    var tightened=0
+    // The previous 3/5 completed H1 candles are evidence for *this bar*.
+    // At no time is this bar's high/low used to tighten its own STOP.
+    // Duplicate timestamps cannot choose the 3/5-bar trailing evidence.
+    // Keep the shadow outcome invalid rather than silently selecting a bar.
+    val historyByOpen=closed.groupBy { it.t }
     for(bar in rows) {
+        if(trailingBars!=null) {
+            val preceding=(1..trailingBars).map {
+                historyByOpen[bar.t-it*TC2_SHADOW_HOUR_MS]?.singleOrNull()
+            }
+            if(preceding.any { it==null } || preceding.filterNotNull().any { b ->
+                listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0.0 } ||
+                    b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.h,b.c)
+            }) return result.put("status","INVALID_OR_MISSING_TRAILING_H1")
+            val prior=preceding.filterNotNull()
+            val candidateStop=if(sign>0.0) prior.minOf { it.l }
+                else prior.maxOf { it.h }
+            val stricter=if(sign>0.0) maxOf(activeStop,candidateStop)
+                else minOf(activeStop,candidateStop)
+            if(stricter!=activeStop) {activeStop=stricter;tightened++}
+        }
         val adverse=if(sign>0.0) book-bar.l else bar.h-book
+        // This H1 extreme could be AFTER the exchange STOP hit, so it is
+        // an adverse OHLC UPPER BOUND, not proven intrabar drawdown.
         maxAdverse=maxOf(maxAdverse,adverse*qty)
-        val stopHit=if(sign>0.0) bar.l<=stop else bar.h>=stop
+        val stopHit=if(sign>0.0) bar.l<=activeStop else bar.h>=activeStop
         if(stopHit) {
-            // Gaps can fill WORSE than STOP. No unrealistic guaranteed stop fill.
-            close=if(sign>0.0) minOf(stop,bar.o) else maxOf(stop,bar.o)
-            reason=if(close==stop) "STATIC_EXCHANGE_STOP_TOUCHED" else "GAP_BEYOND_STOP"
+            // Gap-through-STOP fills can be worse than the stop trigger.
+            close=if(sign>0.0) minOf(activeStop,bar.o) else maxOf(activeStop,bar.o)
+            reason=when {
+                close!=activeStop -> "GAP_BEYOND_STOP"
+                trailingBars!=null -> "HISTORIC_3_5_CLOSED_H1_TRAIL_TOUCHED"
+                else -> "STATIC_EXCHANGE_STOP_TOUCHED"
+            }
             stoppedAt=bar.t+TC2_SHADOW_HOUR_MS
             break
         }
@@ -82,18 +132,29 @@ private fun tc2ShadowReplayHorizon(
     val bookPnl=estimatedClosePnl(book)
     val holdPnl=estimatedClosePnl(close)
     val proposedHold=entry.optBoolean("paper_context_hold",false)
+    val proposedStrictHold=entry.optBoolean("paper_strict_h4_d1_hold",false)
     return result.put("status","MATURED")
         .put("from_full_hour_ms",from).put("as_of_closed_ms",until)
         .put("book_exit_price_reference",book)
         .put("hold_exit_price_reference",close)
         .put("hold_outcome_reason",reason)
-        .put("static_stop_hit_at_ms",if(stoppedAt>0L) stoppedAt else JSONObject.NULL)
+        .put("static_stop_hit_at_ms",if(stoppedAt>0L && trailingBars==null)
+            stoppedAt else JSONObject.NULL)
+        .put("trailing_stop_hit_at_ms",if(stoppedAt>0L && trailingBars!=null)
+            stoppedAt else JSONObject.NULL)
+        .put("original_exchange_stop",stop)
+        .put("paper_final_stop",activeStop)
+        .put("paper_trailing_tightening_events",tightened)
         .put("book_estimated_net_usdt",bookPnl)
         .put("hold_estimated_net_usdt",holdPnl)
         .put("context_estimated_net_usdt",if(proposedHold) holdPnl else bookPnl)
         .put("context_minus_book_estimated_usdt",if(proposedHold) holdPnl-bookPnl else 0.0)
+        .put("strict_h4_d1_context_minus_book_estimated_usdt",
+            if(proposedStrictHold) holdPnl-bookPnl else 0.0)
         .put("hold_minus_book_estimated_usdt",holdPnl-bookPnl)
         .put("hold_max_intrabar_adverse_from_decision_usdt",maxAdverse)
+        .put("intrabar_adverse_is_unverified_upper_bound",true)
+        .put("paper_trailing_does_not_assert_exchange_order_mutation",true)
         .put("return_not_certified",true)
         .put("fee_and_slippage_per_side_assumed",TC2_SHADOW_ENTRY_EXIT_COST_RATE)
         .put("funding_included",false)
@@ -112,6 +173,19 @@ internal fun williamsTc2ExitShadowAdvance(
     val events=state.optJSONArray("events") ?: JSONArray()
     val unique=mutableSetOf<String>()
     val retained=mutableListOf<JSONObject>()
+    // An observed opposite source with unavailable or already violated
+    // historical protection must NOT silently disappear from the research.
+    // Keep only 64 distinct recent rejection identities and bounded reasons.
+    val rejectionRows=(state.optJSONArray("sample_rejections") ?: JSONArray())
+    val rejectedKeys=mutableSetOf<String>()
+    val rejections=mutableListOf<JSONObject>()
+    for(i in 0 until rejectionRows.length()) {
+        val rejected=rejectionRows.optJSONObject(i) ?: continue
+        if(rejected.optString("key").isNotBlank() &&
+            rejectedKeys.add(rejected.optString("key")))
+            rejections+=JSONObject(rejected.toString())
+    }
+    var rejectionTotal=state.optLong("sample_rejections_total",0L)
     for(i in 0 until events.length()) {
         val e=events.optJSONObject(i) ?: continue
         val key=e.optString("key")
@@ -129,6 +203,26 @@ internal fun williamsTc2ExitShadowAdvance(
             c.regime.optString("schema")=="WILLIAMS_TC2_SENIOR_EXIT_CONTEXT_V1" &&
             c.regime.optString("mode")=="SHADOW_ONLY" &&
             c.regime.optLong("as_of_ms")<=c.decisionAtMs
+        if(!valid && key.isNotBlank() && rejectedKeys.add(key)) {
+            val reason=when {
+                c.ownerId.isBlank() || c.signalId.isBlank() ||
+                    c.direction !in setOf("LONG","SHORT") ->
+                    "MISSING_VALID_SOURCE_OR_DIRECTION"
+                c.decisionAtMs<=0L || c.decisionAtMs>atMs ->
+                    "CAUSAL_DECISION_TIME_UNVERIFIED"
+                listOf(c.entryPrice,c.observedContract,c.signedStop,c.signedQuantity)
+                    .any { !it.isFinite() || it<=0.0 } ->
+                    "PRICE_QUANTITY_OR_STOP_NOT_SIGNED"
+                if(c.direction=="LONG") c.signedStop>=c.observedContract
+                    else c.signedStop<=c.observedContract ->
+                    "STOP_ALREADY_BREACHED_BEFORE_PAPER_HOLD"
+                else -> "SENIOR_REGIME_PROVENANCE_NOT_VERIFIED"
+            }
+            rejections+=JSONObject().put("key",key)
+                .put("reason",reason).put("observed_at_ms",atMs)
+                .put("no_order_mutation",true)
+            rejectionTotal++
+        }
         if(valid && unique.add(key)) {
             retained+=JSONObject().put("key",key).put("owner_id",c.ownerId)
                 .put("signal_id",c.signalId).put("direction",c.direction)
@@ -138,6 +232,8 @@ internal fun williamsTc2ExitShadowAdvance(
                 .put("signed_quantity_abs",c.signedQuantity)
                 .put("regime_at_decision",JSONObject(c.regime.toString()))
                 .put("paper_context_hold",c.regime.optBoolean("context_hold_hypothesis",false))
+                .put("paper_strict_h4_d1_hold",
+                    c.regime.optBoolean("context_hold_strict_h4_d1_swings_shadow_only",false))
                 .put("book_exit_is_paper_reference",true)
                 .put("may_authorize_orders",false)
         }
@@ -148,17 +244,30 @@ internal fun williamsTc2ExitShadowAdvance(
         .sortedBy { it.t }
     val replay=retained.takeLast(TC2_SHADOW_MAX_EVENTS)
     for(e in replay) for(h in TC2_SHADOW_HORIZONS) {
-        val k="outcome_${h}h"
-        if(e.optJSONObject(k)?.optString("status")=="MATURED") continue
-        val result=tc2ShadowReplayHorizon(e,bars,atMs,h)
-        if(result.optString("status")!="PENDING_FORWARD_H1")
-            e.put(k,result)
+        for((key,trailing) in listOf(
+            "outcome_${h}h" to null,
+            "outcome_${h}h_trail3" to 3,
+            "outcome_${h}h_trail5" to 5
+        )) {
+            // Re-run all pre-v2 stored outcomes. The old replay skipped
+            // the decision hour entirely and could count impossible holds
+            // where Binance STOP and contrary H1 price both touched.
+            val oldResult=e.optJSONObject(key)
+            if(oldResult?.optString("status")=="MATURED" &&
+                oldResult.optInt("paper_replay_version",0)>=2) continue
+            val outcome=tc2ShadowReplayHorizon(e,bars,atMs,h,trailing)
+            if(outcome.optString("status")!="PENDING_FORWARD_H1")
+                e.put(key,outcome)
+        }
     }
     val summary=JSONObject()
     for(h in TC2_SHADOW_HORIZONS) {
         val outcomes=replay.mapNotNull { it.optJSONObject("outcome_${h}h") }
             .filter { it.optString("status")=="MATURED" }
         val proposed=replay.filter { it.optBoolean("paper_context_hold") }
+            .mapNotNull { it.optJSONObject("outcome_${h}h") }
+            .filter { it.optString("status")=="MATURED" }
+        val strictProposed=replay.filter { it.optBoolean("paper_strict_h4_d1_hold") }
             .mapNotNull { it.optJSONObject("outcome_${h}h") }
             .filter { it.optString("status")=="MATURED" }
         summary.put("h${h}",JSONObject()
@@ -173,6 +282,47 @@ internal fun williamsTc2ExitShadowAdvance(
             .put("context_minus_book_estimated_total_usdt",outcomes.sumOf {
                 it.optDouble("context_minus_book_estimated_usdt",0.0)
             })
+            .put("strict_h4_d1_swing_hold_matured",strictProposed.size)
+            .put("strict_h4_d1_swing_hold_better_than_book",strictProposed.count {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt")>0.0
+            })
+            .put("strict_h4_d1_swing_hold_worse_than_book",strictProposed.count {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt")<0.0
+            })
+            .put("strict_h4_d1_swing_hold_minus_book_estimated_total_usdt",outcomes.sumOf {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt",0.0)
+            })
+            .put("is_statistical_proof",false))
+    }
+    for(h in TC2_SHADOW_HORIZONS) for(trail in listOf(3,5)) {
+        val key="outcome_${h}h_trail${trail}"
+        val matured=replay.mapNotNull { it.optJSONObject(key) }
+            .filter { it.optString("status")=="MATURED" }
+        val holds=replay.filter { it.optBoolean("paper_context_hold") }
+            .mapNotNull { it.optJSONObject(key) }
+            .filter { it.optString("status")=="MATURED" }
+        val strict=replay.filter { it.optBoolean("paper_strict_h4_d1_hold") }
+            .mapNotNull { it.optJSONObject(key) }
+            .filter { it.optString("status")=="MATURED" }
+        summary.put("h${h}_trail${trail}",JSONObject()
+            .put("matured",matured.size)
+            .put("context_hold_matured",holds.size)
+            .put("context_hold_better_than_book",holds.count {
+                it.optDouble("context_minus_book_estimated_usdt")>0.0
+            })
+            .put("context_hold_worse_than_book",holds.count {
+                it.optDouble("context_minus_book_estimated_usdt")<0.0
+            })
+            .put("context_hold_estimated_total_delta_usdt",holds.sumOf {
+                it.optDouble("context_minus_book_estimated_usdt",0.0)
+            })
+            .put("strict_hold_matured",strict.size)
+            .put("strict_hold_worse_than_book",strict.count {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt")<0.0
+            })
+            .put("trailing_stop_hit_count",matured.count {
+                it.opt("trailing_stop_hit_at_ms")!=JSONObject.NULL
+            })
             .put("is_statistical_proof",false))
     }
     return JSONObject().put("schema","WILLIAMS_TC2_EXIT_SHADOW_AB_V1")
@@ -182,12 +332,19 @@ internal fun williamsTc2ExitShadowAdvance(
         .put("as_of_ms",atMs)
         .put("max_events",TC2_SHADOW_MAX_EVENTS)
         .put("events",JSONArray(replay))
+        .put("sample_rejections",JSONArray(rejections.takeLast(TC2_SHADOW_MAX_EVENTS)))
+        .put("sample_rejections_total",rejectionTotal)
+        .put("sample_rejection_counts_are_bounded_recent_diagnostics_only",true)
         .put("summary",summary)
         .put("can_place_orders",false).put("can_close",false)
         .put("can_modify_stop",false).put("can_reverse",false)
         .put("comparison_limits",JSONArray(listOf(
             "FIRST_DECISION_H1_PARTIAL_BAR_EXCLUDED",
-            "STATIC_ORIGINAL_STOP_NOT_FULL_BOOK_TRAIL",
+            "DECISION_HOUR_BOTH_STOP_AND_OPPOSITE_TOUCH_FAILS_CLOSED_NO_INTRABAR_ORDER",
+            "PRE_V2_MATURED_OUTCOMES_RECOMPUTED_WITH_DECISION_HOUR_GUARD",
+            "STATIC_ORIGINAL_STOP_AND_CAUSAL_3_5_CLOSED_H1_TRAIL_SEPARATELY",
+            "PAPER_TRAILING_NEVER_WRITES_BINANCE_STOP",
+            "ACTUAL_H1_TRAILING_EXECUTION_FILLS_UNVERIFIED",
             "MARKET_CLOSE_AT_OBSERVED_CONTRACT_NOT_REAL_FILL",
             "NO_FUNDING_BORROW_OR_LIQUIDATION",
             "PER_SIDE_COST_ESTIMATES",

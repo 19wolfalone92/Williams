@@ -73,6 +73,46 @@ class WilliamsTc2SeniorExitContextTest {
         assertEquals(3,result.getJSONArray("frames").length())
     }
 
+    @Test fun futureH1H4D1BarsCannotChangeAnAlreadyObservedRegimeOrSwingCount() {
+        val original=mapOf("1d" to series("1d",1),
+            "4h" to series("4h",1),
+            "1h" to series("1h",-1))
+        val first=williamsTc2SeniorExitContext("LONG",asOf,original,"WM3:SHORT")
+        val mutated=original.mapValues { (_,bars) ->
+            // An impossible massive future candle may not alter any field
+            // labelled AS-OF the older decision timestamp.
+            bars+WilliamsWaveBar(asOf,9000.0,12000.0,1.0,4500.0,1000.0)
+        }
+        val second=williamsTc2SeniorExitContext("LONG",asOf,mutated,"WM3:SHORT")
+        assertEquals(first.getString("regime"),second.getString("regime"))
+        assertEquals(first.getString("h4_bias"),second.getString("h4_bias"))
+        assertEquals(first.getString("d1_bias"),second.getString("d1_bias"))
+        assertEquals(first.getJSONObject("closed_h1_h4_d1_swing_patterns").toString(),
+            second.getJSONObject("closed_h1_h4_d1_swing_patterns").toString())
+        assertEquals(first.getBoolean("context_hold_strict_h4_d1_swings_shadow_only"),
+            second.getBoolean("context_hold_strict_h4_d1_swings_shadow_only"))
+        assertFalse(second.getBoolean("can_authorize_exit"))
+    }
+
+    @Test fun strictContextPaperHoldCannotExistWithoutBaselineAndRealSwingEvidence() {
+        for(side in listOf("LONG","SHORT")) {
+            val sign=if(side=="LONG") 1 else -1
+            val result=williamsTc2SeniorExitContext(side,asOf,mapOf(
+                "1d" to series("1d",sign),
+                "4h" to series("4h",sign),
+                "1h" to series("1h",-sign)
+            ),"WM2:OPPOSITE")
+            val strict=result.getBoolean("context_hold_strict_h4_d1_swings_shadow_only")
+            if(strict) {
+                assertTrue(result.getBoolean("context_hold_hypothesis"))
+                assertTrue(result.getBoolean("senior_swing_structure_matches_position"))
+            }
+            assertTrue(result.getBoolean("contextual_hold_not_approved_by_historical_oos"))
+            assertFalse(result.getBoolean("can_modify_stop"))
+            assertFalse(result.getBoolean("can_veto_book_exit"))
+        }
+    }
+
     @Test fun shortSideIsIndependentAndDoesNotUseAbsolutePositiveAoAsSide() {
         val result=williamsTc2SeniorExitContext("SHORT",asOf,mapOf(
             "1d" to series("1d",-1),"4h" to series("4h",-1),"1h" to series("1h",1)
