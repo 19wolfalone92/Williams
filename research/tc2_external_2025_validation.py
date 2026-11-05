@@ -86,6 +86,9 @@ def _cohort(events:list[dict])->dict[str,Any]:
                               if x["outcomes"][key].get("valid")]
                     report[name][key]=original._summary(outcomes)
                     report[name][key]["excluded_before_hold"]=len(cohort)-len(outcomes)
+                    report[name][key]["exclusion_reasons"]=dict(collections.Counter(
+                        x["outcomes"][key].get("reason","UNSPECIFIED")
+                        for x in cohort if not x["outcomes"][key].get("valid")))
                     report[name][key]["was_independent_real_binance_fill"]=False
     return report
 
@@ -144,6 +147,7 @@ def evaluate_2025(root:Path)->dict[str,Any]:
             "Original STOP was a hypothetical 3/5-bar history STOP, not signed Binance position protection",
             "3/5 trailing on later closed H1 bars is counterfactual, no real Binance stop updates",
             "Gap fill at adverse opening price is only an approximation",
+            "Trigger-hour STOP and opposite breakout both touched: unknown order is explicitly EXCLUDED from PnL scoring",
             "Unknown first trigger hour path is skipped; no M1 tick order or bid/ask",
             "No funding, partial fills, reverse pyramid, leverage, liquidation or actual execution",
             "Many symbols/signals correlate; do not present candidate count as independent trades",
