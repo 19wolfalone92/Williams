@@ -1606,6 +1606,13 @@ private class NativeEngine(
     private val maxScanSymbols = 10
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
+    // Research HTTP/SQLite/wave analysis must NEVER delay a signed reduce-only
+    // exit or exchange STOP management on the position-management thread.
+    private val tc2ExitResearchExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "williams-tc2-exit-research").apply { isDaemon = true }
+    }
+    private val tc2ExitResearchEnqueued =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
@@ -1767,6 +1774,9 @@ private class NativeEngine(
     fun backgroundSnapshot():BackgroundRuntimeSnapshot = BackgroundRuntimeSnapshot(
         runCatching { prefs.getBoolean("auto_run",false) }.getOrDefault(false),running,
         worker?.isAlive==true,runtimeGeneration,lastWorkerLoopElapsedMs)
+    // Scanner and position manager execute on different threads. Shadow
+    // A/B journal read-modify-write must never lose an observed exit record.
+    private val tc2ExitShadowLock=Any()
     private var scanSymbols = mutableListOf<String>()
     private var candidates = JSONArray()
     private var primaryCandles = emptyList<CandleN>()
@@ -6756,6 +6766,72 @@ private class NativeEngine(
                         .put("market_close_authorized",false))
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
+            if(profile==williamsTc2Profile && actionableOpposing!=null && tc2TriggerNow) {
+                // Capture the causal decision BEFORE reducing the position,
+                // but do NOT fetch H4/D1 or write research SQLite on the
+                // time-critical signed exit / STOP management thread.
+                val signalId=actionableOpposing.signalId
+                val ownerId=intent.optString("client_id")
+                val sampledAt=futuresMarketData.exchangeNowMs()
+                val sampledContract=runCatching { futuresMarketData.price(symbol) }
+                    .getOrDefault(Double.NaN)
+                val sampledStop=intent.optString("protective_stop").toDoubleOrNull()
+                    ?: Double.NaN
+                val sampledEntry=exchangeEntryForExit
+                val sampledQty=kotlin.math.abs(signedQty)
+                val sampledH1=bars.toList()
+                val sampleKey=symbol+":"+ownerId+":"+signalId
+                if(tc2ExitResearchEnqueued.add(sampleKey)) {
+                    runCatching {
+                        tc2ExitResearchExecutor.execute {
+                            val completed=runCatching {
+                                // Read candles later but FILTER them to the
+                                // immutable exchange decision timestamp. No
+                                // future candle may rewrite the earlier regime.
+                                val sources=linkedMapOf("1h" to sampledH1)
+                                for(frame in listOf("4h","1d")) sources[frame]=
+                                    runCatching {
+                                        fetchCandles(symbol,frame,180).map {
+                                            WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                                        }
+                                    }.getOrDefault(emptyList())
+                                val context=williamsTc2SeniorExitContext(dir,sampledAt,
+                                    sources,signalId)
+                                val candidate=Tc2ExitShadowCandidate(ownerId,signalId,dir,
+                                    sampledAt,sampledEntry,sampledContract,sampledStop,
+                                    sampledQty,context)
+                                synchronized(tc2ExitShadowLock) {
+                                    val journalKey="tc2_exit_shadow_ab_"+symbol
+                                    val old=executionStore.readState(journalKey)
+                                        ?.let { JSONObject(it) }
+                                    val next=williamsTc2ExitShadowAdvance(old,symbol,
+                                        sampledAt,sampledH1,candidate)
+                                    check(executionStore.writeState(journalKey,next.toString())) {
+                                        "TC2_SHADOW_EXIT_JOURNAL_NOT_DURABLE" }
+                                    check(executionStore.writeState("tc2_exit_regime_"+symbol,
+                                        context.toString())) { "TC2_EXIT_CONTEXT_NOT_DURABLE" }
+                                }
+                            }
+                            if(completed.isFailure) {
+                                // Allow retry on the next management pass, if
+                                // there still is an owned open campaign.
+                                tc2ExitResearchEnqueued.remove(sampleKey)
+                                runCatching { auditStore.recordCockpitEvent(
+                                    "TC2_EXIT_REGIME_SHADOW",symbol=symbol,
+                                    state="RESEARCH_UNAVAILABLE",
+                                    detail=completed.exceptionOrNull()?.javaClass?.simpleName
+                                        ?: "UNAVAILABLE") }
+                            }
+                        }
+                    }.onFailure {
+                        tc2ExitResearchEnqueued.remove(sampleKey)
+                        runCatching { auditStore.recordCockpitEvent(
+                            "TC2_EXIT_REGIME_SHADOW",symbol=symbol,
+                            state="RESEARCH_SCHEDULING_UNAVAILABLE",
+                            detail=it.javaClass.simpleName) }
+                    }
+                }
+            }
             if (williamsStrategyCanMarketClose(profile) &&
                 (profile!=williamsCourseProfile || courseProof!=null) &&
                 (actionableOpposing != null ||
@@ -7650,6 +7726,29 @@ private class NativeEngine(
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
+                    // Forward-score existing opposite-exit paper samples on
+                    // the scanner's ALREADY FETCHED H1 candles (no extra REST).
+                    // Only run after a newly CLOSED H1 bar; this does not
+                    // participate in readiness, signal or trade execution.
+                    runCatching {
+                        val now=futuresMarketData.exchangeNowMs()
+                        val lastClosed=candles.lastOrNull { it.t+WILLIAMS_H1_MS<=now }
+                            ?.let { it.t+WILLIAMS_H1_MS } ?: 0L
+                        if(lastClosed>0L) synchronized(tc2ExitShadowLock) {
+                            val key="tc2_exit_shadow_ab_"+symbol
+                            val old=executionStore.readState(key)?.let { JSONObject(it) }
+                            if(old!=null && lastClosed>old.optLong("as_of_ms",0L)) {
+                                val next=williamsTc2ExitShadowAdvance(old,symbol,lastClosed,
+                                    candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })
+                                check(executionStore.writeState(key,next.toString())) {
+                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED" }
+                            }
+                        }
+                    }.onFailure { error ->
+                        runCatching { auditStore.recordCockpitEvent("TC2_EXIT_SHADOW_REPLAY",
+                            symbol=symbol,state="RESEARCH_UNAVAILABLE",
+                            detail=error.javaClass.simpleName) }
+                    }
                     stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
                     markScanProgress()
@@ -10095,6 +10194,12 @@ private class NativeEngine(
                 ?.let { trace.put("parent_lifecycle",it) }
             runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("opposition_check",it) }
+            // Cockpit can explain WHY a counter-signal resembles an H1
+            // correction against H4/D1, without implying a permitted order.
+            runCatching { JSONObject(executionStore.readState("tc2_exit_regime_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("tc2_senior_regime_shadow",it) }
+            runCatching { JSONObject(executionStore.readState("tc2_exit_shadow_ab_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("tc2_exit_book_vs_context_summary",it.optJSONObject("summary") ?: JSONObject()) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
             trace.put("entry_passport",williamsEntryPassport(symbol,execution,intents,
                 audit.getOrNull()?.get(symbol),passportNow,passportClockFresh,journal.isSuccess)
@@ -12273,6 +12378,18 @@ private class NativeEngine(
                                 .put("can_place_orders",false))
                         }
                     })
+                }
+            })
+            .put("tc2_senior_exit_regime_research",JSONObject().apply {
+                for(symbol in coreSymbols.sorted()) {
+                    val context=runCatching { executionStore.readState("tc2_exit_regime_"+symbol)
+                        ?.let { JSONObject(it) } }.getOrNull()
+                    val shadow=runCatching { executionStore.readState("tc2_exit_shadow_ab_"+symbol)
+                        ?.let { JSONObject(it) } }.getOrNull()
+                    put(symbol,JSONObject()
+                        .put("last_context",context ?: JSONObject().put("status","NO_OBSERVED_OPPOSITE_EXIT"))
+                        .put("paper_book_vs_context",shadow ?: JSONObject().put("status","NO_PROSPECTIVE_SAMPLES"))
+                        .put("can_place_orders",false).put("can_close",false))
                 }
             })
             .put("observer_paper_archive",JSONObject().apply {
