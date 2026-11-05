@@ -10194,6 +10194,12 @@ private class NativeEngine(
                 ?.let { trace.put("parent_lifecycle",it) }
             runCatching { JSONObject(executionStore.readState("decision_h1_opposition_"+symbol).orEmpty()) }.getOrNull()
                 ?.let { trace.put("opposition_check",it) }
+            // Cockpit can explain WHY a counter-signal resembles an H1
+            // correction against H4/D1, without implying a permitted order.
+            runCatching { JSONObject(executionStore.readState("tc2_exit_regime_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("tc2_senior_regime_shadow",it) }
+            runCatching { JSONObject(executionStore.readState("tc2_exit_shadow_ab_"+symbol).orEmpty()) }.getOrNull()
+                ?.let { trace.put("tc2_exit_book_vs_context_summary",it.optJSONObject("summary") ?: JSONObject()) }
             trace.put("order_chain",williamsExecutionChain(intents,symbol))
             trace.put("entry_passport",williamsEntryPassport(symbol,execution,intents,
                 audit.getOrNull()?.get(symbol),passportNow,passportClockFresh,journal.isSuccess)
