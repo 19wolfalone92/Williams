@@ -131,3 +131,65 @@ def test_both_sides_in_single_hour_have_no_intrabar_ordering_authority():
           "jaw":[100.0]*90,"lips":[100.0]*90}
     events=list(w.signals(rows,inds,.01))
     assert all(e["decision_at"]!=rows[52][0] for e in events)
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_causal_trailing_stop_cannot_widen_and_is_not_static(side):
+    sign=1 if side=="LONG" else -1
+    rows=[]
+    for i in range(28):
+        close=100+sign*i*.6
+        rows.append((w.START+i*w.HOUR,close-.2,close+2,close-2,close,3.0))
+    idx=10
+    reference=100+sign*idx*.6
+    original=w.replay({"i":idx,"owner":side,"exit_ref":reference},
+                      rows,6,stop_bars=5,trailing=False)
+    trailed=w.replay({"i":idx,"owner":side,"exit_ref":reference},
+                     rows,6,stop_bars=5,trailing=True)
+    assert original["valid"] and trailed["valid"]
+    assert not original["stop_hit"] and not trailed["stop_hit"]
+    assert trailed["trailing_tightening_events"]>0
+    assert (trailed["final_stop_reference"]>trailed["initial_stop_reference"]
+            if side=="LONG" else
+            trailed["final_stop_reference"]<trailed["initial_stop_reference"])
+    assert trailed["stop_model"]=="TRAILING_3_OR_5_PREVIOUS_CLOSED_H1"
+    assert not trailed["no_intrabar_sequence_or_bid_ask"] is False
+
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_dynamic_stop_uses_prebar_candles_and_gap_worse_than_trigger(side):
+    sign=1 if side=="LONG" else -1
+    rows=[]
+    for i in range(25):
+        close=100+sign*i*.6
+        rows.append((w.START+i*w.HOUR,close-.2,close+2,close-2,close,3.0))
+    idx=10
+    reference=100+sign*idx*.6
+    bad=15
+    bad_open=100+sign*3.1
+    bad_hi=bad_open+1.3
+    bad_lo=bad_open-1.3
+    rows[bad]=(rows[bad][0],bad_open,bad_hi,bad_lo,bad_open,3.0)
+    event={"i":idx,"owner":side,"exit_ref":reference}
+    original=w.replay(event,rows,6,stop_bars=5,trailing=False)
+    trailing=w.replay(event,rows,6,stop_bars=5,trailing=True)
+    assert original["valid"] and trailing["valid"]
+    assert not original["stop_hit"]
+    assert trailing["stop_hit"]
+    assert trailing["exit_bar_open_ms"]==rows[bad][0]
+    # Gap beyond tightened protective STOP must not be priced at ideal stop.
+    assert trailing["exit_reference"]==bad_open
+    assert (trailing["exit_reference"]<trailing["final_stop_reference"]
+            if side=="LONG" else
+            trailing["exit_reference"]>trailing["final_stop_reference"])
+
+
+def test_trailing_replay_future_perturbation_cannot_change_past_closed_horizon():
+    rows=bars(40)
+    # An unambiguous original stop on the correct side of the LONG ref.
+    event={"i":10,"owner":"LONG","exit_ref":105.0}
+    known=w.replay(event,rows,3,stop_bars=3,trailing=True)
+    altered=list(rows)
+    k=20
+    altered[k]=(rows[k][0],999.0,1000.0,998.0,999.0,3.0)
+    assert w.replay(event,altered,3,stop_bars=3,trailing=True)==known
