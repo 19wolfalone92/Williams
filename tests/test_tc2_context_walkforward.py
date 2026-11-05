@@ -193,3 +193,61 @@ def test_trailing_replay_future_perturbation_cannot_change_past_closed_horizon()
     k=20
     altered[k]=(rows[k][0],999.0,1000.0,998.0,999.0,3.0)
     assert w.replay(event,altered,3,stop_bars=3,trailing=True)==known
+
+
+def test_senior_h4_and_d1_independent_confirmed_swings_are_required_for_strict_shadow():
+    # Construct a historical H1 decision at UTC day 60. The latest D1
+    # candle allowed is day 59; anything from day 60 must not be read.
+    at=w.START+60*w.FRAMES["1d"]
+    i=60*24-1
+    event={"i":i,"owner":"LONG","decision_at":at}
+    def frame(frame, n):
+        return {"close_times":[w.START+(k+1)*w.FRAMES[frame] for k in range(n)],
+            "bias":["UP"]*n,"ao":[1.0]*n,
+            "last_high":[90.0]*n,"prev_high":[80.0]*n,
+            "last_low":[70.0]*n,"prev_low":[60.0]*n}
+    h1=frame("1h",1500);h1["bias"][i]="DOWN"
+    h4=frame("4h",400);d1=frame("1d",100)
+    candles4=[(w.START+k*w.FRAMES["4h"],99.0,101.0,98.0,100.0,2.0)
+              for k in range(400)]
+    candles1=[(w.START+k*w.FRAMES["1d"],99.0,101.0,98.0,100.0,2.0)
+              for k in range(100)]
+    observed=w.regime(event,h1,h4,d1,candles4,candles1)
+    assert observed["hold"]
+    assert observed["hold_structure"]
+    assert observed["hold_h4_and_d1_structure"]
+    assert observed["h4_swing_pattern_confirmed"] and observed["d1_swing_pattern_confirmed"]
+    # A D1 sequence that is unverified at cutoff must NOT masquerade as
+    # independently confirmed senior trend. The permissive baseline is
+    # only a hypothesis; the STRICT research variant has no hold.
+    d1["prev_low"][59]=72.0
+    observed=w.regime(event,h1,h4,d1,candles4,candles1)
+    assert observed["hold"]
+    assert observed["hold_structure"]
+    assert not observed["hold_h4_and_d1_structure"]
+    assert not observed["d1_swing_pattern_confirmed"]
+
+
+def test_all_three_shadow_cohorts_are_monotone_subsets_by_definition():
+    root=__import__("pathlib").Path(__file__).resolve().parents[1]/"research"/"data"
+    report=w.evaluate(root)
+    assert report["instrument_count"]==10
+    assert report["holdout"]["all_candidates"]>0
+    for group in ("development","holdout"):
+        baseline=report[group]["h4_d1_only"]["proposed_holds"]
+        h4=report[group]["h4_swing_confirmed"]["proposed_holds"]
+        senior=report[group]["both_h4_d1_swings_confirmed"]["proposed_holds"]
+        assert 0<=senior<=h4<=baseline
+        for name in ("h4_d1_only","h4_swing_confirmed","both_h4_d1_swings_confirmed"):
+            metrics=report[group][name]
+            for horizon in (6,24):
+                for n in (3,5):
+                    static=metrics[f"{horizon}h_stop{n}"]
+                    dynamic=metrics[f"{horizon}h_trail{n}"]
+                    # Both compare the SAME eligible events; no selective
+                    # deletion of losing historical STOP outcomes is allowed.
+                    assert static["n"]==dynamic["n"]
+                    assert static["ineligible_historic_stop"]==dynamic["ineligible_historic_stop"]
+                    assert dynamic["trailing_stop_tightening_events"]>=0
+    assert not report["execution_authority"]
+    assert not report["profitability_certified"]
