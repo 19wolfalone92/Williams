@@ -102,3 +102,32 @@ def test_invalid_gapped_or_future_data_must_be_rejected(tmp_path):
         (tmp_path/f"usdm_closed_2026_{symbol}.json").write_text(json.dumps(data))
         with pytest.raises(ValueError):
             w.load(symbol,tmp_path)
+
+def test_wm3_confirmed_fractal_can_trigger_two_hours_later_but_prior_stop_may_already_be_hit():
+    rows=[(w.START+i*w.HOUR,100.0,101.0,99.0,100.0,1.0)
+          for i in range(90)]
+    rows[48]=(rows[48][0],100.0,110.0,99.0,100.0,1.0)
+    rows[52]=(rows[52][0],100.0,112.0,99.0,111.0,1.0)
+    fake_indicators={"ao":[0.0]*90,
+        "teeth":[100.0]*90,"jaw":[100.0]*90,"lips":[100.0]*90}
+    observed=list(w.signals(rows,fake_indicators,.01))
+    wm3=[e for e in observed if e["source"]=="WM3_FRACTAL"]
+    assert len(wm3)==1
+    assert wm3[0]["owner"]=="SHORT"
+    assert wm3[0]["decision_at"]==rows[52][0]
+    assert not wm3[0]["prior_5bar_stop_behind_trigger"]
+    assert not w.replay(wm3[0],rows,6,stop_bars=5)["valid"]
+
+
+def test_both_sides_in_single_hour_have_no_intrabar_ordering_authority():
+    rows=[(w.START+i*w.HOUR,100.0,101.0,99.0,100.0,1.0)
+          for i in range(90)]
+    # Bearish and bullish WM3 fractals can coexist from preceding closed
+    # bars, but both stops in same future hour are not serializable from OHLC.
+    rows[46]=(rows[46][0],100.0,108.0,99.0,100.0,1.0)
+    rows[48]=(rows[48][0],100.0,110.0,90.0,100.0,1.0)
+    rows[52]=(rows[52][0],100.0,112.0,85.0,100.0,1.0)
+    inds={"ao":[0.0]*90,"teeth":[100.0]*90,
+          "jaw":[100.0]*90,"lips":[100.0]*90}
+    events=list(w.signals(rows,inds,.01))
+    assert all(e["decision_at"]!=rows[52][0] for e in events)
