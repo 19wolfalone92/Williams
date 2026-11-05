@@ -39,6 +39,7 @@ internal fun williamsTc2SeniorExitContext(
     val counterBias=if(ownerDirection=="LONG") "DOWN" else "UP"
     val perFrame=JSONArray()
     val states=linkedMapOf<String,String>()
+    val verifiedClosed=linkedMapOf<String,List<WilliamsWaveBar>>()
     val breaks=linkedMapOf<String,Boolean>()
     val uncertainty=mutableListOf<String>()
     val correctiveWaveLabels=setOf("W2","W4","A","B","C")
@@ -54,6 +55,7 @@ internal fun williamsTc2SeniorExitContext(
             continue
         }
         val bars=checked.getOrThrow()
+        verifiedClosed[frame]=bars
         val reading=williamsMarketReading(bars,JSONObject(),frame,asOfMs)
         val bias=reading.optString("observed_bias","MIXED")
         if(reading.optString("state")!="OBSERVED" || bias !in setOf("UP","DOWN","MIXED")) {
@@ -106,6 +108,14 @@ internal fun williamsTc2SeniorExitContext(
     }
     val d1=states["1d"];val h4=states["4h"];val h1=states["1h"]
     val complete=states.size==3
+    // Price/time containment across actual D1 → H4 → H1 wave hypotheses.
+    // Multiple competing parent-child paths stay as alternatives: a
+    // geometric containment link is NOT a certified Elliott wave degree.
+    val genealogy=if(complete) runCatching {
+        buildWilliamsWaveHierarchy(verifiedClosed,asOfMs,
+            analysisFrames=listOf("1d","4h","1h"))
+    }.getOrNull() else null
+    val links=genealogy?.links.orEmpty().take(64)
     val seniorOwner=complete && d1==ownerBias && h4==ownerBias
     val seniorOpponent=complete && d1==counterBias && h4==counterBias
     val h4Broken=breaks["4h"]
@@ -137,6 +147,11 @@ internal fun williamsTc2SeniorExitContext(
         .put("h4_structure_broken",h4Broken ?: JSONObject.NULL)
         .put("d1_structure_broken",d1Broken ?: JSONObject.NULL)
         .put("wave_correction_hypotheses",JSONArray(uniqueHints))
+        .put("nested_wave_price_time_links",JSONArray(links.map { it.toJson() }))
+        .put("nested_wave_link_count_observed",links.size)
+        .put("wave_parent_child_containment_observed",genealogy?.hasRequiredContainedChain() ?: false)
+        .put("wave_genealogy_frame_errors",JSONObject(genealogy?.frameErrors ?: emptyMap<String,String>()))
+        .put("wave_parent_child_containment_is_elliott_proof",false)
         .put("wave_hypotheses_only",true)
         .put("uncertainties",JSONArray(uncertainty.distinct()))
         .put("frames",perFrame)
