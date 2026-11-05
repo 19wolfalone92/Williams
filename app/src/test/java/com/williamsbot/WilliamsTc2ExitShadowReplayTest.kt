@@ -94,6 +94,34 @@ class WilliamsTc2ExitShadowReplayTest {
             after.getJSONArray("events").getJSONObject(0).getJSONObject("outcome_24h").getString("status"))
     }
 
+    @Test fun seniorConfirmedSwingAndSimpleSeniorBiasAreSeparatePaperExperiments() {
+        val confirmed=regime(true)
+            .put("context_hold_strict_h4_d1_swings_shadow_only",true)
+        val c=candidate().copy(regime=confirmed)
+        val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,emptyList(),c)
+        val entry=first.getJSONArray("events").getJSONObject(0)
+        assertTrue(entry.getBoolean("paper_context_hold"))
+        assertTrue(entry.getBoolean("paper_strict_h4_d1_hold"))
+        val later=williamsTc2ExitShadowAdvance(first,"BTCUSDT",17*hour,
+            future("LONG"))
+        val outcome=later.getJSONArray("events").getJSONObject(0)
+            .getJSONObject("outcome_6h")
+        assertEquals(outcome.getDouble("context_minus_book_estimated_usdt"),
+            outcome.getDouble("strict_h4_d1_context_minus_book_estimated_usdt"),0.0)
+        val summary=later.getJSONObject("summary").getJSONObject("h6")
+        assertEquals(1,summary.getInt("strict_h4_d1_swing_hold_matured"))
+        assertEquals(1,summary.getInt("strict_h4_d1_swing_hold_better_than_book"))
+        assertFalse(later.getBoolean("can_close"))
+        assertFalse(later.getBoolean("can_modify_stop"))
+        // An unverified senior structure can propose a BASELINE paper hold,
+        // but must not be silently promoted to the stricter held variant.
+        val unverified=williamsTc2ExitShadowAdvance(null,"ETHUSDT",at,
+            emptyList(),candidate())
+        val unverifiedEntry=unverified.getJSONArray("events").getJSONObject(0)
+        assertTrue(unverifiedEntry.getBoolean("paper_context_hold"))
+        assertFalse(unverifiedEntry.getBoolean("paper_strict_h4_d1_hold"))
+    }
+
     @Test fun malformedCandidateDoesNotGetAddedToResearchLedger() {
         val wrong=candidate().copy(signedStop=120.0)
         val e=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,emptyList(),wrong)
