@@ -72,7 +72,7 @@ def _cohort(events:list[dict])->dict[str,Any]:
     for name,criterion in (
         ("h4_d1_only","hold"),
         ("h4_swing_confirmed","hold_structure"),
-        ("h4_and_d1_swings_confirmed","hold_both_structures"),
+        ("h4_and_d1_swings_confirmed","hold_h4_and_d1_structure"),
     ):
         cohort=[x for x in events if x["context"].get(criterion,False)]
         report[name]={"proposed_holds":len(cohort),
