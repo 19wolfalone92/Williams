@@ -111,8 +111,13 @@ def _frame_at(frame:dict,t:int)->int:
 def signals(rows:list[tuple],indic:dict,tick:float):
     """Conservative CLOSED-H1 book-style candidates; not perfect TC2 WM1 geometry."""
     ao=indic["ao"]
+    # Pending WM3 STOP may execute several hours after the confirmed five
+    # candle fractal. Twenty H1 hours = declared RESEARCH TTL, not book rule.
+    pending_long=[];pending_short=[]
     for i in range(40,len(rows)-25):
         now=rows[i];prior=rows[i-1];a=ao[i]
+        pending_long=[x for x in pending_long if x[2]>=i+1]
+        pending_short=[x for x in pending_short if x[2]>=i+1]
         long=[];short=[]
         if all(math.isfinite(ao[k]) for k in (i-3,i-2,i-1,i)):
             if (ao[i]>ao[i-1]>ao[i-2]>ao[i-3]
@@ -140,10 +145,13 @@ def signals(rows:list[tuple],indic:dict,tick:float):
         if math.isfinite(indic["teeth"][i]):
             if (all(rows[j][2]>rows[k][2] for k in (j-2,j-1,j+1,j+2)) and
                 rows[j][2]+tick>indic["teeth"][i]):
-                long.append(("WM3_FRACTAL",rows[j][2]+tick))
+                pending_long.append(("WM3_FRACTAL",rows[j][2]+tick,i+20))
             if (all(rows[j][3]<rows[k][3] for k in (j-2,j-1,j+1,j+2)) and
                 rows[j][3]-tick<indic["teeth"][i]):
-                short.append(("WM3_FRACTAL",rows[j][3]-tick))
+                pending_short.append(("WM3_FRACTAL",rows[j][3]-tick,i+20))
+        # Only original price boundaries from already-formed fractals.
+        long += [(name,price) for name,price,_ in pending_long]
+        short += [(name,price) for name,price,_ in pending_short]
         # The next H1 is not usable for signal FORMATION. Its high/low
         # are used only after that hour has elapsed, as trigger/fill proxy.
         later=rows[i+1]
@@ -154,6 +162,10 @@ def signals(rows:list[tuple],indic:dict,tick:float):
         if short and later[3]<=max(x[1] for x in short):
             source,level=max(short,key=lambda x:x[1])
             triggered.append((source,"LONG",level))
+        # Consumed fractals cannot return as previously TRIGGERED exits.
+        # Same-hour two-sided triggers are unordered and always excluded.
+        pending_long=[x for x in pending_long if later[2]<x[1]]
+        pending_short=[x for x in pending_short if later[3]>x[1]]
         if len(triggered)!=1:
             continue  # unknown same-hour event ordering; never invent
         source,owner,level=triggered[0]
@@ -286,7 +298,7 @@ def evaluate(root:Path)->dict:
         "period_utc":"2026-01-01..2026-11-05 06:00Z",
         "train_period":"Jan-Jul 2026","embargo":"Aug 2026",
         "out_of_sample":"Sep 2026 to 2026-11-05 06:00Z",
-        "historical_williams_signals":"WM2 AO third colour, WM3 5-bar fractal and conservative WM1 proxy; NOT full book or owned campaign",
+        "historical_williams_signals":"WM2 AO third colour, WM3 confirmed 5-bar fractal plus 20-hour research pending STOP, conservative WM1 proxy; NOT full book or owned campaign",
         "fill_model":"next H1 breakout level or worse gap opening; decision-hour path excluded",
         "stop_model":"static historic last 3 or 5 H1 bars (NOT signed actual STOP, NOT book trailing)",
         "h1_h4_d1_feature_lookahead":False,"future_waves_certified":False,
@@ -296,6 +308,7 @@ def evaluate(root:Path)->dict:
         "all_event_count":len(all_events),
         "development":summarize(train),"holdout":summarize(oos),
         "warnings":["WM1 numeric proxy is not visually certified book angulation",
+            "WM3 20-hour pending expiry is a research assumption, NOT a TC2 author rule",
             "NO real campaign ownership, reverse pyramid, funding, liquidation, bid/ask or exchange receipts",
             "Only candidate opposite-entry events; not actual full TC2 book exit trade list",
             "Simulated stop uses pre-signal 3/5 H1 lows/highs, NOT signed Binance STOP",
