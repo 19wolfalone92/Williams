@@ -12370,6 +12370,10 @@ private class NativeEngine(
             executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
         )
         val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
+        // settings() includes megabytes of ten-symbol decision traces.
+        // Avoid allocating/retaining a SECOND identical mutable JSON tree;
+        // both ZIP entries retain the same complete diagnostic contents.
+        val configurationSnapshot=settings()
         return JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -12435,7 +12439,7 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("futures_campaign_coordinator", coordinatorSnapshot)
             .put("status", statusSnapshot)
-            .put("settings", settings())
+            .put("settings", configurationSnapshot)
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
                 .put("app_version", BuildConfig.VERSION_NAME)
@@ -12443,7 +12447,7 @@ private class NativeEngine(
                 .put("android_sdk", android.os.Build.VERSION.SDK_INT)
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
-            .put("configuration_sanitized", settings())
+            .put("configuration_sanitized", configurationSnapshot)
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
