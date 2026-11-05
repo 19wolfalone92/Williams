@@ -41,6 +41,7 @@ internal fun williamsTc2SeniorExitContext(
     val states=linkedMapOf<String,String>()
     val verifiedClosed=linkedMapOf<String,List<WilliamsWaveBar>>()
     val breaks=linkedMapOf<String,Boolean>()
+    val swingPatterns=linkedMapOf<String,String>()
     val uncertainty=mutableListOf<String>()
     val correctiveWaveLabels=setOf("W2","W4","A","B","C")
     val waveHints=mutableListOf<String>()
@@ -74,6 +75,35 @@ internal fun williamsTc2SeniorExitContext(
         val pivot=pivots.lastOrNull { it.kind==if(ownerDirection=="LONG") "LOW" else "HIGH" }
         val broken=pivot?.let { if(ownerDirection=="LONG") bars.last().c<it.price else bars.last().c>it.price }
         if(broken!=null) breaks[frame]=broken
+        // Last two independently CONFIRMED highs/lows, each with two right
+        // closed candles, are an observable swing grammar. This is more
+        // informative than the sign of one AO bar and does not certify W4/ABC.
+        val highs=pivots.filter { it.kind=="HIGH" }.takeLast(2)
+        val lows=pivots.filter { it.kind=="LOW" }.takeLast(2)
+        val ascending=highs.size==2 && lows.size==2 &&
+            highs.last().price>highs.first().price &&
+            lows.last().price>lows.first().price
+        val descending=highs.size==2 && lows.size==2 &&
+            highs.last().price<highs.first().price &&
+            lows.last().price<lows.first().price
+        val swingPattern=when {
+            ascending -> "HIGHER_HIGHS_HIGHER_LOWS"
+            descending -> "LOWER_HIGHS_LOWER_LOWS"
+            highs.size<2 || lows.size<2 -> "INSUFFICIENT_CONFIRMED_SWINGS"
+            else -> "MIXED_OR_OVERLAPPING_SWINGS"
+        }
+        swingPatterns[frame]=swingPattern
+        val frameRange=bars.takeLast(14).map { it.h-it.l }.sorted()
+        val normalRange=if(frameRange.isNotEmpty())
+            (frameRange[6]+frameRange[7])/2.0 else Double.NaN
+        val protectivePivotDistance=if(pivot!=null && normalRange.isFinite() && normalRange>0.0)
+            (if(ownerDirection=="LONG") bars.last().c-pivot.price
+                else pivot.price-bars.last().c)/normalRange else Double.NaN
+        val sourceDirection=if(ownerDirection=="LONG") 1.0 else -1.0
+        val lastCloseMove=sourceDirection*(bars.last().c-bars[bars.lastIndex-1].c)
+        val priorCloseMove=sourceDirection*(bars[bars.lastIndex-1].c-bars[bars.lastIndex-2].c)
+        val adverseBars=bars.takeLast(5).zipWithNext().count { (before,after) ->
+            sourceDirection*(after.c-before.c)<0.0 }
         val hypotheses=reading.optJSONArray("independent_wave_hypotheses") ?: JSONArray()
         val signatures=(0 until hypotheses.length()).mapNotNull { idx ->
             val h=hypotheses.optJSONObject(idx) ?: return@mapNotNull null
@@ -101,6 +131,16 @@ internal fun williamsTc2SeniorExitContext(
             .put("price_close",price)
             .put("owner_side_last_confirmed_pivot",pivot?.toJson() ?: JSONObject.NULL)
             .put("confirmed_pivot_broken_by_close",broken ?: JSONObject.NULL)
+            .put("last_two_confirmed_high_pivots",JSONArray(highs.map { it.toJson() }))
+            .put("last_two_confirmed_low_pivots",JSONArray(lows.map { it.toJson() }))
+            .put("confirmed_swing_pattern",swingPattern)
+            .put("price_distance_from_owner_pivot_in_median_14_bar_ranges",
+                if(protectivePivotDistance.isFinite()) protectivePivotDistance else JSONObject.NULL)
+            .put("median_closed_14_bar_range",if(normalRange.isFinite()) normalRange else JSONObject.NULL)
+            .put("recent_closed_bars_against_owner",adverseBars)
+            .put("last_closed_bar_owner_direction_move",lastCloseMove)
+            .put("previous_closed_bar_owner_direction_move",priorCloseMove)
+            .put("price_move_is_not_future_forecast",true)
             .put("independent_wave_alternatives",hypotheses)
             .put("competing_wave_structures_observed",signatures.size>1)
             .put("momentum_and_alligator_are_correlated_evidence",true)
@@ -146,6 +186,16 @@ internal fun williamsTc2SeniorExitContext(
         .put("senior_trend_aligned_with_opposite",seniorOpponent)
         .put("h4_structure_broken",h4Broken ?: JSONObject.NULL)
         .put("d1_structure_broken",d1Broken ?: JSONObject.NULL)
+        .put("closed_h1_h4_d1_swing_patterns",JSONObject(swingPatterns))
+        .put("senior_swing_structure_matches_position",(
+            if(ownerDirection=="LONG")
+                swingPatterns["4h"]=="HIGHER_HIGHS_HIGHER_LOWS" &&
+                swingPatterns["1d"]=="HIGHER_HIGHS_HIGHER_LOWS"
+            else
+                swingPatterns["4h"]=="LOWER_HIGHS_LOWER_LOWS" &&
+                swingPatterns["1d"]=="LOWER_HIGHS_LOWER_LOWS"))
+        .put("senior_swing_condition_is_book_exit_permission",false)
+        .put("correction_vs_reversal_is_probabilistic_not_certified",true)
         .put("wave_correction_hypotheses",JSONArray(uniqueHints))
         .put("nested_wave_price_time_links",JSONArray(links.map { it.toJson() }))
         .put("nested_wave_link_count_observed",links.size)
