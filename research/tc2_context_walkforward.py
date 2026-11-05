@@ -209,13 +209,26 @@ def regime(event:dict,h1:dict,h4:dict,d1:dict,r4:list,r1:list)->dict:
         pairs=[(h4["prev_high"][h],h4["last_high"][h]),
                (h4["prev_low"][h],h4["last_low"][h])]
         structure=all(all(map(math.isfinite,p)) and p[1]<p[0] for p in pairs)
+    if direction=="LONG":
+        d1_pairs=[(d1["prev_high"][d],d1["last_high"][d]),
+                  (d1["prev_low"][d],d1["last_low"][d])]
+        d1_structure=all(all(map(math.isfinite,p)) and p[1]>p[0]
+                         for p in d1_pairs)
+    else:
+        d1_pairs=[(d1["prev_high"][d],d1["last_high"][d]),
+                  (d1["prev_low"][d],d1["last_low"][d])]
+        d1_structure=all(all(map(math.isfinite,p)) and p[1]<p[0]
+                         for p in d1_pairs)
     ao_h4=h4["ao"][h];ao_d1=d1["ao"][d]
     # Full TC2 Elliott degree not verified. No W2/W4/ABC certainty inferred.
     return {"label":"JUNIOR_COUNTERTREND_CANDIDATE" if same and counter and swing_ok
             else "SENIOR_ALIGNED" if same and swing_ok else "CONFLICTING",
         "hold":bool(same and counter and swing_ok),
         "hold_structure":bool(same and counter and swing_ok and structure),
+        "hold_h4_and_d1_structure":bool(same and counter and swing_ok and
+                                        structure and d1_structure),
         "h4_swing_pattern_confirmed":bool(structure),
+        "d1_swing_pattern_confirmed":bool(d1_structure),
         "h4_bias":h4["bias"][h],"d1_bias":d1["bias"][d],
         "h1_bias":h1["bias"][i],"h4_pivot_broken":b4,"d1_pivot_broken":bd,
         "h4_ao":ao_h4,"d1_ao":ao_d1,
@@ -316,7 +329,10 @@ def evaluate(root:Path)->dict:
         result={"all_candidates":len(cohort),
             "sources":dict(Counter(x["source"] for x in cohort)),
             "regimes":dict(Counter(x["source_context"]["label"] for x in cohort))}
-        for selection,selector in (("h4_d1_only","hold"),("h4_swing_confirmed","hold_structure")):
+        for selection,selector in (
+            ("h4_d1_only","hold"),
+            ("h4_swing_confirmed","hold_structure"),
+            ("both_h4_d1_swings_confirmed","hold_h4_and_d1_structure")):
             chosen=[x for x in cohort if x["source_context"].get(selector)]
             result[selection]={"proposed_holds":len(chosen),"by_source":dict(Counter(
                 x["source"] for x in chosen))}
@@ -366,6 +382,7 @@ def evaluate(root:Path)->dict:
             "Research outcome excludes unknown trigger-hour intrabar order",
             "Overlapping assets/signals are correlated; no calibrated confidence",
             "No thresholds were optimized on holdout outcomes",
+            "A third prespecified H4+D1 both-confirmed swing cohort measures a STRICTER paper-only alternative",
             "Identical 2026 market regime may not generalize to earlier years",
             "Do not replace the real TC2 exit by H4/D1 filter without validated safety improvement"]}
         
