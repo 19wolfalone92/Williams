@@ -4,6 +4,26 @@ import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
+/**
+ * Restrict expensive per-symbol wave-analysis concurrency to actual Java heap
+ * (not largeMemoryClass). The 256 MiB device logged a scanner OOM.
+ * This alters analysis scheduling, never the book signals.
+ */
+internal fun scannerAnalysisParallelism(maxJavaHeapBytes: Long, symbolCount: Int): Int {
+    val budget=when {
+        maxJavaHeapBytes<=0L -> 2
+        maxJavaHeapBytes<=256L*1024L*1024L -> 3
+        maxJavaHeapBytes<=384L*1024L*1024L -> 4
+        else -> 6
+    }
+    return budget.coerceAtMost(symbolCount.coerceAtLeast(1))
+}
+
+/** Do not publish READY while a previous scan is still finalizing. */
+internal fun scannerObservedState(scanning: Boolean, publishedState: String): String =
+    if (scanning && publishedState in setOf("READY","READY_BLOCKED","PARTIAL","PARTIAL_BLOCKED"))
+        "RUNNING" else publishedState
+
 /** Read-only scanner fan-out: a stalled first symbol must never hide fast later results.
  * No signal is manufactured; only genuinely completed successful analyses are returned.
  * All tasks share one deadline, and unresolved tasks are interrupted at that deadline.

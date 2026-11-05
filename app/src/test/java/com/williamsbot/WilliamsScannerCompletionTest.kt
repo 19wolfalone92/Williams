@@ -11,6 +11,26 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 class WilliamsScannerCompletionTest {
+    @Test fun scannerConcurrencyRespectsActualJavaHeapAndSymbolCount() {
+        val mib=1024L*1024L
+        assertEquals(3,scannerAnalysisParallelism(256L*mib,10))
+        assertEquals(4,scannerAnalysisParallelism(384L*mib,10))
+        assertEquals(6,scannerAnalysisParallelism(512L*mib,10))
+        assertEquals(2,scannerAnalysisParallelism(0L,10))
+        assertEquals(1,scannerAnalysisParallelism(256L*mib,1))
+        assertEquals(1,scannerAnalysisParallelism(512L*mib,0))
+    }
+
+    @Test fun diagnosticsNeverReportReadyWhileScannerStillFinalizing() {
+        for(state in listOf("READY","READY_BLOCKED","PARTIAL","PARTIAL_BLOCKED")) {
+            assertEquals("RUNNING",scannerObservedState(true,state))
+            assertEquals(state,scannerObservedState(false,state))
+        }
+        assertEquals("RUNNING",scannerObservedState(true,"RUNNING"))
+        assertEquals("FAILED",scannerObservedState(true,"FAILED"))
+        assertEquals("STOPPED",scannerObservedState(true,"STOPPED"))
+    }
+
     @Test fun fastNineSymbolsAreKeptEvenWhenFirstFutureNeverFinishes() {
         val executor=Executors.newFixedThreadPool(3)
         val blocker=CountDownLatch(1)

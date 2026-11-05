@@ -1605,7 +1605,16 @@ private class NativeEngine(
         startupHistoryPolicy(frame, startupHistoryLimit, minStartupHistoryCandles).minimumCount
     private val maxScanSymbols = 10
     private val waveTopN = 5
-    private val scanExecutor = Executors.newFixedThreadPool(12)
+    // The 256 MiB Java heap exhausted during a ten-symbol parallel wave scan.
+    // Bound both concurrency and stale queued completions; keep all symbols
+    // and the existing 60s time/TC2 decision policies unchanged.
+    private val scanParallelism = scannerAnalysisParallelism(
+        Runtime.getRuntime().maxMemory(),maxScanSymbols)
+    private val scanExecutor = java.util.concurrent.ThreadPoolExecutor(
+        scanParallelism,scanParallelism,0L,TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(maxScanSymbols*2),
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     // Research HTTP/SQLite/wave analysis must NEVER delay a signed reduce-only
     // exit or exchange STOP management on the position-management thread.
     // A stock single-thread executor has an UNBOUNDED queue. A backlog of
@@ -11018,7 +11027,7 @@ private class NativeEngine(
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
-            .put("scanner_state", scannerState)
+            .put("scanner_state", scannerObservedState(scanning,scannerState))
             .put("scanner_error", scannerError ?: JSONObject.NULL)
             .put("scanner_symbol_errors",lastScannerSymbolErrors)
             .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
@@ -12361,6 +12370,10 @@ private class NativeEngine(
             executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
         )
         val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
+        // settings() includes megabytes of ten-symbol decision traces.
+        // Avoid allocating/retaining a SECOND identical mutable JSON tree;
+        // both ZIP entries retain the same complete diagnostic contents.
+        val configurationSnapshot=settings()
         return JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -12426,7 +12439,7 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("futures_campaign_coordinator", coordinatorSnapshot)
             .put("status", statusSnapshot)
-            .put("settings", settings())
+            .put("settings", configurationSnapshot)
             .put("system_info", JSONObject()
                 .put("runtime", "standalone")
                 .put("app_version", BuildConfig.VERSION_NAME)
@@ -12434,7 +12447,7 @@ private class NativeEngine(
                 .put("android_sdk", android.os.Build.VERSION.SDK_INT)
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
-            .put("configuration_sanitized", settings())
+            .put("configuration_sanitized", configurationSnapshot)
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
