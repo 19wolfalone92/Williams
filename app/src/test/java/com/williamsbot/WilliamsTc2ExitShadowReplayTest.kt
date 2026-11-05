@@ -124,7 +124,7 @@ class WilliamsTc2ExitShadowReplayTest {
     }
 
     private fun trailSeed(side:String):List<WilliamsWaveBar> =
-        (6..10).map { hourAt ->
+        (6..9).map { hourAt ->
             val close=if(side=="LONG") 98.0+(hourAt-6)*0.6
                 else 102.0-(hourAt-6)*0.6
             WilliamsWaveBar(hourAt*hour,close,close+0.5,close-0.5,close,1.0)
@@ -155,6 +155,28 @@ class WilliamsTc2ExitShadowReplayTest {
             }
             assertFalse(matured.getBoolean("can_modify_stop"))
             assertFalse(matured.getBoolean("can_close"))
+        }
+    }
+
+    @Test fun duplicatedPriorH1NeverPassesTheTrailingResearchGuard() {
+        for(side in listOf("LONG","SHORT")) {
+            // Decision 10:00 must be unique, but 09:00 is corrupted here.
+            val canonical=trailSeed(side)+future(side)
+            assertEquals(1,canonical.count { it.t==10*hour })
+            val duplicated=canonical+canonical.first { it.t==9*hour }
+            val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",
+                at,duplicated,candidate(side))
+            val after=williamsTc2ExitShadowAdvance(first,"BTCUSDT",
+                17*hour,duplicated)
+            val event=after.getJSONArray("events").getJSONObject(0)
+            assertEquals("MATURED",
+                event.getJSONObject("outcome_6h").getString("status"))
+            for(trail in listOf(3,5)) {
+                assertEquals("INVALID_OR_MISSING_TRAILING_H1",
+                    event.getJSONObject("outcome_6h_trail${trail}").getString("status"))
+            }
+            assertFalse(after.getBoolean("can_modify_stop"))
+            assertFalse(after.getBoolean("can_close"))
         }
     }
 

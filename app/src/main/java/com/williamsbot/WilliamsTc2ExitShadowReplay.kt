@@ -86,11 +86,13 @@ private fun tc2ShadowReplayHorizon(
     var tightened=0
     // The previous 3/5 completed H1 candles are evidence for *this bar*.
     // At no time is this bar's high/low used to tighten its own STOP.
-    val historyByOpen=closed.associateBy { it.t }
+    // Duplicate timestamps cannot choose the 3/5-bar trailing evidence.
+    // Keep the shadow outcome invalid rather than silently selecting a bar.
+    val historyByOpen=closed.groupBy { it.t }
     for(bar in rows) {
         if(trailingBars!=null) {
             val preceding=(1..trailingBars).map {
-                historyByOpen[bar.t-it*TC2_SHADOW_HOUR_MS]
+                historyByOpen[bar.t-it*TC2_SHADOW_HOUR_MS]?.singleOrNull()
             }
             if(preceding.any { it==null } || preceding.filterNotNull().any { b ->
                 listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0.0 } ||
