@@ -1,0 +1,55 @@
+name: TC2 causal market-structure walk-forward (research only)
+
+on:
+  push:
+    paths:
+      - 'research/**'
+      - 'tests/test_tc2_context_walkforward.py'
+      - '.github/workflows/tc2-context-walkforward.yml'
+  pull_request:
+    paths:
+      - 'research/**'
+      - 'tests/test_tc2_context_walkforward.py'
+      - '.github/workflows/tc2-context-walkforward.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-walkforward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - name: Checkout frozen research code and public OHLCV (no secrets)
+        uses: actions/checkout@v4
+      - name: Python standard library
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Historical book proxy vs H4/D1 context (NO EXCHANGE ACTION)
+        run: |
+          python research/tc2_context_walkforward.py \
+            --data research/data \
+            --output build/tc2_context_walkforward_2026.json
+      - name: Fail if dataset, embargo or forward validation is incomplete
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open("build/tc2_context_walkforward_2026.json"))
+          assert p["execution_authority"] is False and p["fills_certified"] is False
+          assert p["h1_h4_d1_feature_lookahead"] is False
+          assert p["instrument_count"]==10
+          assert p["all_event_count"]>0
+          assert p["holdout"]["all_candidates"]>0
+          for symbol,counts in p["frame_bar_counts"].items():
+              assert counts=={"1h":7398,"4h":1849,"1d":308},symbol
+          print("RESEARCH VALIDATION: SUCCESS, not live-trade certification")
+          PY
+      - name: Upload evidence for reproducibility
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc2-context-walkforward-2026
+          path: build/tc2_context_walkforward_2026.json
+          retention-days: 30
+          if-no-files-found: error
