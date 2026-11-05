@@ -82,6 +82,7 @@ private fun tc2ShadowReplayHorizon(
     val bookPnl=estimatedClosePnl(book)
     val holdPnl=estimatedClosePnl(close)
     val proposedHold=entry.optBoolean("paper_context_hold",false)
+    val proposedStrictHold=entry.optBoolean("paper_strict_h4_d1_hold",false)
     return result.put("status","MATURED")
         .put("from_full_hour_ms",from).put("as_of_closed_ms",until)
         .put("book_exit_price_reference",book)
@@ -92,6 +93,8 @@ private fun tc2ShadowReplayHorizon(
         .put("hold_estimated_net_usdt",holdPnl)
         .put("context_estimated_net_usdt",if(proposedHold) holdPnl else bookPnl)
         .put("context_minus_book_estimated_usdt",if(proposedHold) holdPnl-bookPnl else 0.0)
+        .put("strict_h4_d1_context_minus_book_estimated_usdt",
+            if(proposedStrictHold) holdPnl-bookPnl else 0.0)
         .put("hold_minus_book_estimated_usdt",holdPnl-bookPnl)
         .put("hold_max_intrabar_adverse_from_decision_usdt",maxAdverse)
         .put("return_not_certified",true)
@@ -138,6 +141,8 @@ internal fun williamsTc2ExitShadowAdvance(
                 .put("signed_quantity_abs",c.signedQuantity)
                 .put("regime_at_decision",JSONObject(c.regime.toString()))
                 .put("paper_context_hold",c.regime.optBoolean("context_hold_hypothesis",false))
+                .put("paper_strict_h4_d1_hold",
+                    c.regime.optBoolean("context_hold_strict_h4_d1_swings_shadow_only",false))
                 .put("book_exit_is_paper_reference",true)
                 .put("may_authorize_orders",false)
         }
@@ -161,6 +166,9 @@ internal fun williamsTc2ExitShadowAdvance(
         val proposed=replay.filter { it.optBoolean("paper_context_hold") }
             .mapNotNull { it.optJSONObject("outcome_${h}h") }
             .filter { it.optString("status")=="MATURED" }
+        val strictProposed=replay.filter { it.optBoolean("paper_strict_h4_d1_hold") }
+            .mapNotNull { it.optJSONObject("outcome_${h}h") }
+            .filter { it.optString("status")=="MATURED" }
         summary.put("h${h}",JSONObject()
             .put("matured",outcomes.size)
             .put("context_hold_matured",proposed.size)
@@ -172,6 +180,16 @@ internal fun williamsTc2ExitShadowAdvance(
             })
             .put("context_minus_book_estimated_total_usdt",outcomes.sumOf {
                 it.optDouble("context_minus_book_estimated_usdt",0.0)
+            })
+            .put("strict_h4_d1_swing_hold_matured",strictProposed.size)
+            .put("strict_h4_d1_swing_hold_better_than_book",strictProposed.count {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt")>0.0
+            })
+            .put("strict_h4_d1_swing_hold_worse_than_book",strictProposed.count {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt")<0.0
+            })
+            .put("strict_h4_d1_swing_hold_minus_book_estimated_total_usdt",outcomes.sumOf {
+                it.optDouble("strict_h4_d1_context_minus_book_estimated_usdt",0.0)
             })
             .put("is_statistical_proof",false))
     }
