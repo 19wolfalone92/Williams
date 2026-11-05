@@ -172,14 +172,17 @@ def signals(rows:list[tuple],indic:dict,tick:float):
         if owner=="LONG":
             fill=min(level,later[1])  # sell stop gap: worse opening price
             stop=min(x[3] for x in rows[i-4:i+1])
-            if stop>=fill:continue
         else:
             fill=max(level,later[1])
             stop=max(x[2] for x in rows[i-4:i+1])
-            if stop<=fill:continue
+        # Record all opposite signals, including WM3 where an existing
+        # 5-bar trailing stop may ALREADY have fired. Such candidates
+        # cannot enter the HOLD comparison, but must not vanish silently.
+        stop_behind= (stop<fill if owner=="LONG" else stop>fill)
         yield {"i":i,"source":source,"owner":owner,
                "decision_at":later[0],"exit_ref":fill,
-               "stop_ref":stop,"signal_at":now[0]+HOUR}
+               "stop_ref":stop,"prior_5bar_stop_behind_trigger":stop_behind,
+               "signal_at":now[0]+HOUR}
 
 def regime(event:dict,h1:dict,h4:dict,d1:dict,r4:list,r1:list)->dict:
     """No threshold training; distinguish observed price facts from wave hypotheses."""
@@ -288,6 +291,7 @@ def evaluate(root:Path)->dict:
                     key=f"{h}h_stop{stop}"
                     data=[x["windows"][key] for x in chosen if x["windows"][key]["valid"]]
                     result[selection][key]=_summary(data)
+                    result[selection][key]["ineligible_historic_stop"]=(len(chosen)-len(data))
         return result
     train=[x for x in all_events if x["decision_at"]<TRAIN_END]
     oos=[x for x in all_events if x["decision_at"]>=OOS_START]
@@ -311,6 +315,7 @@ def evaluate(root:Path)->dict:
             "WM3 20-hour pending expiry is a research assumption, NOT a TC2 author rule",
             "NO real campaign ownership, reverse pyramid, funding, liquidation, bid/ask or exchange receipts",
             "Only candidate opposite-entry events; not actual full TC2 book exit trade list",
+            "Many triggered WM3 fractals had prior 3/5-bar STOP already breached; they count as candidates but never as valid HOLD samples",
             "Simulated stop uses pre-signal 3/5 H1 lows/highs, NOT signed Binance STOP",
             "Research outcome excludes unknown trigger-hour intrabar order",
             "Overlapping assets/signals are correlated; no calibrated confidence",
