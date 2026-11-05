@@ -21,6 +21,7 @@ class WilliamsTc2ExitShadowReplayTest {
         signedStop=if(side=="LONG") 95.0 else 105.0,
         signedQuantity=2.0,regime=regime(hold))
     private fun future(side:String,stopAt:Int?=null):List<WilliamsWaveBar> =
+        listOf(WilliamsWaveBar(10*hour,100.0,104.0,96.0,100.0)) +
         (0 until 24).map { i ->
             val price=if(side=="LONG") 102.0+i*.5 else 98.0-i*.5
             val o=if(i==stopAt) (if(side=="LONG") 94.0 else 106.0) else price
@@ -216,6 +217,58 @@ class WilliamsTc2ExitShadowReplayTest {
         assertEquals("PRICE_QUANTITY_OR_STOP_NOT_SIGNED",
             out.getJSONArray("sample_rejections").getJSONObject(0).getString("reason"))
         assertEquals(0,out.getJSONArray("events").length())
+    }
+
+    @Test fun dualHitDecisionHourNeverCreatesAnImaginaryPaperWin() {
+        for(side in listOf("LONG","SHORT")) {
+            val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",
+                at,future(side),candidate(side))
+            val rows=future(side).toMutableList()
+            // We only know the complete H1 AFTER that hour closes.
+            // Both the book opposite trigger and the existing Binance STOP
+            // were reached, but the true intrabar order is unknowable.
+            rows[0]=if(side=="LONG")
+                WilliamsWaveBar(10*hour,100.0,104.0,94.0,100.0)
+            else WilliamsWaveBar(10*hour,100.0,106.0,96.0,100.0)
+            val result=williamsTc2ExitShadowAdvance(first,"BTCUSDT",
+                17*hour,rows)
+            val ev=result.getJSONArray("events").getJSONObject(0)
+            val base=ev.getJSONObject("outcome_6h")
+            assertEquals("DECISION_HOUR_STOP_AND_EXIT_ORDER_UNPROVEN",
+                base.getString("status"))
+            assertTrue(base.getBoolean("did_not_credit_ambiguous_hold"))
+            assertEquals(2,base.getInt("paper_replay_version"))
+            assertEquals(0,result.getJSONObject("summary")
+                .getJSONObject("h6").getInt("matured"))
+            assertEquals(0,result.getJSONObject("summary")
+                .getJSONObject("h6_trail5").getInt("matured"))
+        }
+    }
+
+    @Test fun oldMaturedOutcomeIsRecalculatedAfterSourceSafetyUpgrade() {
+        val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",
+            at,emptyList(),candidate())
+        val event=first.getJSONArray("events").getJSONObject(0)
+        event.put("outcome_6h",JSONObject().put("status","MATURED")
+            .put("book_estimated_net_usdt",999999.0))
+        val result=williamsTc2ExitShadowAdvance(first,"BTCUSDT",
+            17*hour,future("LONG"))
+        val updated=result.getJSONArray("events").getJSONObject(0)
+            .getJSONObject("outcome_6h")
+        assertEquals(2,updated.getInt("paper_replay_version"))
+        assertEquals("MATURED",updated.getString("status"))
+        assertNotEquals(999999.0,updated.getDouble("book_estimated_net_usdt"),0.0)
+    }
+
+    @Test fun missingDecisionHourClosedBarDoesNotPretendSafeHold() {
+        val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",
+            at,emptyList(),candidate())
+        val noDecisionHour=future("LONG").filterNot { it.t==10*hour }
+        val result=williamsTc2ExitShadowAdvance(first,"BTCUSDT",
+            17*hour,noDecisionHour)
+        assertEquals("DECISION_HOUR_CLOSED_H1_MISSING_OR_DUPLICATED",
+            result.getJSONArray("events").getJSONObject(0)
+                .getJSONObject("outcome_6h").getString("status"))
     }
 
     @Test fun malformedCandidateDoesNotGetAddedToResearchLedger() {
