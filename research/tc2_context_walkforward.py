@@ -255,6 +255,18 @@ def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
           else max(x[2] for x in rows[i-stop_bars+1:i+1]))
     if sign*(ref-initial)<=0:
         return {"valid":False,"reason":"STOP_ALREADY_PAST_OPPOSITE_TRIGGER"}
+    # The EXIT signal and the OLD campaign's protective STOP may BOTH
+    # have touched within the SAME trigger hour. H1 OHLC cannot tell
+    # whether the old protected position was still alive when the exit
+    # signal fired. Exclude ambiguous cases from beneficial-hold scoring,
+    # rather than pretending a STOP that may have fired did not exist.
+    # This test is EX-POST outcome eligibility, never a live exit filter.
+    trigger_hour=rows[i+1]
+    if (trigger_hour[3]<=initial if sign>0 else trigger_hour[2]>=initial):
+        return {"valid":False,
+                "reason":"TRIGGER_HOUR_STOP_AND_OPPOSITE_SIGNAL_ORDER_UNKNOWN",
+                "first_trigger_hour_open_ms":trigger_hour[0],
+                "execution_authority":False}
     future=rows[i+2:i+2+horizon] # skip trigger hour: unknown intrabar order
     if len(future)!=horizon:return {"valid":False,"reason":"INCOMPLETE_FORWARD_H1"}
     stop=initial
@@ -343,11 +355,17 @@ def evaluate(root:Path)->dict:
                     data=[x["windows"][key] for x in chosen if x["windows"][key]["valid"]]
                     result[selection][key]=_summary(data)
                     result[selection][key]["ineligible_historic_stop"]=(len(chosen)-len(data))
+                    result[selection][key]["ineligibility_reasons"]=dict(Counter(
+                        x["windows"][key].get("reason","UNSPECIFIED")
+                        for x in chosen if not x["windows"][key]["valid"]))
                     trail_key=f"{h}h_trail{stop}"
                     trail_data=[x["windows"][trail_key] for x in chosen
                         if x["windows"][trail_key]["valid"]]
                     result[selection][trail_key]=_summary(trail_data)
                     result[selection][trail_key]["ineligible_historic_stop"]=(len(chosen)-len(trail_data))
+                    result[selection][trail_key]["ineligibility_reasons"]=dict(Counter(
+                        x["windows"][trail_key].get("reason","UNSPECIFIED")
+                        for x in chosen if not x["windows"][trail_key]["valid"]))
                     result[selection][trail_key]["trailing_stop_tightening_events"] = sum(
                         x["trailing_tightening_events"] for x in trail_data)
         return result
@@ -395,6 +413,7 @@ def evaluate(root:Path)->dict:
             "Additional 3/5-bar trailing is modelled causally on later CLOSED bars, but NOT Binance STOP acknowledgements",
             "Actual TC2 wave ownership and pyramid scaling remain unverified; all results are independent exit proxies",
             "MAE from OHLC at stop-hit bar may be overstated (unknown intrabar order)",
+            "Ex-post trigger-hour OHLC touching BOTH current exit level and prior STOP is AMBIGUOUS and EXCLUDED with an explicit reason",
             "Research outcome excludes unknown trigger-hour intrabar order",
             "Overlapping assets/signals are correlated; no calibrated confidence",
             "No thresholds were optimized on holdout outcomes",
