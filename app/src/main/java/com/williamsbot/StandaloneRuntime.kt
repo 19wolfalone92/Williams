@@ -1606,6 +1606,13 @@ private class NativeEngine(
     private val maxScanSymbols = 10
     private val waveTopN = 5
     private val scanExecutor = Executors.newFixedThreadPool(12)
+    // Research HTTP/SQLite/wave analysis must NEVER delay a signed reduce-only
+    // exit or exchange STOP management on the position-management thread.
+    private val tc2ExitResearchExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "williams-tc2-exit-research").apply { isDaemon = true }
+    }
+    private val tc2ExitResearchEnqueued =
+        java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
@@ -6760,44 +6767,69 @@ private class NativeEngine(
                 futuresCampaignCoordinator.saveManagementState(symbol,intent.getString("client_id"),management)
             }
             if(profile==williamsTc2Profile && actionableOpposing!=null && tc2TriggerNow) {
-                // Senior trend disagreement is an important prospective
-                // CORRECTION hypothesis, NOT an override of TC2 book exits.
-                // Sample before any reduce-only close, preserve prices and
-                // timestamps without reading a single future candle.
-                runCatching {
-                    val now=futuresMarketData.exchangeNowMs()
-                    val sources=linkedMapOf("1h" to bars)
-                    for(frame in listOf("4h","1d")) {
-                        sources[frame]=runCatching {
-                            fetchCandles(symbol,frame,180)
-                                .map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-                        }.getOrDefault(emptyList())
+                // Capture the causal decision BEFORE reducing the position,
+                // but do NOT fetch H4/D1 or write research SQLite on the
+                // time-critical signed exit / STOP management thread.
+                val signalId=actionableOpposing.signalId
+                val ownerId=intent.optString("client_id")
+                val sampledAt=futuresMarketData.exchangeNowMs()
+                val sampledContract=runCatching { futuresMarketData.price(symbol) }
+                    .getOrDefault(Double.NaN)
+                val sampledStop=intent.optString("protective_stop").toDoubleOrNull()
+                    ?: Double.NaN
+                val sampledEntry=exchangeEntryForExit
+                val sampledQty=kotlin.math.abs(signedQty)
+                val sampledH1=bars.toList()
+                val sampleKey=symbol+":"+ownerId+":"+signalId
+                if(tc2ExitResearchEnqueued.add(sampleKey)) {
+                    runCatching {
+                        tc2ExitResearchExecutor.execute {
+                            val completed=runCatching {
+                                // Read candles later but FILTER them to the
+                                // immutable exchange decision timestamp. No
+                                // future candle may rewrite the earlier regime.
+                                val sources=linkedMapOf("1h" to sampledH1)
+                                for(frame in listOf("4h","1d")) sources[frame]=
+                                    runCatching {
+                                        fetchCandles(symbol,frame,180).map {
+                                            WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                                        }
+                                    }.getOrDefault(emptyList())
+                                val context=williamsTc2SeniorExitContext(dir,sampledAt,
+                                    sources,signalId)
+                                val candidate=Tc2ExitShadowCandidate(ownerId,signalId,dir,
+                                    sampledAt,sampledEntry,sampledContract,sampledStop,
+                                    sampledQty,context)
+                                synchronized(tc2ExitShadowLock) {
+                                    val journalKey="tc2_exit_shadow_ab_"+symbol
+                                    val old=executionStore.readState(journalKey)
+                                        ?.let { JSONObject(it) }
+                                    val next=williamsTc2ExitShadowAdvance(old,symbol,
+                                        sampledAt,sampledH1,candidate)
+                                    check(executionStore.writeState(journalKey,next.toString())) {
+                                        "TC2_SHADOW_EXIT_JOURNAL_NOT_DURABLE" }
+                                    check(executionStore.writeState("tc2_exit_regime_"+symbol,
+                                        context.toString())) { "TC2_EXIT_CONTEXT_NOT_DURABLE" }
+                                }
+                            }
+                            if(completed.isFailure) {
+                                // Allow retry on the next management pass, if
+                                // there still is an owned open campaign.
+                                tc2ExitResearchEnqueued.remove(sampleKey)
+                                runCatching { auditStore.recordCockpitEvent(
+                                    "TC2_EXIT_REGIME_SHADOW",symbol=symbol,
+                                    state="RESEARCH_UNAVAILABLE",
+                                    detail=completed.exceptionOrNull()?.javaClass?.simpleName
+                                        ?: "UNAVAILABLE") }
+                            }
+                        }
+                    }.onFailure {
+                        tc2ExitResearchEnqueued.remove(sampleKey)
+                        runCatching { auditStore.recordCockpitEvent(
+                            "TC2_EXIT_REGIME_SHADOW",symbol=symbol,
+                            state="RESEARCH_SCHEDULING_UNAVAILABLE",
+                            detail=it.javaClass.simpleName) }
                     }
-                    val context=williamsTc2SeniorExitContext(dir,now,sources,
-                        actionableOpposing.signalId)
-                    val stop=intent.optString("protective_stop").toDoubleOrNull() ?: Double.NaN
-                    val contract=futuresMarketData.price(symbol)
-                    val candidate=Tc2ExitShadowCandidate(
-                        ownerId=intent.getString("client_id"),
-                        signalId=actionableOpposing.signalId,direction=dir,
-                        decisionAtMs=now,entryPrice=exchangeEntryForExit,
-                        observedContract=contract,signedStop=stop,
-                        signedQuantity=kotlin.math.abs(signedQty),regime=context)
-                    synchronized(tc2ExitShadowLock) {
-                        val journalKey="tc2_exit_shadow_ab_"+symbol
-                        val old=executionStore.readState(journalKey)?.let { JSONObject(it) }
-                        val next=williamsTc2ExitShadowAdvance(old,symbol,now,bars,candidate)
-                        check(executionStore.writeState(journalKey,next.toString())) {
-                            "TC2_SHADOW_EXIT_JOURNAL_NOT_DURABLE" }
-                        check(executionStore.writeState("tc2_exit_regime_"+symbol,context.toString())) {
-                            "TC2_EXIT_CONTEXT_NOT_DURABLE" }
-                    }
-                }.onFailure { error ->
-                    // An optional RESEARCH write must never degrade an already
-                    // owned, protected trade or bypass the signed Binance gate.
-                    runCatching { auditStore.recordCockpitEvent("TC2_EXIT_REGIME_SHADOW",
-                        symbol=symbol,state="RESEARCH_UNAVAILABLE",
-                        detail=error.javaClass.simpleName) }
                 }
             }
             if (williamsStrategyCanMarketClose(profile) &&
