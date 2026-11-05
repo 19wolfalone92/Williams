@@ -99,6 +99,27 @@ internal fun williamsTc2SeniorExitContext(
         val protectivePivotDistance=if(pivot!=null && normalRange.isFinite() && normalRange>0.0)
             (if(ownerDirection=="LONG") bars.last().c-pivot.price
                 else pivot.price-bars.last().c)/normalRange else Double.NaN
+        // Distance travelled against a previously CONFIRMED swing leg.
+        // This may resemble W2/W4 or ABC, but NEVER proves Elliott degree.
+        val confirmedTop=highs.lastOrNull()
+        val confirmedBase=lows.lastOrNull()
+        val retracementProxy=if(confirmedTop!=null && confirmedBase!=null &&
+            confirmedTop.price>confirmedBase.price) {
+            if(ownerDirection=="LONG" &&
+                confirmedTop.extremeAt>confirmedBase.extremeAt)
+                (confirmedTop.price-bars.last().c)/
+                    (confirmedTop.price-confirmedBase.price)
+            else if(ownerDirection=="SHORT" &&
+                confirmedBase.extremeAt>confirmedTop.extremeAt)
+                (bars.last().c-confirmedBase.price)/
+                    (confirmedTop.price-confirmedBase.price)
+            else Double.NaN
+        } else Double.NaN
+        val aoSeries=waveAo(bars)
+        val aoNow=aoSeries.lastOrNull() ?: Double.NaN
+        val aoPrior=aoSeries.getOrNull(aoSeries.lastIndex-1) ?: Double.NaN
+        val aoMomentumDelta=if(aoNow.isFinite() && aoPrior.isFinite())
+            aoNow-aoPrior else Double.NaN
         val sourceDirection=if(ownerDirection=="LONG") 1.0 else -1.0
         val lastCloseMove=sourceDirection*(bars.last().c-bars[bars.lastIndex-1].c)
         val priorCloseMove=sourceDirection*(bars[bars.lastIndex-1].c-bars[bars.lastIndex-2].c)
@@ -134,6 +155,11 @@ internal fun williamsTc2SeniorExitContext(
             .put("last_two_confirmed_high_pivots",JSONArray(highs.map { it.toJson() }))
             .put("last_two_confirmed_low_pivots",JSONArray(lows.map { it.toJson() }))
             .put("confirmed_swing_pattern",swingPattern)
+            .put("confirmed_swing_retracement_proxy_ratio",
+                if(retracementProxy.isFinite()) retracementProxy else JSONObject.NULL)
+            .put("confirmed_swing_retracement_is_elliott_proof",false)
+            .put("ao_slope_last_two_completed_bars",
+                if(aoMomentumDelta.isFinite()) aoMomentumDelta else JSONObject.NULL)
             .put("price_distance_from_owner_pivot_in_median_14_bar_ranges",
                 if(protectivePivotDistance.isFinite()) protectivePivotDistance else JSONObject.NULL)
             .put("median_closed_14_bar_range",if(normalRange.isFinite()) normalRange else JSONObject.NULL)
@@ -176,10 +202,23 @@ internal fun williamsTc2SeniorExitContext(
     // This HOLD outcome is only a paper alternative to the book's exit.
     // Never turn an uncertain wave label into a live-market override.
     val paperHold=regime=="JUNIOR_CORRECTION_INSIDE_SENIOR_TREND_PLAUSIBLE"
+    // Variant B2 is a second, stricter PAPER experiment only. 2026
+    // historical OOS rejected the naive H4/D1 retention hypothesis.
+    // Even two aligned confirmed senior swings are not proof of reversal.
+    val expectedSwing=if(ownerDirection=="LONG") "HIGHER_HIGHS_HIGHER_LOWS"
+        else "LOWER_HIGHS_LOWER_LOWS"
+    val paperStrictHold=paperHold &&
+        swingPatterns["4h"]==expectedSwing &&
+        swingPatterns["1d"]==expectedSwing
     if(!allStructureKnown) uncertainty+="SENIOR_PIVOT_BOUNDS_UNVERIFIED"
     val uniqueHints=waveHints.distinct().take(24)
     return result.put("regime",regime)
         .put("context_hold_hypothesis",paperHold)
+        .put("context_hold_strict_h4_d1_swings_shadow_only",paperStrictHold)
+        .put("senior_contradiction_even_when_h4_d1_agree",
+            seniorOwner && (swingPatterns["4h"]!=expectedSwing ||
+                swingPatterns["1d"]!=expectedSwing))
+        .put("contextual_hold_not_approved_by_historical_oos",true)
         .put("h1_bias",h1 ?: "UNVERIFIED").put("h4_bias",h4 ?: "UNVERIFIED")
         .put("d1_bias",d1 ?: "UNVERIFIED")
         .put("senior_trend_aligned_with_position",seniorOwner)
