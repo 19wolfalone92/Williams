@@ -115,11 +115,16 @@ internal fun williamsTc2SeniorExitContext(
                     (confirmedTop.price-confirmedBase.price)
             else Double.NaN
         } else Double.NaN
-        val aoSeries=waveAo(bars)
-        val aoNow=aoSeries.lastOrNull() ?: Double.NaN
-        val aoPrior=aoSeries.getOrNull(aoSeries.lastIndex-1) ?: Double.NaN
-        val aoMomentumDelta=if(aoNow.isFinite() && aoPrior.isFinite())
-            aoNow-aoPrior else Double.NaN
+        // AO uses only the 5/34 median-price SMAs of already closed
+        // candles; compute the last-two slope locally rather than exposing
+        // the private wave-lab oscillator implementation.
+        val aoMomentumDelta=if(bars.size>=35) {
+            val median=bars.takeLast(35).map { (it.h+it.l)/2.0 }
+            val current=median.takeLast(5).average()-median.takeLast(34).average()
+            val prev=median.dropLast(1).takeLast(5).average()-
+                median.dropLast(1).takeLast(34).average()
+            current-prev
+        } else Double.NaN
         val sourceDirection=if(ownerDirection=="LONG") 1.0 else -1.0
         val lastCloseMove=sourceDirection*(bars.last().c-bars[bars.lastIndex-1].c)
         val priorCloseMove=sourceDirection*(bars[bars.lastIndex-1].c-bars[bars.lastIndex-2].c)
