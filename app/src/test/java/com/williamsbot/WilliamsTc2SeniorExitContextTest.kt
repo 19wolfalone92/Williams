@@ -78,10 +78,9 @@ class WilliamsTc2SeniorExitContextTest {
             "4h" to series("4h",1),
             "1h" to series("1h",-1))
         val first=williamsTc2SeniorExitContext("LONG",asOf,original,"WM3:SHORT")
-        val mutated=original.mapValues { (frame,bars) ->
+        val mutated=original.mapValues { (_,bars) ->
             // An impossible massive future candle may not alter any field
             // labelled AS-OF the older decision timestamp.
-            val step=williamsWaveFrames.getValue(frame)
             bars+WilliamsWaveBar(asOf,9000.0,12000.0,1.0,4500.0,1000.0)
         }
         val second=williamsTc2SeniorExitContext("LONG",asOf,mutated,"WM3:SHORT")
