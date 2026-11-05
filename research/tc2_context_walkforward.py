@@ -222,28 +222,60 @@ def regime(event:dict,h1:dict,h4:dict,d1:dict,r4:list,r1:list)->dict:
         "wave_hypotheses":["W2","W4","ABC","NEW_IMPULSE_UNRESOLVED"],
         "wave_degree_certified":False,"decision_hour_bar_included":False}
 
-def replay(e:dict,rows:list,horizon:int,stop_bars:int=5)->dict:
+def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
+           trailing:bool=False)->dict:
+    """Causal H1 paper path; source STOP is not an actual exchange order.
+
+    At the first simulated full H1 AFTER the unknown execution hour, the
+    original 3/5-closed-H1 stop remains. When trailing=True, each new STOP
+    is evaluated solely from candles COMPLETED before the bar that may
+    hit it. An existing protective STOP must never widen. A gap through
+    the scheduled stop gets the WORSE opening price, never a guaranteed
+    execution at the stop price.
+    """
     i=e["i"];ref=e["exit_ref"];owner=e["owner"]
     sign=1.0 if owner=="LONG" else -1.0
-    stop=(min(x[3] for x in rows[i-stop_bars+1:i+1]) if sign>0
+    if stop_bars not in (3,5) or horizon<=0 or not math.isfinite(ref) or ref<=0:
+        return {"valid":False,"reason":"INVALID_REPLAY_ARGUMENTS"}
+    initial=(min(x[3] for x in rows[i-stop_bars+1:i+1]) if sign>0
           else max(x[2] for x in rows[i-stop_bars+1:i+1]))
-    if sign*(ref-stop)<=0:return {"valid":False}
+    if sign*(ref-initial)<=0:
+        return {"valid":False,"reason":"STOP_ALREADY_PAST_OPPOSITE_TRIGGER"}
     future=rows[i+2:i+2+horizon] # skip trigger hour: unknown intrabar order
-    if len(future)!=horizon:return {"valid":False}
-    exit_price=future[-1][4];hit=False;max_adverse=0.0
-    for bar in future:
+    if len(future)!=horizon:return {"valid":False,"reason":"INCOMPLETE_FORWARD_H1"}
+    stop=initial
+    exit_price=future[-1][4];hit=False;max_adverse=0.0;last_at=None;updates=0
+    for k,bar in enumerate(future,i+2):
+        # Look ONLY at complete bars with indices strictly less than k.
+        if trailing:
+            prior=rows[k-stop_bars:k]
+            if len(prior)!=stop_bars:return {"valid":False,"reason":"MISSING_TRAIL_HISTORY"}
+            new=(min(x[3] for x in prior) if sign>0
+                 else max(x[2] for x in prior))
+            tightened=max(stop,new) if sign>0 else min(stop,new)
+            if tightened!=stop:
+                updates+=1
+                stop=tightened
+        # Using a whole H1 low/high at a stop-hit bar may OVERESTIMATE
+        # adverse excursion after the actual stop fill. Explicitly label it.
         max_adverse=max(max_adverse,max(0.0,-sign*(bar[3 if sign>0 else 2]-ref)))
         if (bar[3]<=stop if sign>0 else bar[2]>=stop):
             exit_price=min(stop,bar[1]) if sign>0 else max(stop,bar[1])
-            hit=True;break
-    # Same initial entry cancels from the comparison. Exit fee/slippage
-    # model charges both paths by exit notional; no fictional fill certainty.
-    delta=(sign*(exit_price-ref)-(exit_price-ref)*0
-           -COST_SIDE*(exit_price-ref))/ref*10_000
+            hit=True;last_at=bar[0];break
+    # Same initial entry cancels from both paths. Exit fee/slippage
+    # model charges each path by exit notional; no real fills known.
+    delta=(sign*(exit_price-ref)-COST_SIDE*(exit_price-ref))/ref*10_000
     return {"valid":True,"delta_bps":delta,"stop_hit":hit,
         "adverse_bps":max_adverse/ref*10_000,
-        "risk_unit":max_adverse/abs(ref-stop),
-        "loss_bps":min(0.0,delta)}
+        "risk_unit":max_adverse/abs(ref-initial),
+        "loss_bps":min(0.0,delta),
+        "exit_reference":exit_price,"initial_stop_reference":initial,
+        "final_stop_reference":stop,"trailing_tightening_events":updates,
+        "exit_bar_open_ms":last_at,
+        "stop_model":"TRAILING_3_OR_5_PREVIOUS_CLOSED_H1" if trailing
+                     else "STATIC_3_OR_5_PRIOR_H1",
+        "no_intrabar_sequence_or_bid_ask":True,
+        "adverse_measurement_is_full_bar_upper_bound":True}
 
 def _summary(items:list[dict])->dict:
     if not items:return {"n":0,"win":0,"loss":0,"stop_hits":0,
@@ -277,6 +309,8 @@ def evaluate(root:Path)->dict:
                 for stop_bars in (3,5):
                     e["windows"][f"{hours}h_stop{stop_bars}"]=replay(
                         e,frames["1h"],hours,stop_bars)
+                    e["windows"][f"{hours}h_trail{stop_bars}"]=replay(
+                        e,frames["1h"],hours,stop_bars,trailing=True)
             all_events.append(e)
     def summarize(cohort):
         result={"all_candidates":len(cohort),
@@ -292,6 +326,13 @@ def evaluate(root:Path)->dict:
                     data=[x["windows"][key] for x in chosen if x["windows"][key]["valid"]]
                     result[selection][key]=_summary(data)
                     result[selection][key]["ineligible_historic_stop"]=(len(chosen)-len(data))
+                    trail_key=f"{h}h_trail{stop}"
+                    trail_data=[x["windows"][trail_key] for x in chosen
+                        if x["windows"][trail_key]["valid"]]
+                    result[selection][trail_key]=_summary(trail_data)
+                    result[selection][trail_key]["ineligible_historic_stop"]=(len(chosen)-len(trail_data))
+                    result[selection][trail_key]["trailing_stop_tightening_events"] = sum(
+                        x["trailing_tightening_events"] for x in trail_data)
         return result
     train=[x for x in all_events if x["decision_at"]<TRAIN_END]
     oos=[x for x in all_events if x["decision_at"]>=OOS_START]
@@ -304,7 +345,9 @@ def evaluate(root:Path)->dict:
         "out_of_sample":"Sep 2026 to 2026-11-05 06:00Z",
         "historical_williams_signals":"WM2 AO third colour, WM3 confirmed 5-bar fractal plus 20-hour research pending STOP, conservative WM1 proxy; NOT full book or owned campaign",
         "fill_model":"next H1 breakout level or worse gap opening; decision-hour path excluded",
-        "stop_model":"static historic last 3 or 5 H1 bars (NOT signed actual STOP, NOT book trailing)",
+        "stop_model":"static historic last 3 or 5 H1 bars PLUS prebar-closed 3/5 trailing counterfactual (NOT signed actual Binance STOP)",
+        "trailing_replay_observation":"STOP can tighten only from H1 bars closed BEFORE next simulated H1, stop gap fills at adverse open",
+        "first_trigger_hour_unreplayed":True,
         "h1_h4_d1_feature_lookahead":False,"future_waves_certified":False,
         "fills_certified":False,"profitability_certified":False,
         "execution_authority":False,"no_real_trades":True,
@@ -317,6 +360,9 @@ def evaluate(root:Path)->dict:
             "Only candidate opposite-entry events; not actual full TC2 book exit trade list",
             "Many triggered WM3 fractals had prior 3/5-bar STOP already breached; they count as candidates but never as valid HOLD samples",
             "Simulated stop uses pre-signal 3/5 H1 lows/highs, NOT signed Binance STOP",
+            "Additional 3/5-bar trailing is modelled causally on later CLOSED bars, but NOT Binance STOP acknowledgements",
+            "Actual TC2 wave ownership and pyramid scaling remain unverified; all results are independent exit proxies",
+            "MAE from OHLC at stop-hit bar may be overstated (unknown intrabar order)",
             "Research outcome excludes unknown trigger-hour intrabar order",
             "Overlapping assets/signals are correlated; no calibrated confidence",
             "No thresholds were optimized on holdout outcomes",
