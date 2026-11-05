@@ -195,6 +195,30 @@ def test_trailing_replay_future_perturbation_cannot_change_past_closed_horizon()
     assert w.replay(event,altered,3,stop_bars=3,trailing=True)==known
 
 
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+def test_opposing_h1_trigger_and_existing_stop_touched_same_hour_is_unordered(side):
+    src=bars(75)
+    i=50
+    for j in range(i-4,i+1):
+        if side=="LONG":
+            src[j]=(src[j][0],100.0,102.0,90.0,100.0,4.0)
+        else:
+            src[j]=(src[j][0],100.0,110.0,98.0,100.0,4.0)
+    # The next fully observed H1 bar spans BOTH the adverse prior STOP
+    # and the putative opposing Wise-Man exit price. H1 cannot tell which
+    # fired first, even though a later 24h replay may look profitable.
+    ref=104.0 if side=="LONG" else 96.0
+    src[i+1]=(src[i+1][0],100.0,111.0,89.0,100.0,5.0)
+    event={"i":i,"owner":side,"exit_ref":ref}
+    static=w.replay(event,src,6,5,trailing=False)
+    dynamic=w.replay(event,src,6,5,trailing=True)
+    for x in (static,dynamic):
+        assert x["valid"] is False
+        assert x["reason"]=="TRIGGER_HOUR_STOP_AND_OPPOSITE_SIGNAL_ORDER_UNKNOWN"
+        assert not x["execution_authority"]
+        assert x["first_trigger_hour_open_ms"]==src[i+1][0]
+
+
 def test_senior_h4_and_d1_independent_confirmed_swings_are_required_for_strict_shadow():
     # Construct a historical H1 decision at UTC day 60. The latest D1
     # candle allowed is day 59; anything from day 60 must not be read.
