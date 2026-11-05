@@ -192,6 +192,32 @@ class WilliamsTc2ExitShadowReplayTest {
             e.getJSONObject("outcome_6h_trail5").getString("status"))
     }
 
+    @Test fun invalidStopBeforeOppositeSignalIsReportedAndDedupedAcrossRestart() {
+        val candidate=candidate().copy(signedStop=120.0)
+        val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,
+            emptyList(),candidate)
+        assertEquals(0,first.getJSONArray("events").length())
+        assertEquals(1,first.getJSONArray("sample_rejections").length())
+        assertEquals("STOP_ALREADY_BREACHED_BEFORE_PAPER_HOLD",
+            first.getJSONArray("sample_rejections").getJSONObject(0).getString("reason"))
+        assertEquals(1L,first.getLong("sample_rejections_total"))
+        val afterRestart=williamsTc2ExitShadowAdvance(JSONObject(first.toString()),
+            "BTCUSDT",at+1000L,emptyList(),candidate)
+        assertEquals(1L,afterRestart.getLong("sample_rejections_total"))
+        assertEquals(1,afterRestart.getJSONArray("sample_rejections").length())
+        assertFalse(afterRestart.getBoolean("can_modify_stop"))
+        assertFalse(afterRestart.getBoolean("can_close"))
+    }
+
+    @Test fun missingSourceAndInvalidSignedStopDoNotFakeSuccessfulResearchSample() {
+        val c=candidate().copy(signedStop=Double.NaN)
+        val out=williamsTc2ExitShadowAdvance(null,"ETHUSDT",at,
+            emptyList(),c)
+        assertEquals("PRICE_QUANTITY_OR_STOP_NOT_SIGNED",
+            out.getJSONArray("sample_rejections").getJSONObject(0).getString("reason"))
+        assertEquals(0,out.getJSONArray("events").length())
+    }
+
     @Test fun malformedCandidateDoesNotGetAddedToResearchLedger() {
         val wrong=candidate().copy(signedStop=120.0)
         val e=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,emptyList(),wrong)
