@@ -225,6 +225,17 @@ internal fun williamsTc2OppositeExitEvidenceBlocker(
     val uncertainty=decision.optJSONArray("uncertain")
         ?: return "TC2_OPPOSITE_EXIT_UNCERTAINTY_NOT_RECORDED"
     if(uncertainty.length()>0) return "TC2_OPPOSITE_EXIT_AMBIGUOUS_OR_INCOMPLETE_HISTORY"
+    // A historical breakout that was later invalidated or expired is NOT a
+    // fresh TC2 EXIT. Unlike entry-cancellation replay, position reduction
+    // requires proof from the scanner's COMPLETE post-trigger H1 history.
+    // Fail closed for pre-upgrade/absent proofs, leaving Binance STOP intact.
+    val lifecycle=decision.optJSONObject("opposition_revalidation")
+        ?: return "TC2_OPPOSITE_EXIT_LIFECYCLE_NOT_VERIFIED"
+    if(lifecycle.optString("status")!="FRESH_CONFIRMED_OPPOSITE" ||
+        lifecycle.optString("reason") !in setOf(
+            "CURRENT_CONTRACT_TRIGGER","CLOSED_H1_SIGNAL_REMAINS_VALID") ||
+        lifecycle.optBoolean("may_override_exchange_stop",true))
+        return "TC2_OPPOSITE_EXIT_LIFECYCLE_NOT_VERIFIED"
     val examinedAt=decision.optLong("observed_at_ms")
     val signalAt=opposite.optLong("signal_bar_time_ms")
     val eventAt=event.optLong("known_at_ms")
