@@ -152,6 +152,19 @@ internal fun williamsTc2ExitShadowAdvance(
     val events=state.optJSONArray("events") ?: JSONArray()
     val unique=mutableSetOf<String>()
     val retained=mutableListOf<JSONObject>()
+    // An observed opposite source with unavailable or already violated
+    // historical protection must NOT silently disappear from the research.
+    // Keep only 64 distinct recent rejection identities and bounded reasons.
+    val rejectionRows=(state.optJSONArray("sample_rejections") ?: JSONArray())
+    val rejectedKeys=mutableSetOf<String>()
+    val rejections=mutableListOf<JSONObject>()
+    for(i in 0 until rejectionRows.length()) {
+        val rejected=rejectionRows.optJSONObject(i) ?: continue
+        if(rejected.optString("key").isNotBlank() &&
+            rejectedKeys.add(rejected.optString("key")))
+            rejections+=JSONObject(rejected.toString())
+    }
+    var rejectionTotal=state.optLong("sample_rejections_total",0L)
     for(i in 0 until events.length()) {
         val e=events.optJSONObject(i) ?: continue
         val key=e.optString("key")
@@ -169,6 +182,26 @@ internal fun williamsTc2ExitShadowAdvance(
             c.regime.optString("schema")=="WILLIAMS_TC2_SENIOR_EXIT_CONTEXT_V1" &&
             c.regime.optString("mode")=="SHADOW_ONLY" &&
             c.regime.optLong("as_of_ms")<=c.decisionAtMs
+        if(!valid && key.isNotBlank() && rejectedKeys.add(key)) {
+            val reason=when {
+                c.ownerId.isBlank() || c.signalId.isBlank() ||
+                    c.direction !in setOf("LONG","SHORT") ->
+                    "MISSING_VALID_SOURCE_OR_DIRECTION"
+                c.decisionAtMs<=0L || c.decisionAtMs>atMs ->
+                    "CAUSAL_DECISION_TIME_UNVERIFIED"
+                listOf(c.entryPrice,c.observedContract,c.signedStop,c.signedQuantity)
+                    .any { !it.isFinite() || it<=0.0 } ->
+                    "PRICE_QUANTITY_OR_STOP_NOT_SIGNED"
+                if(c.direction=="LONG") c.signedStop>=c.observedContract
+                    else c.signedStop<=c.observedContract ->
+                    "STOP_ALREADY_BREACHED_BEFORE_PAPER_HOLD"
+                else -> "SENIOR_REGIME_PROVENANCE_NOT_VERIFIED"
+            }
+            rejections+=JSONObject().put("key",key)
+                .put("reason",reason).put("observed_at_ms",atMs)
+                .put("no_order_mutation",true)
+            rejectionTotal++
+        }
         if(valid && unique.add(key)) {
             retained+=JSONObject().put("key",key).put("owner_id",c.ownerId)
                 .put("signal_id",c.signalId).put("direction",c.direction)
@@ -273,6 +306,9 @@ internal fun williamsTc2ExitShadowAdvance(
         .put("as_of_ms",atMs)
         .put("max_events",TC2_SHADOW_MAX_EVENTS)
         .put("events",JSONArray(replay))
+        .put("sample_rejections",JSONArray(rejections.takeLast(TC2_SHADOW_MAX_EVENTS)))
+        .put("sample_rejections_total",rejectionTotal)
+        .put("sample_rejection_counts_are_bounded_recent_diagnostics_only",true)
         .put("summary",summary)
         .put("can_place_orders",false).put("can_close",false)
         .put("can_modify_stop",false).put("can_reverse",false)
