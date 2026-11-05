@@ -122,6 +122,76 @@ class WilliamsTc2ExitShadowReplayTest {
         assertFalse(unverifiedEntry.getBoolean("paper_strict_h4_d1_hold"))
     }
 
+    private fun trailSeed(side:String):List<WilliamsWaveBar> =
+        (6..10).map { hourAt ->
+            val close=if(side=="LONG") 98.0+(hourAt-6)*0.6
+                else 102.0-(hourAt-6)*0.6
+            WilliamsWaveBar(hourAt*hour,close,close+0.5,close-0.5,close,1.0)
+        }
+
+    @Test fun dynamic3And5BarShadowStopsOnlyTightenAndNeverAuthorizeTrading() {
+        for(side in listOf("LONG","SHORT")) {
+            val input=trailSeed(side)+future(side)
+            val first=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,input,candidate(side))
+            val matured=williamsTc2ExitShadowAdvance(first,"BTCUSDT",17*hour,input)
+            val e=matured.getJSONArray("events").getJSONObject(0)
+            val static=e.getJSONObject("outcome_6h")
+            assertEquals("MATURED",static.getString("status"))
+            for(trail in listOf(3,5)) {
+                val paper=e.getJSONObject("outcome_6h_trail${trail}")
+                assertEquals("MATURED",paper.getString("status"))
+                assertTrue(paper.getBoolean("includes_trailing_stop"))
+                assertFalse(paper.getBoolean("actual_binance_fills"))
+                assertTrue(paper.getBoolean("intrabar_adverse_is_unverified_upper_bound"))
+                assertTrue(paper.getBoolean("paper_trailing_does_not_assert_exchange_order_mutation"))
+                val start=paper.getDouble("original_exchange_stop")
+                val end=paper.getDouble("paper_final_stop")
+                assertTrue(if(side=="LONG") end>=start else end<=start)
+                assertTrue(paper.getInt("paper_trailing_tightening_events")>=1)
+                assertEquals(1,matured.getJSONObject("summary")
+                    .getJSONObject("h6_trail${trail}").getInt("matured"))
+                assertNull(e.optJSONObject("outcome_24h_trail${trail}"))
+            }
+            assertFalse(matured.getBoolean("can_modify_stop"))
+            assertFalse(matured.getBoolean("can_close"))
+        }
+    }
+
+    @Test fun dynamicTrailingGapExitsAtWorseOpeningWhileOriginalStaticStopSurvives() {
+        for(side in listOf("LONG","SHORT")) {
+            val bars=(trailSeed(side)+future(side)).toMutableList()
+            val shockIndex=bars.indexOfFirst { it.t==15*hour }
+            assertTrue(shockIndex>0)
+            val open=if(side=="LONG") 99.0 else 101.0
+            val close=open
+            bars[shockIndex]=WilliamsWaveBar(15*hour,open,open+0.5,
+                open-0.5,close,1.0)
+            val first=williamsTc2ExitShadowAdvance(null,"ETHUSDT",at,bars,candidate(side))
+            val matured=williamsTc2ExitShadowAdvance(first,"ETHUSDT",17*hour,bars)
+            val e=matured.getJSONArray("events").getJSONObject(0)
+            assertEquals("HORIZON_CLOSED_BAR_MARK",
+                e.getJSONObject("outcome_6h").getString("hold_outcome_reason"))
+            val trail=e.getJSONObject("outcome_6h_trail3")
+            assertEquals("GAP_BEYOND_STOP",trail.getString("hold_outcome_reason"))
+            assertEquals(open,trail.getDouble("hold_exit_price_reference"),0.0001)
+            assertTrue(if(side=="LONG")
+                open<trail.getDouble("paper_final_stop") else
+                open>trail.getDouble("paper_final_stop"))
+        }
+    }
+
+    @Test fun trailingShadowRejectsMissingPriorClosedH1RatherThanAssumingProtection() {
+        val incomplete=future("LONG")
+        val first=williamsTc2ExitShadowAdvance(null,"LTCUSDT",at,incomplete,candidate())
+        val matured=williamsTc2ExitShadowAdvance(first,"LTCUSDT",17*hour,incomplete)
+        val e=matured.getJSONArray("events").getJSONObject(0)
+        assertEquals("MATURED",e.getJSONObject("outcome_6h").getString("status"))
+        assertEquals("INVALID_OR_MISSING_TRAILING_H1",
+            e.getJSONObject("outcome_6h_trail3").getString("status"))
+        assertEquals("INVALID_OR_MISSING_TRAILING_H1",
+            e.getJSONObject("outcome_6h_trail5").getString("status"))
+    }
+
     @Test fun malformedCandidateDoesNotGetAddedToResearchLedger() {
         val wrong=candidate().copy(signedStop=120.0)
         val e=williamsTc2ExitShadowAdvance(null,"BTCUSDT",at,emptyList(),wrong)
