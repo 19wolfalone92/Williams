@@ -251,3 +251,15 @@ def test_all_three_shadow_cohorts_are_monotone_subsets_by_definition():
                     assert dynamic["trailing_stop_tightening_events"]>=0
     assert not report["execution_authority"]
     assert not report["profitability_certified"]
+    assert report["holdout_events_all_accounted_for"]
+    by_symbol=report["holdout_by_symbol_all_ten_no_selection"]
+    by_month=report["holdout_by_calendar_month_all_no_selection"]
+    assert set(by_symbol)==set(w.SYMBOLS)
+    assert set(by_month)=={"2026-09","2026-10","2026-11"}
+    assert sum(v["all_candidates"] for v in by_symbol.values())==report["holdout"]["all_candidates"]
+    assert sum(v["all_candidates"] for v in by_month.values())==report["holdout"]["all_candidates"]
+    for cohort in (by_symbol,by_month):
+        for _,entry in cohort.items():
+            assert (entry["both_h4_d1_swings_confirmed"]["proposed_holds"]
+                    <=entry["h4_swing_confirmed"]["proposed_holds"]
+                    <=entry["h4_d1_only"]["proposed_holds"])
