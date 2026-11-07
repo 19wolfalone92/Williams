@@ -51,7 +51,7 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             reading!!.optJSONObject("tc1_market_facilitation") else null
         val mfiRu=when(mfi?.optString("status")) {
             "OBSERVED_BASE_VOLUME_PROXY","TIED_NEITHER_UP_NOR_DOWN" ->
-                mfi.optString("explanation_ru")
+                mfi?.optString("explanation_ru").orEmpty()
             else -> "По TC1 четыре окна MFI/объёма не подтверждены: нет двух проверенных закрытых свечей или объём неверен. Наблюдение не управляет TC2."
         }
         val hypotheses=rows(row?.optJSONArray("hypotheses"))
