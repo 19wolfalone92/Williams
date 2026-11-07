@@ -102,6 +102,25 @@ class WilliamsTc1WavePriceGeometryTest {
         assertEquals("UNVERIFIED_WAVE_ANCHORS",williamsTc1WavePriceGeometry(noPrice).getString("status"))
     }
 
+    @Test fun tc1CorrectionBZoneNeverInventsWaveCEntryWithoutFractalSquatAndFiveThreeFive() {
+        val up=listOf(100.0,120.0,110.0,142.0,128.0,154.0,134.0,145.0)
+        for((dir,prices) in listOf("UP" to up,"DOWN" to up.map { 500.0-it })) {
+            val analysis=williamsTc1WavePriceGeometry(scenario(prices,dir))
+            val b=analysis.getJSONObject("abc_b_retracement")
+            assertEquals("ZIGZAG_B_50_62_PRICE_ZONE_ONLY",b.getString("status"))
+            assertEquals(.55,b.getDouble("b_over_a"),1e-12)
+            assertFalse(b.getBoolean("zigzag_5_3_5_internal_degree_verified"))
+            assertFalse(b.getBoolean("fractal_and_squat_confirmed_here"))
+            assertFalse(b.getBoolean("can_enter_c_wave"))
+            assertFalse(analysis.getBoolean("can_place_orders"))
+        }
+        val deep=williamsTc1WavePriceGeometry(scenario(
+            listOf(100.0,120.0,110.0,142.0,128.0,154.0,134.0,153.0)))
+        assertEquals("DEEP_B_MAY_BE_FLAT_OR_ALTERNATIVE_COUNT",
+            deep.getJSONObject("abc_b_retracement").getString("status"))
+        assertFalse(deep.getJSONObject("abc_b_retracement").getBoolean("can_enter_c_wave"))
+    }
+
     @Test fun existingMarketPhaseCarriesBookEvidenceWithoutOpeningOrClosing() {
         val sc=scenario(listOf(100.0,120.0,110.0,142.0,128.0))
             .put("active_label","W5")
