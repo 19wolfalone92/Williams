@@ -17,9 +17,9 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     val asOf=phase.optLong("as_of",0L)
     fun rows(array:JSONArray?):List<JSONObject> = if(array==null) emptyList() else
         (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    val researchCorrections=rows(phase.optJSONArray("complex_correction_hypotheses"))
     val rows=rows(phase.optJSONArray("frames"))
         .associateBy { it.optString("frame") }
-    val researchCorrections=rows(phase.optJSONArray("complex_correction_hypotheses"))
     // A possible H4/D1 complex Elliott structure is NOT a proven trade veto.
     // Only a separate current CLOSED-H1 / signal-price check has the right
     // to withhold new TC2 exposure. No narrative can move a Binance STOP.
