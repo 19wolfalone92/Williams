@@ -145,6 +145,7 @@ class WilliamsTc2CongestionTest {
         }+org.json.JSONObject().put("range_resolved",false)
             .put("crosses_entry",true).put("id","OLDEST_STILL_ACTIVE")
         val shown=williamsTc2ComplexStructureDisplay(samples)
+        assertTrue(williamsTc2ComplexEntryBlocked(samples))
         assertEquals(48,shown.size)
         assertEquals("OLDEST_STILL_ACTIVE",shown.first().getString("id"))
         assertTrue(shown.any { it.optBoolean("crosses_entry") })
@@ -159,6 +160,11 @@ class WilliamsTc2CongestionTest {
         assertEquals(48,selected.size)
         assertTrue(selected.all { it.optBoolean("crosses_entry") })
         assertEquals(0,williamsTc2ComplexStructureDisplay(all,0).size)
+        assertTrue(williamsTc2ComplexEntryBlocked(all))
+        val onlyResolved=(0 until 95).map {
+            org.json.JSONObject().put("crosses_entry",false).put("range_resolved",true)
+        }
+        assertFalse(williamsTc2ComplexEntryBlocked(onlyResolved))
     }
 
     @Test fun confirmedComplexPatternDoesNotExpireAfterTwelveMoreClosedHours() {
