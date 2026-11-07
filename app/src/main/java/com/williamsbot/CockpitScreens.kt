@@ -59,6 +59,10 @@ internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(
 }
 
 internal fun williamsRuRuntimeMessage(raw: String): String = when {
+    raw.startsWith("SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY", ignoreCase=true) ||
+        raw.startsWith("WILLIAMS_UNIFIED_DIRECTION_CONFLICT", ignoreCase=true) ||
+        raw.startsWith("FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE", ignoreCase=true) ->
+        russianExecutionBlocker(raw)
     raw.startsWith("BOOK H1 WM", ignoreCase = true) ->
         russianTradeEntryExplanation(raw, when {
             raw.contains("LONG stop-entry", ignoreCase=true) -> "LONG"
