@@ -141,20 +141,14 @@ jobs:
           path: build-debug.log
           if-no-files-found: ignore
           retention-days: 3
-      - name: Build release APK
-        run: gradle --no-daemon :app:assembleRelease --stacktrace
-      - name: Verify APK files
+      # Signed debug is the user-installable artifact. A failing or slow
+      # optional unsigned release build must never withhold the already
+      # tested, certificate-pinned, safely upgradable debug APK.
+      - name: Verify installable debug APK exists
+        run: test -s app/build/outputs/apk/debug/app-debug.apk
+      - name: Inspect installable debug APK metadata
         run: |
-          set -euo pipefail
-          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
-          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
-          test -f "$DEBUG_APK"
-          test -f "$RELEASE_APK"
-      - name: Inspect APK metadata
-        run: |
-          set -euo pipefail
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
       - name: Verify debug keystore
         run: |
           set -euo pipefail
@@ -179,13 +173,8 @@ jobs:
             exit 1
           fi
           "$APKSIGNER" verify --verbose "$APK"
-      - name: Generate SHA-256 checksums
-        run: |
-          set -euo pipefail
-          sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
-          sha256sum app/build/outputs/apk/release/app-release-unsigned.apk > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
-          cat app/build/outputs/apk/debug/app-debug.apk.sha256
-          cat app/build/outputs/apk/release/app-release-unsigned.apk.sha256
+      - name: Generate installable debug APK SHA-256 checksum
+        run: sha256sum app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.apk.sha256
       - name: Upload installable debug APK
         uses: actions/upload-artifact@v7
         with:
@@ -195,6 +184,22 @@ jobs:
             app/build/outputs/apk/debug/app-debug.apk.sha256
           if-no-files-found: error
           retention-days: 14
+      - name: Build release APK
+        run: gradle --no-daemon :app:assembleRelease --stacktrace
+      - name: Verify APK files
+        run: |
+          set -euo pipefail
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
+          test -f "$DEBUG_APK"
+          test -f "$RELEASE_APK"
+      - name: Inspect APK metadata
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E "package:|sdkVersion:|targetSdkVersion:"
+      - name: Generate unsigned release APK SHA-256 checksum
+        run: sha256sum app/build/outputs/apk/release/app-release-unsigned.apk > app/build/outputs/apk/release/app-release-unsigned.apk.sha256
       - name: Upload release APK
         uses: actions/upload-artifact@v7
         with:
