@@ -99,6 +99,29 @@ class WilliamsTc2CongestionTest {
         assertFalse(old.getBoolean("blocked"))
     }
 
+    @Test fun triangleNeverBecomesKnownBeforeTwoRightH1BarsHaveClosed() {
+        val source=triangularBars()
+        val notYet=source.take(116)
+        val early=williamsTc2CongestionEvidence(notYet,notYet.last().t+h,
+            "FRACTAL","LONG",115.0)
+        assertFalse(early.toString(),early.getBoolean("blocked"))
+        val confirmed=source.take(117)
+        val now=confirmed.last().t+h
+        val later=williamsTc2CongestionEvidence(confirmed,now,
+            "FRACTAL","LONG",115.0)
+        assertTrue(later.toString(),later.getBoolean("blocked"))
+        assertTrue(later.getJSONArray("complex_structures").let { arr ->
+            (0 until arr.length()).any { i ->
+                arr.getJSONObject(i).getLong("known_at_ms")<=now
+            }
+        })
+        // A forming next bar with an extreme high is not allowed into
+        // the confirmation/reclassification prefix.
+        val future=confirmed+WilliamsWaveBar(now,115.0,1000.0,1.0,115.0,100.0)
+        assertEquals("HISTORY_UNVERIFIED",williamsTc2CongestionEvidence(
+            future,now,"FRACTAL","LONG",115.0).getString("state"))
+    }
+
     @Test fun confirmedComplexPatternDoesNotExpireAfterTwelveMoreClosedHours() {
         val initial=triangularBars()
         val later=(1..18).map { hour ->
