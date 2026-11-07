@@ -28,6 +28,9 @@ class Tc2ThreeFiveBarStudyTest {
             val five=study.getJSONObject("window5")
             assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",three.getString("status"))
             assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",four.getString("status"))
+            assertEquals(161,four.getInt("book_source_pdf_page"))
+            assertTrue(four.getString("explanation_ru").contains("только гипотеза"))
+            assertFalse(four.getBoolean("execution_authority"))
             assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",five.getString("status"))
             assertEquals(if(long) 101.0 else 119.0,four.getDouble("source_stop_price"),1e-9)
             assertEquals("TC2_THREE_FOUR_FIVE_CLOSED_H1_SHADOW_V2",study.getString("schema"))
@@ -58,6 +61,7 @@ class Tc2ThreeFiveBarStudyTest {
             forming.getString("series_state"))
         assertEquals("UNVERIFIED_INPUT",forming.getJSONObject("window3").getString("status"))
         assertEquals("UNVERIFIED_INPUT",forming.getJSONObject("window4").getString("status"))
+        assertTrue(forming.getJSONObject("window4").getString("explanation_ru").contains("закрытые H1"))
         val gap=longBars().toMutableList().also {
             val b=it[3];it[3]=b.copy(openTimeMs=b.openTimeMs+5*h)
         }
