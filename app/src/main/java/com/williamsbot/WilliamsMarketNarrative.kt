@@ -76,6 +76,24 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             }
             "${names.getValue(frame)}: ${reason}; направление и волна неизвестны."
         }
+        val geometry=hypotheses.mapNotNull { it.optJSONObject("tc1_wave_price_geometry") }
+            .filter { it.optString("status")=="BOUNDED_PRICE_EVIDENCE" }
+        val geomRu=when {
+            !readingReady -> "Ценовые пропорции волн по TC1 не оценены: закрытые свечи этого масштаба не проверены."
+            geometry.isEmpty() -> "Подтверждённых экстремумов недостаточно для оценки пропорций волн 2–4 по TC1. Отсутствие данных не доказывает отсутствие волн."
+            geometry.size>1 -> "На этом масштабе несколько конкурирующих волновых подсчётов ("+
+                geometry.size+"). Их пропорции отличаются: выбор единственной версии без независимого подтверждения недопустим."
+            else -> {
+                val g=geometry.single()
+                val w2=g.getJSONObject("w2_retracement")
+                val w3=g.getJSONObject("w3_extension")
+                val w4=g.getJSONObject("w4_retracement")
+                val pieces=mutableListOf(w2.optString("explanation_ru"))
+                for(v in listOf(w3,w4)) if(v.optString("status")!="NOT_OBSERVED")
+                    pieces+=v.optString("explanation_ru")
+                pieces.joinToString(" ")+" Эти соотношения только наблюдение: TC2, риск и Binance проверяются отдельно."
+            }
+        }
         val complex=researchCorrections.filter {
             it.optString("frame")==frame && it.optBoolean("fresh_at_frame") }
         val complexRu=when {
@@ -94,8 +112,11 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("wave_text",wave).put("hypothesis_count",hypotheses.size)
             .put("complex_correction_alternatives",complex.size)
             .put("complex_correction_explanation_ru",complexRu)
+            .put("tc1_wave_price_evidence",JSONArray(geometry))
+            .put("tc1_price_geometry_explanation_ru",geomRu)
+            .put("tc1_ratios_can_veto_orders",false)
             .put("complex_research_can_veto_orders",false)
-            .put("explanation_ru",observed)
+            .put("explanation_ru",observed+" "+geomRu)
             .put("wave_degree_confirmed",false)
             .put("can_place_orders",false).put("can_close",false))
     }
