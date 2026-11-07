@@ -429,7 +429,9 @@ data class Trade(
     val managementReason:String="",
     val historyRecoveryDetail:String="",
     val excursionKnown:Boolean=false,
-    val managementHistory:List<TradeManagementEvent> = emptyList()
+    val managementHistory:List<TradeManagementEvent> = emptyList(),
+    val entrySignalBarMs:Long=0L,
+    val tradeAuditSource:String=""
 ) : java.io.Serializable
 
 data class MarketPair(
@@ -2196,8 +2198,9 @@ private fun ScannerScreen(
             CockpitCard("Исторический график • ${historicalTrade.symbol}", AppColors.violet) {
                 Text((if(historicalTrade.entryTimeKnown) "Вход: " else "Первое наблюдение: ")+
                     cockpitTime(historicalTrade.openedAtMs)+" • выход: "+cockpitTime(historicalTrade.closedAtMs), style = MaterialTheme.typography.bodySmall)
-                Text(historicalTrade.reason.ifBlank { "Причина входа не записана" }, style = MaterialTheme.typography.bodySmall)
-                Text("Выход: " + russianExecutionBlocker(historicalTrade.exitReason).ifBlank { "Причина не записана" }, style = MaterialTheme.typography.bodySmall)
+                Text("Почему открыли: " + russianTradeEntryExplanation(historicalTrade.reason,historicalTrade.direction), style = MaterialTheme.typography.bodySmall)
+                Text("Почему вышли: " + russianTradeExitExplanation(historicalTrade.exitReason,
+                    historicalTrade.tradeAuditSource=="BINANCE_USDM_USER_TRADES" && historicalTrade.fillCount>0), style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = onLive) { Text("Вернуться к прямому эфиру") }
             }
         }
@@ -2847,7 +2850,7 @@ private fun HistoryScreen(
                             "UNKNOWN_FEES" -> "Закрыта • комиссии уточняются"
                             else -> russianStatus(it.outcome)
                         }
-                        Text(it.symbol + " • " + it.direction + " • " + label, style = MaterialTheme.typography.titleMedium,
+                        Text(it.symbol + " • " + russianDirection(it.direction) + " • " + label, style = MaterialTheme.typography.titleMedium,
                             modifier=Modifier.weight(1f))
                         Text(
                             fmt(it.pnl, 2) + " USDT",
@@ -2858,11 +2861,15 @@ private fun HistoryScreen(
                     Text("Вход " + fmt(it.entry) + " → выход " + fmt(it.exit), color = AppColors.textMuted)
                     if(it.quantity!=null) Text("Объём "+fmt(it.quantity,6))
                     if(it.stopPrice!=null) Text("Первоначальный SL "+fmt(it.stopPrice))
+                    else Text("Первоначальный SL не восстановлен; защита на момент входа не подтверждена",
+                        color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
                     if(it.lastStop!=null) Text("Последний подтверждённый SL "+fmt(it.lastStop))
                     fun eventTime(ms:Long):String=java.text.DateFormat.getDateTimeInstance(
                         java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(ms))
                     if(it.openedAtMs>0L) Text((if(it.entryTimeKnown) "Открыта " else "Позиция замечена ")+eventTime(it.openedAtMs))
                     else Text("Время открытия не сохранено",color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
+                    if(it.entrySignalBarMs>0L) Text("Сигнальная свеча H1: "+eventTime(it.entrySignalBarMs),
+                        color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
                     if(it.supervisionStartedAtMs>0L) Text("Сопровождение подключено "+eventTime(it.supervisionStartedAtMs))
                     if(it.closedAtMs>0L) Text("Закрыта "+eventTime(it.closedAtMs))
                     else if(it.closureObservedAtMs>0L) Text("Отсутствие позиции замечено "+eventTime(it.closureObservedAtMs),
@@ -2875,11 +2882,20 @@ private fun HistoryScreen(
                     if (it.feeUsdt != null) {
                         Text(
                             "Комиссия " + fmt(it.feeUsdt, 4) + " USDT" +
-                                if (it.feeKnown) "" else " • fee conversion incomplete",
+                                if (it.feeKnown) "" else " • часть комиссии не пересчитана в USDT",
                             color = if (it.feeKnown) AppColors.textMuted else AppColors.amber,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    if (it.grossPnl != null && it.feeUsdt != null && it.pnlComplete && it.pnl != null) {
+                        Text("Расчёт результата: " + fmt(it.grossPnl,4) + " − " +
+                            fmt(it.feeUsdt,4) + " = " + fmt(it.pnl,4) + " USDT. " +
+                            "Комиссии учтены; финансирование (funding) в этой формуле отдельно не вычитается.",
+                            color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
+                    }
+                    if(it.tradeAuditSource.isNotBlank()) Text(
+                        russianTradeAuditEvidence(it.tradeAuditSource,it.fillCount),
+                        color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
                     if (it.entrySlippagePct != null) {
                         Text(
                             "Проскальзывание входа (невыгодное +) " +
@@ -2904,19 +2920,25 @@ private fun HistoryScreen(
                         "Лучший ход " + fmt(it.mfeR, 2) + "R • Худший ход " + fmt(it.maeR, 2) + "R",
                         color = AppColors.textMuted
                     )
-                    if (it.reason.isNotBlank()) {
-                        Text("Почему открыли: " + williamsRuRuntimeMessage(it.reason), style = MaterialTheme.typography.bodySmall)
+                    Text("Почему открыли",fontWeight=FontWeight.SemiBold)
+                    Text(russianTradeEntryExplanation(it.reason,it.direction),
+                        style=MaterialTheme.typography.bodySmall)
+                    if(it.historyStatus in setOf("CLOSED","CLOSED_UNVERIFIED") || it.exit != null || it.exitReason.isNotBlank()) {
+                        Text("Почему вышли",fontWeight=FontWeight.SemiBold)
+                        Text(russianTradeExitExplanation(it.exitReason,
+                            it.tradeAuditSource=="BINANCE_USDM_USER_TRADES" && it.fillCount>0),
+                            style=MaterialTheme.typography.bodySmall)
                     }
-                    if (it.exitReason.isNotBlank()) Text("Почему вышли: " + it.exitReason, style = MaterialTheme.typography.bodySmall)
-                    if(it.managementReason.isNotBlank()) Text("Сопровождение: "+russianExecutionBlocker(it.managementReason),
+                    if(it.managementReason.isNotBlank()) Text("Сопровождение: "+russianTradeManagementExplanation(it.managementReason),
                         style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
-                    if(it.historyRecoveryDetail.isNotBlank()) Text("Сверка истории: "+russianExecutionBlocker(it.historyRecoveryDetail),
+                    if(it.historyRecoveryDetail.isNotBlank()) Text("Сверка истории: "+russianTradeManagementExplanation(it.historyRecoveryDetail),
                         style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                     if(it.managementHistory.isNotEmpty()) {
                         var shown by remember(it.id) { mutableIntStateOf(6) }
                         Text("События сопровождения",fontWeight=FontWeight.Bold)
                         it.managementHistory.asReversed().take(shown).forEach { event ->
-                            Text(eventTime(event.atMs)+" · "+event.detail+
+                            Text((if(event.atMs>0L) eventTime(event.atMs) else "время не подтверждено")+" · "+
+                                russianTradeManagementExplanation(event.detail)+
                                 (event.stop?.let { stop -> " · SL "+fmt(stop) } ?: ""),
                                 style=MaterialTheme.typography.bodySmall)
                         }
@@ -2927,7 +2949,7 @@ private fun HistoryScreen(
                     TextButton(onClick = { onTradeChart(it) }) { Text("Открыть график сделки") }
                     if (it.classification.isNotBlank()) {
                         Text(
-                            "Разбор: " + it.classification,
+                            "Паспорт сделки: " + russianTradeClassification(it.classification,it.feeKnown),
                             style = MaterialTheme.typography.bodySmall,
                             color = if (it.outcome == "LOSS") AppColors.amber else AppColors.green
                         )
@@ -4308,6 +4330,8 @@ private fun parseTrades(array: JSONArray): List<Trade> =
             managementReason=x.optString("management_reason"),
             historyRecoveryDetail=x.optString("history_recovery_detail"),
             excursionKnown=x.has("mfe_r") && x.has("mae_r"),
+            entrySignalBarMs=snap?.optLong("signal_bar_time_ms",0L) ?: 0L,
+            tradeAuditSource=x.optString("trade_audit_source"),
             managementHistory=CockpitDiagnostics.rows(x.optJSONArray("management_history")).map { event ->
                 TradeManagementEvent(event.optLong("at_ms"),event.optString("detail"),
                     event.optDouble("stop").takeIf { it.isFinite() && it>0 })
