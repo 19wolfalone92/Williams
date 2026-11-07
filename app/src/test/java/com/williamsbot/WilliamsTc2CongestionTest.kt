@@ -80,6 +80,7 @@ class WilliamsTc2CongestionTest {
             assertTrue(family,report.getBoolean("blocked"))
             assertEquals(family,WILLIAMS_TC2_CONGESTION_BLOCKER,
                 report.getString("reason_code"))
+            assertTrue(report.getString("explanation_ru").contains("Новая заявка TC2 не разрешена"))
             assertFalse(report.getBoolean("can_place_orders"))
             assertFalse(report.getBoolean("can_close"))
             assertFalse(report.getBoolean("can_change_stops"))
@@ -112,6 +113,8 @@ class WilliamsTc2CongestionTest {
         assertEquals("COMPLEX_CORRECTION_RESOLVED",report.getString("state"))
         assertEquals("COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1",report.getString("reason_code"))
         assertEquals(0,report.getInt("active_complex_structure_count"))
+        assertTrue(report.getString("explanation_ru").contains("закрытая свеча H1"))
+        assertFalse(report.getBoolean("confidence_calibrated"))
         assertTrue(report.getJSONArray("complex_structures").let { entries ->
             (0 until entries.length()).any { entries.getJSONObject(it).optBoolean("range_resolved") &&
                 entries.getJSONObject(it).getString("resolved_direction")=="UP" &&
