@@ -67,6 +67,12 @@ internal fun tc2ThreeFiveBarStudy(
         })
         return invalid("CLOSED_H1_CONTINUITY_OR_OHLC_UNVERIFIED")
 
+    // A contiguous but old 3/5-bar tail is not the current trailing basis.
+    // Missing the latest completed H1 must remain UNVERIFIED rather than
+    // show a seemingly executable historic source level.
+    val lastClose=closedH1.lastOrNull()?.openTimeMs?.plus(WILLIAMS_H1_MS)
+    if(lastClose==null || asOfMs-lastClose !in 0 until WILLIAMS_H1_MS)
+        return invalid("STALE_OR_MISSING_LATEST_CLOSED_H1")
     study.put("series_state", "CLOSED_H1_VALIDATED")
         .put("last_closed_bar_at_ms",
             closedH1.lastOrNull()?.openTimeMs ?: JSONObject.NULL)
