@@ -1,0 +1,116 @@
+{
+  "schema": "TC1_SOURCE_WAVE_FIBONACCI_SHARED_CASES_V1",
+  "source_pdf_pages": [
+    52,
+    53,
+    54,
+    55
+  ],
+  "source_book": "TC1",
+  "execution_authority": false,
+  "note": "Numerical source rules are typical zones; not automatic TC2 signals, money-management or unique Elliott proof.",
+  "cases": [
+    {
+      "id": "W2_W3_W4_LONG",
+      "direction": "UP",
+      "prices": [
+        100,
+        120,
+        110,
+        142,
+        128,
+        154
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "w2": 0.5,
+      "w3": 1.6,
+      "w4": 0.4375,
+      "w5_origin": 128,
+      "overlap": false
+    },
+    {
+      "id": "W2_W3_W4_SHORT",
+      "direction": "DOWN",
+      "prices": [
+        400,
+        380,
+        390,
+        358,
+        372,
+        346
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "w2": 0.5,
+      "w3": 1.6,
+      "w4": 0.4375,
+      "w5_origin": 372,
+      "overlap": false
+    },
+    {
+      "id": "W4_OVERLAP_ALTERNATIVE",
+      "direction": "UP",
+      "prices": [
+        100,
+        120,
+        110,
+        145,
+        117,
+        153
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "w2": 0.5,
+      "w3": 1.75,
+      "w4": 0.8,
+      "w5_origin": 117,
+      "overlap": true
+    },
+    {
+      "id": "W5_PREMATURE_AFTER_W3",
+      "direction": "UP",
+      "prices": [
+        100,
+        120,
+        110,
+        142
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "w2": 0.5,
+      "w3": 1.6,
+      "w5_status": "W4_NOT_CONFIRMED"
+    },
+    {
+      "id": "CORRECTIVE_B_55",
+      "direction": "UP",
+      "prices": [
+        100,
+        120,
+        110,
+        142,
+        128,
+        154,
+        134,
+        145
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "b_over_a": 0.55,
+      "b_status": "ZIGZAG_B_50_62_PRICE_ZONE_ONLY"
+    },
+    {
+      "id": "CORRECTIVE_B_95",
+      "direction": "DOWN",
+      "prices": [
+        400,
+        380,
+        390,
+        358,
+        372,
+        346,
+        366,
+        347
+      ],
+      "status": "BOUNDED_PRICE_EVIDENCE",
+      "b_over_a": 0.95,
+      "b_status": "DEEP_B_MAY_BE_FLAT_OR_ALTERNATIVE_COUNT"
+    }
+  ]
+}

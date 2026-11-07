@@ -14,7 +14,7 @@ class Tc2ThreeFiveBarStudyTest {
         122.0, 120.0, 118.0, 117.0, 115.0, 113.0
     ).mapIndexed { i, high -> FuturesTrailBar((15+i)*h,high,high-2.0) }
 
-    @Test fun longAndShortMirrorExactlyOnThreeAndFiveClosedBars() {
+    @Test fun longAndShortMirrorExactlyOnThreeFourFiveClosedBars() {
         for(side in listOf("LONG","SHORT")) {
             val long=side=="LONG"
             val study=tc2ThreeFiveBarStudy(side, if(long) 95.0 else 125.0,
@@ -24,12 +24,21 @@ class Tc2ThreeFiveBarStudyTest {
             assertFalse(study.getBoolean("execution_authority"))
             assertEquals(165,study.getInt("source_pdf_page"))
             val three=study.getJSONObject("window3")
+            val four=study.getJSONObject("window4")
             val five=study.getJSONObject("window5")
             assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",three.getString("status"))
+            assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",four.getString("status"))
+            assertEquals(161,four.getInt("book_source_pdf_page"))
+            assertTrue(four.getString("explanation_ru").contains("только гипотеза"))
+            assertFalse(four.getBoolean("execution_authority"))
             assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",five.getString("status"))
+            assertEquals(if(long) 101.0 else 119.0,four.getDouble("source_stop_price"),1e-9)
+            assertEquals("TC2_THREE_FOUR_FIVE_CLOSED_H1_SHADOW_V2",study.getString("schema"))
             assertEquals(if(long) 102.0 else 118.0,three.getDouble("source_stop_price"),1e-9)
             assertEquals(if(long) 99.0 else 121.0,five.getDouble("source_stop_price"),1e-9)
             assertTrue(three.getDouble("stop_risk_reduction_per_unit") >
+                four.getDouble("stop_risk_reduction_per_unit"))
+            assertTrue(four.getDouble("stop_risk_reduction_per_unit") >
                 five.getDouble("stop_risk_reduction_per_unit"))
         }
     }
@@ -38,6 +47,8 @@ class Tc2ThreeFiveBarStudyTest {
         val result=tc2ThreeFiveBarStudy("LONG",95.0,130.0,1.0,18*h,21*h,longBars())
         assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",
             result.getJSONObject("window3").getString("status"))
+        assertEquals("NOT_ENOUGH_FULL_POST_OBSERVATION_BARS",
+            result.getJSONObject("window4").getString("status"))
         assertEquals("NOT_ENOUGH_FULL_POST_OBSERVATION_BARS",
             result.getJSONObject("window5").getString("status"))
         assertEquals(3,result.getJSONObject("window5").getInt("observed_post_position_bars"))
@@ -49,6 +60,8 @@ class Tc2ThreeFiveBarStudyTest {
         assertEquals("CLOSED_H1_CONTINUITY_OR_OHLC_UNVERIFIED",
             forming.getString("series_state"))
         assertEquals("UNVERIFIED_INPUT",forming.getJSONObject("window3").getString("status"))
+        assertEquals("UNVERIFIED_INPUT",forming.getJSONObject("window4").getString("status"))
+        assertTrue(forming.getJSONObject("window4").getString("explanation_ru").contains("закрытые H1"))
         val gap=longBars().toMutableList().also {
             val b=it[3];it[3]=b.copy(openTimeMs=b.openTimeMs+5*h)
         }
@@ -63,6 +76,8 @@ class Tc2ThreeFiveBarStudyTest {
             "LONG",95.0,130.0,1.0,15*h,25*h,longBars())
         assertEquals("STALE_OR_MISSING_LATEST_CLOSED_H1",
             stale.getString("series_state"))
+        assertEquals("UNVERIFIED_INPUT",
+            stale.getJSONObject("window4").getString("status"))
         assertEquals("UNVERIFIED_INPUT",
             stale.getJSONObject("window5").getString("status"))
     }
@@ -97,6 +112,8 @@ class Tc2ThreeFiveBarStudyTest {
         assertFalse(study.getBoolean("execution_authority"))
         assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",
             study.getJSONObject("window3").getString("status"))
+        assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",
+            study.getJSONObject("window4").getString("status"))
         assertEquals("SHADOW_ELIGIBLE_NOT_AN_ORDER",
             study.getJSONObject("window5").getString("status"))
     }
