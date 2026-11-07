@@ -2860,10 +2860,12 @@ private fun HistoryScreen(
                     }
                     Text("Вход " + fmt(it.entry) + " → выход " + fmt(it.exit), color = AppColors.textMuted)
                     if(it.quantity!=null) Text("Объём "+fmt(it.quantity,6))
-                    if(it.stopPrice!=null) Text("Первоначальный SL "+fmt(it.stopPrice))
-                    else Text("Первоначальный SL не восстановлен; защита на момент входа не подтверждена",
+                    if(it.stopPrice!=null) Text("Начальный уровень SL из журнала: "+fmt(it.stopPrice)+
+                        " (сам по себе не подтверждает размещение STOP на Binance)")
+                    else Text("Начальный уровень SL не восстановлен; защита на момент входа не подтверждена",
                         color=AppColors.amber,style=MaterialTheme.typography.bodySmall)
-                    if(it.lastStop!=null) Text("Последний подтверждённый SL "+fmt(it.lastStop))
+                    if(it.lastStop!=null) Text("Последний ранее подтверждённый SL: "+fmt(it.lastStop)+
+                        " (не является доказательством действующего STOP сейчас)")
                     fun eventTime(ms:Long):String=java.text.DateFormat.getDateTimeInstance(
                         java.text.DateFormat.SHORT,java.text.DateFormat.SHORT).format(java.util.Date(ms))
                     if(it.openedAtMs>0L) Text((if(it.entryTimeKnown) "Открыта " else "Позиция замечена ")+eventTime(it.openedAtMs))
