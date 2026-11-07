@@ -121,6 +121,42 @@ class WilliamsTc1WavePriceGeometryTest {
         assertFalse(deep.getJSONObject("abc_b_retracement").getBoolean("can_enter_c_wave"))
     }
 
+    @Test fun sharedBookFixturesMatchThePythonContractOnBothDirections() {
+        val file=requireNotNull(javaClass.getResource(
+            "/williams_tc1_wave_price_geometry_contract.json")).readText()
+        val cases=JSONObject(file).getJSONArray("cases")
+        assertEquals(6,cases.length())
+        for(i in 0 until cases.length()) {
+            val item=cases.getJSONObject(i)
+            val prices=item.getJSONArray("prices")
+            val points=(0 until prices.length()).map { prices.getDouble(it) }
+            val report=williamsTc1WavePriceGeometry(
+                scenario(points,item.getString("direction")))
+            assertEquals(item.getString("id"),item.getString("status"),report.getString("status"))
+            for((field,jsonKey) in listOf("w2" to "w2_retracement",
+                "w3" to "w3_extension","w4" to "w4_retracement")) {
+                if(item.has(field)) assertEquals(item.getString("id"),
+                    item.getDouble(field),
+                    report.getJSONObject(jsonKey).getDouble("fraction"),1e-10)
+            }
+            if(item.has("overlap")) assertEquals(item.getString("id"),
+                item.getBoolean("overlap"),
+                report.getJSONObject("w4_retracement").getBoolean("overlaps_w1_price_territory"))
+            if(item.has("w5_origin")) assertEquals(item.getDouble("w5_origin"),
+                report.getJSONObject("w5_projection").getDouble("origin_price"),1e-9)
+            if(item.has("w5_status")) assertEquals(item.getString("w5_status"),
+                report.getJSONObject("w5_projection").getString("status"))
+            if(item.has("b_over_a")) {
+                val b=report.getJSONObject("abc_b_retracement")
+                assertEquals(item.getDouble("b_over_a"),b.getDouble("b_over_a"),1e-10)
+                assertEquals(item.getString("b_status"),b.getString("status"))
+                assertFalse(b.getBoolean("can_enter_c_wave"))
+            }
+            assertFalse(report.getBoolean("can_place_orders"))
+            assertFalse(report.getBoolean("can_close"))
+        }
+    }
+
     @Test fun existingMarketPhaseCarriesBookEvidenceWithoutOpeningOrClosing() {
         val sc=scenario(listOf(100.0,120.0,110.0,142.0,128.0))
             .put("active_label","W5")
