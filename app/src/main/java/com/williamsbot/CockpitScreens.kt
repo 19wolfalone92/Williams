@@ -59,6 +59,17 @@ internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(
 }
 
 internal fun williamsRuRuntimeMessage(raw: String): String = when {
+    raw.startsWith("BOOK H1 WM", ignoreCase = true) ->
+        russianTradeEntryExplanation(raw, when {
+            raw.contains("LONG stop-entry", ignoreCase=true) -> "LONG"
+            raw.contains("SHORT stop-entry", ignoreCase=true) -> "SHORT"
+            else -> null
+        })
+    raw.equals("EXCHANGE_RECONCILED_CLOSE", ignoreCase = true) ->
+        russianTradeExitExplanation(raw, false)
+    raw.equals("exchange_reconciled", ignoreCase = true) ||
+        raw.equals("fees_incomplete", ignoreCase = true) ->
+        russianTradeClassification(raw)
     raw.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN", ignoreCase = true) ->
         "Не удалось подтвердить капитал на начало суток UTC. Новые входы запрещены; анализ рынка и защита позиций продолжаются. Требуется сверка истории доходов, позиций и ожидающих ордеров Binance."
     raw.contains("exchange_confirmed_pending_entry_or_fill_not_yet_resolved", ignoreCase = true) ->
