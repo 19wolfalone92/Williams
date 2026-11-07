@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-25",
+  "updated": "2026-11-07",
   "release": "4.64.0",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
@@ -1504,6 +1504,185 @@
         "cases/changed_common_grid"
       ],
       "remaining_evidence": "Exact decimal/lot adaptation and modeled signed-fill/restart tests do not establish source wave genealogy, independently adjudicated chart counts, full Course new-risk admission or physical Android/Futures Demo execution. Initial parent/child degree proof remains unfinished. Existing partial exposure stays protected; Course remains OBSERVE for new risk.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.W2.RETRACE_38_62",
+      "book": "TC1",
+      "pdf_pages": [
+        52
+      ],
+      "rule": "W2 typical retracement 38–62% of W1; NOT a mandatory hard gate.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::tc1SourceRatiosAreNumericallyExactButDoNotActAsTradeGates",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/W2_W3_W4_LONG"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.W3.EXTENSION_1_TO_1_62",
+      "book": "TC1",
+      "pdf_pages": [
+        53
+      ],
+      "rule": "W3 often travels 1–1.62 times W1 measured from confirmed W2; source target is a range, not guaranteed.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::tc1SourceRatiosAreNumericallyExactButDoNotActAsTradeGates",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/W2_W3_W4_SHORT"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.W4.RETRACE_38_50",
+      "book": "TC1",
+      "pdf_pages": [
+        53,
+        54
+      ],
+      "rule": "W4 typical retracement 38–50% of W3; other outcomes occur; observational, never a blanket entry veto.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::tc1SourceRatiosAreNumericallyExactButDoNotActAsTradeGates",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/W2_W3_W4_LONG"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.W4.OVERLAP_ALTERNATIVE",
+      "book": "TC1",
+      "pdf_pages": [
+        54
+      ],
+      "rule": "W4 overlap with W1 price territory weakens an ORDINARY impulse interpretation but exceptions and diagonals are competing hypotheses.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::overlapHighlightsCompetingDiagonalNotCertainW4",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/W4_OVERLAP_ALTERNATIVE"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.W5.PROJECTION_ORIGIN_AFTER_W4",
+      "book": "TC1",
+      "pdf_pages": [
+        54
+      ],
+      "rule": "Wave-five target calculations must not be anchored to W4 until the fourth-wave pivot is causally confirmed.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::w5OriginIsUnavailableUntilFourthWavePivotIsConfirmed",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/W5_PREMATURE_AFTER_W3"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.ZIGZAG.B_RETRACE_50_62",
+      "book": "TC1",
+      "pdf_pages": [
+        54,
+        55
+      ],
+      "rule": "An A-B-C zigzag B retracement around 50–62% is a zone to SEEK independent fractal and squat confirmation before trading C, not an entry in itself.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsTc1WavePriceGeometry.kt",
+        "williams_tc1_wave_price_geometry.py",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::tc1CorrectionBZoneNeverInventsWaveCEntryWithoutFractalSquatAndFiveThreeFive",
+        "app/src/test/java/com/williamsbot/WilliamsTc1WavePriceGeometryTest.kt::sharedBookFixturesMatchThePythonContractOnBothDirections",
+        "tests/test_tc1_wave_price_geometry.py::test_tc1_book_geometry_shared_with_android"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_wave_price_geometry_contract.json",
+      "fixtures": [
+        "cases/CORRECTIVE_B_55"
+      ],
+      "remaining_evidence": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.STOP.FOUR_BAR_ALTERNATIVE",
+      "book": "TC2",
+      "pdf_pages": [
+        161,
+        165
+      ],
+      "rule": "Chapter 12 explicitly allows 3–5 last price-bar trailing STOP; some traders prefer four–five bars for room. This four-bar variant is an OPTIONAL strategy choice, not an automatically better exit.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/Tc2ThreeFiveBarStudy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::longAndShortMirrorExactlyOnThreeFourFiveClosedBars",
+        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::thirdCompletedHourCanBeComparedButFiveIsNotPretended"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent.",
       "can_place_orders_from_registry": false
     }
   ],
