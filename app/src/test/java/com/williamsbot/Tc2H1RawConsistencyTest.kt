@@ -57,5 +57,7 @@ class Tc2H1RawConsistencyTest {
     @Test fun russianDiagnosticExplainsWhyExchangeEntryWasNotPlaced() {
         assertTrue(russianExecutionBlocker("H1_CLOSED_BAR_RAW_EXCHANGE_MISMATCH")
             .contains("Новый вход запрещён"))
+        assertTrue(williamsRuRuntimeMessage("H1_CLOSED_BAR_RAW_EXCHANGE_MISMATCH")
+            .contains("свежими данными Binance"))
     }
 }
