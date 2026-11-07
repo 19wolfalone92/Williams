@@ -99,11 +99,61 @@ class WilliamsTc2CongestionTest {
         // from this extra TC2 policy.
         assertNull(williamsTc2CongestionEntryBlocker(
             williamsNtdProfile,"FRACTAL","LONG",900.0,missing,now))
-        assertNull(williamsTc2CongestionAdmissionBlocker(JSONObject()
-            .put("state","NO_COMPLEX_CORRECTION_EVIDENCE")
-            .put("blocked",false)))
+        val safe=williamsTc2CongestionEvidence(
+            full,now,"FRACTAL","LONG",1000.0)
+        assertEquals("NO_COMPLEX_CORRECTION_EVIDENCE",safe.getString("state"))
+        assertNull(williamsTc2CongestionAdmissionBlocker(safe))
         assertTrue(russianExecutionBlocker(WILLIAMS_TC2_CONGESTION_UNVERIFIED)
             .contains("закрытых H1"))
+    }
+
+    @Test fun wrongOrContradictoryH1RiskTraceNeverPermitsNewRisk() {
+        val bars=trending()
+        val now=bars.last().t+h
+        val safe=williamsTc2CongestionEvidence(
+            bars,now,"FRACTAL","LONG",1000.0)
+        assertNull(williamsTc2CongestionAdmissionBlocker(safe))
+        val altered=listOf<JSONObject>(
+            JSONObject().put("state","NO_COMPLEX_CORRECTION_EVIDENCE")
+                .put("blocked",false),
+            JSONObject(safe.toString()).put("schema","UNRECOGNIZED"),
+            JSONObject(safe.toString()).put("state","CORRUPTED"),
+            JSONObject(safe.toString()).put("reason_code","NOT_EVALUATED"),
+            JSONObject(safe.toString()).put("active_complex_structure_count",1),
+            JSONObject(safe.toString()).put("complex_structure_count",-1),
+            JSONObject(safe.toString()).put("as_of_close_ms",0),
+            JSONObject(safe.toString()).put("blocked",true),
+            JSONObject(safe.toString()).put("source","TRUST_ME"),
+            JSONObject(safe.toString()).put("policy","REMOVED_BOOK_PROOF")
+        )
+        for(report in altered)
+            assertEquals(report.toString(),WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+                williamsTc2CongestionAdmissionBlocker(report))
+        assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+            williamsTc2CongestionAdmissionBlocker(JSONObject()
+                .put("state","NO_COMPLEX_CORRECTION_EVIDENCE")
+                .put("blocked",false)))
+    }
+
+    @Test fun nextConfirmedH1ComplexPivotInvalidatesEarlierUnblockedDecision() {
+        val source=triangularBars()
+        // The scanner can start BEFORE both right-hand pivot bars close.
+        // Its context is not enough to authorize a future Binance POST.
+        val before=source.take(116)
+        val scanAt=before.last().t+h
+        val old=williamsTc2CongestionEvidence(before,scanAt,"FRACTAL","LONG",115.0)
+        assertNull(old.toString(),williamsTc2CongestionAdmissionBlocker(old))
+        // The final mutation door must re-evaluate newly closed candles,
+        // not reuse old blocked=false. The same price is now within the
+        // confirmed complex correction and must reject new exposure.
+        val after=source.take(117)
+        val exchangeAt=after.last().t+h
+        assertEquals(WILLIAMS_TC2_CONGESTION_BLOCKER,
+            williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                "FRACTAL","LONG",115.0,after,exchangeAt))
+        assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+            williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                "FRACTAL","LONG",115.0,before,exchangeAt))
     }
 
     @Test fun activeComplexCorrectionStillWinsOverOtherwiseVerifiedTradeSignal() {
