@@ -249,6 +249,53 @@ class WilliamsTc2CongestionTest {
             "ADD_ON","WORKING","W2A_BNBUSDT_test",knownFill=true))
     }
 
+    @Test fun rollingTenSymbolH1PrefixReplayDoesNotInventComplexVeto() {
+        // Historical causality check: each prefix is exactly the CLOSED H1
+        // data available at that hour. The test does not predict future PnL.
+        val fixture=org.json.JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_tc2_public_h1_congestion_20261027.json")).readText())
+        val symbols=fixture.getJSONArray("symbols")
+        var examined=0
+        var vetoes=0
+        for(i in 0 until symbols.length()) {
+            val raw=symbols.getJSONObject(i)
+            val candles=raw.getJSONArray("bars")
+            val history=(0 until candles.length()).map { j ->
+                val a=candles.getJSONArray(j)
+                WilliamsWaveBar(a.getLong(0),a.getDouble(1),a.getDouble(2),
+                    a.getDouble(3),a.getDouble(4),a.getDouble(5))
+            }
+            for(length in 60..history.size step 6) {
+                val prefix=history.take(length)
+                val now=prefix.last().t+h
+                for(side in listOf("LONG","SHORT")) {
+                    val signal=if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL"
+                    val report=williamsTc2CongestionEvidence(
+                        prefix,now,signal,side,prefix.last().c)
+                    examined++
+                    assertEquals("CLOSED_CONTIGUOUS_H1_CANDLES",report.getString("source"))
+                    assertFalse(report.getBoolean("can_place_orders"))
+                    assertFalse(report.getBoolean("can_close"))
+                    assertFalse(report.getBoolean("can_change_stops"))
+                    if(report.getBoolean("blocked")) {
+                        vetoes++
+                        assertEquals(WILLIAMS_TC2_CONGESTION_BLOCKER,report.getString("reason_code"))
+                        assertTrue(report.getInt("active_complex_structure_count")>0)
+                        val structures=report.getJSONArray("complex_structures")
+                        assertTrue((0 until structures.length()).any { j ->
+                            val item=structures.getJSONObject(j)
+                            item.getBoolean("crosses_entry") && !item.getBoolean("range_resolved") &&
+                                item.getLong("known_at_ms")<=now
+                        })
+                    }
+                }
+            }
+        }
+        assertEquals(10,symbols.length())
+        assertTrue(examined>=300)
+        assertTrue(vetoes<=examined)
+    }
+
     @Test fun frozenTenSymbolBinanceH1GeometryIsCausalAndTransparent() {
         // PUBLIC Binance Futures OHLC only, not the operator's signed Demo
         // positions and not an independent Elliott-wave expert verdict.
