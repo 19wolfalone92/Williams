@@ -26,6 +26,7 @@ internal fun williamsTc1WavePriceGeometry(scenario:JSONObject):JSONObject {
         .put("w3_extension",JSONObject().put("status","NOT_OBSERVED"))
         .put("w4_retracement",JSONObject().put("status","NOT_OBSERVED"))
         .put("w5_projection",JSONObject().put("status","W4_NOT_CONFIRMED"))
+        .put("abc_b_retracement",JSONObject().put("status","NO_CONFIRMED_CORRECTIVE_A_B"))
         .put("wave_alternation",JSONObject().put("status","INTERNAL_W2_W4_TYPES_UNVERIFIED"))
     val observed=scenario.optLong("observed_at",0L)
     val dir=scenario.optString("direction")
@@ -113,6 +114,34 @@ internal fun williamsTc1WavePriceGeometry(scenario:JSONObject):JSONObject {
                 .put("origin_price",points[4].first)
                 .put("price_target_not_invented",true)
                 .put("explanation_ru","Точка отсчёта возможной волны 5 известна после подтверждения завершения волны 4. Книга не даёт права выводить универсальную цель по одним пяти экстремумам."))
+        }
+    }
+    // TC1 ch7 PDF pp.54–55: for a simple five-three-five zigzag, B often
+    // retraces no more than 62% of A; 50–62% is the author's zone for
+    // considering a fractal + squat setup to trade C. The B/A price ratio
+    // ALONE cannot prove a simple correction (internal A=5, B=3, C=5).
+    // Do not turn the zone into an entry order or an automatic C forecast.
+    if(points.size>=8) {
+        val a=values[5]-values[6]
+        val b=values[7]-values[6]
+        if(a>0.0 && b>0.0) {
+            val ba=b/a
+            val zone=ba>=.50-1e-9 && ba<=.62+1e-9
+            result.put("abc_b_retracement",JSONObject()
+                .put("status",when {
+                    zone -> "ZIGZAG_B_50_62_PRICE_ZONE_ONLY"
+                    ba>=.90 -> "DEEP_B_MAY_BE_FLAT_OR_ALTERNATIVE_COUNT"
+                    else -> "OUTSIDE_TYPICAL_ZIGZAG_B_ZONE"
+                })
+                .put("b_over_a",ba)
+                .put("source_book_zone_min",.50).put("source_book_zone_max",.62)
+                .put("zigzag_5_3_5_internal_degree_verified",false)
+                .put("fractal_and_squat_confirmed_here",false)
+                .put("c_wave_confirmed",false)
+                .put("can_enter_c_wave",false)
+                .put("explanation_ru","Предполагаемая B-волна откатила " +
+                    String.format(Locale.US,"%.2f",ba*100) +
+                    "% движения A. TC1 выделяет 50–62% для поиска отдельного фрактала и «приседающего»; без подтверждения внутренних подволн это не сигнал к торговле C."))
         }
     }
     return result
