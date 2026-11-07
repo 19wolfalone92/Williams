@@ -229,6 +229,57 @@ class WilliamsTc2CongestionTest {
             future,now,"FRACTAL","LONG",115.0).getString("state"))
     }
 
+    /** Frozen reference algorithm from V4. Proves this optimization is
+     * strictly input/output-preserving for all book-recognized correction
+     * candidates, including their exact confirmation timestamps and types.
+     */
+    private fun originalFullPrefixDetector(
+        anchors:List<WilliamsWaveAnchor>,asOf:Long
+    ):List<WilliamsComplexEvidence> {
+        val retained=anchors.takeLast(120)
+        val observed=mutableListOf<WilliamsComplexEvidence>()
+        for(n in 6..retained.size) {
+            val prefix=retained.take(n)
+            for(side in listOf("UP","DOWN"))
+                observed+=detectWilliamsComplexWave(prefix,side,asOf)
+                    .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
+                        it.knownAt in 1L..asOf && it.endAt<=asOf }
+        }
+        return observed.distinctBy {
+            listOf(it.pattern,it.direction,it.startAt,it.endAt)
+        }.sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
+            .thenByDescending { it.endAt })
+    }
+
+    @Test fun optimizedSixteenAnchorSuffixMatchesFullLegacyPrefixesExactly() {
+        for(mode in listOf("CONTRACTING","EXPANDING","PLATEAU","MIXED")) {
+            val anchors=(0 until 132).map { i ->
+                val high=i%2==0
+                val leg=i/2
+                val p=when(mode) {
+                    "CONTRACTING" -> if(high) 200.0-leg*.12 else 100.0+leg*.12
+                    "EXPANDING" -> if(high) 200.0+leg*.12 else 100.0-leg*.12
+                    "PLATEAU" -> if(high) 200.0 else 100.0+leg*.12
+                    else -> if(high) 180.0+9.0*kotlin.math.sin(leg*.55)
+                        else 115.0+7.0*kotlin.math.cos(leg*.49)
+                }
+                WilliamsWaveAnchor(if(high) "HIGH" else "LOW",
+                    p,i,i*h,(i+3L)*h)
+            }
+            for(n in listOf(6,8,9,10,12,16,17,24,48,80,120,132)) {
+                val prefix=anchors.take(n)
+                val expected=originalFullPrefixDetector(prefix,200*h)
+                val actual=williamsTc2RecentComplexPriceCandidates(prefix,200*h)
+                assertEquals("mode=$mode anchors=$n",expected,actual)
+                assertEquals("No oldest active pattern may be lost from prefix sampling",
+                    expected.map { it.knownAt },actual.map { it.knownAt })
+                assertTrue(actual.distinctBy {
+                    listOf(it.pattern,it.direction,it.startAt,it.endAt)
+                }.size==actual.size)
+            }
+        }
+    }
+
     @Test fun olderActiveCorrectionNotDiscardedByFortyEightNewerCandidates() {
         // Former failure: a source candidate older than 48 newer labels
         // was dropped before its current price state was inspected.
