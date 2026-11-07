@@ -9,8 +9,8 @@ import org.json.JSONArray
  * The author does NOT specify a numerical 24-bar congestion formula.
  *
  * This is a labelled PROJECT RISK POLICY, not an Elliott-wave certification.
- * It withholds NEW TC2 exposure only when the chart has a RECENT, causally
- * confirmed, structural COMPLEX-correction price grammar (triangle or
+ * It withholds NEW TC2 exposure only when the chart has a causally
+ * confirmed, unresolved structural COMPLEX-correction grammar (flat, triangle or
  * constrained corrective combination) and entry remains inside its range.
  * A mere sideways market, simple ZIGZAG A-B-C, incomplete/running flat,
  * or W-X-Y_UNRESOLVED placeholder is NOT sufficient to block. A *completed*
@@ -21,7 +21,7 @@ import org.json.JSONArray
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
  * Closed and contiguous H1 only; no M15 confirmation and no future candles.
  */
-internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V2"
+internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V3_ACTIVE_UNTIL_BREAKOUT"
 internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE"
 
 /** Only price grammars that actually distinguish a complex correction from
