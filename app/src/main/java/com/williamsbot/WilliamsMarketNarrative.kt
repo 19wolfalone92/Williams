@@ -17,8 +17,12 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
     val asOf=phase.optLong("as_of",0L)
     fun rows(array:JSONArray?):List<JSONObject> = if(array==null) emptyList() else
         (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    val researchCorrections=rows(phase.optJSONArray("complex_correction_hypotheses"))
     val rows=rows(phase.optJSONArray("frames"))
         .associateBy { it.optString("frame") }
+    // A possible H4/D1 complex Elliott structure is NOT a proven trade veto.
+    // Only a separate current CLOSED-H1 / signal-price check has the right
+    // to withhold new TC2 exposure. No narrative can move a Binance STOP.
     val order=listOf("1d","6h","4h","1h","15m")
     val names=mapOf("1d" to "D1","6h" to "H6","4h" to "H4","1h" to "H1","15m" to "M15")
     val details=JSONArray()
@@ -72,6 +76,15 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             }
             "${names.getValue(frame)}: ${reason}; направление и волна неизвестны."
         }
+        val complex=researchCorrections.filter {
+            it.optString("frame")==frame && it.optBoolean("fresh_at_frame") }
+        val complexRu=when {
+            !readingReady -> "Свежие закрытые свечи этого масштаба не подтверждены; сложную коррекцию установить нельзя."
+            complex.isEmpty() -> "В доступной волновой разметке нет свежего сложного паттерна. Это не доказательство отсутствия коррекции."
+            else -> "На этом масштабе найдены геометрические альтернативы сложной коррекции " +
+                "(плоская/неправильная коррекция, треугольник или комбинация). Внутренние подволны и активность ценового диапазона " +
+                "не доказаны; данная гипотеза сама по себе не запрещает TC2 и не закрывает позицию."
+        }
         details.put(JSONObject()
             .put("frame",frame).put("label",names.getValue(frame)).put("state",phaseState)
             .put("chart_observed",readingReady)
@@ -79,6 +92,9 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("observed_bias",bias).put("alligator_phase",alligator)
             .put("indicators",oscillators)
             .put("wave_text",wave).put("hypothesis_count",hypotheses.size)
+            .put("complex_correction_alternatives",complex.size)
+            .put("complex_correction_explanation_ru",complexRu)
+            .put("complex_research_can_veto_orders",false)
             .put("explanation_ru",observed)
             .put("wave_degree_confirmed",false)
             .put("can_place_orders",false).put("can_close",false))
@@ -118,6 +134,12 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
         .put("junior_bias_opposes_h1",opposed)
         .put("cross_timeframe_caution_ru",caution)
         .put("structural_relations",JSONArray(structure))
+        .put("complex_correction_hypotheses",JSONArray(researchCorrections))
+        .put("complex_correction_review_ru",
+            "Старшие D1/H6/H4 и младшие H1/M15 структуры сопоставляются без подмены альтернатив " +
+            "готовыми волнами. Только отдельная проверка актуальной H1-геометрии и конкретного " +
+            "STOP-входа может отклонить новую TC2 заявку внутри ещё активной сложной коррекции.")
+        .put("complex_research_can_place_or_cancel_orders",false)
         .put("interpretation","CLOSED_CANDLE_OBSERVATION_PLUS_UNCONFIRMED_WAVE_HYPOTHESES")
         .put("source","LOCAL_INDEPENDENT_CLOSED_CANDLES")
         .put("confidence_calibrated",false)

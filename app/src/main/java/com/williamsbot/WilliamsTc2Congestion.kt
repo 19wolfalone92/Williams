@@ -12,8 +12,10 @@ import org.json.JSONArray
  * It withholds NEW TC2 exposure only when the chart has a RECENT, causally
  * confirmed, structural COMPLEX-correction price grammar (triangle or
  * constrained corrective combination) and entry remains inside its range.
- * A mere sideways market, uncomplicated A-B-C, or W-X-Y_UNRESOLVED placeholder
- * is NOT sufficient to block. A real breakout outside the structure passes.
+ * A mere sideways market, simple ZIGZAG A-B-C, incomplete/running flat,
+ * or W-X-Y_UNRESOLVED placeholder is NOT sufficient to block. A *completed*
+ * regular/expanded FLAT is a complex correction per TC1 chapter 7.
+ * A real breakout outside the structure passes.
  * Every WM1/WM2/WM3 signal is evaluated on the same basis.
  *
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
@@ -27,6 +29,12 @@ internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE
  * All are provisional Elliott *candidates*, never unique wave counts.
  */
 internal val WILLIAMS_TC2_COMPLEX_PATTERNS=setOf(
+    // TC1 ch7 PDF55-56 classifies flat and irregular/expanded flat as
+    // COMPLEX, not the simple 5-3-5 zigzag. Demand completed, confirmed
+    // A-B-C price extrema (C reaches/breaks A); truncated/running flats
+    // with unproven C remain alternatives, not automatic new-entry vetoes.
+    "REGULAR_FLAT_ABC_CANDIDATE",
+    "EXPANDED_FLAT_ABC_CANDIDATE",
     "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",
     "EXPANDING_TRIANGLE_ABCDE_CANDIDATE",
     "BARRIER_TRIANGLE_ABCDE_CANDIDATE",
@@ -110,8 +118,8 @@ internal fun williamsTc2CongestionEvidence(
     val lastEight=phases.takeLast(8)
     val nonTrending=lastEight.count { it in setOf("SLEEPING","SATIATED") }
     // These numerical range observations are only CONTEXT, not a veto.
-    // A triangle/combination needs its own confirmed multi-swing geometry.
-    // Unlike generic congestion, normal ABC zigzags/flats remain tradable.
+    // Complex flats/triangles/combinations need confirmed multi-swing
+    // geometry. Simple ABC zigzags and unresolved corrections remain tradable.
     val rangeObserved=teethCrosses>=3 && aoFlips>=2 && nonTrending>=4
     val confirmedPivots=confirmedWilliamsWaveAnchors(closedBars,WILLIAMS_H1_MS)
     val structural=williamsTc2RecentComplexPriceCandidates(confirmedPivots,nowMs)
@@ -120,26 +128,68 @@ internal fun williamsTc2CongestionEvidence(
         if(involved.size<6) null else {
             val patternHigh=involved.maxOf { it.price }
             val patternLow=involved.minOf { it.price }
+            // The last known confirmation pivot is an historical candidate,
+            // not a permanent active correction. A LATER *closed* H1 candle
+            // decisively beyond its price limits resolves the old range.
+            // A wick alone is NOT a confirmed breakout; a forming H1 candle
+            // is NEVER examined. This post-confirmation close policy is an
+            // explicit engineering interpretation, not a Williams formula.
+            val resolution=closedBars.firstOrNull { b ->
+                b.t>=pattern.knownAt && (b.c>patternHigh || b.c<patternLow)
+            }
+            val unresolved=resolution==null
             JSONObject().put("pattern",pattern.pattern).put("known_at_ms",pattern.knownAt)
                 .put("start_at_ms",pattern.startAt).put("end_at_ms",pattern.endAt)
                 .put("range_high",patternHigh).put("range_low",patternLow)
-                .put("crosses_entry",trigger in patternLow..patternHigh)
+                .put("state",if(unresolved) "UNRESOLVED_PRICE_RANGE" else "RESOLVED_BY_CLOSED_H1_PRICE")
+                .put("range_resolved",!unresolved)
+                .put("first_closed_breakout_at_ms",resolution?.t?.plus(WILLIAMS_H1_MS) ?: JSONObject.NULL)
+                .put("resolved_direction",if(resolution==null) JSONObject.NULL
+                    else if(resolution.c>patternHigh) "UP" else "DOWN")
+                .put("inside_range",trigger in patternLow..patternHigh)
+                .put("crosses_entry",unresolved && trigger in patternLow..patternHigh)
         }
     }
-    val insideComplex=structures.any { it.optBoolean("crosses_entry") }
-    // H1 entry outside the actually observed complex structure is a distinct
-    // possible breakout. The separate standard Wise-Man gates still apply.
+    val active=structures.filter { !it.optBoolean("range_resolved") }
+    val insideComplex=active.any { it.optBoolean("crosses_entry") }
+    // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
+    // A closed breakout resolves the stale range and never resurrects its
+    // inside-price veto. Other H1 Wise-Man and Binance checks still apply.
     val block=insideComplex
     val state=when {
-        structures.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
+        active.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
+        structures.isNotEmpty() -> "COMPLEX_CORRECTION_RESOLVED"
         rangeObserved -> "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX"
         else -> "NO_COMPLEX_CORRECTION_EVIDENCE"
     }
-    return result.put("state",state)
+    val explanationRu=when {
+        block -> "На закрытых H1 выявлена свежая геометрия возможной сложной коррекции " +
+            "(плоская/неправильная коррекция, треугольник или комбинация). Уровень входа остаётся внутри её ещё не " +
+            "пробитого закрытием диапазона. Новая заявка TC2 не разрешена; " +
+            "уже открытая позиция и её биржевой STOP продолжают сопровождаться. " +
+            "Волновая разметка является гипотезой, а фильтр — дополнительной политикой риска."
+        active.isNotEmpty() -> "Есть геометрические признаки сложной коррекции на H1, " +
+            "но уровень входа расположен вне её ценового диапазона. " +
+            "Фильтр сложной коррекции не запрещает этот сигнал, однако отдельные " +
+            "условия Мудреца, риск и проверка Binance всё ещё обязательны."
+        structures.isNotEmpty() -> "Ранее наблюдавшаяся возможная сложная коррекция " +
+            "вышла за свои границы: после подтверждения фигуры закрытая свеча H1 " +
+            "завершилась вне диапазона. Старую структуру больше нельзя считать активной; " +
+            "торговля по этому признаку не запрещена, но сигнал TC2 проверяется отдельно."
+        rangeObserved -> "Зафиксированы признаки бокового движения (пересечения " +
+            "Аллигатора и AO), но доказанной геометрии сложной коррекции нет. " +
+            "Обычный диапазон и простую A–B–C фильтр не блокирует."
+        else -> "По имеющимся закрытым H1 нет достаточных геометрических признаков " +
+            "сложной коррекции. Это не доказывает отсутствие коррекции; " +
+            "новый вход возможен только по подтверждённому сигналу TC2 и при защите Binance."
+    }
+    return result.put("state",state).put("explanation_ru",explanationRu)
+        .put("source_book_reference","TC1_CH7_PDF_53_57_TC2_CH11_FIG_11_7_PDF_151")
+        .put("confidence_calibrated",false)
         .put("reason_code",when {
             block -> WILLIAMS_TC2_CONGESTION_BLOCKER
-            structures.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
-            structures.isNotEmpty() && breaksRange -> "STOP_BREAKOUT_OUTSIDE_COMPLEX_STRUCTURE"
+            active.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
+            structures.isNotEmpty() && active.isEmpty() -> "COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1"
             rangeObserved -> "ONLY_CONGESTION_NOT_COMPLEX_NO_VETO"
             else -> "NO_COMPLEX_CORRECTION_PROOF"
         }).put("blocked",block).put("window_bars",window.size)
@@ -150,8 +200,12 @@ internal fun williamsTc2CongestionEvidence(
         .put("satiated_or_sleeping_last_8",nonTrending)
         .put("complex_structures",JSONArray(structures))
         .put("complex_structure_count",structures.size)
+        .put("active_complex_structure_count",active.size)
+        .put("complex_structure_requires_unresolved_closed_price_range",true)
         .put("complex_structure_blocks_only_when_inside",true)
-        .put("simple_abc_is_allowed",true)
+        .put("simple_zigzag_abc_is_allowed",true)
+        .put("completed_complex_flat_can_block",true)
+        .put("running_or_incomplete_flat_does_not_auto_block",true)
         .put("generic_wxy_unresolved_is_not_a_veto",true)
         .put("as_of_close_ms",closedBars.last().t+WILLIAMS_H1_MS)
 }

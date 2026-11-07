@@ -80,6 +80,9 @@ class WilliamsTc2CongestionTest {
             assertTrue(family,report.getBoolean("blocked"))
             assertEquals(family,WILLIAMS_TC2_CONGESTION_BLOCKER,
                 report.getString("reason_code"))
+            assertTrue(report.getString("explanation_ru").contains("Новая заявка TC2 не разрешена"))
+            assertTrue(williamsRuRuntimeMessage(WILLIAMS_TC2_CONGESTION_BLOCKER)
+                .contains("дополнительный фильтр риска"))
             assertFalse(report.getBoolean("can_place_orders"))
             assertFalse(report.getBoolean("can_close"))
             assertFalse(report.getBoolean("can_change_stops"))
@@ -96,7 +99,95 @@ class WilliamsTc2CongestionTest {
         assertFalse(old.getBoolean("blocked"))
     }
 
-    @Test fun ordinaryAbcFlatZigzagAndUnresolvedWxyAreAllowed() {
+    @Test fun completedH1CloseBeyondTriangleEndsTheOldComplexRangeVeto() {
+        // TC1 ch7 explains triangle corrections; TC2 ch11 fig 11.7
+        // warns against trading stale internal fractals. A confirmed
+        // CLOSED H1 escape is different from an unresolved triangle.
+        val old=triangularBars()
+        val baseTime=old.last().t+h
+        val baseline=williamsTc2CongestionEvidence(old,baseTime,"FRACTAL","LONG",115.0)
+        assertTrue(baseline.toString(),baseline.getBoolean("blocked"))
+        val escaped=old.toMutableList()
+        val previous=escaped.last()
+        escaped[escaped.lastIndex]=previous.copy(h=137.0,c=134.0)
+        val report=williamsTc2CongestionEvidence(escaped,baseTime,"FRACTAL","LONG",115.0)
+        assertFalse(report.toString(),report.getBoolean("blocked"))
+        assertEquals("COMPLEX_CORRECTION_RESOLVED",report.getString("state"))
+        assertEquals("COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1",report.getString("reason_code"))
+        assertEquals(0,report.getInt("active_complex_structure_count"))
+        assertTrue(report.getString("explanation_ru").contains("закрытая свеча H1"))
+        assertFalse(report.getBoolean("confidence_calibrated"))
+        assertTrue(report.getJSONArray("complex_structures").let { entries ->
+            (0 until entries.length()).any { entries.getJSONObject(it).optBoolean("range_resolved") &&
+                entries.getJSONObject(it).getString("resolved_direction")=="UP" &&
+                entries.getJSONObject(it).getLong("first_closed_breakout_at_ms")==baseTime }
+        })
+        // This is only removal of a congestion veto; normal TC2 signal
+        // validation and stop protection must still authorize any order.
+        assertFalse(report.getBoolean("can_place_orders"))
+    }
+
+    @Test fun wickBeyondBoundaryWithoutClosingOutsideDoesNotResolveTriangle() {
+        val old=triangularBars()
+        val spike=old.toMutableList()
+        val last=spike.last()
+        spike[spike.lastIndex]=last.copy(h=137.0,c=115.0)
+        val now=spike.last().t+h
+        val report=williamsTc2CongestionEvidence(spike,now,"SHORT_SUPER_AO","SHORT",115.0)
+        assertEquals(report.toString(),"COMPLEX_CORRECTION_CANDIDATE",report.getString("state"))
+        assertTrue(report.toString(),report.getBoolean("blocked"))
+        assertTrue(report.getInt("active_complex_structure_count")>0)
+        assertTrue(report.getJSONArray("complex_structures").let { entries ->
+            (0 until entries.length()).any {
+                !entries.getJSONObject(it).optBoolean("range_resolved")
+            }
+        })
+    }
+
+    private fun completedFlatBars(expanded:Boolean):List<WilliamsWaveBar> {
+        // Actual sequential H1 price geometry: W1/W2/W3/W4/W5 then A/B/C,
+        // with each pivot having two strict bars to left and right.
+        val knots=sortedMapOf(
+            0 to 115.0,70 to 100.0,76 to 120.0,82 to 110.0,
+            88 to 145.0,94 to 125.0,100 to 155.0,106 to 135.0,
+            112 to (if(expanded) 158.0 else 153.0),
+            118 to (if(expanded) 128.0 else 124.0),122 to 134.0
+        )
+        fun price(i:Int):Double {
+            val before=knots.keys.last { it<=i }
+            val after=knots.keys.first { it>=i }
+            val start=knots.getValue(before)
+            return if(before==after) start else start+
+                (knots.getValue(after)-start)*(i-before)/(after-before)
+        }
+        return (0..122).map { i ->
+            val p=price(i)
+            WilliamsWaveBar((i+1)*h,p,p+.1,p-.1,p,100.0)
+        }
+    }
+
+    @Test fun tc1RegularAndExpandedFlatAreComplexCorrectionNotSimpleZigzag() {
+        for(expanded in listOf(false,true)) {
+            val bars=completedFlatBars(expanded)
+            val now=bars.last().t+h
+            val actual=confirmedWilliamsWaveAnchors(bars,h)
+            val expected=if(expanded) "EXPANDED_FLAT_ABC_CANDIDATE"
+                else "REGULAR_FLAT_ABC_CANDIDATE"
+            assertTrue(expected+" "+actual.map { it.kind+":"+it.price },
+                williamsTc2RecentComplexPriceCandidates(actual,now).any { it.pattern==expected })
+            val inside=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",140.0)
+            assertEquals(inside.toString(),"COMPLEX_CORRECTION_CANDIDATE",inside.getString("state"))
+            assertTrue(inside.toString(),inside.getBoolean("blocked"))
+            assertTrue(inside.getString("explanation_ru").contains("сложной коррекции"))
+            assertFalse(inside.getBoolean("can_place_orders"))
+            // Breakout outside the actual completed structure is not a
+            // trade by itself; it merely removes this additional risk veto.
+            val breakout=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",170.0)
+            assertFalse(breakout.getBoolean("blocked"))
+        }
+    }
+
+    @Test fun simpleZigzagAndUnconfirmedFlatRemainTradableButCompletedFlatIsComplex() {
         fun anchors(values:List<Double>):List<WilliamsWaveAnchor> = values.mapIndexed { i,p ->
             WilliamsWaveAnchor(if(i%2==0) "LOW" else "HIGH",
                 p,i,(i+1)*h,(i+4)*h)
@@ -110,7 +201,17 @@ class WilliamsTc2CongestionTest {
             135.0,158.0,128.0))
         assertTrue("EXPANDED_FLAT_ABC_CANDIDATE" in
             detectWilliamsComplexWave(expandedFlat,"UP",16*h).map { it.pattern })
-        assertTrue(williamsTc2RecentComplexPriceCandidates(expandedFlat,16*h).isEmpty())
+        assertTrue(williamsTc2RecentComplexPriceCandidates(expandedFlat,16*h).any {
+            it.pattern=="EXPANDED_FLAT_ABC_CANDIDATE" })
+        val regularFlat=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
+            135.0,153.0,125.0))
+        assertTrue(williamsTc2RecentComplexPriceCandidates(regularFlat,16*h).any {
+            it.pattern=="REGULAR_FLAT_ABC_CANDIDATE" })
+        val running=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
+            135.0,158.0,140.0))
+        assertTrue(detectWilliamsComplexWave(running,"UP",16*h).any {
+            it.pattern=="RUNNING_FLAT_ABC_CANDIDATE" })
+        assertTrue(williamsTc2RecentComplexPriceCandidates(running,16*h).isEmpty())
         val unresolved=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
             135.0,143.0,120.0,132.0,116.0,125.0))
         val names=detectWilliamsComplexWave(unresolved,"UP",16*h).map { it.pattern }
@@ -150,6 +251,53 @@ class WilliamsTc2CongestionTest {
             "ADD_ON","WORKING","W2A_BNBUSDT_test",knownFill=true))
     }
 
+    @Test fun rollingTenSymbolH1PrefixReplayDoesNotInventComplexVeto() {
+        // Historical causality check: each prefix is exactly the CLOSED H1
+        // data available at that hour. The test does not predict future PnL.
+        val fixture=org.json.JSONObject(requireNotNull(javaClass.getResource(
+            "/williams_tc2_public_h1_congestion_20261027.json")).readText())
+        val symbols=fixture.getJSONArray("symbols")
+        var examined=0
+        var vetoes=0
+        for(i in 0 until symbols.length()) {
+            val raw=symbols.getJSONObject(i)
+            val candles=raw.getJSONArray("bars")
+            val history=(0 until candles.length()).map { j ->
+                val a=candles.getJSONArray(j)
+                WilliamsWaveBar(a.getLong(0),a.getDouble(1),a.getDouble(2),
+                    a.getDouble(3),a.getDouble(4),a.getDouble(5))
+            }
+            for(length in 60..history.size step 6) {
+                val prefix=history.take(length)
+                val now=prefix.last().t+h
+                for(side in listOf("LONG","SHORT")) {
+                    val signal=if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL"
+                    val report=williamsTc2CongestionEvidence(
+                        prefix,now,signal,side,prefix.last().c)
+                    examined++
+                    assertEquals("CLOSED_CONTIGUOUS_H1_CANDLES",report.getString("source"))
+                    assertFalse(report.getBoolean("can_place_orders"))
+                    assertFalse(report.getBoolean("can_close"))
+                    assertFalse(report.getBoolean("can_change_stops"))
+                    if(report.getBoolean("blocked")) {
+                        vetoes++
+                        assertEquals(WILLIAMS_TC2_CONGESTION_BLOCKER,report.getString("reason_code"))
+                        assertTrue(report.getInt("active_complex_structure_count")>0)
+                        val structures=report.getJSONArray("complex_structures")
+                        assertTrue((0 until structures.length()).any { j ->
+                            val item=structures.getJSONObject(j)
+                            item.getBoolean("crosses_entry") && !item.getBoolean("range_resolved") &&
+                                item.getLong("known_at_ms")<=now
+                        })
+                    }
+                }
+            }
+        }
+        assertEquals(10,symbols.length())
+        assertTrue(examined>=300)
+        assertTrue(vetoes<=examined)
+    }
+
     @Test fun frozenTenSymbolBinanceH1GeometryIsCausalAndTransparent() {
         // PUBLIC Binance Futures OHLC only, not the operator's signed Demo
         // positions and not an independent Elliott-wave expert verdict.
@@ -176,6 +324,7 @@ class WilliamsTc2CongestionTest {
             assertEquals(symbol,"CLOSED_CONTIGUOUS_H1_CANDLES",v.getString("source"))
             assertTrue(symbol,v.getString("state") in
                 setOf("COMPLEX_CORRECTION_CANDIDATE",
+                    "COMPLEX_CORRECTION_RESOLVED",
                     "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX",
                     "NO_COMPLEX_CORRECTION_EVIDENCE"))
             assertFalse(symbol,v.getBoolean("can_place_orders"))
@@ -198,6 +347,7 @@ class WilliamsTc2CongestionTest {
         // a trade veto; only a demonstrated complex price-grammar candidate is.
         assertTrue(classifications["BNBUSDT"] in setOf(
             "COMPLEX_CORRECTION_CANDIDATE",
+            "COMPLEX_CORRECTION_RESOLVED",
             "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX",
             "NO_COMPLEX_CORRECTION_EVIDENCE"))
     }

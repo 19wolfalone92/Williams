@@ -75,6 +75,38 @@ class WilliamsMarketNarrativeTest {
         assertTrue(narrative.getJSONArray("frames").getJSONObject(0)
             .getString("explanation_ru").contains("не запускался"))
     }
+    @Test fun seniorComplexCorrectionIsExplainedButCannotActAsTc2ExecutionAuthority() {
+        val raw=JSONObject().put("as_of",now)
+            .put("frame_errors",JSONObject())
+            .put("complex_wave_patterns",JSONArray().put(JSONObject()
+                .put("frame","4h")
+                .put("pattern","CONTRACTING_TRIANGLE_ABCDE_CANDIDATE")
+                .put("known_at",now-4*williamsWaveFrames.getValue("4h"))
+                .put("start_at",now-16*williamsWaveFrames.getValue("4h"))
+                .put("end_at",now-6*williamsWaveFrames.getValue("4h"))
+                .put("internal_proof",JSONObject().put("status","PRICE_SUBDIVISIONS_UNVERIFIED"))
+                .put("recursive_proof",JSONObject().put("status","UNRESOLVED"))))
+        val phase=williamsMarketPhaseContext(raw)
+        val contexts=phase.getJSONArray("complex_correction_hypotheses")
+        assertEquals(1,contexts.length())
+        val hypothesis=contexts.getJSONObject(0)
+        assertEquals("4h",hypothesis.getString("frame"))
+        assertTrue(hypothesis.getBoolean("fresh_at_frame"))
+        assertTrue(hypothesis.getBoolean("current_price_range_unverified"))
+        assertFalse(hypothesis.getBoolean("can_veto_entries"))
+        assertFalse(phase.getBoolean("complex_hypotheses_can_veto_trading"))
+        // Supply observed H4 bar state and show Russian market context.
+        val narrated=williamsMarketNarrative(JSONObject()
+            .put("as_of",now)
+            .put("frames",JSONArray().put(frame("4h","UP")))
+            .put("complex_correction_hypotheses",contexts))
+        val h4=narrated.getJSONArray("frames").getJSONObject(2)
+        assertEquals(1,h4.getInt("complex_correction_alternatives"))
+        assertTrue(h4.getString("complex_correction_explanation_ru").contains("не доказаны"))
+        assertFalse(narrated.getBoolean("complex_research_can_place_or_cancel_orders"))
+        assertFalse(narrated.getBoolean("can_place_orders"))
+    }
+
     @Test fun staleOrUnavailableRowsCannotBecomeFreshObservations() {
         val stale=frame("1h","UP",now-3_600_000L)
         val unavailable=frame("15m","DOWN").put("state","UNAVAILABLE")
