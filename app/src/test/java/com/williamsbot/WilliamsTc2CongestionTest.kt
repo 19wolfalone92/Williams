@@ -99,6 +99,83 @@ class WilliamsTc2CongestionTest {
         assertFalse(old.getBoolean("blocked"))
     }
 
+    @Test fun triangleNeverBecomesKnownBeforeTwoRightH1BarsHaveClosed() {
+        val source=triangularBars()
+        val notYet=source.take(116)
+        val early=williamsTc2CongestionEvidence(notYet,notYet.last().t+h,
+            "FRACTAL","LONG",115.0)
+        assertFalse(early.toString(),early.getBoolean("blocked"))
+        val confirmed=source.take(117)
+        val now=confirmed.last().t+h
+        val later=williamsTc2CongestionEvidence(confirmed,now,
+            "FRACTAL","LONG",115.0)
+        assertTrue(later.toString(),later.getBoolean("blocked"))
+        assertTrue(later.getJSONArray("complex_structures").let { arr ->
+            (0 until arr.length()).any { i ->
+                arr.getJSONObject(i).getLong("known_at_ms")<=now
+            }
+        })
+        // A forming next bar with an extreme high is not allowed into
+        // the confirmation/reclassification prefix.
+        val future=confirmed+WilliamsWaveBar(now,115.0,1000.0,1.0,115.0,100.0)
+        assertEquals("HISTORY_UNVERIFIED",williamsTc2CongestionEvidence(
+            future,now,"FRACTAL","LONG",115.0).getString("state"))
+    }
+
+    @Test fun confirmedComplexPatternDoesNotExpireAfterTwelveMoreClosedHours() {
+        val initial=triangularBars()
+        val later=(1..18).map { hour ->
+            WilliamsWaveBar(initial.last().t+hour*h,115.0,116.0,114.0,115.0,100.0)
+        }
+        val history=initial+later
+        val now=history.last().t+h
+        for(side in listOf("LONG","SHORT")) {
+            val report=williamsTc2CongestionEvidence(history,now,
+                if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL",side,115.0)
+            assertTrue(report.toString(),report.getBoolean("blocked"))
+            assertEquals("COMPLEX_CORRECTION_CANDIDATE",report.getString("state"))
+            assertTrue(report.getInt("active_complex_structure_count")>0)
+            assertEquals("CONFIRMED_PRICE_PIVOT_PREFIXES_UNTIL_CLOSED_H1_BREAKOUT",
+                report.getString("complex_candidate_retention"))
+        }
+        // A real *closed* H1 exit invalidates the previous range for both
+        // directions. The historical correction is recorded, not erased.
+        val breakout=history+WilliamsWaveBar(now,115.0,138.0,114.0,135.0,100.0)
+        val completeAt=now+h
+        for(side in listOf("LONG","SHORT")) {
+            val report=williamsTc2CongestionEvidence(breakout,completeAt,
+                if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL",side,115.0)
+            assertFalse(report.toString(),report.getBoolean("blocked"))
+            assertEquals("COMPLEX_CORRECTION_RESOLVED",report.getString("state"))
+            assertTrue(report.getJSONArray("complex_structures").let { arr ->
+                (0 until arr.length()).any { i ->
+                    arr.getJSONObject(i).getBoolean("range_resolved") &&
+                        arr.getJSONObject(i).getString("resolved_direction")=="UP"
+                }
+            })
+        }
+    }
+
+    @Test fun alreadyConfirmedTriangleSurvivesAnExtraInnerPivot() {
+        val seed=triangularBars()
+        val next=(1..12).map { i ->
+            val hi=if(i==4) 117.0 else 116.0
+            val lo=if(i==8) 113.0 else 114.0
+            WilliamsWaveBar(seed.last().t+i*h,115.0,hi,lo,115.0,100.0)
+        }
+        val bars=seed+next
+        val now=bars.last().t+h
+        val report=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",115.0)
+        assertTrue(report.toString(),report.getBoolean("blocked"))
+        assertTrue(report.getJSONArray("complex_structures").let { arr ->
+            (0 until arr.length()).any { i ->
+                val p=arr.getJSONObject(i)
+                p.getString("pattern")=="CONTRACTING_TRIANGLE_ABCDE_CANDIDATE" &&
+                    !p.getBoolean("range_resolved")
+            }
+        })
+    }
+
     @Test fun completedH1CloseBeyondTriangleEndsTheOldComplexRangeVeto() {
         // TC1 ch7 explains triangle corrections; TC2 ch11 fig 11.7
         // warns against trading stale internal fractals. A confirmed

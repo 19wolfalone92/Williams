@@ -9,8 +9,8 @@ import org.json.JSONArray
  * The author does NOT specify a numerical 24-bar congestion formula.
  *
  * This is a labelled PROJECT RISK POLICY, not an Elliott-wave certification.
- * It withholds NEW TC2 exposure only when the chart has a RECENT, causally
- * confirmed, structural COMPLEX-correction price grammar (triangle or
+ * It withholds NEW TC2 exposure only when the chart has a causally
+ * confirmed, unresolved structural COMPLEX-correction grammar (flat, triangle or
  * constrained corrective combination) and entry remains inside its range.
  * A mere sideways market, simple ZIGZAG A-B-C, incomplete/running flat,
  * or W-X-Y_UNRESOLVED placeholder is NOT sufficient to block. A *completed*
@@ -21,7 +21,7 @@ import org.json.JSONArray
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
  * Closed and contiguous H1 only; no M15 confirmation and no future candles.
  */
-internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V2"
+internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V3_ACTIVE_UNTIL_BREAKOUT"
 internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE"
 
 /** Only price grammars that actually distinguish a complex correction from
@@ -42,19 +42,40 @@ internal val WILLIAMS_TC2_COMPLEX_PATTERNS=setOf(
     "W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE"
 )
 
-/** No signal veto from arbitrary flatness alone or from an old/incomplete
- * W-X-Y label. Look only at confirmed, recent H1 fractal pivot geometry.
+/** No veto from flatness or an unresolved W-X-Y label.
+ *
+ * Important: a fully confirmed triangle/flat is a historical price event.
+ * It does NOT cease to exist merely because 12 more H1 bars have closed or
+ * the latest six pivots have shifted. Retain every confirmed candidate
+ * inside the bounded observed H1 history, and decide whether it is STILL
+ * ACTIVE only from subsequent CLOSED H1 price outside its own boundaries
+ * in williamsTc2CongestionEvidence. Never backdate "known_at".
+ *
+ * Only the last 120 alternating pivots are scanned, so this cannot turn a
+ * long-running Android scanner into an unbounded history computation.
+ * This bounded retention is project policy, NOT a Williams time cutoff.
  */
 internal fun williamsTc2RecentComplexPriceCandidates(
     anchors:List<WilliamsWaveAnchor>,asOf:Long
 ):List<WilliamsComplexEvidence> {
-    if(asOf<=0L || anchors.size<6 || anchors.any { it.knownAt>asOf || it.knownAt<it.extremeAt }) return emptyList()
-    val recentCutoff=asOf-12*WILLIAMS_H1_MS
-    return listOf("UP","DOWN").flatMap { side ->
-        detectWilliamsComplexWave(anchors,side,asOf)
-    }.filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
-        it.knownAt in recentCutoff..asOf && it.endAt<=asOf }
-        .distinctBy { listOf(it.pattern,it.startAt,it.endAt) }
+    if(asOf<=0L || anchors.size<6 || anchors.any {
+        it.kind !in setOf("LOW","HIGH") || !it.price.isFinite() ||
+            it.price<=0.0 || it.knownAt>asOf || it.knownAt<it.extremeAt
+    } || anchors.zipWithNext().any { (a,b) ->
+        a.kind==b.kind || a.extremeAt>=b.extremeAt || a.knownAt>b.knownAt
+    }) return emptyList()
+    val retained=anchors.takeLast(120)
+    val observed=mutableListOf<WilliamsComplexEvidence>()
+    for(prefixSize in 6..retained.size) {
+        val confirmedPrefix=retained.take(prefixSize)
+        for(side in listOf("UP","DOWN"))
+            observed+=detectWilliamsComplexWave(confirmedPrefix,side,asOf)
+                .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
+                    it.knownAt in 1L..asOf && it.endAt<=asOf }
+    }
+    return observed.distinctBy { listOf(it.pattern,it.direction,it.startAt,it.endAt) }
+        .sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
+            .thenByDescending { it.endAt }).take(48)
 }
 
 
@@ -68,6 +89,7 @@ internal fun williamsTc2CongestionEvidence(
         .put("complex_correction_grammar_reference","RESEARCH_ELLIOTT_COMPLEX_PRICE_GRAMMAR")
         .put("classification_is_provisional",true)
         .put("numerical_thresholds_are_engineering",true)
+        .put("complex_candidate_retention","CONFIRMED_PRICE_PIVOT_PREFIXES_UNTIL_CLOSED_H1_BREAKOUT")
         .put("source","CLOSED_CONTIGUOUS_H1_CANDLES")
         .put("can_place_orders",false).put("can_close",false)
         .put("can_change_stops",false)
