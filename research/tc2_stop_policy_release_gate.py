@@ -42,8 +42,11 @@ def verify_report(label:str,report:dict)->None:
     for permission in ("can_place_orders","can_close","can_move_stop"):
         if report.get(permission) is not False:
             raise ValueError(f"{label}: missing/invalid no-trade authority: {permission}")
-    if "book_stop_windows" in report and report["book_stop_windows"]!=[3,4,5]:
-        raise ValueError(f"{label}: compared windows were changed after book selection")
+    if label=="2025":
+        if report.get("book_stop_windows")!=[3,4,5]:
+            raise ValueError("2025 book-approved 3/4/5 STOP set has changed")
+    elif report.get("comparisons_locked_to_same_3_4_5") is not True:
+        raise ValueError("2026 book-approved 3/4/5 comparison has been unlocked")
     if report.get("cost_charged_on",report.get("cost_applied_to")) not in (
         "EXIT_NOTIONAL","EXIT_NOTIONAL_NOT_PRICE_DELTA"
     ):
@@ -61,9 +64,7 @@ def verify_report(label:str,report:dict)->None:
         if set(bucket["summary_common"])!=set(WINDOWS) or set(bucket["comparisons"])!=set(DIFFS):
             raise ValueError(f"{label} {name}: source alternative missing")
         for key,summary in bucket["summary_common"].items():
-            if summary.get("candidate_count",summary.get("valid_events",matched)) not in (matched,):
-                # Some older versions use 'valid' as a key: only fail on
-                # genuinely declared nonmatching counts, not absent fields.
+            if type(summary.get("n")) is not int or summary["n"]!=matched:
                 raise ValueError(f"{label} {name} {key}: mismatched cohort")
             _number(summary["mean_delta_bps"])
         for key,comparison in bucket["comparisons"].items():
