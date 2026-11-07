@@ -88,6 +88,17 @@ internal fun williamsTc2RecentComplexPriceCandidates(
  * other unresolved structures; last show resolved historical candidates.
  * The decision engine must always examine the FULL bounded source list.
  */
+internal fun williamsTc2ComplexPatternRu(code:String):String = when(code) {
+    "REGULAR_FLAT_ABC_CANDIDATE" -> "обычная плоская коррекция A–B–C (предположение)"
+    "EXPANDED_FLAT_ABC_CANDIDATE" -> "расширенная плоская коррекция A–B–C (предположение)"
+    "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE" -> "сужающийся треугольник A–B–C–D–E (предположение)"
+    "EXPANDING_TRIANGLE_ABCDE_CANDIDATE" -> "расширяющийся треугольник A–B–C–D–E (предположение)"
+    "BARRIER_TRIANGLE_ABCDE_CANDIDATE" -> "треугольник с горизонтальной границей (предположение)"
+    "W_X_Y_ZIGZAG_COMBINATION_CANDIDATE" -> "составная коррекция W–X–Y (предположение)"
+    "W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE" -> "составная коррекция W–X–Y–X–Z (предположение)"
+    else -> "тип сложной коррекции не установлен"
+}
+
 internal fun williamsTc2ComplexEntryBlocked(all:List<JSONObject>):Boolean =
     all.any { !it.optBoolean("range_resolved") && it.optBoolean("crosses_entry") }
 
@@ -213,7 +224,7 @@ internal fun williamsTc2CongestionEvidence(
     val explanationRu=when {
         block -> "На закрытых H1 выявлена геометрия возможной сложной коррекции " +
             "(плоская/неправильная коррекция, треугольник или комбинация). " +
-            "Обнаруженный паттерн: ${blockingExample?.optString("pattern") ?: "НЕ УСТАНОВЛЕН"}. " +
+            "Обнаруженный паттерн: ${williamsTc2ComplexPatternRu(blockingExample?.optString("pattern").orEmpty())}. " +
             "Диапазон: ${blockingExample?.optDouble("range_low") ?: Double.NaN} – " +
             "${blockingExample?.optDouble("range_high") ?: Double.NaN}; " +
             "запрошенный уровень входа: $trigger. " +
