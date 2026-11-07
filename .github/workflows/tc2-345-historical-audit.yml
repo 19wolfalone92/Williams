@@ -9,6 +9,8 @@ on:
       - research/tc2_context_walkforward.py
       - research/tc2_three_four_five_historical_audit.py
       - research/tc2_three_four_five_2026_chronological.py
+      - research/tc2_stop_policy_release_gate.py
+      - tests/test_tc2_stop_policy_release_gate.py
       - tests/test_tc2_three_four_five_historical_audit.py
       - tests/test_tc2_three_four_five_2026_chronological.py
   workflow_dispatch:
@@ -32,6 +34,7 @@ jobs:
           python -m pytest -q
           tests/test_tc2_three_four_five_historical_audit.py
           tests/test_tc2_three_four_five_2026_chronological.py
+          tests/test_tc2_stop_policy_release_gate.py
       - name: Research all ten genuine frozen 2025 symbols
         run: >
           python -m research.tc2_three_four_five_historical_audit
@@ -42,6 +45,12 @@ jobs:
           python -m research.tc2_three_four_five_2026_chronological
           --data research/data
           --output build/tc2_2026_post_embargo_345.json
+      - name: Refuse unproven stop window promotion using both years
+        run: >
+          python -m research.tc2_stop_policy_release_gate
+          --report-2025 build/tc2_2025_three_four_five_shadow.json
+          --report-2026 build/tc2_2026_post_embargo_345.json
+          --output build/tc2_345_no_live_promotion_gate.json
       - name: Upload both read-only reports, never any APK or secrets
         uses: actions/upload-artifact@v4
         with:
@@ -49,5 +58,6 @@ jobs:
           path: |
             build/tc2_2025_three_four_five_shadow.json
             build/tc2_2026_post_embargo_345.json
+            build/tc2_345_no_live_promotion_gate.json
           if-no-files-found: error
           retention-days: 7
