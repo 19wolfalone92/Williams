@@ -222,6 +222,7 @@ class WilliamsTc2CongestionTest {
             assertEquals(symbol,"CLOSED_CONTIGUOUS_H1_CANDLES",v.getString("source"))
             assertTrue(symbol,v.getString("state") in
                 setOf("COMPLEX_CORRECTION_CANDIDATE",
+                    "COMPLEX_CORRECTION_RESOLVED",
                     "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX",
                     "NO_COMPLEX_CORRECTION_EVIDENCE"))
             assertFalse(symbol,v.getBoolean("can_place_orders"))
@@ -244,6 +245,7 @@ class WilliamsTc2CongestionTest {
         // a trade veto; only a demonstrated complex price-grammar candidate is.
         assertTrue(classifications["BNBUSDT"] in setOf(
             "COMPLEX_CORRECTION_CANDIDATE",
+            "COMPLEX_CORRECTION_RESOLVED",
             "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX",
             "NO_COMPLEX_CORRECTION_EVIDENCE"))
     }
