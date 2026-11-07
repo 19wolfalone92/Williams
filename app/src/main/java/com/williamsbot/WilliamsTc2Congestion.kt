@@ -21,7 +21,7 @@ import org.json.JSONArray
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
  * Closed and contiguous H1 only; no M15 confirmation and no future candles.
  */
-internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V3_ACTIVE_UNTIL_BREAKOUT"
+internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V4_EVALUATE_ALL_BEFORE_DISPLAY"
 internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE"
 
 /** Only price grammars that actually distinguish a complex correction from
@@ -73,9 +73,44 @@ internal fun williamsTc2RecentComplexPriceCandidates(
                 .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
                     it.knownAt in 1L..asOf && it.endAt<=asOf }
     }
+    // Do NOT discard old candidates here. A valid unresolved correction can
+    // be older than 48 newer *resolved* candidates. Cutting to 48 before
+    // checking their current price status could incorrectly permit an entry.
+    // A fixed-size display sample is selected AFTER all live statuses and the
+    // trade veto have been evaluated.
     return observed.distinctBy { listOf(it.pattern,it.direction,it.startAt,it.endAt) }
         .sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
-            .thenByDescending { it.endAt }).take(48)
+            .thenByDescending { it.endAt })
+}
+
+/** Bounded cockpit projection, never the entry decision itself.
+ * Prioritise unresolved structures INSIDE the requested entry price, then
+ * other unresolved structures; last show resolved historical candidates.
+ * The decision engine must always examine the FULL bounded source list.
+ */
+internal fun williamsTc2ComplexPatternRu(code:String):String = when(code) {
+    "REGULAR_FLAT_ABC_CANDIDATE" -> "обычная плоская коррекция A–B–C (предположение)"
+    "EXPANDED_FLAT_ABC_CANDIDATE" -> "расширенная плоская коррекция A–B–C (предположение)"
+    "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE" -> "сужающийся треугольник A–B–C–D–E (предположение)"
+    "EXPANDING_TRIANGLE_ABCDE_CANDIDATE" -> "расширяющийся треугольник A–B–C–D–E (предположение)"
+    "BARRIER_TRIANGLE_ABCDE_CANDIDATE" -> "треугольник с горизонтальной границей (предположение)"
+    "W_X_Y_ZIGZAG_COMBINATION_CANDIDATE" -> "составная коррекция W–X–Y (предположение)"
+    "W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE" -> "составная коррекция W–X–Y–X–Z (предположение)"
+    else -> "тип сложной коррекции не установлен"
+}
+
+internal fun williamsTc2ComplexEntryBlocked(all:List<JSONObject>):Boolean =
+    all.any { !it.optBoolean("range_resolved") && it.optBoolean("crosses_entry") }
+
+internal fun williamsTc2ComplexStructureDisplay(
+    all:List<JSONObject>,maxVisible:Int=48
+):List<JSONObject> {
+    if(maxVisible<=0) return emptyList()
+    return all.filter { it.optBoolean("crosses_entry") } .take(maxVisible) +
+        all.filter { !it.optBoolean("crosses_entry") && !it.optBoolean("range_resolved") }
+            .take((maxVisible-all.count { it.optBoolean("crosses_entry") }).coerceAtLeast(0)) +
+        all.filter { it.optBoolean("range_resolved") }
+            .take((maxVisible-all.count { !it.optBoolean("range_resolved") }).coerceAtLeast(0))
 }
 
 
@@ -173,7 +208,9 @@ internal fun williamsTc2CongestionEvidence(
         }
     }
     val active=structures.filter { !it.optBoolean("range_resolved") }
-    val insideComplex=active.any { it.optBoolean("crosses_entry") }
+    val insideComplex=williamsTc2ComplexEntryBlocked(structures)
+    val displayed=williamsTc2ComplexStructureDisplay(structures)
+    val blockingExample=active.firstOrNull { it.optBoolean("crosses_entry") }
     // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
     // A closed breakout resolves the stale range and never resurrects its
     // inside-price veto. Other H1 Wise-Man and Binance checks still apply.
@@ -185,9 +222,16 @@ internal fun williamsTc2CongestionEvidence(
         else -> "NO_COMPLEX_CORRECTION_EVIDENCE"
     }
     val explanationRu=when {
-        block -> "На закрытых H1 выявлена свежая геометрия возможной сложной коррекции " +
-            "(плоская/неправильная коррекция, треугольник или комбинация). Уровень входа остаётся внутри её ещё не " +
-            "пробитого закрытием диапазона. Новая заявка TC2 не разрешена; " +
+        block -> "На закрытых H1 выявлена геометрия возможной сложной коррекции " +
+            "(плоская/неправильная коррекция, треугольник или комбинация). " +
+            "Обнаруженный паттерн: ${williamsTc2ComplexPatternRu(blockingExample?.optString("pattern").orEmpty())}. " +
+            "Диапазон: ${blockingExample?.optDouble("range_low") ?: Double.NaN} – " +
+            "${blockingExample?.optDouble("range_high") ?: Double.NaN}; " +
+            "запрошенный уровень входа: $trigger. " +
+            "Подтверждение структуры по H1 (время Unix мс): " +
+            "${blockingExample?.optLong("known_at_ms") ?: 0L}. " +
+            "Цена входа остаётся внутри ещё не разрешённого по закрытию диапазона. " +
+            "Новая заявка TC2 не разрешена; " +
             "уже открытая позиция и её биржевой STOP продолжают сопровождаться. " +
             "Волновая разметка является гипотезой, а фильтр — дополнительной политикой риска."
         active.isNotEmpty() -> "Есть геометрические признаки сложной коррекции на H1, " +
@@ -220,8 +264,15 @@ internal fun williamsTc2CongestionEvidence(
         .put("trigger",trigger).put("breakout_outside_range",breaksRange)
         .put("teeth_close_crossings",teethCrosses).put("ao_zero_crossings",aoFlips)
         .put("satiated_or_sleeping_last_8",nonTrending)
-        .put("complex_structures",JSONArray(structures))
+        .put("complex_structures",JSONArray(displayed))
         .put("complex_structure_count",structures.size)
+        .put("complex_structure_display_count",displayed.size)
+        .put("complex_structure_display_truncated",displayed.size<structures.size)
+        .put("complex_structure_display_note_ru",if(displayed.size<structures.size)
+            "Показаны ${displayed.size} из ${structures.size} гипотез. Решение о блокировке рассчитано по ВСЕМ проверенным кандидатам; более старые активные структуры не исключались из проверки."
+            else "Показаны все ${structures.size} проверенных гипотез сложной коррекции.")
+        .put("blocking_complex_structure",blockingExample ?: JSONObject.NULL)
+        .put("active_inside_entry_count",active.count { it.optBoolean("crosses_entry") })
         .put("active_complex_structure_count",active.size)
         .put("complex_structure_requires_unresolved_closed_price_range",true)
         .put("complex_structure_blocks_only_when_inside",true)
