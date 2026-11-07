@@ -77,12 +77,15 @@ jobs:
           else:
               print("Lint XML not produced by this build.")
           PY
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: williams-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
+      # A fresh GitHub runner signs Gradle's default debug APK with an
+      # ephemeral certificate. Publishing it under a plausible installable
+      # name causes INSTALL_FAILED_UPDATE_INCOMPATIBLE on existing phones.
+      # The only distributable build is the pinned-certificate artifact
+      # from the separate "Build Android APK" workflow.
+      - name: Prevent accidental distribution of ephemeral CI debug build
+        run: |
+          echo "::notice::CI debug assembled and tested, but NOT published: ephemeral signing key."
+          echo "::notice::Install ONLY williams-bot-debug-apk-* from Build Android APK after certificate verification."
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
