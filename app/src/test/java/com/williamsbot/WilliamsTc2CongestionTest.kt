@@ -142,7 +142,50 @@ class WilliamsTc2CongestionTest {
         })
     }
 
-    @Test fun ordinaryAbcFlatZigzagAndUnresolvedWxyAreAllowed() {
+    private fun completedFlatBars(expanded:Boolean):List<WilliamsWaveBar> {
+        // Actual sequential H1 price geometry: W1/W2/W3/W4/W5 then A/B/C,
+        // with each pivot having two strict bars to left and right.
+        val knots=sortedMapOf(
+            0 to 115.0,70 to 100.0,76 to 120.0,82 to 110.0,
+            88 to 145.0,94 to 125.0,100 to 155.0,106 to 135.0,
+            112 to (if(expanded) 158.0 else 153.0),
+            118 to (if(expanded) 128.0 else 124.0),122 to 134.0
+        )
+        fun price(i:Int):Double {
+            val before=knots.keys.last { it<=i }
+            val after=knots.keys.first { it>=i }
+            val start=knots.getValue(before)
+            return if(before==after) start else start+
+                (knots.getValue(after)-start)*(i-before)/(after-before)
+        }
+        return (0..122).map { i ->
+            val p=price(i)
+            WilliamsWaveBar((i+1)*h,p,p+.1,p-.1,p,100.0)
+        }
+    }
+
+    @Test fun tc1RegularAndExpandedFlatAreComplexCorrectionNotSimpleZigzag() {
+        for(expanded in listOf(false,true)) {
+            val bars=completedFlatBars(expanded)
+            val now=bars.last().t+h
+            val actual=confirmedWilliamsWaveAnchors(bars,h)
+            val expected=if(expanded) "EXPANDED_FLAT_ABC_CANDIDATE"
+                else "REGULAR_FLAT_ABC_CANDIDATE"
+            assertTrue(expected+" "+actual.map { it.kind+":"+it.price },
+                williamsTc2RecentComplexPriceCandidates(actual,now).any { it.pattern==expected })
+            val inside=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",140.0)
+            assertEquals(inside.toString(),"COMPLEX_CORRECTION_CANDIDATE",inside.getString("state"))
+            assertTrue(inside.toString(),inside.getBoolean("blocked"))
+            assertTrue(inside.getString("explanation_ru").contains("сложной коррекции"))
+            assertFalse(inside.getBoolean("can_place_orders"))
+            // Breakout outside the actual completed structure is not a
+            // trade by itself; it merely removes this additional risk veto.
+            val breakout=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",170.0)
+            assertFalse(breakout.getBoolean("blocked"))
+        }
+    }
+
+    @Test fun simpleZigzagAndUnconfirmedFlatRemainTradableButCompletedFlatIsComplex() {
         fun anchors(values:List<Double>):List<WilliamsWaveAnchor> = values.mapIndexed { i,p ->
             WilliamsWaveAnchor(if(i%2==0) "LOW" else "HIGH",
                 p,i,(i+1)*h,(i+4)*h)
@@ -156,7 +199,17 @@ class WilliamsTc2CongestionTest {
             135.0,158.0,128.0))
         assertTrue("EXPANDED_FLAT_ABC_CANDIDATE" in
             detectWilliamsComplexWave(expandedFlat,"UP",16*h).map { it.pattern })
-        assertTrue(williamsTc2RecentComplexPriceCandidates(expandedFlat,16*h).isEmpty())
+        assertTrue(williamsTc2RecentComplexPriceCandidates(expandedFlat,16*h).any {
+            it.pattern=="EXPANDED_FLAT_ABC_CANDIDATE" })
+        val regularFlat=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
+            135.0,153.0,125.0))
+        assertTrue(williamsTc2RecentComplexPriceCandidates(regularFlat,16*h).any {
+            it.pattern=="REGULAR_FLAT_ABC_CANDIDATE" })
+        val running=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
+            135.0,158.0,140.0))
+        assertTrue(detectWilliamsComplexWave(running,"UP",16*h).any {
+            it.pattern=="RUNNING_FLAT_ABC_CANDIDATE" })
+        assertTrue(williamsTc2RecentComplexPriceCandidates(running,16*h).isEmpty())
         val unresolved=anchors(listOf(100.0,120.0,110.0,145.0,125.0,155.0,
             135.0,143.0,120.0,132.0,116.0,125.0))
         val names=detectWilliamsComplexWave(unresolved,"UP",16*h).map { it.pattern }
