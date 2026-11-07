@@ -88,6 +88,9 @@ internal fun williamsTc2RecentComplexPriceCandidates(
  * other unresolved structures; last show resolved historical candidates.
  * The decision engine must always examine the FULL bounded source list.
  */
+internal fun williamsTc2ComplexEntryBlocked(all:List<JSONObject>):Boolean =
+    all.any { !it.optBoolean("range_resolved") && it.optBoolean("crosses_entry") }
+
 internal fun williamsTc2ComplexStructureDisplay(
     all:List<JSONObject>,maxVisible:Int=48
 ):List<JSONObject> {
@@ -194,7 +197,7 @@ internal fun williamsTc2CongestionEvidence(
         }
     }
     val active=structures.filter { !it.optBoolean("range_resolved") }
-    val insideComplex=active.any { it.optBoolean("crosses_entry") }
+    val insideComplex=williamsTc2ComplexEntryBlocked(structures)
     val displayed=williamsTc2ComplexStructureDisplay(structures)
     // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
     // A closed breakout resolves the stale range and never resurrects its
