@@ -120,26 +120,45 @@ internal fun williamsTc2CongestionEvidence(
         if(involved.size<6) null else {
             val patternHigh=involved.maxOf { it.price }
             val patternLow=involved.minOf { it.price }
+            // The last known confirmation pivot is an historical candidate,
+            // not a permanent active correction. A LATER *closed* H1 candle
+            // decisively beyond its price limits resolves the old range.
+            // A wick alone is NOT a confirmed breakout; a forming H1 candle
+            // is NEVER examined. This post-confirmation close policy is an
+            // explicit engineering interpretation, not a Williams formula.
+            val resolution=closedBars.firstOrNull { b ->
+                b.t>=pattern.knownAt && (b.c>patternHigh || b.c<patternLow)
+            }
+            val unresolved=resolution==null
             JSONObject().put("pattern",pattern.pattern).put("known_at_ms",pattern.knownAt)
                 .put("start_at_ms",pattern.startAt).put("end_at_ms",pattern.endAt)
                 .put("range_high",patternHigh).put("range_low",patternLow)
-                .put("crosses_entry",trigger in patternLow..patternHigh)
+                .put("state",if(unresolved) "UNRESOLVED_PRICE_RANGE" else "RESOLVED_BY_CLOSED_H1_PRICE")
+                .put("range_resolved",!unresolved)
+                .put("first_closed_breakout_at_ms",resolution?.t?.plus(WILLIAMS_H1_MS) ?: JSONObject.NULL)
+                .put("resolved_direction",if(resolution==null) JSONObject.NULL
+                    else if(resolution.c>patternHigh) "UP" else "DOWN")
+                .put("inside_range",trigger in patternLow..patternHigh)
+                .put("crosses_entry",unresolved && trigger in patternLow..patternHigh)
         }
     }
-    val insideComplex=structures.any { it.optBoolean("crosses_entry") }
-    // H1 entry outside the actually observed complex structure is a distinct
-    // possible breakout. The separate standard Wise-Man gates still apply.
+    val active=structures.filter { !it.optBoolean("range_resolved") }
+    val insideComplex=active.any { it.optBoolean("crosses_entry") }
+    // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
+    // A closed breakout resolves the stale range and never resurrects its
+    // inside-price veto. Other H1 Wise-Man and Binance checks still apply.
     val block=insideComplex
     val state=when {
-        structures.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
+        active.isNotEmpty() -> "COMPLEX_CORRECTION_CANDIDATE"
+        structures.isNotEmpty() -> "COMPLEX_CORRECTION_RESOLVED"
         rangeObserved -> "ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX"
         else -> "NO_COMPLEX_CORRECTION_EVIDENCE"
     }
     return result.put("state",state)
         .put("reason_code",when {
             block -> WILLIAMS_TC2_CONGESTION_BLOCKER
-            structures.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
-            structures.isNotEmpty() && breaksRange -> "STOP_BREAKOUT_OUTSIDE_COMPLEX_STRUCTURE"
+            active.isNotEmpty() && !insideComplex -> "ENTRY_OUTSIDE_COMPLEX_STRUCTURE"
+            structures.isNotEmpty() && active.isEmpty() -> "COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1"
             rangeObserved -> "ONLY_CONGESTION_NOT_COMPLEX_NO_VETO"
             else -> "NO_COMPLEX_CORRECTION_PROOF"
         }).put("blocked",block).put("window_bars",window.size)
@@ -150,6 +169,8 @@ internal fun williamsTc2CongestionEvidence(
         .put("satiated_or_sleeping_last_8",nonTrending)
         .put("complex_structures",JSONArray(structures))
         .put("complex_structure_count",structures.size)
+        .put("active_complex_structure_count",active.size)
+        .put("complex_structure_requires_unresolved_closed_price_range",true)
         .put("complex_structure_blocks_only_when_inside",true)
         .put("simple_abc_is_allowed",true)
         .put("generic_wxy_unresolved_is_not_a_veto",true)
