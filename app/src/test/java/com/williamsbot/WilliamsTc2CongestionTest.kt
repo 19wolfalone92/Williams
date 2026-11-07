@@ -122,6 +122,45 @@ class WilliamsTc2CongestionTest {
             future,now,"FRACTAL","LONG",115.0).getString("state"))
     }
 
+    @Test fun olderActiveCorrectionNotDiscardedByFortyEightNewerCandidates() {
+        // Former failure: a source candidate older than 48 newer labels
+        // was dropped before its current price state was inspected.
+        // These 80 verified alternating pivots provide many triangles.
+        val pivots=(0 until 80).map { i ->
+            val high=i%2==0
+            val step=i/2
+            WilliamsWaveAnchor(if(high) "HIGH" else "LOW",
+                if(high) 200.0-step*0.1 else 100.0+step*0.1,
+                i, i*h, (i+3L)*h)
+        }
+        val candidates=williamsTc2RecentComplexPriceCandidates(pivots,100*h)
+        assertTrue("Every historically known candidate must be classified",
+            candidates.count { it.pattern=="CONTRACTING_TRIANGLE_ABCDE_CANDIDATE" }>48)
+        val old=candidates.filter { it.pattern=="CONTRACTING_TRIANGLE_ABCDE_CANDIDATE" }
+            .minByOrNull { it.knownAt }!!
+        assertTrue(candidates.indexOf(old)>=48)
+        val samples=(0 until 70).map { i ->
+            org.json.JSONObject().put("range_resolved",true)
+                .put("crosses_entry",false).put("id","RESOLVED_"+i)
+        }+org.json.JSONObject().put("range_resolved",false)
+            .put("crosses_entry",true).put("id","OLDEST_STILL_ACTIVE")
+        val shown=williamsTc2ComplexStructureDisplay(samples)
+        assertEquals(48,shown.size)
+        assertEquals("OLDEST_STILL_ACTIVE",shown.first().getString("id"))
+        assertTrue(shown.any { it.optBoolean("crosses_entry") })
+    }
+
+    @Test fun displayContainsNoMoreThanCapacityWithManyActiveStructures() {
+        val all=(0 until 95).map { i ->
+            org.json.JSONObject().put("crosses_entry",i<50)
+                .put("range_resolved",i>=70)
+        }
+        val selected=williamsTc2ComplexStructureDisplay(all)
+        assertEquals(48,selected.size)
+        assertTrue(selected.all { it.optBoolean("crosses_entry") })
+        assertEquals(0,williamsTc2ComplexStructureDisplay(all,0).size)
+    }
+
     @Test fun confirmedComplexPatternDoesNotExpireAfterTwelveMoreClosedHours() {
         val initial=triangularBars()
         val later=(1..18).map { hour ->
