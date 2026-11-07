@@ -241,7 +241,7 @@ def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
     """Causal H1 paper path; source STOP is not an actual exchange order.
 
     At the first simulated full H1 AFTER the unknown execution hour, the
-    original 3/5-closed-H1 stop remains. When trailing=True, each new STOP
+    original 3/4/5-closed-H1 stop remains. When trailing=True, each new STOP
     is evaluated solely from candles COMPLETED before the bar that may
     hit it. An existing protective STOP must never widen. A gap through
     the scheduled stop gets the WORSE opening price, never a guaranteed
@@ -249,7 +249,7 @@ def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
     """
     i=e["i"];ref=e["exit_ref"];owner=e["owner"]
     sign=1.0 if owner=="LONG" else -1.0
-    if stop_bars not in (3,5) or horizon<=0 or not math.isfinite(ref) or ref<=0:
+    if stop_bars not in (3,4,5) or horizon<=0 or not math.isfinite(ref) or ref<=0:
         return {"valid":False,"reason":"INVALID_REPLAY_ARGUMENTS"}
     initial=(min(x[3] for x in rows[i-stop_bars+1:i+1]) if sign>0
           else max(x[2] for x in rows[i-stop_bars+1:i+1]))
@@ -288,9 +288,13 @@ def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
         if (bar[3]<=stop if sign>0 else bar[2]>=stop):
             exit_price=min(stop,bar[1]) if sign>0 else max(stop,bar[1])
             hit=True;last_at=bar[0];break
-    # Same initial entry cancels from both paths. Exit fee/slippage
-    # model charges each path by exit notional; no real fills known.
-    delta=(sign*(exit_price-ref)-COST_SIDE*(exit_price-ref))/ref*10_000
+    # Same initial hypothetical entry cancels from ALL compared paths.
+    # IMPORTANT BUG FIX: the old formula mistakenly charged commission
+    # on (exit_price - reference), so a flat exit had ZERO modeled costs,
+    # and a losing exit could even get a fake fee rebate. This is wrong.
+    # Charge the declared one-side fee/slippage on actual EXIT NOTIONAL.
+    # Entry/funding fees are still excluded and disclosed, not invented.
+    delta=(sign*(exit_price-ref)-COST_SIDE*exit_price)/ref*10_000
     return {"valid":True,"delta_bps":delta,"stop_hit":hit,
         "adverse_bps":max_adverse/ref*10_000,
         "risk_unit":max_adverse/abs(ref-initial),
@@ -298,8 +302,14 @@ def replay(e:dict,rows:list,horizon:int,stop_bars:int=5, *,
         "exit_reference":exit_price,"initial_stop_reference":initial,
         "final_stop_reference":stop,"trailing_tightening_events":updates,
         "exit_bar_open_ms":last_at,
-        "stop_model":"TRAILING_3_OR_5_PREVIOUS_CLOSED_H1" if trailing
-                     else "STATIC_3_OR_5_PRIOR_H1",
+        "stop_model":(
+            ("TRAILING_4_PREVIOUS_CLOSED_H1" if stop_bars==4
+             else "TRAILING_3_OR_5_PREVIOUS_CLOSED_H1")
+            if trailing else
+            ("STATIC_4_PRIOR_H1" if stop_bars==4 else "STATIC_3_OR_5_PRIOR_H1")),
+        "exit_cost_rate_per_notional":COST_SIDE,
+        "costs_entry_common_and_excluded":True,
+        "funding_not_modelled":True,
         "no_intrabar_sequence_or_bid_ask":True,
         "adverse_measurement_is_full_bar_upper_bound":True}
 

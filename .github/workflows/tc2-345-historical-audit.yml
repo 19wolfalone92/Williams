@@ -1,0 +1,41 @@
+name: TC2 2025 3-4-5 STOP price audit (read only)
+
+on:
+  push:
+    branches:
+      - research/nov07-tc2-three-four-five-historical-audit
+  pull_request:
+    paths:
+      - research/tc2_context_walkforward.py
+      - research/tc2_three_four_five_historical_audit.py
+      - tests/test_tc2_three_four_five_historical_audit.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  price-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install only offline test dependency
+        run: python -m pip install pytest
+      - name: Test causality, common matched cohorts and real notional cost
+        run: python -m pytest -q tests/test_tc2_three_four_five_historical_audit.py
+      - name: Research all ten genuine frozen 2025 symbols
+        run: >
+          python -m research.tc2_three_four_five_historical_audit
+          --data research/data_2025
+          --output build/tc2_2025_three_four_five_shadow.json
+      - name: Upload read-only research report, never any APK or secrets
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc2-three-four-five-2025-common-cohort-shadow
+          path: build/tc2_2025_three_four_five_shadow.json
+          if-no-files-found: error
+          retention-days: 7
