@@ -47,6 +47,15 @@ class TradeExplanationRuTest {
         assertFalse(russianTradeClassification("unexpected_secret_code").contains("unexpected_secret_code"))
     }
 
+    @Test fun sharedRuntimeUiDoesNotExposeKnownBookOrExchangeCodes() {
+        val signal = williamsRuRuntimeMessage("BOOK H1 WM3 eligible confirmed fractal outside Teeth; LONG stop-entry")
+        assertTrue(signal.contains("треть"))
+        assertFalse(signal.contains("eligible"))
+        val reconciled = williamsRuRuntimeMessage("exchange_reconciled")
+        assertTrue(reconciled.contains("Binance"))
+        assertFalse(reconciled.contains("exchange_reconciled"))
+    }
+
     @Test fun provenanceAndManagementHaveSafeFallbacks() {
         assertTrue(russianTradeAuditEvidence("BINANCE_USDM_USER_TRADES", 4).contains("4"))
         assertTrue(russianTradeAuditEvidence("FUTURES_CAMPAIGN_SNAPSHOT", 0)
