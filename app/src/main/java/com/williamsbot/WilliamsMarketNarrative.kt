@@ -88,8 +88,10 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
                 val w2=g.getJSONObject("w2_retracement")
                 val w3=g.getJSONObject("w3_extension")
                 val w4=g.getJSONObject("w4_retracement")
+                val abc=g.getJSONObject("abc_b_retracement")
                 val pieces=mutableListOf(w2.optString("explanation_ru"))
-                for(v in listOf(w3,w4)) if(v.optString("status")!="NOT_OBSERVED")
+                for(v in listOf(w3,w4,abc)) if(v.optString("status") !in
+                    setOf("NOT_OBSERVED","NO_CONFIRMED_CORRECTIVE_A_B"))
                     pieces+=v.optString("explanation_ru")
                 pieces.joinToString(" ")+" Эти соотношения только наблюдение: TC2, риск и Binance проверяются отдельно."
             }
