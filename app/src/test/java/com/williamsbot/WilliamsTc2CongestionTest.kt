@@ -105,6 +105,8 @@ class WilliamsTc2CongestionTest {
         assertNull(williamsTc2CongestionAdmissionBlocker(safe))
         assertTrue(russianExecutionBlocker(WILLIAMS_TC2_CONGESTION_UNVERIFIED)
             .contains("закрытых H1"))
+        assertTrue(williamsRuRuntimeMessage(WILLIAMS_TC2_CONGESTION_UNVERIFIED)
+            .contains("закрытых H1"))
     }
 
     @Test fun wrongOrContradictoryH1RiskTraceNeverPermitsNewRisk() {
