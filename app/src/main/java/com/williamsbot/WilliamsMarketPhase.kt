@@ -183,10 +183,39 @@ internal fun williamsMarketPhaseContext(hierarchy:JSONObject):JSONObject {
             .put("can_place_orders",false).put("can_close",false).put("can_reverse",false))
         if(recursive.length()>=16) break
     }
+    // Full H4/D1/H1 wave analysis can suggest a complex correction.
+    // Unlike the H1 CLOSED-price runtime veto, these recursive labels are
+    // only observational hypotheses. A senior triangle cannot be promoted
+    // to proof that an exchange order must close or be cancelled.
+    val complexObservations=JSONArray()
+    for(item in rows(hierarchy.optJSONArray("complex_wave_patterns"))) {
+        val frame=item.optString("frame")
+        val known=item.optLong("known_at",0L)
+        if(frame !in williamsObservedMarketFrames || errors.has(frame) ||
+            known<=0L || known>asOf ||
+            item.optString("pattern") !in WILLIAMS_TC2_COMPLEX_PATTERNS) continue
+        val proof=item.optJSONObject("internal_proof")
+        val recursiveProof=item.optJSONObject("recursive_proof")
+        complexObservations.put(JSONObject()
+            .put("frame",frame).put("pattern",item.optString("pattern"))
+            .put("known_at_ms",known).put("start_at_ms",item.optLong("start_at"))
+            .put("end_at_ms",item.optLong("end_at"))
+            .put("internal_price_proof_status",proof?.optString("status","UNRESOLVED") ?: "UNAVAILABLE")
+            .put("recursive_proof_status",recursiveProof?.optString("status","UNRESOLVED") ?: "UNAVAILABLE")
+            .put("fresh_at_frame",asOf-known<12*williamsWaveFrames.getValue(frame))
+            .put("current_price_range_unverified",true)
+            .put("unique_elliott_genealogy_proven",false)
+            .put("can_place_orders",false).put("can_close",false)
+            .put("can_veto_entries",false))
+        if(complexObservations.length()>=24) break
+    }
     val phase=JSONObject().put("schema","WILLIAMS_MARKET_PHASE_V1").put("as_of",asOf)
         .put("course_correction_policy",williamsCourseCorrectionPolicySnapshot())
         .put("frames",JSONArray(frames)).put("warning_scope",scope)
         .put("recursive_degree_evidence",recursive)
+        .put("complex_correction_hypotheses",complexObservations)
+        .put("complex_hypotheses_can_veto_trading",false)
+        .put("tc2_actual_h1_entry_veto_source","FRESH_CLOSED_H1_COMPLEX_RANGE_LIFECYCLE_ONLY")
         .put("wave_interpretation",williamsWaveInterpretation(hierarchy))
         .put("wave_genealogy_confirmed",false).put("probability_calibrated",false)
         .put("action_policy","SOURCE_SIGNAL_AND_PRICE_TRIGGER_REQUIRED")
