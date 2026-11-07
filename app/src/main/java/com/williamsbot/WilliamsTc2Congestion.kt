@@ -12,8 +12,10 @@ import org.json.JSONArray
  * It withholds NEW TC2 exposure only when the chart has a RECENT, causally
  * confirmed, structural COMPLEX-correction price grammar (triangle or
  * constrained corrective combination) and entry remains inside its range.
- * A mere sideways market, uncomplicated A-B-C, or W-X-Y_UNRESOLVED placeholder
- * is NOT sufficient to block. A real breakout outside the structure passes.
+ * A mere sideways market, simple ZIGZAG A-B-C, incomplete/running flat,
+ * or W-X-Y_UNRESOLVED placeholder is NOT sufficient to block. A *completed*
+ * regular/expanded FLAT is a complex correction per TC1 chapter 7.
+ * A real breakout outside the structure passes.
  * Every WM1/WM2/WM3 signal is evaluated on the same basis.
  *
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
@@ -27,6 +29,12 @@ internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE
  * All are provisional Elliott *candidates*, never unique wave counts.
  */
 internal val WILLIAMS_TC2_COMPLEX_PATTERNS=setOf(
+    // TC1 ch7 PDF55-56 classifies flat and irregular/expanded flat as
+    // COMPLEX, not the simple 5-3-5 zigzag. Demand completed, confirmed
+    // A-B-C price extrema (C reaches/breaks A); truncated/running flats
+    // with unproven C remain alternatives, not automatic new-entry vetoes.
+    "REGULAR_FLAT_ABC_CANDIDATE",
+    "EXPANDED_FLAT_ABC_CANDIDATE",
     "CONTRACTING_TRIANGLE_ABCDE_CANDIDATE",
     "EXPANDING_TRIANGLE_ABCDE_CANDIDATE",
     "BARRIER_TRIANGLE_ABCDE_CANDIDATE",
@@ -110,8 +118,8 @@ internal fun williamsTc2CongestionEvidence(
     val lastEight=phases.takeLast(8)
     val nonTrending=lastEight.count { it in setOf("SLEEPING","SATIATED") }
     // These numerical range observations are only CONTEXT, not a veto.
-    // A triangle/combination needs its own confirmed multi-swing geometry.
-    // Unlike generic congestion, normal ABC zigzags/flats remain tradable.
+    // Complex flats/triangles/combinations need confirmed multi-swing
+    // geometry. Simple ABC zigzags and unresolved corrections remain tradable.
     val rangeObserved=teethCrosses>=3 && aoFlips>=2 && nonTrending>=4
     val confirmedPivots=confirmedWilliamsWaveAnchors(closedBars,WILLIAMS_H1_MS)
     val structural=williamsTc2RecentComplexPriceCandidates(confirmedPivots,nowMs)
@@ -195,7 +203,9 @@ internal fun williamsTc2CongestionEvidence(
         .put("active_complex_structure_count",active.size)
         .put("complex_structure_requires_unresolved_closed_price_range",true)
         .put("complex_structure_blocks_only_when_inside",true)
-        .put("simple_abc_is_allowed",true)
+        .put("simple_zigzag_abc_is_allowed",true)
+        .put("completed_complex_flat_can_block",true)
+        .put("running_or_incomplete_flat_does_not_auto_block",true)
         .put("generic_wxy_unresolved_is_not_a_veto",true)
         .put("as_of_close_ms",closedBars.last().t+WILLIAMS_H1_MS)
 }
