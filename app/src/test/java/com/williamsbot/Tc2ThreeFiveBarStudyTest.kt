@@ -58,6 +58,15 @@ class Tc2ThreeFiveBarStudyTest {
             invalid.getString("series_state"))
     }
 
+    @Test fun staleButOtherwiseContiguousH1IsNotCurrentStopEvidence() {
+        val stale=tc2ThreeFiveBarStudy(
+            "LONG",95.0,130.0,1.0,15*h,25*h,longBars())
+        assertEquals("STALE_OR_MISSING_LATEST_CLOSED_H1",
+            stale.getString("series_state"))
+        assertEquals("UNVERIFIED_INPUT",
+            stale.getJSONObject("window5").getString("status"))
+    }
+
     @Test fun sourceOffTickAndTooCloseToMarkNeverBecomeExecutableOrders() {
         val sourceOffGrid=longBars().toMutableList().also {
             val b=it[1]; it[1]=b.copy(low=100.5)
