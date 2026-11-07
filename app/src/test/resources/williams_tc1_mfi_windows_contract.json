@@ -1,0 +1,75 @@
+{
+  "schema": "TC1_CH6_MFI_FOUR_WINDOWS_V1",
+  "book": "TC1",
+  "pdf_pages": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "volume_source": "EXCHANGE_KLINE_BASE_ASSET_VOLUME_PROXY",
+  "execution_authority": false,
+  "previous": {
+    "high": 110,
+    "low": 100,
+    "volume": 100
+  },
+  "cases": [
+    {
+      "id": "GREEN",
+      "high": 124,
+      "low": 100,
+      "volume": 120,
+      "window": "GREEN",
+      "status": "OBSERVED_BASE_VOLUME_PROXY"
+    },
+    {
+      "id": "FADE",
+      "high": 104,
+      "low": 100,
+      "volume": 80,
+      "window": "FADE",
+      "status": "OBSERVED_BASE_VOLUME_PROXY"
+    },
+    {
+      "id": "FAKE",
+      "high": 116,
+      "low": 100,
+      "volume": 80,
+      "window": "FAKE",
+      "status": "OBSERVED_BASE_VOLUME_PROXY"
+    },
+    {
+      "id": "SQUAT",
+      "high": 106,
+      "low": 100,
+      "volume": 120,
+      "window": "SQUAT",
+      "status": "OBSERVED_BASE_VOLUME_PROXY"
+    },
+    {
+      "id": "TIED_VOLUME",
+      "high": 124,
+      "low": 100,
+      "volume": 100,
+      "window": "UNCHANGED_OR_TIED",
+      "status": "TIED_NEITHER_UP_NOR_DOWN"
+    },
+    {
+      "id": "TIED_MFI",
+      "high": 112,
+      "low": 100,
+      "volume": 120,
+      "window": "UNCHANGED_OR_TIED",
+      "status": "TIED_NEITHER_UP_NOR_DOWN"
+    },
+    {
+      "id": "ZERO_VOLUME",
+      "high": 112,
+      "low": 100,
+      "volume": 0,
+      "window": "UNKNOWN",
+      "status": "SOURCE_H1_OR_FRAME_UNVERIFIED"
+    }
+  ]
+}
