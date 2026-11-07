@@ -81,6 +81,8 @@ class WilliamsTc2CongestionTest {
             assertEquals(family,WILLIAMS_TC2_CONGESTION_BLOCKER,
                 report.getString("reason_code"))
             assertTrue(report.getString("explanation_ru").contains("Новая заявка TC2 не разрешена"))
+            assertTrue(williamsRuRuntimeMessage(WILLIAMS_TC2_CONGESTION_BLOCKER)
+                .contains("дополнительный фильтр риска"))
             assertFalse(report.getBoolean("can_place_orders"))
             assertFalse(report.getBoolean("can_close"))
             assertFalse(report.getBoolean("can_change_stops"))
