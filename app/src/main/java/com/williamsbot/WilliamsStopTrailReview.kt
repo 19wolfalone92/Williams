@@ -81,6 +81,14 @@ internal fun reviewWilliamsTc2StopTightening(
     // W4/H1 cannot be inferred from stale or still-forming H4 kline values.
     val h1=runCatching { closedWilliamsWaveBars(h1Input,"1h",asOfMs) }
         .getOrNull() ?: return refuse("CLOSED_H1_HISTORY_NOT_VERIFIED")
+    // TC2 p.165 offers both the last-three and last-five-bar exits. Record
+    // both as contemporaneously knowable, exact-tick *shadow* levels even if
+    // H4 research or the live 5-bar stop review later defers a replacement.
+    // This observer has no independent right to change an exchange STOP.
+    audit.put("tc2_three_five_bar_shadow", tc2ThreeFiveBarStudy(
+        direction, oldStop, mark, tick, openedAtMs, asOfMs,
+        h1.map { FuturesTrailBar(it.t,it.h,it.l) }
+    ))
     val h4=runCatching { closedWilliamsWaveBars(h4Input,"4h",asOfMs) }
         .getOrNull() ?: return refuse("CLOSED_H4_HISTORY_NOT_VERIFIED")
     val candidate=planWilliamsCampaignStop(direction,oldStop,entry,initialStop,mark,tick,
