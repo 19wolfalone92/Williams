@@ -197,6 +197,25 @@ internal fun williamsBookH1ObservedBreakoutBlocker(
         } || recentBars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS } ||
         recentBars.last().t!=observedAtMs/WILLIAMS_H1_MS*WILLIAMS_H1_MS)
         return "H1_CURRENT_BAR_OBSERVATION_UNVERIFIED"
+    // The final admission verifier reads both the cached CLOSED-H1 history
+    // and a fresh raw two-bar Binance response. Never silently let
+    // associateBy(last writer wins) overwrite a previously witnessed H1
+    // breakout with an older/truncated raw view of that SAME closed hour.
+    // That could resurrect an already-consumed TC2 WM1/WM2/WM3 STOP entry.
+    // A mismatch is not evidence to trade; no Binance mutation is allowed.
+    if(closedBars.zipWithNext().any { (a,b) -> b.t-a.t!=WILLIAMS_H1_MS } ||
+        closedBars.any { b ->
+            b.t<0L || b.t%WILLIAMS_H1_MS!=0L || b.t+WILLIAMS_H1_MS>observedAtMs ||
+                listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0.0 } ||
+                b.h<maxOf(b.o,b.c,b.l) || b.l>minOf(b.o,b.c)
+        }) return "H1_CLOSED_HISTORY_CONTINUITY_OR_OHLC_UNVERIFIED"
+    val closedByTime=closedBars.associateBy { it.t }
+    for(raw in recentBars) {
+        val confirmed=closedByTime[raw.t] ?: continue
+        if(listOf(confirmed.o!=raw.o,confirmed.h!=raw.h,
+                confirmed.l!=raw.l,confirmed.c!=raw.c).any { it })
+            return "H1_CLOSED_BAR_RAW_EXCHANGE_MISMATCH"
+    }
     val merged=(closedBars+recentBars).associateBy { it.t }.values.sortedBy { it.t }
     return if(williamsBookH1TriggerConsumed(direction,signalAtMs,trigger,observedAtMs,merged))
         "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED" else null
