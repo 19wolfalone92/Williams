@@ -59,7 +59,8 @@ internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(
 }
 
 internal fun williamsRuRuntimeMessage(raw: String): String = when {
-    raw.startsWith("TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE",ignoreCase=true) ->
+    raw.startsWith("TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE",ignoreCase=true) ||
+        raw.startsWith("TC2_COMPLEX_CORRECTION_H1_EVIDENCE_UNVERIFIED",ignoreCase=true) ->
         russianExecutionBlocker(raw)
     raw.startsWith("H1_CLOSED_BAR_RAW_EXCHANGE_MISMATCH",ignoreCase=true) ||
         raw.startsWith("H1_CLOSED_HISTORY_CONTINUITY_OR_OHLC_UNVERIFIED",ignoreCase=true) ->

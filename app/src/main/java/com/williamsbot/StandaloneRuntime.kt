@@ -7641,6 +7641,31 @@ private class NativeEngine(
                 signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
                 "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION"
             }
+            // P0: the earlier scan's correction report is an observation,
+            // not a durable authorization to POST an exchange entry.
+            // A newly CONFIRMED H1 pivot can turn the price into an active
+            // complex correction while the scanner waits on network/risk.
+            // Re-evaluate the last independently CLOSED H1 price geometry
+            // at the final mutation door, after all price/Teeth checks and
+            // immediately BEFORE coordinator.submitPendingEntry(plan).
+            // If an hour rolled over, an old snapshot must fail CLOSED and
+            // defer new risk, never treat absence of current proof as safety.
+            // Crucially this never gates existing positions/protective STOPs.
+            if(signal.strategyProfile==williamsTc2Profile) {
+                val finalH1AsOf=futuresMarketData.exchangeNowMs()
+                val finalTc2Reason=williamsTc2CongestionEntryBlocker(
+                    signal.strategyProfile,signal.type,direction.name,trigger,
+                    submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
+                    finalH1AsOf)
+                if(finalTc2Reason!=null) {
+                    return@withCampaignMutation JSONObject()
+                        .put("accepted",false).put("safe_rejection",true)
+                        .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                        .put("blocker",finalTc2Reason+
+                            ": last exchange-mutation H1 check deferred new TC2 entry; existing protective STOP unchanged")
+                        .put("final_h1_context_as_of_ms",finalH1AsOf)
+                }
+            }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
