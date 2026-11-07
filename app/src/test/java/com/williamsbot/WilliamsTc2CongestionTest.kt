@@ -96,6 +96,49 @@ class WilliamsTc2CongestionTest {
         assertFalse(old.getBoolean("blocked"))
     }
 
+    @Test fun completedH1CloseBeyondTriangleEndsTheOldComplexRangeVeto() {
+        // TC1 ch7 explains triangle corrections; TC2 ch11 fig 11.7
+        // warns against trading stale internal fractals. A confirmed
+        // CLOSED H1 escape is different from an unresolved triangle.
+        val old=triangularBars()
+        val baseTime=old.last().t+h
+        val baseline=williamsTc2CongestionEvidence(old,baseTime,"FRACTAL","LONG",115.0)
+        assertTrue(baseline.toString(),baseline.getBoolean("blocked"))
+        val escaped=old.toMutableList()
+        val previous=escaped.last()
+        escaped[escaped.lastIndex]=previous.copy(h=137.0,c=134.0)
+        val report=williamsTc2CongestionEvidence(escaped,baseTime,"FRACTAL","LONG",115.0)
+        assertFalse(report.toString(),report.getBoolean("blocked"))
+        assertEquals("COMPLEX_CORRECTION_RESOLVED",report.getString("state"))
+        assertEquals("COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1",report.getString("reason_code"))
+        assertEquals(0,report.getInt("active_complex_structure_count"))
+        assertTrue(report.getJSONArray("complex_structures").let { entries ->
+            (0 until entries.length()).any { entries.getJSONObject(it).optBoolean("range_resolved") &&
+                entries.getJSONObject(it).getString("resolved_direction")=="UP" &&
+                entries.getJSONObject(it).getLong("first_closed_breakout_at_ms")==baseTime }
+        })
+        // This is only removal of a congestion veto; normal TC2 signal
+        // validation and stop protection must still authorize any order.
+        assertFalse(report.getBoolean("can_place_orders"))
+    }
+
+    @Test fun wickBeyondBoundaryWithoutClosingOutsideDoesNotResolveTriangle() {
+        val old=triangularBars()
+        val spike=old.toMutableList()
+        val last=spike.last()
+        spike[spike.lastIndex]=last.copy(h=137.0,c=115.0)
+        val now=spike.last().t+h
+        val report=williamsTc2CongestionEvidence(spike,now,"SHORT_SUPER_AO","SHORT",115.0)
+        assertEquals(report.toString(),"COMPLEX_CORRECTION_CANDIDATE",report.getString("state"))
+        assertTrue(report.toString(),report.getBoolean("blocked"))
+        assertTrue(report.getInt("active_complex_structure_count")>0)
+        assertTrue(report.getJSONArray("complex_structures").let { entries ->
+            (0 until entries.length()).any {
+                !entries.getJSONObject(it).optBoolean("range_resolved")
+            }
+        })
+    }
+
     @Test fun ordinaryAbcFlatZigzagAndUnresolvedWxyAreAllowed() {
         fun anchors(values:List<Double>):List<WilliamsWaveAnchor> = values.mapIndexed { i,p ->
             WilliamsWaveAnchor(if(i%2==0) "LOW" else "HIGH",
