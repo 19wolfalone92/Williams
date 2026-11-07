@@ -4,11 +4,12 @@ import org.json.JSONObject
 import kotlin.math.max
 
 /**
- * Read-only comparison of the two price-bar STOP alternatives in Trading Chaos
- * 2nd edition, chapter 12, Russian PDF p.165 (printed p.150).
+ * Read-only comparison of the THREE price-bar STOP alternatives in Trading Chaos
+ * 2nd edition, chapter 12, Russian PDF pp.161 and 165 (printed pp.146, 150).
  *
- * Source describes a 3- OR 5-bar trailing exit, not an objectively superior
- * single variant. This observer neither chooses a live method nor creates or
+ * The book explicitly permits a trailing STOP based on the last 3–5 bars;
+ * some traders prefer four or five bars to allow more room. There is no
+ * universally prescribed winning window. This observer neither chooses a live method nor creates or
  * changes Binance orders. Existing signed STOP and production TC2 selection
  * remain the sole authority for actual risk management.
  *
@@ -27,19 +28,21 @@ internal fun tc2ThreeFiveBarStudy(
     closedH1: List<FuturesTrailBar>
 ): JSONObject {
     val study = JSONObject()
-        .put("schema", "TC2_THREE_FIVE_CLOSED_H1_SHADOW_V1")
+        .put("schema", "TC2_THREE_FOUR_FIVE_CLOSED_H1_SHADOW_V2")
         .put("edition", "TC2")
         .put("source_pdf_page", 165)
+        .put("source_pdf_pages",org.json.JSONArray(listOf(161,165)))
         .put("frame", "1h")
         .put("execution_authority", false)
         .put("source", "CLOSED_H1_ONLY")
         .put("first_observed_position_at_ms", firstObservedPositionAtMs)
         .put("as_of_ms", asOfMs)
         .put("window3", JSONObject())
+        .put("window4", JSONObject())
         .put("window5", JSONObject())
     fun invalid(reason: String): JSONObject {
         study.put("series_state", reason)
-        for(window in listOf(3, 5)) {
+        for(window in listOf(3, 4, 5)) {
             study.put("window$window", JSONObject().put("window", window)
                 .put("status", "UNVERIFIED_INPUT")
                 .put("reason", reason).put("execution_authority", false))
@@ -79,7 +82,7 @@ internal fun tc2ThreeFiveBarStudy(
         .put("known_at_ms", closedH1.lastOrNull()
             ?.let { it.openTimeMs+WILLIAMS_H1_MS } ?: JSONObject.NULL)
     val minGap=max(2.0*tickSize,markPrice*0.00025)
-    for(window in listOf(3,5)) {
+    for(window in listOf(3,4,5)) {
         val evidence=JSONObject().put("window", window)
             .put("status", "NOT_OBSERVED")
             .put("execution_authority", false)
