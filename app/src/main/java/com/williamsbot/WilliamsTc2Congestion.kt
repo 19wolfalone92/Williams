@@ -73,9 +73,30 @@ internal fun williamsTc2RecentComplexPriceCandidates(
                 .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
                     it.knownAt in 1L..asOf && it.endAt<=asOf }
     }
+    // Do NOT discard old candidates here. A valid unresolved correction can
+    // be older than 48 newer *resolved* candidates. Cutting to 48 before
+    // checking their current price status could incorrectly permit an entry.
+    // A fixed-size display sample is selected AFTER all live statuses and the
+    // trade veto have been evaluated.
     return observed.distinctBy { listOf(it.pattern,it.direction,it.startAt,it.endAt) }
         .sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
-            .thenByDescending { it.endAt }).take(48)
+            .thenByDescending { it.endAt })
+}
+
+/** Bounded cockpit projection, never the entry decision itself.
+ * Prioritise unresolved structures INSIDE the requested entry price, then
+ * other unresolved structures; last show resolved historical candidates.
+ * The decision engine must always examine the FULL bounded source list.
+ */
+internal fun williamsTc2ComplexStructureDisplay(
+    all:List<JSONObject>,maxVisible:Int=48
+):List<JSONObject> {
+    if(maxVisible<=0) return emptyList()
+    return all.filter { it.optBoolean("crosses_entry") } .take(maxVisible) +
+        all.filter { !it.optBoolean("crosses_entry") && !it.optBoolean("range_resolved") }
+            .take((maxVisible-all.count { it.optBoolean("crosses_entry") }).coerceAtLeast(0)) +
+        all.filter { it.optBoolean("range_resolved") }
+            .take((maxVisible-all.count { !it.optBoolean("range_resolved") }).coerceAtLeast(0))
 }
 
 
@@ -174,6 +195,7 @@ internal fun williamsTc2CongestionEvidence(
     }
     val active=structures.filter { !it.optBoolean("range_resolved") }
     val insideComplex=active.any { it.optBoolean("crosses_entry") }
+    val displayed=williamsTc2ComplexStructureDisplay(structures)
     // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
     // A closed breakout resolves the stale range and never resurrects its
     // inside-price veto. Other H1 Wise-Man and Binance checks still apply.
@@ -220,8 +242,11 @@ internal fun williamsTc2CongestionEvidence(
         .put("trigger",trigger).put("breakout_outside_range",breaksRange)
         .put("teeth_close_crossings",teethCrosses).put("ao_zero_crossings",aoFlips)
         .put("satiated_or_sleeping_last_8",nonTrending)
-        .put("complex_structures",JSONArray(structures))
+        .put("complex_structures",JSONArray(displayed))
         .put("complex_structure_count",structures.size)
+        .put("complex_structure_display_count",displayed.size)
+        .put("complex_structure_display_truncated",displayed.size<structures.size)
+        .put("active_inside_entry_count",active.count { it.optBoolean("crosses_entry") })
         .put("active_complex_structure_count",active.size)
         .put("complex_structure_requires_unresolved_closed_price_range",true)
         .put("complex_structure_blocks_only_when_inside",true)
