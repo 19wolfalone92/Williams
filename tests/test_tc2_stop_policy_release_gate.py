@@ -21,7 +21,7 @@ def fixture(year,reverse=False):
         }
         windows[mode]={
             "common_matched_eligible":5,
-            "summary_common":{n:{"mean_delta_bps":v} for n,v in avg.items()},
+            "summary_common":{n:{"n":5,"mean_delta_bps":v} for n,v in avg.items()},
             "comparisons":{n:{
                 "matched_events":5,
                 "mean_delta_bps":delta,
@@ -45,6 +45,7 @@ def fixture(year,reverse=False):
     else:
         data.update(previously_inspected_data_not_a_new_untouched_holdout=True,
             cost_charged_on="EXIT_NOTIONAL",
+            comparisons_locked_to_same_3_4_5=True,
             by_month={"2026-09":{"windows":windows}})
     return data
 
@@ -73,11 +74,19 @@ def test_positive_2025_is_not_certified_trade_proof_or_authorized_stop():
     ("2026","previously_inspected_data_not_a_new_untouched_holdout",False),
     ("2026","can_place_orders",True),
     ("2026","cost_charged_on","NONE"),
+    ("2026","comparisons_locked_to_same_3_4_5",False),
+    ("2025","book_stop_windows",[3,5]),
 ])
 def test_laundered_research_labels_cannot_promote_stop(year,field,value):
     data=pair()
     data[year][field]=value
     with pytest.raises(ValueError):
+        assess_stop_selection(data)
+
+def test_wrong_summary_sample_size_fails_before_live_stop_selection():
+    data=pair()
+    data["2026"]["overall"]["windows"]["24h_trail"]["summary_common"]["5"]["n"]=2
+    with pytest.raises(ValueError,match="mismatched cohort"):
         assess_stop_selection(data)
 
 def test_mismatched_matched_cohorts_fail_instead_of_cherry_pick():
