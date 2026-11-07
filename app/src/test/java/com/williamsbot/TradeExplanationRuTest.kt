@@ -49,7 +49,7 @@ class TradeExplanationRuTest {
 
     @Test fun sharedRuntimeUiDoesNotExposeKnownBookOrExchangeCodes() {
         val signal = williamsRuRuntimeMessage("BOOK H1 WM3 eligible confirmed fractal outside Teeth; LONG stop-entry")
-        assertTrue(signal.contains("треть"))
+        assertTrue(signal.contains("третий Мудрец"))
         assertFalse(signal.contains("eligible"))
         val reconciled = williamsRuRuntimeMessage("exchange_reconciled")
         assertTrue(reconciled.contains("Binance"))
