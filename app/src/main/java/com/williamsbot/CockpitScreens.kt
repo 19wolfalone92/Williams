@@ -59,6 +59,9 @@ internal fun williamsRuStatus(raw: String): String = when (raw.trim().uppercase(
 }
 
 internal fun williamsRuRuntimeMessage(raw: String): String = when {
+    raw.startsWith("H1_CLOSED_BAR_RAW_EXCHANGE_MISMATCH",ignoreCase=true) ||
+        raw.startsWith("H1_CLOSED_HISTORY_CONTINUITY_OR_OHLC_UNVERIFIED",ignoreCase=true) ->
+        russianExecutionBlocker(raw)
     raw.startsWith("SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY", ignoreCase=true) ||
         raw.startsWith("WILLIAMS_UNIFIED_DIRECTION_CONFLICT", ignoreCase=true) ||
         raw.startsWith("FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE", ignoreCase=true) ->
