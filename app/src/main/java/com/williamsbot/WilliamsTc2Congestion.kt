@@ -21,7 +21,7 @@ import org.json.JSONArray
  * Existing positions, stops, risk reductions and book exits are NEVER gated.
  * Closed and contiguous H1 only; no M15 confirmation and no future candles.
  */
-internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V3_ACTIVE_UNTIL_BREAKOUT"
+internal const val WILLIAMS_TC2_CONGESTION_POLICY="TC2_COMPLEX_CORRECTIONS_ONLY_V4_EVALUATE_ALL_BEFORE_DISPLAY"
 internal const val WILLIAMS_TC2_CONGESTION_BLOCKER="TC2_COMPLEX_CORRECTION_PRICE_GRAMMAR_INSIDE_H1_RANGE"
 
 /** Only price grammars that actually distinguish a complex correction from
@@ -199,6 +199,7 @@ internal fun williamsTc2CongestionEvidence(
     val active=structures.filter { !it.optBoolean("range_resolved") }
     val insideComplex=williamsTc2ComplexEntryBlocked(structures)
     val displayed=williamsTc2ComplexStructureDisplay(structures)
+    val blockingExample=active.firstOrNull { it.optBoolean("crosses_entry") }
     // H1 entry outside a STILL-ACTIVE candidate is a possible breakout.
     // A closed breakout resolves the stale range and never resurrects its
     // inside-price veto. Other H1 Wise-Man and Binance checks still apply.
@@ -210,9 +211,16 @@ internal fun williamsTc2CongestionEvidence(
         else -> "NO_COMPLEX_CORRECTION_EVIDENCE"
     }
     val explanationRu=when {
-        block -> "На закрытых H1 выявлена свежая геометрия возможной сложной коррекции " +
-            "(плоская/неправильная коррекция, треугольник или комбинация). Уровень входа остаётся внутри её ещё не " +
-            "пробитого закрытием диапазона. Новая заявка TC2 не разрешена; " +
+        block -> "На закрытых H1 выявлена геометрия возможной сложной коррекции " +
+            "(плоская/неправильная коррекция, треугольник или комбинация). " +
+            "Обнаруженный паттерн: ${blockingExample?.optString("pattern") ?: "НЕ УСТАНОВЛЕН"}. " +
+            "Диапазон: ${blockingExample?.optDouble("range_low") ?: Double.NaN} – " +
+            "${blockingExample?.optDouble("range_high") ?: Double.NaN}; " +
+            "запрошенный уровень входа: $trigger. " +
+            "Подтверждение структуры по H1 (время Unix мс): " +
+            "${blockingExample?.optLong("known_at_ms") ?: 0L}. " +
+            "Цена входа остаётся внутри ещё не разрешённого по закрытию диапазона. " +
+            "Новая заявка TC2 не разрешена; " +
             "уже открытая позиция и её биржевой STOP продолжают сопровождаться. " +
             "Волновая разметка является гипотезой, а фильтр — дополнительной политикой риска."
         active.isNotEmpty() -> "Есть геометрические признаки сложной коррекции на H1, " +
@@ -249,6 +257,10 @@ internal fun williamsTc2CongestionEvidence(
         .put("complex_structure_count",structures.size)
         .put("complex_structure_display_count",displayed.size)
         .put("complex_structure_display_truncated",displayed.size<structures.size)
+        .put("complex_structure_display_note_ru",if(displayed.size<structures.size)
+            "Показаны ${displayed.size} из ${structures.size} гипотез. Решение о блокировке рассчитано по ВСЕМ проверенным кандидатам; более старые активные структуры не исключались из проверки."
+            else "Показаны все ${structures.size} проверенных гипотез сложной коррекции.")
+        .put("blocking_complex_structure",blockingExample ?: JSONObject.NULL)
         .put("active_inside_entry_count",active.count { it.optBoolean("crosses_entry") })
         .put("active_complex_structure_count",active.size)
         .put("complex_structure_requires_unresolved_closed_price_range",true)
