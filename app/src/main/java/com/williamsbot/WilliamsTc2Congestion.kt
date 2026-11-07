@@ -64,23 +64,34 @@ internal fun williamsTc2RecentComplexPriceCandidates(
     } || anchors.zipWithNext().any { (a,b) ->
         a.kind==b.kind || a.extremeAt>=b.extremeAt || a.knownAt>b.knownAt
     }) return emptyList()
+    // detectWilliamsComplexWave reads ONLY suffixes of lengths
+    // 6, 8, 9, 10, 12 and 16. The entire anchor history has already been
+    // validated above. Passing each full 6..120 prefix copied O(N²) anchors
+    // on every scan across ten symbols; a bounded view of the final 16
+    // changes NO recognized pattern, knownAt, or executable decision.
     val retained=anchors.takeLast(120)
-    val observed=mutableListOf<WilliamsComplexEvidence>()
+    val unique=linkedMapOf<String,WilliamsComplexEvidence>()
     for(prefixSize in 6..retained.size) {
-        val confirmedPrefix=retained.take(prefixSize)
-        for(side in listOf("UP","DOWN"))
-            observed+=detectWilliamsComplexWave(confirmedPrefix,side,asOf)
-                .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
-                    it.knownAt in 1L..asOf && it.endAt<=asOf }
+        val latestWindow=retained.subList(maxOf(0,prefixSize-16),prefixSize)
+        for(side in listOf("UP","DOWN")) {
+            for(found in detectWilliamsComplexWave(latestWindow,side,asOf)) {
+                if(found.pattern !in WILLIAMS_TC2_COMPLEX_PATTERNS ||
+                    found.knownAt !in 1L..asOf || found.endAt>asOf) continue
+                // Safe de-dup before JSON generation; the same signature
+                // was previously removed by distinctBy after materializing
+                // *every* repeated price-grammar candidate.
+                val key="${found.pattern}|${found.direction}|${found.startAt}|${found.endAt}"
+                unique.putIfAbsent(key,found)
+            }
+        }
     }
     // Do NOT discard old candidates here. A valid unresolved correction can
     // be older than 48 newer *resolved* candidates. Cutting to 48 before
     // checking their current price status could incorrectly permit an entry.
     // A fixed-size display sample is selected AFTER all live statuses and the
     // trade veto have been evaluated.
-    return observed.distinctBy { listOf(it.pattern,it.direction,it.startAt,it.endAt) }
-        .sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
-            .thenByDescending { it.endAt })
+    return unique.values.sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
+        .thenByDescending { it.endAt })
 }
 
 /** Bounded cockpit projection, never the entry decision itself.
