@@ -47,6 +47,13 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("ao_direction",reading.optString("ao_direction","UNKNOWN"))
             .put("ac_direction",reading.optString("ac_direction","UNKNOWN"))
         else JSONObject().put("status","NOT_VERIFIED")
+        val mfi=if(readingReady)
+            reading!!.optJSONObject("tc1_market_facilitation") else null
+        val mfiRu=when(mfi?.optString("status")) {
+            "OBSERVED_BASE_VOLUME_PROXY","TIED_NEITHER_UP_NOR_DOWN" ->
+                mfi?.optString("explanation_ru").orEmpty()
+            else -> "По TC1 четыре окна MFI/объёма не подтверждены: нет двух проверенных закрытых свечей или объём неверен. Наблюдение не управляет TC2."
+        }
         val hypotheses=rows(row?.optJSONArray("hypotheses"))
         val unique=hypotheses.map { it.optString("active_label") to it.optString("active_direction") }
             .distinct()
@@ -111,6 +118,9 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("candle_closed_at_ms",if(readingReady) reading!!.optLong("as_of_close_ms") else JSONObject.NULL)
             .put("observed_bias",bias).put("alligator_phase",alligator)
             .put("indicators",oscillators)
+            .put("tc1_mfi_window",mfi ?: JSONObject.NULL)
+            .put("tc1_mfi_explanation_ru",mfiRu)
+            .put("tc1_mfi_can_place_orders",false)
             .put("wave_text",wave).put("hypothesis_count",hypotheses.size)
             .put("complex_correction_alternatives",complex.size)
             .put("complex_correction_explanation_ru",complexRu)
@@ -118,7 +128,7 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("tc1_price_geometry_explanation_ru",geomRu)
             .put("tc1_ratios_can_veto_orders",false)
             .put("complex_research_can_veto_orders",false)
-            .put("explanation_ru",observed+" "+geomRu)
+            .put("explanation_ru",observed+" "+geomRu+" "+mfiRu)
             .put("wave_degree_confirmed",false)
             .put("can_place_orders",false).put("can_close",false))
     }

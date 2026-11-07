@@ -21,6 +21,8 @@ internal fun buildWilliamsObservedMarketContext(history:Map<String,List<Williams
     val phase=williamsMarketPhaseContext(result)
     result.put("frame_readings",JSONArray(williamsObservedMarketFrames.map { frame ->
         val reading=williamsMarketReading(closed.getValue(frame),phase,frame,asOf)
+            .put("tc1_market_facilitation",
+                williamsTc1MarketFacilitation(closed.getValue(frame),frame,asOf))
         if(readErrors.containsKey(frame)) reading.put("state","HISTORY_READ_FAILED")
             .put("history_error",readErrors.getValue(frame))
         reading

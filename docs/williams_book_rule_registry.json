@@ -1684,6 +1684,147 @@
       "fixtures": [],
       "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.MFI.RANGE_OVER_VOLUME",
+      "book": "TC1",
+      "pdf_pages": [
+        42,
+        43
+      ],
+      "rule": "MFI = (High-Low) / tick volume, interpreted only relative to the immediately preceding bar, never absolute.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_market_facilitation.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1MarketFacilitation.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "tests/test_tc1_market_facilitation.py::test_mfi_four_windows_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::exactFourTC1WindowsShareThePythonPriceVolumeFixtures",
+        "tests/test_tc1_market_facilitation.py::test_bad_or_gapped_bars_cannot_be_four_window_observation",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::zeroVolumeGapsPartialAndStaleBarsNeverProduceSignal"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_mfi_windows_contract.json",
+      "fixtures": [
+        "cases/GREEN",
+        "cases/TIED_MFI"
+      ],
+      "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.MFI.WINDOW_GREEN",
+      "book": "TC1",
+      "pdf_pages": [
+        43,
+        44
+      ],
+      "rule": "Green Profitunity window: tick volume rises and MFI rises relative to previous bar. Window does NOT imply LONG/SHORT side.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_market_facilitation.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1MarketFacilitation.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "tests/test_tc1_market_facilitation.py::test_mfi_four_windows_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::exactFourTC1WindowsShareThePythonPriceVolumeFixtures",
+        "tests/test_tc1_market_facilitation.py::test_bad_or_gapped_bars_cannot_be_four_window_observation",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::zeroVolumeGapsPartialAndStaleBarsNeverProduceSignal"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_mfi_windows_contract.json",
+      "fixtures": [
+        "cases/GREEN"
+      ],
+      "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.MFI.WINDOW_FADE",
+      "book": "TC1",
+      "pdf_pages": [
+        43,
+        44
+      ],
+      "rule": "Fade window: tick volume and MFI both decline. A quiet market does not prove trend termination.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_market_facilitation.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1MarketFacilitation.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "tests/test_tc1_market_facilitation.py::test_mfi_four_windows_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::exactFourTC1WindowsShareThePythonPriceVolumeFixtures",
+        "tests/test_tc1_market_facilitation.py::test_bad_or_gapped_bars_cannot_be_four_window_observation",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::zeroVolumeGapsPartialAndStaleBarsNeverProduceSignal"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_mfi_windows_contract.json",
+      "fixtures": [
+        "cases/FADE"
+      ],
+      "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.MFI.WINDOW_FAKE",
+      "book": "TC1",
+      "pdf_pages": [
+        43,
+        44
+      ],
+      "rule": "Fake window: volume falls while MFI rises; lack of external participation can weaken the inference from the price move.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_market_facilitation.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1MarketFacilitation.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "tests/test_tc1_market_facilitation.py::test_mfi_four_windows_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::exactFourTC1WindowsShareThePythonPriceVolumeFixtures",
+        "tests/test_tc1_market_facilitation.py::test_bad_or_gapped_bars_cannot_be_four_window_observation",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::zeroVolumeGapsPartialAndStaleBarsNeverProduceSignal"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_mfi_windows_contract.json",
+      "fixtures": [
+        "cases/FAKE"
+      ],
+      "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.MFI.WINDOW_SQUAT",
+      "book": "TC1",
+      "pdf_pages": [
+        44,
+        45
+      ],
+      "rule": "Squat window: volume rises while MFI falls; a squat is not sufficient proof of a reversal since it may occur mid-wave 3.",
+      "status": "BOUNDED_TESTED",
+      "modules": [
+        "williams_tc1_market_facilitation.py",
+        "app/src/main/java/com/williamsbot/WilliamsTc1MarketFacilitation.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketPhase.kt",
+        "app/src/main/java/com/williamsbot/WilliamsMarketNarrative.kt"
+      ],
+      "tests": [
+        "tests/test_tc1_market_facilitation.py::test_mfi_four_windows_parity_with_android",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::exactFourTC1WindowsShareThePythonPriceVolumeFixtures",
+        "tests/test_tc1_market_facilitation.py::test_bad_or_gapped_bars_cannot_be_four_window_observation",
+        "app/src/test/java/com/williamsbot/WilliamsTc1MarketFacilitationTest.kt::zeroVolumeGapsPartialAndStaleBarsNeverProduceSignal"
+      ],
+      "fixture_file": "app/src/test/resources/williams_tc1_mfi_windows_contract.json",
+      "fixtures": [
+        "cases/SQUAT"
+      ],
+      "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
