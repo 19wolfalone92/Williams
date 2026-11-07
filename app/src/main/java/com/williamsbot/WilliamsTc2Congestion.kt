@@ -295,10 +295,38 @@ internal const val WILLIAMS_TC2_CONGESTION_UNVERIFIED=
     "TC2_COMPLEX_CORRECTION_H1_EVIDENCE_UNVERIFIED"
 
 internal fun williamsTc2CongestionAdmissionBlocker(report:JSONObject?):String? {
-    if(report==null || report.optString("state")=="HISTORY_UNVERIFIED")
+    if(report==null || report.optString("schema")!="WILLIAMS_TC2_CONGESTION_V1" ||
+        report.optString("source")!="CLOSED_CONTIGUOUS_H1_CANDLES" ||
+        report.optLong("as_of_close_ms",0L)<=0L ||
+        report.optString("policy")!=WILLIAMS_TC2_CONGESTION_POLICY)
         return WILLIAMS_TC2_CONGESTION_UNVERIFIED
-    return if(report.optBoolean("blocked")) WILLIAMS_TC2_CONGESTION_BLOCKER
-        else null
+    val state=report.optString("state")
+    val code=report.optString("reason_code")
+    val blocked=report.optBoolean("blocked")
+    val total=report.optInt("complex_structure_count",-1)
+    val active=report.optInt("active_complex_structure_count",-1)
+    val inside=report.optInt("active_inside_entry_count",-1)
+    // A malformed or inconsistent decision trace must never silently pass
+    // new financial risk. Bounded classification and explicit admission are
+    // checked separately so UNKNOWN cannot turn into an invented "safe".
+    if(total<0 || active !in 0..total || inside !in 0..active)
+        return WILLIAMS_TC2_CONGESTION_UNVERIFIED
+    return when {
+        state=="COMPLEX_CORRECTION_CANDIDATE" && blocked &&
+            code==WILLIAMS_TC2_CONGESTION_BLOCKER && inside>0 ->
+                WILLIAMS_TC2_CONGESTION_BLOCKER
+        state=="COMPLEX_CORRECTION_CANDIDATE" && !blocked &&
+            code=="ENTRY_OUTSIDE_COMPLEX_STRUCTURE" && active>0 && inside==0 ->
+                null
+        state=="COMPLEX_CORRECTION_RESOLVED" && !blocked &&
+            code=="COMPLEX_RANGE_RESOLVED_BY_CLOSED_H1" && total>0 &&
+            active==0 && inside==0 -> null
+        state=="ORDINARY_CONGESTION_OR_CORRECTION_NOT_COMPLEX" && !blocked &&
+            code=="ONLY_CONGESTION_NOT_COMPLEX_NO_VETO" && total==0 -> null
+        state=="NO_COMPLEX_CORRECTION_EVIDENCE" && !blocked &&
+            code=="NO_COMPLEX_CORRECTION_PROOF" && total==0 -> null
+        else -> WILLIAMS_TC2_CONGESTION_UNVERIFIED
+    }
 }
 
 internal fun williamsTc2CongestionEntryBlocker(
