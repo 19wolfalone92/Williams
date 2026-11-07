@@ -283,12 +283,30 @@ internal fun williamsTc2CongestionEvidence(
         .put("as_of_close_ms",closedBars.last().t+WILLIAMS_H1_MS)
 }
 
+/** The risk-screen classification and ENTRY ADMISSION are different concepts.
+ * A missing/stale/contradictory H1 input is NOT a proved complex correction
+ * (blocked=false), but is ALSO NOT permission to place fresh TC2 exposure.
+ * Previously, reading just blocked=false accidentally failed OPEN.
+ *
+ * Never call this from position management or STOP renewal: those must
+ * preserve existing exchange protection regardless of the regime observer.
+ */
+internal const val WILLIAMS_TC2_CONGESTION_UNVERIFIED=
+    "TC2_COMPLEX_CORRECTION_H1_EVIDENCE_UNVERIFIED"
+
+internal fun williamsTc2CongestionAdmissionBlocker(report:JSONObject?):String? {
+    if(report==null || report.optString("state")=="HISTORY_UNVERIFIED")
+        return WILLIAMS_TC2_CONGESTION_UNVERIFIED
+    return if(report.optBoolean("blocked")) WILLIAMS_TC2_CONGESTION_BLOCKER
+        else null
+}
+
 internal fun williamsTc2CongestionEntryBlocker(
     source:String,signalType:String,direction:String,trigger:Double,
     closedBars:List<WilliamsWaveBar>,nowMs:Long
 ):String? = if(source!=williamsTc2Profile) null else {
     val report=williamsTc2CongestionEvidence(closedBars,nowMs,signalType,direction,trigger)
-    if(report.optBoolean("blocked",false)) WILLIAMS_TC2_CONGESTION_BLOCKER else null
+    williamsTc2CongestionAdmissionBlocker(report)
 }
 
 /**

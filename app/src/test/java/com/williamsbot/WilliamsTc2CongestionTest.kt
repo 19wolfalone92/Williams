@@ -1,5 +1,7 @@
 package com.williamsbot
 
+import org.json.JSONObject
+
 import org.junit.Assert.*
 import org.junit.Test
 import kotlin.math.PI
@@ -66,6 +68,55 @@ class WilliamsTc2CongestionTest {
             val lo=lowAt[i] ?: 114.0
             WilliamsWaveBar((i+1)*h,115.0,hi,lo,115.0,100.0)
         }
+    }
+
+    @Test fun missingOrStaleH1CannotSilentlyBypassNewTc2EntryRiskScreen() {
+        val full=trending()
+        val now=full.last().t+h
+        val missing=full.takeLast(35)
+        val missingReport=williamsTc2CongestionEvidence(
+            missing,now,"FRACTAL","LONG",1000.0)
+        assertEquals("HISTORY_UNVERIFIED",missingReport.getString("state"))
+        // A missing chart is NOT evidence that a complex correction exists:
+        assertFalse(missingReport.getBoolean("blocked"))
+        // But a new entry still MUST NOT be admitted on that absence.
+        assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+            williamsTc2CongestionAdmissionBlocker(missingReport))
+        for(side in listOf("LONG","SHORT")) {
+            assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+                williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                    if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL",
+                    side,800.0,missing,now))
+        }
+        assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+            williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                "REVERSAL","LONG",900.0,full,now+13*h))
+        assertEquals(WILLIAMS_TC2_CONGESTION_UNVERIFIED,
+            williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                "SUPER_AO","LONG",900.0,
+                full+WilliamsWaveBar(now,100.0,200.0,90.0,100.0),now))
+        // TC1, NTD and Course stay OBSERVE, NEVER acquire trading authority
+        // from this extra TC2 policy.
+        assertNull(williamsTc2CongestionEntryBlocker(
+            williamsNtdProfile,"FRACTAL","LONG",900.0,missing,now))
+        assertNull(williamsTc2CongestionAdmissionBlocker(JSONObject()
+            .put("state","NO_COMPLEX_CORRECTION_EVIDENCE")
+            .put("blocked",false)))
+        assertTrue(russianExecutionBlocker(WILLIAMS_TC2_CONGESTION_UNVERIFIED)
+            .contains("закрытых H1"))
+    }
+
+    @Test fun activeComplexCorrectionStillWinsOverOtherwiseVerifiedTradeSignal() {
+        val bars=triangularBars()
+        val now=bars.last().t+h
+        val report=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",115.0)
+        assertEquals(WILLIAMS_TC2_CONGESTION_BLOCKER,
+            williamsTc2CongestionAdmissionBlocker(report))
+        assertEquals(WILLIAMS_TC2_CONGESTION_BLOCKER,
+            williamsTc2CongestionEntryBlocker(williamsTc2Profile,
+                "FRACTAL","LONG",115.0,bars,now))
+        val outside=williamsTc2CongestionEvidence(bars,now,"FRACTAL","LONG",131.0)
+        assertNull(williamsTc2CongestionAdmissionBlocker(outside))
     }
 
     @Test fun confirmedRecentTriangleOnlyBlocksEntriesInsideActualComplexCorrection() {

@@ -7102,9 +7102,12 @@ private class NativeEngine(
             val currentH1=fetchCandles(symbol,"1h",220)
             val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
             check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
-            check(williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
-                currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)==null) {
-                WILLIAMS_TC2_CONGESTION_BLOCKER+": NEW ADDITION BLOCKED"
+            val addRiskReason=williamsTc2CongestionEntryBlocker(
+                profile,signal.type,direction,signal.triggerPrice,
+                currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
+            check(addRiskReason==null) {
+                (addRiskReason ?: WILLIAMS_TC2_CONGESTION_UNVERIFIED)+
+                    ": new addition withheld; existing STOP unchanged"
             }
             if(!market) {
                 val current=futuresMarketData.price(symbol)
@@ -7278,20 +7281,26 @@ private class NativeEngine(
             signal.signalId to williamsTc2CongestionEvidence(congestionBars,contextNow,
                 signal.type,campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice)
         }
+        val congestionAdmission=freshSignals.associate { signal ->
+            signal.signalId to if(signal.strategyProfile==williamsTc2Profile)
+                williamsTc2CongestionAdmissionBlocker(congestion[signal.signalId])
+                else null
+        }
         check(executionStore.writeState("decision_tc2_congestion_"+symbol,JSONObject()
             .put("as_of",contextNow).put("policy",WILLIAMS_TC2_CONGESTION_POLICY)
             .put("signals",JSONArray(freshSignals.map { signal ->
                 JSONObject().put("signal_id",signal.signalId)
                     .put("report",congestion[signal.signalId])
+                    .put("new_tc2_entry_blocker",
+                        congestionAdmission[signal.signalId] ?: JSONObject.NULL)
             })).toString())) { "TC2_CONGESTION_DECISION_NOT_DURABLE" }
         val allowedSignals = freshSignals.filter { signal ->
-            contextRank(signal)>0 &&
-                (signal.strategyProfile!=williamsTc2Profile ||
-                    congestion[signal.signalId]?.optBoolean("blocked",false)!=true)
+            contextRank(signal)>0 && congestionAdmission[signal.signalId]==null
         }
-        if(allowedSignals.isEmpty() && congestion.values.any { it.optBoolean("blocked",false) })
-            return rejectDecision(symbol,WILLIAMS_TC2_CONGESTION_BLOCKER+
-                ": new entry deferred; existing position STOP and management unchanged")
+        if(allowedSignals.isEmpty() && congestionAdmission.values.any { it!=null })
+            return rejectDecision(symbol,(congestionAdmission.values.firstOrNull { it!=null }
+                ?: WILLIAMS_TC2_CONGESTION_UNVERIFIED)+
+                ": no new risk; existing position STOP and management unchanged")
         // A pending re-anchor must never hide a contradictory confirmed
         // hypothesis from another enabled Williams edition.
         if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
