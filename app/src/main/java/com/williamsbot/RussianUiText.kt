@@ -156,6 +156,9 @@ internal fun russianLossResetExplanation(
 }
 
 private val russianBlockerPrefixes=linkedMapOf(
+    "SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY" to "Перед новым входом устарела подписанная сверка позиций и заявок Binance. Входная заявка не отправлена; требуется повторная свежая проверка биржи.",
+    "WILLIAMS_UNIFIED_DIRECTION_CONFLICT" to "На одной паре одновременно выявлены несовместимые сигналы LONG и SHORT на H1. Новая заявка не отправлена, пока направление не определено однозначно.",
+    "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE" to "После входа ещё нет пяти закрытых свечей H1 для расчёта переноса STOP по TC2. Перенос отложен; наличие текущего STOP подтверждается отдельно на Binance.",
     "ENTRY_PASSPORT_AUDIT_UNAVAILABLE" to "Не удалось сохранить паспорт заявки. Новая заявка не отправлялась; сопровождение позиций продолжается.",
     "H1_FRACTAL_TEETH_INVALID" to "Фрактал H1 больше не проходит проверку относительно Зубов Аллигатора.",
     "H1_BOOK_TRIGGER_ALREADY" to "Уровень входа H1 уже пройден. Требуется действующая формация с непробитым уровнем.",
