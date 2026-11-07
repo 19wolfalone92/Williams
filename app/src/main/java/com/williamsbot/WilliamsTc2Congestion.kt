@@ -42,19 +42,40 @@ internal val WILLIAMS_TC2_COMPLEX_PATTERNS=setOf(
     "W_X_Y_X_Z_ZIGZAG_COMBINATION_CANDIDATE"
 )
 
-/** No signal veto from arbitrary flatness alone or from an old/incomplete
- * W-X-Y label. Look only at confirmed, recent H1 fractal pivot geometry.
+/** No veto from flatness or an unresolved W-X-Y label.
+ *
+ * Important: a fully confirmed triangle/flat is a historical price event.
+ * It does NOT cease to exist merely because 12 more H1 bars have closed or
+ * the latest six pivots have shifted. Retain every confirmed candidate
+ * inside the bounded observed H1 history, and decide whether it is STILL
+ * ACTIVE only from subsequent CLOSED H1 price outside its own boundaries
+ * in williamsTc2CongestionEvidence. Never backdate "known_at".
+ *
+ * Only the last 120 alternating pivots are scanned, so this cannot turn a
+ * long-running Android scanner into an unbounded history computation.
+ * This bounded retention is project policy, NOT a Williams time cutoff.
  */
 internal fun williamsTc2RecentComplexPriceCandidates(
     anchors:List<WilliamsWaveAnchor>,asOf:Long
 ):List<WilliamsComplexEvidence> {
-    if(asOf<=0L || anchors.size<6 || anchors.any { it.knownAt>asOf || it.knownAt<it.extremeAt }) return emptyList()
-    val recentCutoff=asOf-12*WILLIAMS_H1_MS
-    return listOf("UP","DOWN").flatMap { side ->
-        detectWilliamsComplexWave(anchors,side,asOf)
-    }.filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
-        it.knownAt in recentCutoff..asOf && it.endAt<=asOf }
-        .distinctBy { listOf(it.pattern,it.startAt,it.endAt) }
+    if(asOf<=0L || anchors.size<6 || anchors.any {
+        it.kind !in setOf("LOW","HIGH") || !it.price.isFinite() ||
+            it.price<=0.0 || it.knownAt>asOf || it.knownAt<it.extremeAt
+    } || anchors.zipWithNext().any { (a,b) ->
+        a.kind==b.kind || a.extremeAt>=b.extremeAt || a.knownAt>b.knownAt
+    }) return emptyList()
+    val retained=anchors.takeLast(120)
+    val observed=mutableListOf<WilliamsComplexEvidence>()
+    for(prefixSize in 6..retained.size) {
+        val confirmedPrefix=retained.take(prefixSize)
+        for(side in listOf("UP","DOWN"))
+            observed+=detectWilliamsComplexWave(confirmedPrefix,side,asOf)
+                .filter { it.pattern in WILLIAMS_TC2_COMPLEX_PATTERNS &&
+                    it.knownAt in 1L..asOf && it.endAt<=asOf }
+    }
+    return observed.distinctBy { listOf(it.pattern,it.direction,it.startAt,it.endAt) }
+        .sortedWith(compareByDescending<WilliamsComplexEvidence> { it.knownAt }
+            .thenByDescending { it.endAt }).take(48)
 }
 
 
@@ -68,6 +89,7 @@ internal fun williamsTc2CongestionEvidence(
         .put("complex_correction_grammar_reference","RESEARCH_ELLIOTT_COMPLEX_PRICE_GRAMMAR")
         .put("classification_is_provisional",true)
         .put("numerical_thresholds_are_engineering",true)
+        .put("complex_candidate_retention","CONFIRMED_PRICE_PIVOT_PREFIXES_UNTIL_CLOSED_H1_BREAKOUT")
         .put("source","CLOSED_CONTIGUOUS_H1_CANDLES")
         .put("can_place_orders",false).put("can_close",false)
         .put("can_change_stops",false)
