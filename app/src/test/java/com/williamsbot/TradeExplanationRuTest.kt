@@ -56,6 +56,24 @@ class TradeExplanationRuTest {
         assertFalse(reconciled.contains("exchange_reconciled"))
     }
 
+    @Test fun realDeviceDiagnosticsGiveRussianReasonsWithoutInventingOrders() {
+        val stale = williamsRuRuntimeMessage(
+            "SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY: Binance account stale"
+        )
+        assertTrue(stale.contains("не отправлена"))
+        assertTrue(stale.contains("сверка"))
+        val conflict = williamsRuRuntimeMessage(
+            "WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for ADAUSDT; no order armed"
+        )
+        assertTrue(conflict.contains("несовместимые"))
+        assertTrue(conflict.contains("не отправлена"))
+        val trail = russianExecutionBlocker(
+            "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE"
+        )
+        assertTrue(trail.contains("пяти закрытых свечей"))
+        assertTrue(trail.contains("отдельно"))
+    }
+
     @Test fun provenanceAndManagementHaveSafeFallbacks() {
         assertTrue(russianTradeAuditEvidence("BINANCE_USDM_USER_TRADES", 4).contains("4"))
         assertTrue(russianTradeAuditEvidence("FUTURES_CAMPAIGN_SNAPSHOT", 0)
