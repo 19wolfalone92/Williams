@@ -43,7 +43,7 @@ jobs:
       - name: Validate repository release contract
         run: python3 ci_release_gate.py
 
-      - name: Probe real public USD-M Futures Demo clock, contracts and closed H1 on all 10 pairs
+      - name: Probe real public USD-M Futures Demo clock, contracts and closed H1 on all 15 pairs
         run: python3 tools/verify_public_futures_demo.py
 
       - name: Check optional CI Demo credentials
