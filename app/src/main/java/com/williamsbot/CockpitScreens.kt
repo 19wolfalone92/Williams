@@ -244,6 +244,25 @@ private fun ResponsiveDashboardPair(
     }
 }
 
+/** Read-only scanner truth: evaluation progress never authorizes an exchange order. */
+internal fun cockpitScannerHeadline(status: Status): String {
+    val total = status.scannerConfiguredSymbols.takeIf { it > 0 } ?: APPROVED_FUTURES_SYMBOLS.size
+    val runningScan = status.scannerScanning || status.scannerState == "RUNNING"
+    val completed = if (runningScan) status.scannerProgressSymbols else status.scannerSymbols
+    val count = completed.coerceIn(0, total)
+    val state = when (status.scannerState) {
+        "READY" -> "Анализ завершён"
+        "READY_BLOCKED" -> "Анализ завершён • входы заблокированы"
+        "RUNNING" -> "Анализ выполняется"
+        "PARTIAL", "PARTIAL_BLOCKED" -> "Анализ неполный • входы заблокированы"
+        "WAITING_FOR_HISTORY" -> "Загрузка истории H1"
+        "WAITING_FOR_MARKET_DATA", "WAITING_FOR_REST" -> "Ожидание котировок"
+        "FAILED", "ERROR" -> "Ошибка сканера"
+        "STOPPED" -> "Сканер остановлен"
+        else -> williamsRuStatus(status.scannerState)
+    }
+    return "$state · $count/$total пар"
+}
 @Composable
 internal fun CockpitDashboard(
     padding: PaddingValues, status: Status, candidates: List<Candidate>, message: String,
@@ -280,16 +299,36 @@ internal fun CockpitDashboard(
                 } }
             )
         }
-        item { Text("Активность бота", style = MaterialTheme.typography.titleLarge) }
-        val activeIntents = status.futuresIntents.filterNot(::isTerminalFuturesExitIntent)
-        items(activeIntents.take(4)) { intent ->
-            CockpitIntentCard(intent, status, onMarket)
+        item {
+            CockpitCard("Сканер рынка · TC2 / H1") {
+                Text(cockpitScannerHeadline(status), style = MaterialTheme.typography.titleMedium)
+                if (status.scannerState == "WAITING_FOR_HISTORY") {
+                    Text("Подготовлено историй H1: ${status.h1ReadySymbolCount}/${status.scannerConfiguredSymbols}",
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                }
+                if (status.running && status.scannerSymbols == 0 && !status.scannerScanning &&
+                    status.scannerState !in setOf("READY", "READY_BLOCKED")) {
+                    Text("⚠️ Сканирование ещё не подтверждено: отсутствие сделок не означает отсутствия сигналов на рынке.",
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+                }
+                if (status.scannerState in setOf("READY", "READY_BLOCKED")) {
+                    Text("LONG ${status.scannerLongCandidates} · SHORT ${status.scannerShortCandidates} · кандидатов ${candidates.size}",
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                }
+                if (status.scannerError != null && status.scannerState != "READY") {
+                    Text(williamsRuRuntimeMessage(status.scannerError),
+                        style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+                }
+                TextButton(onClick = { onMarket(candidates.firstOrNull()?.symbol ?: status.symbol) }) {
+                    Text("Открыть рынок →")
+                }
+            }
         }
-        if (activeIntents.isEmpty()) item {
-            CockpitCard("Наблюдение за рынком") {
-                Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/${status.scannerConfiguredSymbols} пар")
-                Text(candidates.firstOrNull()?.let { "${it.symbol}: ${russianExecutionBlocker(it.reason)}" }
-                    ?: "Подтверждённых торговых кампаний в текущем снимке нет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+        val activeIntents = status.futuresIntents.filterNot(::isTerminalFuturesExitIntent)
+        if (activeIntents.isNotEmpty()) {
+            item { Text("Активные заявки и позиции", style = MaterialTheme.typography.titleMedium) }
+            items(activeIntents.take(3)) { intent ->
+                CockpitIntentCard(intent, status, onMarket)
             }
         }
         item { controls() }
