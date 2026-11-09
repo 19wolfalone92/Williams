@@ -101,30 +101,33 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
     }
 
     @Test
-    fun timestampTextInAnUnrelatedErrorNeverAuthorizesMutationReplay() {
-        var posts = 0
-        val http = OkHttpClient.Builder().addInterceptor { chain ->
-            val request = chain.request()
-            val body = when (request.url.encodedPath) {
-                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
-                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
-                else -> {
-                    posts++
-                    """{"code":-1000,"msg":"upstream mentions -1021 but execution is unknown"}"""
+    fun ambiguousServerErrorNeverAuthorizesMutationReplayEvenWithTimestampCode() {
+        for (exchangeCode in listOf(-1000, -1021)) {
+            var posts = 0
+            val http = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                val body = when (request.url.encodedPath) {
+                    "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                    "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                    else -> {
+                        posts++
+                        """{"code":$exchangeCode,"msg":"upstream mentions -1021 but execution is unknown"}"""
+                    }
                 }
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                    .code(if (request.url.encodedPath == "/fapi/v1/order") 503 else 200)
+                    .message("test").body(body.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            try {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
+                    .newOrder("BTCUSDT", "BUY", "0.01", false, "timestamp_ambiguous")
+                fail("Ambiguous order must fail")
+            } catch (expected: FuturesHttpException) {
+                assertEquals(503, expected.statusCode)
+                assertEquals(exchangeCode, expected.exchangeCode)
             }
-            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
-                .code(if (request.url.encodedPath == "/fapi/v1/order") 503 else 200)
-                .message("test").body(body.toResponseBody("application/json".toMediaType())).build()
-        }.build()
-        try {
-            BinanceUsdMFuturesTestnetAdapter("key", "secret", http)
-                .newOrder("BTCUSDT", "BUY", "0.01", false, "timestamp_text")
-            throw AssertionError("ambiguous order must fail")
-        } catch (expected: FuturesHttpException) {
-            assertEquals(-1000, expected.exchangeCode)
+            assertEquals(1, posts)
         }
-        assertEquals(1, posts)
     }
 
     @Test

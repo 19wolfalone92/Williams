@@ -23,8 +23,8 @@ internal class FuturesHttpException(
     val requestPath: String? = null
 ) : IOException("Binance USD-M Futures HTTP $statusCode: $detail")
 
-/** Thrown only before entering the protective STOP POST transport. A failed
- * GET/preflight cannot be confused with a lost acknowledgement after POST. */
+/** No protective STOP could have been accepted: transport was never entered
+ * or Binance definitively rejected every POST during timestamp validation. */
 internal class FuturesProtectionNotSubmittedException(cause: Exception) :
     IOException("Protective STOP was not submitted: " + (cause.message ?: cause.javaClass.simpleName), cause)
 
@@ -764,15 +764,13 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         } catch (failure: Exception) {
             throw FuturesProtectionNotSubmittedException(failure)
         }
-        var postStarted = false
+        var outcomeUnknown = false
         return try {
             JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true) {
-                postStarted = true
+                outcomeUnknown = it
             })
         } catch (failure: Exception) {
-            // Signing and rate admission can fail after the protection ID is
-            // journaled, but before any order request reaches the transport.
-            if (!postStarted) throw FuturesProtectionNotSubmittedException(failure)
+            if (!outcomeUnknown) throw FuturesProtectionNotSubmittedException(failure)
             throw failure
         }
     }
@@ -785,8 +783,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         path: String,
         params: Map<String, String>,
         signed: Boolean,
-        onTransportStarting: (() -> Unit)? = null
+        onTransportUnresolved: ((Boolean) -> Unit)? = null
     ): String {
+        val onTransportStarting = onTransportUnresolved?.let { report -> { report(true) } }
         var timestampResynced = false
         var safeReadAttempt = 0
         val safeReadDelaysMs = longArrayOf(250L, 500L, 1_000L)
@@ -798,13 +797,16 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 // Binance -1021 explicitly rejects a stale timestamp. It is the only
                 // condition permitting a single signed-mutation retry because the exchange
                 // has definitively rejected that request before applying the mutation.
-                if (signed && !timestampResynced &&
-                    error is FuturesHttpException && error.exchangeCode == -1021
+                if (signed && error is FuturesHttpException && error.statusCode == 400 &&
+                    error.exchangeCode == -1021 && error.requestPath == path
                 ) {
-                    timestampResynced = true
+                    onTransportUnresolved?.invoke(false)
                     synchronized(clockLock) { timeSynced = false }
-                    serverTime() // only an explicit rejection allows one mutation retry
-                    continue
+                    if (!timestampResynced) {
+                        timestampResynced = true
+                        serverTime()
+                        continue
+                    }
                 }
                 // Reads are idempotent. Retry transient transport/5xx failures only for GET;
                 // never retry POST/DELETE on timeout or 5xx because exchange execution may

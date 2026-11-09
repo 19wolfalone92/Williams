@@ -2312,11 +2312,9 @@ internal class NativeFuturesCampaignCoordinator(
                         } catch (failure: Exception) {
                             anyUnprotected = true
                             if(failure is FuturesProtectionNotSubmittedException) {
-                                // The adapter proves that its STOP POST was never
-                                // entered. Restore a retryable lifecycle, rather
-                                // than querying a phantom id forever. If mark has
-                                // crossed the stop, the next reconciliation emits
-                                // the existing NEVER_SUBMITTED safety capability.
+                                // No STOP POST could have been accepted. Restore
+                                // the retryable state so the next reconciliation
+                                // can recheck MARK_PRICE before acting.
                                 matchingIntent.put("protection_status","NOT_SUBMITTED")
                                     .put("protection_preflight_rejected_at_ms",clock())
                                     .put("protection_post_attempted",false)
