@@ -14,8 +14,12 @@ import java.util.concurrent.TimeUnit
 /** Single source of truth for the chart, market-data transport and execution universe. */
 internal val APPROVED_FUTURES_SYMBOLS = listOf(
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT"
 )
+
+/** Preserve the original ten concurrent campaign slots when scanning fifteen markets. */
+internal const val MAX_FUTURES_CAMPAIGNS = 10
 internal val APPROVED_FUTURES_KLINE_INTERVALS = listOf(
     "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
     "6h", "8h", "12h", "1d", "3d", "1w", "1M"
