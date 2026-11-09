@@ -76,8 +76,8 @@ def main() -> None:
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
         "FUTURES_FORCE_ONE_WAY=true",
-        "FUTURES_APPROVED_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT",
-        "WILLIAMS_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT",
+        "FUTURES_APPROVED_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,SUIUSDT,NEARUSDT,DOTUSDT,TRXUSDT,BCHUSDT",
+        "WILLIAMS_SYMBOLS=BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,LINKUSDT,AVAXUSDT,LTCUSDT,SUIUSDT,NEARUSDT,DOTUSDT,TRXUSDT,BCHUSDT",
         "EXECUTION_TIMEFRAME=1h",
         "STRUCTURAL_TIMEFRAMES=1d,4h,1h,15m",
         "ALLOW_LONG=true",
@@ -91,7 +91,7 @@ def main() -> None:
         must(env, needle, ".env.example")
 
     cfg = read("trading_config.py")
-    must(cfg, "WILLIAMS_SYMBOLS must match the approved ten-symbol Futures universe", "trading_config.py")
+    must(cfg, "WILLIAMS_SYMBOLS must match the approved fifteen-symbol Futures universe", "trading_config.py")
     must(cfg, "AUTO_SCAN_SYMBOLS cannot override the fixed Futures universe", "trading_config.py")
     must(cfg, "EXECUTION_TIMEFRAME must be H1", "trading_config.py")
     must(cfg, "STRUCTURAL_TIMEFRAMES must be D1,H4,H1,M15", "trading_config.py")
@@ -291,8 +291,14 @@ def main() -> None:
         must(server, needle, "server.py")
 
     legacy_runtime = read("app/src/main/java/com/williamsbot/StandaloneRuntime.kt")
-    must(legacy_runtime, '"DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"', "StandaloneRuntime.kt")
-    must(legacy_runtime, "private val maxScanSymbols = 10", "StandaloneRuntime.kt")
+    futures_market_data = read("app/src/main/java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
+    must(futures_market_data, '"SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT"', "BinanceUsdMFuturesMarketData.kt")
+    must(futures_market_data, "internal const val MAX_FUTURES_CAMPAIGNS = 10", "BinanceUsdMFuturesMarketData.kt position-slot contract")
+    must(legacy_runtime, "private val coreSymbols = APPROVED_FUTURES_SYMBOLS", "StandaloneRuntime.kt one-source universe")
+    must(legacy_runtime, "private val maxScanSymbols = coreSymbols.size", "StandaloneRuntime.kt 15-symbol scanner")
+    must(legacy_runtime, "get() = MAX_FUTURES_CAMPAIGNS", "StandaloneRuntime.kt unchanged 10-position ceiling")
+    must(coordinator_editions, "maxPositions = MAX_FUTURES_CAMPAIGNS", "NativeFuturesCampaignCoordinator.kt unchanged 10-position ceiling")
+    must(cfg, "MAX_FUTURES_OPEN_POSITIONS = 10", "trading_config.py unchanged position ceiling")
     must(legacy_runtime, "in-process Futures Runtime API; no remote execution dependency", "StandaloneRuntime.kt")
     must(legacy_runtime, "private val executionStore = FuturesExecutionStore(context)", "StandaloneRuntime.kt")
     must(legacy_runtime, "wss://demo-fstream.binance.com/market/stream?streams=", "StandaloneRuntime.kt")
