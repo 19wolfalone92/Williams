@@ -28,8 +28,8 @@ def candles(start=360_000_000):
              start + (i + 1) * hour - 1] for i in range(3)]
 
 
-def test_exactly_ten_real_usdt_perpetual_contracts_checked():
-    assert len(probe.SYMBOLS) == 10
+def test_exactly_fifteen_real_usdt_perpetual_contracts_checked():
+    assert len(probe.SYMBOLS) == 15
     assert probe.DEMO == "https://demo-fapi.binance.com"
     probe.validate_contracts(contracts())
     absent = contracts()
@@ -86,12 +86,12 @@ def test_full_public_probe_never_claims_signed_demo_account_or_stop_proof():
     with patch.object(probe, "read_public", side_effect=get):
         report = probe.run()
     assert report["result"] == "PUBLIC_DEMO_FUTURES_READ_ONLY_PASS"
-    assert report["checked_usdt_perpetuals"] == 10
+    assert report["checked_usdt_perpetuals"] == 15
     assert report["signed_account_verified"] is False
     assert report["orders_executed"] is False
     assert report["protective_stops_verified"] is False
     assert report["physical_android_recovery_verified"] is False
-    assert len([x for x in observed if x[0] == "/fapi/v1/klines"]) == 10
+    assert len([x for x in observed if x[0] == "/fapi/v1/klines"]) == 15
     assert set(x[0] for x in observed) == {
         "/fapi/v1/time", "/fapi/v1/exchangeInfo", "/fapi/v1/klines"
     }
