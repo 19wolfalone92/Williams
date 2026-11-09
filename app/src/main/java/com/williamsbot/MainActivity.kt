@@ -486,6 +486,9 @@ private class LocalRuntimeApi(context: Context) {
     fun get(path: String): String =
         StandaloneRuntime.request(appContext, "GET", path, null)
 
+    /** Avoid allocating a second giant JSON String and reparsing it on Android. */
+    fun diagnosticsReport(): JSONObject = StandaloneRuntime.diagnosticsReport(appContext)
+
     fun post(path: String, body: String? = null): String =
         StandaloneRuntime.request(appContext, "POST", path, body)
 
@@ -939,7 +942,9 @@ fun WilliamsApp(context: Context) {
         scope.launch(Dispatchers.IO) {
             try {
                 runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "DIAGNOSTICS").put("detail", "Run requested").toString()) }
-                val report=JSONObject(api.get("/api/v1/diagnostics?run=true"))
+                // Preserve the original evidence for streaming ZIP export. The
+                // legacy String dispatch caused a confirmed Java heap OOM.
+                val report=api.diagnosticsReport()
                 report.put("diagnostic_comparison",
                     DiagnosticsArchive.compareWithLatest(context,report))
                 // Archiving failure is a separate error from successful
@@ -948,7 +953,10 @@ fun WilliamsApp(context: Context) {
                     DiagnosticsArchive.writeLatest(context,report)
                 }
                 withContext(Dispatchers.Main) {
-                    diagnosticReport=report
+                    // The screen needs checks/summary, not the 26+ MB
+                    // research diaries and full decision history. ZIP already
+                    // holds the complete report if stored succeeded.
+                    diagnosticReport=williamsDiagnosticUiSnapshot(report)
                     diagnosticsArchiveReady=stored.isSuccess
                     val label=williamsRuStatus(report.optJSONObject("diagnostic_summary")
                         ?.optString("overall","NOT_VERIFIED") ?: "NOT_VERIFIED")
