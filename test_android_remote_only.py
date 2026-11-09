@@ -373,8 +373,8 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
 
     assert "val riskPerTrade: Double = 0.0025" in main
     assert "val maxDailyLoss: Double = 0.03" in main
-    assert "val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size" in main
-    assert "get() = APPROVED_FUTURES_SYMBOLS.size" in runtime
+    assert "val maxOpenPositions: Int = MAX_FUTURES_CAMPAIGNS" in main
+    assert "get() = MAX_FUTURES_CAMPAIGNS" in runtime
     assert "val maxTotalRiskPct: Double = 0.006" in main
     assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
@@ -536,7 +536,7 @@ def test_android_campaign_lifecycle_is_separate_from_exchange_order_status():
     assert '"FILL_CONFIRMATION_PENDING"' in coordinator
     assert "isEntryCampaignReserved(intent)" in coordinator
     assert "futuresPositionSlotBlocker(" in coordinator
-    assert "maxPositions = allowedSymbols.size" in coordinator
+    assert "maxPositions = MAX_FUTURES_CAMPAIGNS" in coordinator
     assert "latestEntryIntentIndex(intents, symbol)" in coordinator
     flat_cleanup = coordinator.index("// Once Binance reports the symbol flat")
     terminal_write = coordinator.index('intent.put("campaign_status", "CLOSED_OR_STOPPED")', flat_cleanup)
