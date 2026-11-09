@@ -78,6 +78,30 @@ internal fun publicFuturesClockNeedsRefresh(
     return elapsedMs >= 30_000L || kotlin.math.abs(wallElapsedMs - elapsedMs) > 1_000L
 }
 
+/**
+ * Refresh a healthy public Binance time sample well before the strict 30-second
+ * admission TTL. A slow/failed refresh still NEVER extends the old sample.
+ * This is deliberately distinct from publicFuturesClockNeedsRefresh(), which
+ * remains the fail-closed freshness rule for UTC risk and closed candles.
+ */
+internal fun publicFuturesClockNeedsEarlyRenewal(
+    anchorWallMs: Long, anchorMonotonicNs: Long,
+    wallNowMs: Long, monotonicNowNs: Long
+): Boolean = publicFuturesClockNeedsRefresh(
+    anchorWallMs, anchorMonotonicNs, wallNowMs, monotonicNowNs
+) || (monotonicNowNs - anchorMonotonicNs) / 1_000_000L >= 20_000L
+
+/** Reject slow/asymmetric or wall-clock-unstable public time probes. */
+internal fun publicFuturesClockSampleUsable(
+    serverTimeMs: Long, monotonicRttMs: Long, wallElapsedMs: Long
+): Boolean = serverTimeMs > 0L && monotonicRttMs in 0L..3_000L &&
+    kotlin.math.abs(wallElapsedMs - monotonicRttMs) <= 1_000L
+
+/** Prevent a failed public-time endpoint from stampeding concurrent scanner/UI reads. */
+internal fun publicFuturesClockProbeDue(lastAttemptNs: Long, nowNs: Long): Boolean =
+    lastAttemptNs == Long.MIN_VALUE || nowNs < lastAttemptNs ||
+        nowNs - lastAttemptNs >= 5_000_000_000L
+
 internal class BinanceUsdMFuturesMarketData(
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -86,9 +110,20 @@ internal class BinanceUsdMFuturesMarketData(
     private val rateGuard: BinanceRateGuard? = null
 ) {
     private val base = "https://demo-fapi.binance.com"
+    // The UTC-day safety pulse must NOT inherit four generic market-GET
+    // retries, which can stall for >30s on a dead mobile radio. One bounded
+    // unsigned GET is retried by the independent 5-second watchdog tick.
+    private val clockHttp = http.newBuilder()
+        .callTimeout(5, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
     @Volatile private var lastServerSyncMonotonicNs = Long.MIN_VALUE
+    // Bounded clock-probe retries: a dead radio cannot stall every caller.
+    @Volatile private var lastClockProbeAttemptNs = Long.MIN_VALUE
     // Public market-data GETs only. Signed account, STOP and recovery transport
     // use a separate adapter and are never suppressed by this cooldown.
     @Volatile private var transportRetryNotBeforeNs = Long.MIN_VALUE
@@ -108,24 +143,95 @@ internal class BinanceUsdMFuturesMarketData(
 
     /** Exchange clock is authoritative for candle closure and stale-cache decisions. */
     fun exchangeNowMs(): Long {
-        if (publicFuturesClockNeedsRefresh(
+        if (publicFuturesClockNeedsEarlyRenewal(
                 lastServerSyncLocalMs, lastServerSyncMonotonicNs,
                 System.currentTimeMillis(), System.nanoTime())) {
             synchronized(this) {
                 val before = System.currentTimeMillis()
-                if (publicFuturesClockNeedsRefresh(
+                val beforeMono = System.nanoTime()
+                if (publicFuturesClockNeedsEarlyRenewal(
                         lastServerSyncLocalMs, lastServerSyncMonotonicNs,
-                        before, System.nanoTime())) {
-                    val remote = getObject("$base/fapi/v1/time").optLong("serverTime", 0L)
-                    val after = System.currentTimeMillis()
-                    if (remote <= 0L) throw IOException("USD-M Futures server time unavailable")
-                    serverOffsetMs = remote - (before + (after - before) / 2L)
-                    lastServerSyncLocalMs = after
-                    lastServerSyncMonotonicNs = System.nanoTime()
+                        before, beforeMono)) {
+                    val trulyExpired = publicFuturesClockNeedsRefresh(
+                        lastServerSyncLocalMs, lastServerSyncMonotonicNs, before, beforeMono
+                    )
+                    if (!publicFuturesClockProbeDue(lastClockProbeAttemptNs, beforeMono)) {
+                        // Fail immediately on an expired sample instead of sending
+                        // one blocked /time GET per concurrent scanner/UI request.
+                        if (trulyExpired) throw IOException("USD-M Futures clock expired; bounded probe retry pending")
+                    } else {
+                        lastClockProbeAttemptNs = beforeMono
+                        try {
+                            val remote = fetchServerTimeOnce()
+                            val afterMono = System.nanoTime()
+                            val after = System.currentTimeMillis()
+                            val rttMs = (afterMono - beforeMono) / 1_000_000L
+                            if (!publicFuturesClockSampleUsable(remote, rttMs, after - before)) {
+                                throw IOException("USD-M Futures server clock sample unverified: " +
+                                    "rtt_ms=$rttMs; wall_elapsed_ms=${after - before}")
+                            }
+                            // Never overstate server time across an asymmetric
+                            // mobile response; this may safely delay an UTC reset.
+                            serverOffsetMs = remote - after
+                            lastServerSyncLocalMs = after
+                            lastServerSyncMonotonicNs = afterMono
+                        } catch (failure: Exception) {
+                            // Early proactive refresh is opportunistic. Its
+                            // failure cannot invalidate a still-good 30s sample.
+                            // Once it expires, the caller must fail closed.
+                            if (publicFuturesClockNeedsRefresh(
+                                    lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                                    System.currentTimeMillis(), System.nanoTime())) throw failure
+                        }
+                    }
                 }
             }
         }
+        // The sample may have expired while a network read was in flight.
+        // No caller receives unverified UTC time for candles or risk decisions.
+        if (publicFuturesClockNeedsRefresh(
+                lastServerSyncLocalMs, lastServerSyncMonotonicNs,
+                System.currentTimeMillis(), System.nanoTime())
+        ) throw IOException("USD-M Futures clock expired; exchange UTC unverified")
         return System.currentTimeMillis() + serverOffsetMs
+    }
+
+    /**
+     * SQLite can hold 160 recent candles but still contain an internal hole.
+     * A merely fresh last candle is NOT a valid continuous H1/M15 working set.
+     * Verify real exchange-open boundaries (including calendar months), without
+     * interpolating missing candles or using a forming future bar.
+     */
+    internal fun nativeCandleTimelineContiguous(openTimes: List<Long>, interval: String): Boolean {
+        if (openTimes.isEmpty() || openTimes.any { it < 0L }) return false
+        return openTimes.zipWithNext().all { (left, right) ->
+            val end = runCatching { klineCloseTimeMs(left, interval) }.getOrNull()
+            end != null && end < Long.MAX_VALUE && right == end + 1L
+        }
+    }
+
+    /**
+     * Single bounded unsigned clock probe. Generic ticker/klines retries and
+     * their transport cooldown cannot starve the independent UTC risk pulse.
+     * Rate-limit cooldown is still respected; no exchange mutation occurs.
+     */
+    private fun fetchServerTimeOnce(): Long {
+        rateGuard?.beforeRequest(maximumWaitMs = 1_000L)
+        val req = Request.Builder().url("$base/fapi/v1/time")
+            .header("Accept", "application/json").get().build()
+        clockHttp.newCall(req).execute().use { response ->
+            rateGuard?.observe(response.headers, response.code)
+            if (!response.isSuccessful) {
+                throw IOException("USD-M Futures clock HTTP ${response.code}; admission time remains unverified")
+            }
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) throw IOException("USD-M Futures clock response is empty")
+            return try {
+                JSONObject(body).optLong("serverTime", 0L)
+            } catch (failure: org.json.JSONException) {
+                throw IOException("Malformed USD-M Futures server-time response", failure)
+            }
+        }
     }
 
     val approvedSymbols: Set<String> = APPROVED_FUTURES_SYMBOLS.toSet()
