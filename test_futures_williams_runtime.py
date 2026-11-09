@@ -655,11 +655,12 @@ def test_five_magic_bullets_core_math():
     assert state.all_five
 
 
-def test_futures_universe_uses_the_configured_default_ten_when_env_is_absent(monkeypatch):
+def test_futures_universe_uses_the_configured_default_fifteen_when_env_is_absent(monkeypatch):
     monkeypatch.delenv("FUTURES_APPROVED_SYMBOLS", raising=False)
     approved = [
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+        "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT",
     ]
 
     class Client:
@@ -721,7 +722,7 @@ def test_futures_universe_rejects_duplicates_and_exchange_ineligible_symbols(mon
     assert symbols[-1] in scanner.last_universe_error
 
 
-def test_futures_universe_returns_exact_approved_ten_without_dynamic_additions(monkeypatch):
+def test_futures_universe_returns_exact_approved_fifteen_without_dynamic_additions(monkeypatch):
     symbols = list(DEFAULT_FUTURES_SYMBOLS)
     monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(symbols))
     rows = [{
@@ -753,8 +754,8 @@ def test_futures_universe_returns_exact_approved_ten_without_dynamic_additions(m
 
     scanner = FuturesWilliamsScanner(Client(), interval="5m")
     assert scanner.universe(limit=40) == symbols
-    assert len(scanner.universe()) == 10
-    assert len(set(scanner.universe())) == 10
+    assert len(scanner.universe()) == 15
+    assert len(set(scanner.universe())) == 15
     assert scanner.last_universe_error is None
 
 def test_dry_run_still_scans_market_data_but_never_arms_orders():
@@ -1157,7 +1158,7 @@ def test_default_config_keeps_intraday_h1_and_market_specific_universes():
     assert futures.execution_timeframe == "1h"
     assert futures.structural_timeframes == ("1d", "4h", "1h", "15m")
     assert futures.symbols == DEFAULT_FUTURES_SYMBOLS
-    assert len(futures.symbols) == 10
+    assert len(futures.symbols) == 15
     assert futures.market == "futures_usdt"
     assert futures.futures_leverage == 2
     assert futures.futures_margin_type == "ISOLATED"
@@ -1210,11 +1211,11 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
     assert _pending_entry_preflight_reason(short_pending, short_intent, 203.1, now_ms=2000) == "short_setup_invalidated_before_trigger"
 
 
-def test_scanner_reports_all_ten_evaluated_symbols_and_both_directions(monkeypatch):
+def test_scanner_reports_all_fifteen_evaluated_symbols_and_both_directions(monkeypatch):
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", "TC2_THREE_WISE_MEN")
     scanner = FuturesWilliamsScanner(object(), interval="1h")
     symbols = list(DEFAULT_FUTURES_SYMBOLS)
-    scanner.universe = lambda limit=10: symbols
+    scanner.universe = lambda limit=15: symbols
     scanner.analyse = lambda symbol: [
         SimpleNamespace(
             symbol=symbol,
@@ -1232,13 +1233,13 @@ def test_scanner_reports_all_ten_evaluated_symbols_and_both_directions(monkeypat
 
     candidates = scanner.scan()
 
-    assert len(scanner.symbols) == 10
+    assert len(scanner.symbols) == 15
     assert scanner.last_scan_status["state"] == "COMPLETE"
-    assert scanner.last_scan_status["configured_symbols"] == 10
-    assert scanner.last_scan_status["evaluated_symbols"] == 10
+    assert scanner.last_scan_status["configured_symbols"] == 15
+    assert scanner.last_scan_status["evaluated_symbols"] == 15
     assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
     assert candidates[0].score == 61.0
-    assert len(candidates) == 20
+    assert len(candidates) == 30
 
 
 def test_futures_config_rejects_symbol_universe_drift():
@@ -1257,20 +1258,21 @@ def test_futures_config_rejects_symbol_universe_drift():
         })
 
 
-def test_futures_config_keeps_fixed_ten_symbols_even_when_auto_alias_is_used():
+def test_futures_config_keeps_fixed_fifteen_symbols_even_when_auto_alias_is_used():
     config = TradingConfig.from_env({
         "BINANCE_MARKET": "futures_usdt",
         "WILLIAMS_SYMBOLS": "ALL",
         "AUTO_SCAN_SYMBOLS": "AUTO",
     })
     assert config.symbols == DEFAULT_FUTURES_SYMBOLS
-    assert len(config.symbols) == 10
+    assert len(config.symbols) == 15
 
 
-def test_futures_universe_rejects_unapproved_ten_symbol_substitution(monkeypatch):
+def test_futures_universe_rejects_unapproved_fifteen_symbol_substitution(monkeypatch):
     substituted = [
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "NOTLTCUSDT",
+        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+        "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "NOTBCHUSDT",
     ]
     monkeypatch.setenv("FUTURES_APPROVED_SYMBOLS", ",".join(substituted))
 
@@ -1280,7 +1282,7 @@ def test_futures_universe_rejects_unapproved_ten_symbol_substitution(monkeypatch
 
     scanner = FuturesWilliamsScanner(Client(), interval="1h")
     assert scanner.universe() == []
-    assert "canonical ten-symbol" in scanner.last_universe_error
+    assert "canonical fifteen-symbol" in scanner.last_universe_error
 
 
 def test_futures_boolean_parser_matches_configuration_conventions(monkeypatch):
