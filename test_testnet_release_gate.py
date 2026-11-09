@@ -58,6 +58,7 @@ GATE_STEPS = (
 APPROVED_FUTURES_SYMBOLS = (
     "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
     "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+    "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT",
 )
 
 
@@ -123,7 +124,7 @@ def run_testnet_read_only(symbol: str = "BTCUSDT") -> dict:
         )
     requested_symbol = symbol.upper()
     if requested_symbol not in APPROVED_FUTURES_SYMBOLS:
-        raise RuntimeError(f"{requested_symbol}: outside the approved ten-symbol Futures universe")
+        raise RuntimeError(f"{requested_symbol}: outside the approved fifteen-symbol Futures universe")
 
     # Synchronize the client's signed-request clock before the account read.
     initial_clock = client.sync_time()
@@ -429,7 +430,7 @@ def test_read_only_gate_rejects_symbol_outside_approved_universe(monkeypatch):
     monkeypatch.setenv("TESTNET", "true")
     monkeypatch.setenv("BINANCE_API_KEY", "test-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
-    with __import__("pytest").raises(RuntimeError, match="outside the approved ten-symbol"):
+    with __import__("pytest").raises(RuntimeError, match="outside the approved fifteen-symbol"):
         run_testnet_read_only("NOTUSDT")
 
 
