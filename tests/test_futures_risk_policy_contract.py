@@ -1,13 +1,13 @@
-"""Regression guards for the approved ten-symbol Futures portfolio risk profile."""
+"""Regression guards for 15 approved Futures symbols and unchanged portfolio risk."""
 from trading_config import DEFAULT_FUTURES_SYMBOLS, DEFAULT_STRUCTURAL_TFS, TradingConfig
 
 
-def test_default_futures_profile_allows_ten_symbols_and_caps_daily_loss_at_three_percent():
+def test_default_futures_profile_allows_fifteen_symbols_and_caps_daily_loss_at_three_percent():
     config = TradingConfig.from_env({})
 
     assert config.market == "futures_usdt"
     assert config.symbols == DEFAULT_FUTURES_SYMBOLS
-    assert len(config.symbols) == 10
+    assert len(config.symbols) == 15
     assert config.execution_timeframe == "1h"
     assert config.structural_timeframes == DEFAULT_STRUCTURAL_TFS
     assert config.allow_long is True
