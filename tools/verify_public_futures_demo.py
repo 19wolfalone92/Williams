@@ -13,8 +13,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 DEMO = "https://demo-fapi.binance.com"
-SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-           "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
+from trading_config import DEFAULT_FUTURES_SYMBOLS
+
+# One canonical approved trading universe; the probe MUST reject missing contracts.
+SYMBOLS = DEFAULT_FUTURES_SYMBOLS
 HOUR_MS = 3_600_000
 
 
