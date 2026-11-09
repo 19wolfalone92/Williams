@@ -11114,7 +11114,9 @@ private class NativeEngine(
             .put("market_metadata_warning",scannerMarketMetadataWarning ?: JSONObject.NULL)
             .put("h1_scanner_history_ready",readOnlyH1Ready)
             .put("h1_ready_symbol_count",h1HistoryReadyCount)
+            // Historical field retained for old diagnostic consumers.
             .put("h1_all_ten_ready",historyReady)
+            .put("h1_all_approved_ready",historyReady)
             .put("optional_context_history_ready",optionalContextHistoryReady)
             .put("run_id", scanRunId)
             .put("progress_symbols", scanProgressSymbols)
@@ -12006,9 +12008,11 @@ private class NativeEngine(
             .put("scanner_scanning", scan.optBoolean("scanning"))
             .put("scanner_error", scan.opt("scanner_error") ?: JSONObject.NULL)
             .put("scanner_progress_symbols", scan.optInt("progress_symbols"))
-            .put("scanner_progress_total", scan.optInt("progress_total", 10))
+            .put("scanner_progress_total", scan.optInt("progress_total", coreSymbols.size))
             .put("scanner_configured_symbols", scan.optInt("progress_total", coreSymbols.size))
             .put("scanner_universe", scan.optJSONArray("scan_symbols") ?: JSONArray())
+            .put("h1_ready_symbol_count",scan.optInt("h1_ready_symbol_count"))
+            .put("h1_all_approved_ready",scan.optBoolean("h1_all_approved_ready"))
             .put("scanner_symbols", scan.optInt("symbols_scanned"))
             .put("allow_long", true).put("allow_short", true)
         val coordinator = captured.optJSONObject("futures_runtime") ?: JSONObject()
@@ -12282,7 +12286,7 @@ private class NativeEngine(
                 "сигнала и окончательное решение D1/H4, риска и Binance. " +
                 "Разбивка по книгам — наблюдаемость кандидатов, не доказательство допуска ордеров."))
         tests.put(JSONObject().put("id", "DATA-06").put("domain", "strategy")
-            .put("name", "Что бот видит на D1/H6/H4/H1/M15 по 10 парам")
+            .put("name", "Что бот видит на D1/H6/H4/H1/M15 по ${coreSymbols.size} парам")
             .put("severity", when {
                 inspectedChartSymbols.size != coreSymbols.size -> "NOT_VERIFIED"
                 chartReadingAudit.length() != coreSymbols.size * 5 -> "NOT_VERIFIED"
