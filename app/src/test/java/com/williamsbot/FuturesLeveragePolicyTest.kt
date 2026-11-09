@@ -11,12 +11,12 @@ class FuturesLeveragePolicyTest {
         {"notionalFloor":1000,"notionalCap":10000,"initialLeverage":10,"maintMarginRatio":0.01}
     ]}""")
 
-    @Test fun settingsRoundTripAllTenSymbolsAndInheritDefault() {
+    @Test fun settingsRoundTripAllFifteenSymbolsAndInheritDefault() {
         val overrides = BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.withIndex()
             .associate { it.value to it.index + 1 }
         val original = FuturesLeverageSettings(5, overrides)
         assertEquals(original, FuturesLeverageSettings.fromJson(original.toJson()))
-        assertEquals(10, original.resolvedJson().length())
+        assertEquals(15, original.resolvedJson().length())
         assertEquals(5, FuturesLeverageSettings(5).forSymbol("BTCUSDT"))
         assertEquals(3, FuturesLeverageSettings(5, mapOf("BTCUSDT" to 3)).forSymbol("BTCUSDT"))
     }
