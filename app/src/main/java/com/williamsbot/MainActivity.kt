@@ -1789,7 +1789,7 @@ private fun ScanSummaryCard(
                         "PARTIAL", "PARTIAL_BLOCKED" -> "Проверено " + status.scannerSymbols + "/" +
                             status.scannerConfiguredSymbols + "; новые входы заблокированы"
                         "WAITING_FOR_HISTORY" -> "Ожидание закрытой истории H1: " +
-                            (status.scannerError ?: "нужно загрузить историю для 10 контрактов")
+                            (status.scannerError ?: "нужно загрузить историю для ${status.scannerConfiguredSymbols} контрактов")
                         "BLOCKED_ACCOUNT" -> "Баланс/счёт Futures заблокировал сканирование: " +
                             (status.scannerError ?: "проверка аккаунта не пройдена")
                         "WAITING_FOR_MARKET_DATA", "WAITING_FOR_REST" ->
@@ -2297,7 +2297,7 @@ private fun MarketChartPanel(
                 Text(formatChartPrice(livePrice),
                     color = AppColors.primary, fontWeight = FontWeight.Bold)
             }
-            Text("Бот независимо сканирует все 10 контрактов. Здесь показан только выбранный рынок.",
+            Text("Бот сканирует ${status.scannerConfiguredSymbols} контрактов. Здесь показан выбранный рынок.",
                 color = AppColors.textMuted, style = MaterialTheme.typography.bodySmall)
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -3067,7 +3067,7 @@ private fun SettingsScreen(
                     )
 
                     InfoRow("Управление исполнением", "Автономный телефон • Binance напрямую")
-                    InfoRow("Торговые пары сканера", "USDⓈ-M Futures • 15 контрактов USDT")
+                    InfoRow("Торговые пары сканера", "USDⓈ-M Futures • ${APPROVED_FUTURES_CHART_SYMBOLS.size} контрактов USDT")
                     InfoRow("Масштабы", "D1/H4 — контекст • H1 — сигналы WM1/WM2/WM3 • M15 не требуется для входа")
                 }
             }
