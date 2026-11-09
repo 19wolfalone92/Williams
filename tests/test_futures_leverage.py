@@ -28,13 +28,13 @@ def test_invalid_leverage_is_rejected_instead_of_silently_clamped(value):
 def test_global_leverage_is_not_capped_at_two(leverage):
     config = TradingConfig.from_env({"FUTURES_LEVERAGE": str(leverage)})
     assert all(config.leverage_for(symbol) == leverage for symbol in DEFAULT_FUTURES_SYMBOLS)
-    assert config.allow_long and config.allow_short and len(config.symbols) == 10
+    assert config.allow_long and config.allow_short and len(config.symbols) == 15
 
 
 def test_per_symbol_settings_survive_configuration_and_do_not_change_risk_caps():
     overrides = ",".join(f"{symbol}:{i + 1}" for i, symbol in enumerate(DEFAULT_FUTURES_SYMBOLS))
     config = TradingConfig.from_env({"FUTURES_LEVERAGE": "5", "FUTURES_SYMBOL_LEVERAGES": overrides})
-    assert [config.leverage_for(s) for s in DEFAULT_FUTURES_SYMBOLS] == list(range(1, 11))
+    assert [config.leverage_for(s) for s in DEFAULT_FUTURES_SYMBOLS] == list(range(1, 16))
     assert config.risk_per_trade_pct == 0.0025
     assert config.max_total_risk_pct == 0.006
     assert config.max_daily_loss_pct == 0.03
