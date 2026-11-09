@@ -172,9 +172,12 @@ internal fun CockpitFreshness(status: Status) {
 @Composable
 internal fun CockpitReadiness(status: Status) {
     val r = status.cockpitReadiness
+    var expanded by rememberSaveable { mutableStateOf(false) }
     CockpitCard("BINANCE FUTURES TESTNET") {
-        CockpitField("Движок", if (status.running) "Работает" else "Остановлен", if (status.running) AppColors.green else AppColors.amber)
-        CockpitField("Связь", if (r.optBoolean("technical_ready")) "Готова" else "Требует внимания")
+        if (expanded) {
+            CockpitField("Движок", if (status.running) "Работает" else "Остановлен", if (status.running) AppColors.green else AppColors.amber)
+            CockpitField("Связь", if (r.optBoolean("technical_ready")) "Готова" else "Требует внимания")
+        }
         CockpitField("Новые входы", if (r.optBoolean("new_entries_allowed")) "Разрешены" else "Ограничены",
             if (r.optBoolean("new_entries_allowed")) AppColors.green else AppColors.amber)
         CockpitField("Сопровождение", when {
@@ -202,9 +205,14 @@ internal fun CockpitReadiness(status: Status) {
                     style=MaterialTheme.typography.bodySmall,color=AppColors.red)
             }
         }
-        Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")), style = MaterialTheme.typography.bodySmall)
-        Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
-            style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+        if (!r.optBoolean("new_entries_allowed", false)) {
+            Text(russianExecutionBlocker(r.optString("new_entries_reason", "Ожидание первого снимка")),
+                style = MaterialTheme.typography.bodySmall, color = AppColors.amber)
+        }
+        if (expanded) {
+            Text(r.optString("utc_loss_reset_explanation", "Суточные ограничения уточняются по времени Binance UTC."),
+                style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+        }
         if (!r.optBoolean("daily_risk_baseline_known", false)) {
             Text("⚠️ Дневная база риска не подтверждена. 00:00 UTC не снимает этот независимый блок.",
                 style = MaterialTheme.typography.bodySmall, color = AppColors.red)
@@ -219,6 +227,9 @@ internal fun CockpitReadiness(status: Status) {
                 color=AppColors.red,style=MaterialTheme.typography.bodySmall)
         }
         CockpitFreshness(status)
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(if (expanded) "Свернуть подробности готовности" else "Подробнее о готовности")
+        }
     }
 }
 
