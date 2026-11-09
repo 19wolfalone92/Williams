@@ -2210,21 +2210,159 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun actualLostProtectivePostReplyKeepsItsIdAndIsAdoptedWithoutRetry() {
-        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
-            val exchange=Exchange(direction)
-            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+    @Test fun missingMarkPriceDoesNotAuthorizeEmergencyExitForAnUnplacedStop() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             assertTrue(coordinator.reconcile().getBoolean("ok"))
             assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
-            exchange.fill();exchange.loseProtectionReply=true
-            assertFalse(coordinator.reconcile().getBoolean("ok"))
-            val owner=coordinator.intentsSnapshot().getJSONObject(0)
-            assertEquals("SUBMISSION_UNKNOWN",owner.getString("protection_status"))
-            assertTrue(owner.getString("protection_client_id").isNotBlank())
-            val next=coordinator.reconcile()
-            assertTrue(next.toString(),next.getBoolean("ok"))
-            assertEquals(2,exchange.posts("/fapi/v1/algoOrder")) // Entry + original STOP, never a duplicate.
-            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            exchange.fill()
+            exchange.mark = Double.NaN
+
+            val uncertain = coordinator.reconcile()
+            assertFalse(uncertain.toString(), uncertain.getBoolean("ok"))
+            assertEquals(0, uncertain.getJSONArray("required_safety_exits").length())
+            assertEquals("NOT_SUBMITTED", coordinator.intentsSnapshot().getJSONObject(0).getString("protection_status"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+
+            exchange.mark = 100.0
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val protected = restarted.reconcile()
+            assertTrue(protected.toString(), protected.getBoolean("ok"))
+            assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun explicitlyRejectedInitialStopRecoversAcrossRestartOrReducesOnceIfStillCrossed() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for (markRecovers in listOf(false, true)) {
+                val exchange = Exchange(direction)
+                val journal = Journal()
+                val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                assertTrue(coordinator.reconcile().getBoolean("ok"))
+                assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+                exchange.fill()
+                exchange.beforeRequest = { request, params ->
+                    if (request.method == "POST" && request.url.encodedPath == "/fapi/v1/algoOrder" &&
+                        params["closePosition"] == "true") {
+                        exchange.mark = if (direction == NativeFuturesCampaignCoordinator.Direction.LONG) 94.0 else 106.0
+                        exchange.rejectProtectionCode = -2021
+                    }
+                }
+                val rejected = coordinator.reconcile()
+                assertFalse(rejected.toString(), rejected.getBoolean("ok"))
+                assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+                val owner = coordinator.intentsSnapshot().getJSONObject(0)
+                assertEquals("NOT_SUBMITTED", owner.getString("protection_status"))
+                assertTrue(owner.getString("initial_stop_rejection_id").isNotBlank())
+                assertTrue(owner.optString("protection_client_id").isBlank())
+                exchange.beforeRequest = null
+                exchange.rejectProtectionCode = null
+
+                val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                val request = restarted.reconcile().getJSONArray("required_safety_exits").getJSONObject(0)
+                assertEquals("INITIAL_STOP_TRIGGER_REJECTED", request.getString("guard_origin"))
+                if (markRecovers) {
+                    exchange.mark = 100.0
+                    assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+                    assertEquals(0, exchange.posts("/fapi/v1/order"))
+                    val protected = restarted.reconcile()
+                    assertTrue(protected.toString(), protected.getBoolean("ok"))
+                    assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+                    assertEquals(1, exchange.algos.values.count { it.optString("closePosition") == "true" })
+                } else {
+                    exchange.beforeRequest = { lookup, params ->
+                        if (lookup.method == "GET" && lookup.url.encodedPath == "/fapi/v1/algoOrder" &&
+                            params["clientAlgoId"] == owner.getString("initial_stop_rejection_id")) {
+                            throw FuturesHttpException(503, -2013, """{"code":-2013}""", "/fapi/v1/algoOrder")
+                        }
+                    }
+                    assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+                    assertEquals(0, exchange.posts("/fapi/v1/order"))
+                    exchange.beforeRequest = null
+                    val closed = restarted.executeRequiredUnprotectedSafetyExit(request)
+                    assertTrue(closed.toString(), closed.getBoolean("ok"))
+                    assertEquals(0.0, exchange.quantity, 0.0)
+                    assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+                    assertEquals(1, exchange.posts("/fapi/v1/order"))
+                    assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+                }
+            }
+        }
+    }
+
+    @Test fun definitiveProtectiveTimestampRejectionsAllowRecoveryAfterRestart() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for (resyncFails in listOf(false, true)) {
+                val exchange = Exchange(direction)
+                val journal = Journal()
+                val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                assertTrue(coordinator.reconcile().getBoolean("ok"))
+                assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+                exchange.fill()
+                exchange.rejectProtectionCode = -1021
+                var stopPosts = 0
+                exchange.beforeRequest = { request, params ->
+                    val path = request.url.encodedPath
+                    if (request.method == "POST" && path == "/fapi/v1/algoOrder" &&
+                        params["closePosition"] == "true") {
+                        stopPosts++
+                    }
+                    if (resyncFails && stopPosts > 0 && path == "/fapi/v1/time") {
+                        throw java.io.IOException("Network lost during exchange clock resync")
+                    }
+                }
+
+                val rejected = coordinator.reconcile()
+                assertFalse(rejected.toString(), rejected.getBoolean("ok"))
+                assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+                val owner = coordinator.intentsSnapshot().getJSONObject(0)
+                assertEquals("NOT_SUBMITTED", owner.getString("protection_status"))
+                assertTrue(owner.optString("protection_client_id").isBlank())
+                assertEquals(if (resyncFails) 1 else 2, stopPosts)
+
+                exchange.beforeRequest = null
+                exchange.rejectProtectionCode = null
+                val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+                val protected = restarted.reconcile()
+                assertTrue(protected.toString(), protected.getBoolean("ok"))
+                assertEquals(stopPosts + 2, exchange.posts("/fapi/v1/algoOrder"))
+                assertEquals(1, exchange.algos.values.count { it.optBoolean("closePosition") })
+                assertEquals(0, exchange.posts("/fapi/v1/order"))
+            }
+        }
+    }
+
+    @Test fun actualLostProtectivePostReplyKeepsItsIdAndIsAdoptedWithoutRetry() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            for (timestampRejectedFirst in listOf(false, true)) {
+                val exchange = Exchange(direction)
+                val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+                assertTrue(coordinator.reconcile().getBoolean("ok"))
+                assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+                exchange.fill()
+                exchange.loseProtectionReply = true
+                var stopPosts = 0
+                exchange.beforeRequest = { request, params ->
+                    if (request.method == "POST" && request.url.encodedPath == "/fapi/v1/algoOrder" &&
+                        params["closePosition"] == "true") {
+                        stopPosts++
+                        exchange.rejectProtectionCode = (-1021).takeIf { timestampRejectedFirst && stopPosts == 1 }
+                    }
+                }
+                assertFalse(coordinator.reconcile().getBoolean("ok"))
+                val owner = coordinator.intentsSnapshot().getJSONObject(0)
+                assertEquals("SUBMISSION_UNKNOWN", owner.getString("protection_status"))
+                assertTrue(owner.getString("protection_client_id").isNotBlank())
+                val next = coordinator.reconcile()
+                assertTrue(next.toString(), next.getBoolean("ok"))
+                assertEquals(if (timestampRejectedFirst) 2 else 1, stopPosts)
+                assertEquals(1, exchange.algos.values.count { it.optBoolean("closePosition") })
+                assertEquals(0, exchange.posts("/fapi/v1/order"))
+            }
         }
     }
 

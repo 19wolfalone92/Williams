@@ -55,6 +55,7 @@ internal fun russianStatus(value: String?): String {
         "CLOSED_OR_STOPPED", "CLOSED", "EXIT_CONFIRMED" -> "Позиция закрыта"
         "PROTECTED" -> "Защита подтверждена при сверке"
         "NOT_SUBMITTED", "NOT_YET_VERIFIED" -> "Защита ещё не подтверждена"
+        "INITIAL_STOP_TRIGGER_REJECTED" -> "Binance отклонила первый стоп при пересечении его уровня"
         "SUBMISSION_UNKNOWN", "RESULT_REQUIRES_RECONCILIATION" -> "Результат отправки требует сверки"
         "UNRESOLVED_EXTRA_ORDER" -> "Обнаружена неразрешённая дополнительная заявка"
         "REPLACEMENT_PENDING_PROTECTED", "NATIVE_REPLACEMENT_PROTECTION_SEEN" -> "SL подтверждён · замена ожидает завершения"
