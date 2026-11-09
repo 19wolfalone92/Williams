@@ -3,6 +3,14 @@ name: Binance USD-M Futures Demo read-only gate
 on:
   push:
     branches: [futures-williams-campaign, fix/book-exact-short-wm3-ticks-20261026, fix/ntd-no-phantom-position-book-exit-replay-20261028, test/testnet-public-market-smoke-20261028, fix/release-audit-4645-20261029]
+  # Validate each candidate for canonical main before any consolidation merge.
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'trading_config.py'
+      - 'tools/verify_public_futures_demo.py'
+      - '.github/workflows/testnet-readonly.yml'
   workflow_dispatch:
     inputs:
       symbol:
