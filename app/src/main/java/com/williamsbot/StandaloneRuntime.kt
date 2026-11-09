@@ -1344,6 +1344,19 @@ private class StandaloneServer(private val context: Context) {
 
     fun diagnosticsReport(): JSONObject = e().diagnostics()
 
+    /** Explicitly incomplete, bounded response for the legacy String transport. */
+    fun briefDiagnostics(): JSONObject {
+        val snapshot = e().status(fast = true)
+        return JSONObject()
+            .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
+            .put("full_report", false)
+            .put("created_at_ms", System.currentTimeMillis())
+            .put("message", "Полная диагностика доступна через экран приложения и экспорт ZIP")
+            .put("status", JSONObject()
+                .put("state", snapshot.optString("state"))
+                .put("execution_enabled", snapshot.optBoolean("execution_enabled")))
+    }
+
     fun startTrading() {
         e().start()
     }
@@ -1451,15 +1464,7 @@ private class StandaloneServer(private val context: Context) {
             // Returning a 26+ MB String on this legacy string API caused a
             // confirmed Android OutOfMemoryError. Do not re-enable it.
             method == "GET" && path == "/api/v1/diagnostics" ->
-                JSONObject()
-                    .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
-                    .put("full_report", false)
-                    .put("message", "Полная диагностика доступна через экран приложения и экспорт ZIP")
-                    .put("created_at_ms", System.currentTimeMillis())
-                    .put("status", JSONObject()
-                        .put("state", x.status(fast = true).optString("state"))
-                        .put("execution_enabled", x.status(fast = true).optBoolean("execution_enabled")))
-                    .toString()
+                x.briefDiagnostics().toString()
 
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
