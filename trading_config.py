@@ -13,7 +13,9 @@ from futures_leverage import parse_leverage, parse_symbol_leverages
 
 
 DEFAULT_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT")
-DEFAULT_FUTURES_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT")
+DEFAULT_FUTURES_SYMBOLS = ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT")
+# Expanding scan coverage must not increase the number of simultaneous campaigns.
+MAX_FUTURES_OPEN_POSITIONS = 10
 DEFAULT_STRUCTURAL_TFS = ("1d", "4h", "1h", "15m")
 
 
@@ -144,11 +146,11 @@ class TradingConfig:
         raw_auto_symbols = str(source.get("AUTO_SCAN_SYMBOLS", "")).strip()
         if market == "futures_usdt":
             # The Futures scanner, history loader, risk engine and UI must agree
-            # on one fixed ten-contract universe. Fail closed on configuration
+            # on one fixed fifteen-contract universe. Fail closed on configuration
             # drift instead of silently scanning a different set.
             if symbols != DEFAULT_FUTURES_SYMBOLS:
                 raise ValueError(
-                    "WILLIAMS_SYMBOLS must match the approved ten-symbol Futures universe"
+                    "WILLIAMS_SYMBOLS must match the approved fifteen-symbol Futures universe"
                 )
             if raw_auto_symbols:
                 auto_symbols = _csv(source, "AUTO_SCAN_SYMBOLS", default_symbols)
@@ -163,7 +165,7 @@ class TradingConfig:
             # Legacy Spot mode retains its own market-specific configuration.
             symbols = _csv(source, "AUTO_SCAN_SYMBOLS", symbols)
 
-        max_positions = min(len(DEFAULT_FUTURES_SYMBOLS), max(1, _int(source, "MAX_OPEN_POSITIONS", len(DEFAULT_FUTURES_SYMBOLS))))
+        max_positions = min(MAX_FUTURES_OPEN_POSITIONS, max(1, _int(source, "MAX_OPEN_POSITIONS", MAX_FUTURES_OPEN_POSITIONS)))
         # Parse outer caps first. A user may tighten any cap, but no lower-level
         # risk parameter may silently override a stricter campaign/portfolio cap.
         total_risk = max(0.0, min(0.006, _float(source, "MAX_TOTAL_RISK_PCT", 0.006)))
