@@ -3355,7 +3355,7 @@ internal class NativeFuturesCampaignCoordinator(
             symbol = plan.symbol,
             openPositionSymbols = openPositionRows.keys,
             intents = currentIntents,
-            maxPositions = allowedSymbols.size
+            maxPositions = MAX_FUTURES_CAMPAIGNS
         )
         if (!isAddition && slotBlocker != null) return@synchronized safePreflightRejection(slotBlocker)
         if (isAddition) {
