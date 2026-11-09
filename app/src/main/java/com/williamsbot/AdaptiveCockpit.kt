@@ -121,9 +121,10 @@ internal fun AdaptiveCockpitScaffold(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("WILLIAMS BOT 2.1", style = MaterialTheme.typography.titleMedium,
+                        Text("WILLIAMS BOT ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold)
-                        Text(if (landscape) "Futures Demo · H1" else "Futures Demo · 10 пар · LONG / SHORT",
+                        Text(if (landscape) "Futures Demo · ${APPROVED_FUTURES_CHART_SYMBOLS.size} пар · H1"
+                            else "Futures Demo · ${APPROVED_FUTURES_CHART_SYMBOLS.size} пар · LONG / SHORT",
                             style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                     }
                     CockpitOrientationMenu()
