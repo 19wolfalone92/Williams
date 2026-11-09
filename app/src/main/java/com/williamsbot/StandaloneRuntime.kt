@@ -1622,20 +1622,18 @@ private class NativeEngine(
     private val primarySymbol = "BTCUSDT"
     private val interval = "1h"
 
-    // This on-device USD-M Futures Runtime owns the approved ten-contract universe.
+    // This on-device USD-M Futures Runtime scans the approved fifteen-contract universe.
     // The remote backend is optional and is not in the order-execution path.
-    private val coreSymbols = listOf(
-        "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-        "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
-    )
+    // Chart, execution adapter, and scanner share the same approved universe.
+    private val coreSymbols = APPROVED_FUTURES_SYMBOLS
     private val analysisFrames = listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M")
     // Startup only needs the frames that directly participate in execution.
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
-    // Prime H1 for all ten symbols before optional context/chart frames.
+    // Prime H1 for all approved symbols before optional context/chart frames.
     // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
     private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
     // Prioritize analysis horizons. Full exchange history of minute-by-minute
-    // bars for ten pairs can consume gigabytes and is NOT safe to force on mobile.
+    // bars for fifteen pairs can consume gigabytes and is NOT safe to force on mobile.
     // 1m/3m/5m remain persisted on demand as bounded chart/monitoring history.
     private val durableBackfillFrames = listOf(
         "1h", "4h", "6h", "1d", "1w", "1M",
@@ -1652,7 +1650,7 @@ private class NativeEngine(
 
     private fun minStartupHistoryCandles(frame: String): Int =
         startupHistoryPolicy(frame, startupHistoryLimit, minStartupHistoryCandles).minimumCount
-    private val maxScanSymbols = 10
+    private val maxScanSymbols = coreSymbols.size
     private val waveTopN = 5
     // The 256 MiB Java heap exhausted during a ten-symbol parallel wave scan.
     // Bound both concurrency and stale queued completions; keep all symbols
@@ -1763,7 +1761,7 @@ private class NativeEngine(
     @Volatile private var lastProtectedRiskCapManagementAtMs = 0L
     @Volatile private var lastExternalStopManagementAtMs = 0L
     private val deepWatchTopN = 10
-    private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_10"
+    private val scannerUniverseLabel = "USD_M_FUTURES_TESTNET_15"
 
     @Volatile
     private var running = false
@@ -1851,7 +1849,7 @@ private class NativeEngine(
     // Concurrent campaigns may span the approved Futures universe. One campaign per symbol,
     // unresolved intents occupying slots, and the 0.6% aggregate risk cap remain mandatory.
     private val maxOpenPositions: Int
-        get() = APPROVED_FUTURES_SYMBOLS.size
+        get() = MAX_FUTURES_CAMPAIGNS
     private val campaignEngineEnabled: Boolean
         get() = true
     private val campaignExecutionTimeframe: String
@@ -4033,7 +4031,7 @@ private class NativeEngine(
                         h1TasksResolved++
                         if(ok) h1ReadyNow++
                         h1HistoryReadyCount=h1ReadyNow
-                        // Wait until the whole ten-symbol H1 warmup group
+                        // Wait until the whole approved H1 warmup group
                         // settles. Starting a ten-way REST scan after the
                         // FIRST symbol finished caused a thundering herd that
                         // could starve the remaining H1 startup workers.
@@ -5448,7 +5446,7 @@ private class NativeEngine(
             if (signedQty == 0.0) continue
             if (symbol !in coreSymbols) {
                 throw IllegalStateException(
-                    "Unmanaged live Futures position outside the approved ten-symbol universe: $symbol"
+                    "Unmanaged live Futures position outside the approved fifteen-symbol universe: $symbol"
                 )
             }
             val direction = if (signedQty > 0.0) "LONG" else "SHORT"
@@ -7808,7 +7806,7 @@ private class NativeEngine(
 
         // Read-only H1 discovery NEVER starts a signed account-wide reconciliation.
         // Scheduling management here put the coordinator into RECONCILE_REQUIRED
-        // during every scan and suppressed all ten otherwise-valid TC2 entries.
+        // during every scan and suppressed otherwise-valid TC2 entries.
         val universe = loadUniverse()
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
@@ -12009,7 +12007,7 @@ private class NativeEngine(
             .put("scanner_error", scan.opt("scanner_error") ?: JSONObject.NULL)
             .put("scanner_progress_symbols", scan.optInt("progress_symbols"))
             .put("scanner_progress_total", scan.optInt("progress_total", 10))
-            .put("scanner_configured_symbols", scan.optInt("progress_total", 10))
+            .put("scanner_configured_symbols", scan.optInt("progress_total", coreSymbols.size))
             .put("scanner_universe", scan.optJSONArray("scan_symbols") ?: JSONArray())
             .put("scanner_symbols", scan.optInt("symbols_scanned"))
             .put("allow_long", true).put("allow_short", true)
