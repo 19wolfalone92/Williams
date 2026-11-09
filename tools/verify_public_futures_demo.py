@@ -9,11 +9,15 @@ from __future__ import annotations
 import json
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-DEMO = "https://demo-fapi.binance.com"
+# Keep canonical contract configuration importable in both script and -m modes.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from trading_config import DEFAULT_FUTURES_SYMBOLS
+
+DEMO = "https://demo-fapi.binance.com"
 
 # One canonical approved trading universe; the probe MUST reject missing contracts.
 SYMBOLS = DEFAULT_FUTURES_SYMBOLS
