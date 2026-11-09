@@ -1089,3 +1089,18 @@ def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_cont
     assert 'ownerProfile in williamsSourceProfiles' in policy
     assert 'williamsStrategyCanMarketClose(ownerProfile)' in policy
     assert "futuresCampaignCoordinator.trailProtectiveStop(" in manage
+
+
+def test_dashboard_uses_actual_version_and_canonical_fifteen_symbol_universe():
+    scaffold = _read(ANDROID / "java/com/williamsbot/AdaptiveCockpit.kt")
+    screens = _read(ANDROID / "java/com/williamsbot/CockpitScreens.kt")
+    runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
+    assert "WILLIAMS BOT ${BuildConfig.VERSION_NAME}" in scaffold
+    assert "APPROVED_FUTURES_SYMBOLS.size" in scaffold
+    assert "WILLIAMS BOT 2.1" not in scaffold
+    assert "Futures Demo · 10 пар" not in scaffold
+    assert "status.scannerConfiguredSymbols" in screens
+    assert "cockpitScannerHeadline(status)" in screens
+    assert "Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар" not in screens
+    assert '.put("scanner_progress_total", scan.optInt("progress_total", coreSymbols.size))' in runtime
+    assert '.put("h1_all_approved_ready",historyReady)' in runtime
