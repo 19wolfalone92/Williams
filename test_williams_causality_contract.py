@@ -84,7 +84,7 @@ def test_fractal_confirmation_is_not_backdated_to_the_pivot():
 def test_canonical_futures_contract_keeps_both_directions_and_exact_universe():
     cfg = TradingConfig.from_env({})
     assert cfg.symbols == DEFAULT_FUTURES_SYMBOLS
-    assert len(cfg.symbols) == 10 and len(set(cfg.symbols)) == 10
+    assert len(cfg.symbols) == 15 and len(set(cfg.symbols)) == 15
     assert cfg.allow_long is True
     assert cfg.allow_short is True
     assert cfg.execution_timeframe == "1h"
