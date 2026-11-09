@@ -1714,7 +1714,7 @@ private class NativeEngine(
     @Volatile private var deepHistoryStorageLow = false
     @Volatile private var deepHistoryLastStartMs = 0L
     @Volatile private var historyWarmupRunning = false
-    @Volatile private var historyReady = false // All ten H1 decision sets ready.
+    @Volatile private var historyReady = false // All approved H1 decision sets ready.
     @Volatile private var readOnlyH1Ready = false // At least one valid H1 working set.
     @Volatile private var h1HistoryReadyCount = 0
     @Volatile private var optionalContextHistoryReady = false
@@ -2892,7 +2892,7 @@ private class NativeEngine(
                         }
                         // The H1 read-only scanner works as soon as ONE
                         // decision frame is ready. Trading additionally
-                        // requires all ten H1 series + independent safety
+                        // requires all approved H1 series + independent safety
                         // admission; partial chart data is never an entry pass.
                         if(readOnlyH1Ready) {
                             if (historyReady) schedulePersistentHistoryBackfill(generation)
@@ -4529,7 +4529,7 @@ private class NativeEngine(
 
         // Volume and public bid/ask are OPTIONAL read-only ranking context.
         // Previously one missing contract or a short-lived 24h ticker outage
-        // threw here and cancelled analysis of ALL TEN H1 charts. Unknown
+        // threw here and cancelled analysis of ALL approved H1 charts. Unknown
         // spreads remain -1 (never executable) and final live top-of-book,
         // account and spread preflights must still pass independently.
         val volumes = HashMap<String, Double>()
@@ -4589,7 +4589,7 @@ private class NativeEngine(
             scannerState = gateState
             scannerError = when (gateState) {
                 "STOPPED" -> "Runtime is stopped; press START after Futures credentials are configured"
-                "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for closed H1 history for all 10 approved contracts"
+                "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for closed H1 history for all ${coreSymbols.size} approved contracts"
                 "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures REST market data is stale or unavailable"
                 else -> "Read-only scanner data gate is not ready: " + gateState
             }
@@ -12724,7 +12724,7 @@ private class NativeEngine(
     fun configureFuturesLeverage(payload: JSONObject): JSONObject {
         val next = FuturesLeverageSettings.fromJson(payload)
         // Keep the operator's chosen leverage. FuturesLeverageSettings
-        // already validates the requested 1..125 range for all ten pairs.
+        // already validates the requested 1..125 range for all approved pairs.
         // Binance brackets and the margin available BEFORE liquidation or
         // the structural STOP are authoritative on every new order.
         val profile=payload.optString("strategy_profile",williamsProfile)
