@@ -651,8 +651,8 @@ class FuturesWilliamsScanner:
         # signal consume an available campaign slot before a current one.
         result.sort(key=lambda c: (-c.score, -c.signal.signal_bar_time_ms, c.symbol, c.side))
         self.last_scan_status = {
-            "state": "COMPLETE" if len(evaluated) == 10 else "PARTIAL",
-            "reason": None if len(evaluated) == 10 else "ONE_OR_MORE_SYMBOL_EVALUATIONS_FAILED",
+            "state": "COMPLETE" if len(evaluated) == len(symbols) else "PARTIAL",
+            "reason": None if len(evaluated) == len(symbols) else "ONE_OR_MORE_SYMBOL_EVALUATIONS_FAILED",
             "configured_symbols": len(symbols),
             "evaluated_symbols": len(evaluated),
             "symbols": evaluated,
