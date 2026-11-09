@@ -40,13 +40,16 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
-    fun chartContractSharesTheExactTenSymbolsAndAllFifteenNativeIntervals() {
+    fun chartContractSharesTheExactFifteenSymbolsAndAllFifteenNativeIntervals() {
         assertEquals(
             listOf("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"),
+                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+                "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT"),
             APPROVED_FUTURES_SYMBOLS
         )
         assertEquals(APPROVED_FUTURES_SYMBOLS.toSet(), BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS)
+        assertEquals(15, BinanceUsdMFuturesMarketData().approvedSymbols.size)
+        assertEquals(10, MAX_FUTURES_CAMPAIGNS)
         assertEquals(
             listOf("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h",
                 "6h", "8h", "12h", "1d", "3d", "1w", "1M"),
