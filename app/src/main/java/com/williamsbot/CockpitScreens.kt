@@ -122,7 +122,7 @@ internal fun cockpitTime(at: Long): String = if (at <= 0L) "не подтвер�
 internal fun CockpitCard(title: String, accent: Color = AppColors.primary, content: @Composable ColumnScope.() -> Unit) {
     Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = AppColors.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, color = accent, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
             content()
         }
@@ -228,7 +228,7 @@ private fun ResponsiveDashboardPair(
     first: @Composable () -> Unit, second: @Composable () -> Unit
 ) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val narrow=maxWidth < 420.dp ||
+        val narrow=maxWidth < 350.dp ||
             androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.25f
         if(narrow) {
             Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -287,7 +287,7 @@ internal fun CockpitDashboard(
         }
         if (activeIntents.isEmpty()) item {
             CockpitCard("Наблюдение за рынком") {
-                Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/10 пар")
+                Text("Сканер: ${russianStatus(status.scannerState)} • ${status.scannerSymbols}/${status.scannerConfiguredSymbols} пар")
                 Text(candidates.firstOrNull()?.let { "${it.symbol}: ${russianExecutionBlocker(it.reason)}" }
                     ?: "Подтверждённых торговых кампаний в текущем снимке нет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             }
@@ -608,7 +608,7 @@ internal fun CockpitControls(status: Status, onStart: () -> Unit, onPause: () ->
         }
         if (status.running) {
             Text(if (status.paused) "H1-анализ и сопровождение продолжаются. Новые входы на паузе; ранее выставленные заявки могут исполниться."
-                else "Бот анализирует 10 пар и сопровождает позиции.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
+                else "Бот анализирует ${status.scannerConfiguredSymbols} пар и сопровождает позиции.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
             OutlinedButton(onClick = { confirmation = "suspend" }, modifier = Modifier.fillMaxWidth()) { Text("Приостановить входы и снять заявки") }
         }
         TextButton(onClick = { confirmation = "shutdown" }, modifier = Modifier.fillMaxWidth()) { Text("Полностью выключить движок") }
