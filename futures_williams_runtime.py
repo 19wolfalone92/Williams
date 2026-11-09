@@ -271,9 +271,9 @@ class FuturesWilliamsScanner:
         }
         return float((filters.get("PRICE_FILTER") or {}).get("tickSize", "0") or 0)
 
-    def universe(self, limit: int = 10) -> list[str]:
+    def universe(self, limit: int = len(DEFAULT_FUTURES_SYMBOLS)) -> list[str]:
         # Never auto-discover or rank an unrestricted contract list for trading.
-        # The approved ten-symbol list is a separate, explicit acceptance input.
+        # The approved fifteen-symbol list is a separate, explicit acceptance input.
         default_symbols = DEFAULT_FUTURES_SYMBOLS
         raw = os.getenv("FUTURES_APPROVED_SYMBOLS", "").strip()
         approved = (
@@ -283,10 +283,10 @@ class FuturesWilliamsScanner:
         self.last_universe_error = None
         self.symbols = []
         self.configured_symbols = len(approved)
-        if len(approved) != 10 or any(not item for item in approved):
-            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 10 unique symbols"
+        if len(approved) != len(DEFAULT_FUTURES_SYMBOLS) or any(not item for item in approved):
+            self.last_universe_error = "FUTURES_APPROVED_SYMBOLS must contain exactly 15 unique symbols"
             return []
-        if len(set(approved)) != 10:
+        if len(set(approved)) != len(DEFAULT_FUTURES_SYMBOLS):
             self.last_universe_error = "FUTURES_APPROVED_SYMBOLS contains duplicate symbols"
             return []
         if any(not item.isalnum() or not item.endswith("USDT") for item in approved):
@@ -294,7 +294,7 @@ class FuturesWilliamsScanner:
             return []
         if tuple(approved) != DEFAULT_FUTURES_SYMBOLS:
             self.last_universe_error = (
-                "FUTURES_APPROVED_SYMBOLS must match the canonical ten-symbol Futures universe"
+                "FUTURES_APPROVED_SYMBOLS must match the canonical fifteen-symbol Futures universe"
             )
             return []
 
@@ -629,10 +629,10 @@ class FuturesWilliamsScanner:
             }
             return []
         symbols = self.universe()
-        if len(symbols) != 10:
+        if len(symbols) != len(DEFAULT_FUTURES_SYMBOLS):
             self.last_scan_status = {
                 "state": "BLOCKED",
-                "reason": self.last_universe_error or "FUTURES_UNIVERSE_NOT_EXACTLY_TEN",
+                "reason": self.last_universe_error or "FUTURES_UNIVERSE_NOT_EXACTLY_FIFTEEN",
                 "configured_symbols": self.configured_symbols,
                 "evaluated_symbols": 0,
             }
