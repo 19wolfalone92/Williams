@@ -123,8 +123,8 @@ internal fun AdaptiveCockpitScaffold(
                     Column(Modifier.weight(1f)) {
                         Text("WILLIAMS BOT ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold)
-                        Text(if (landscape) "Futures Demo · ${APPROVED_FUTURES_CHART_SYMBOLS.size} пар · H1"
-                            else "Futures Demo · ${APPROVED_FUTURES_CHART_SYMBOLS.size} пар · LONG / SHORT",
+                        Text(if (landscape) "Futures Demo · ${APPROVED_FUTURES_SYMBOLS.size} пар · H1"
+                            else "Futures Demo · ${APPROVED_FUTURES_SYMBOLS.size} пар · LONG / SHORT",
                             style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                     }
                     CockpitOrientationMenu()
