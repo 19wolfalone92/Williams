@@ -201,7 +201,8 @@ object AppColors {
 // Static release-contract anchor: the chart must expose every approved USD-M contract
 // while using the shared backend/execution universe, never a separate scan universe:
 // "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-// "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT".
+// "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+// "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT".
 private val APPROVED_FUTURES_CHART_SYMBOLS = APPROVED_FUTURES_SYMBOLS
 private val CHART_VIEW_INTERVALS = APPROVED_FUTURES_KLINE_INTERVALS
 
@@ -272,7 +273,7 @@ data class Status(
     val dailyCapitalFlowUsdt: Double = 0.0,
     val tradingMode: String = "ACTIVE",
     val openPositions: Int = 0,
-    val maxOpenPositions: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
+    val maxOpenPositions: Int = MAX_FUTURES_CAMPAIGNS,
     val reservedRiskPct: Double = 0.0,
     val maxTotalRiskPct: Double = 0.006,
     val reconcileRequired: Boolean = false,
@@ -281,9 +282,9 @@ data class Status(
     val scannerState: String = "NOT_RUN",
     val scannerError: String? = null,
     val scannerSymbols: Int = 0,
-    val scannerConfiguredSymbols: Int = 10,
+    val scannerConfiguredSymbols: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
     val scannerProgressSymbols: Int = 0,
-    val scannerProgressTotal: Int = 10,
+    val scannerProgressTotal: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
     val scannerUniverse: List<String> = emptyList(),
     val scannerLongCandidates: Int = 0,
     val scannerShortCandidates: Int = 0,
@@ -3066,7 +3067,7 @@ private fun SettingsScreen(
                     )
 
                     InfoRow("Управление исполнением", "Автономный телефон • Binance напрямую")
-                    InfoRow("Торговые пары сканера", "USDⓈ-M Futures • 10 контрактов USDT")
+                    InfoRow("Торговые пары сканера", "USDⓈ-M Futures • 15 контрактов USDT")
                     InfoRow("Масштабы", "D1/H4 — контекст • H1 — сигналы WM1/WM2/WM3 • M15 не требуется для входа")
                 }
             }
@@ -4059,7 +4060,7 @@ internal fun parseStatus(json: JSONObject): Status {
         maxOpenPositions =
             json.optInt(
                 "max_open_positions",
-                APPROVED_FUTURES_CHART_SYMBOLS.size
+                MAX_FUTURES_CAMPAIGNS
             ),
         reservedRiskPct =
             json.optDouble(
@@ -4097,9 +4098,9 @@ internal fun parseStatus(json: JSONObject): Status {
                 0
             ),
         scannerConfiguredSymbols =
-            json.optInt("scanner_configured_symbols", 10),
+            json.optInt("scanner_configured_symbols", APPROVED_FUTURES_CHART_SYMBOLS.size),
         scannerProgressSymbols = json.optInt("scanner_progress_symbols"),
-        scannerProgressTotal = json.optInt("scanner_progress_total", 10),
+        scannerProgressTotal = json.optInt("scanner_progress_total", APPROVED_FUTURES_CHART_SYMBOLS.size),
         scannerUniverse = scannerUniverse.toList(),
         scannerLongCandidates =
             json.optInt("scanner_long_candidates", 0),
