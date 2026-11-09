@@ -285,6 +285,7 @@ data class Status(
     val scannerConfiguredSymbols: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
     val scannerProgressSymbols: Int = 0,
     val scannerProgressTotal: Int = APPROVED_FUTURES_CHART_SYMBOLS.size,
+    val h1ReadySymbolCount: Int = 0,
     val scannerUniverse: List<String> = emptyList(),
     val scannerLongCandidates: Int = 0,
     val scannerShortCandidates: Int = 0,
@@ -4101,6 +4102,7 @@ internal fun parseStatus(json: JSONObject): Status {
             json.optInt("scanner_configured_symbols", APPROVED_FUTURES_CHART_SYMBOLS.size),
         scannerProgressSymbols = json.optInt("scanner_progress_symbols"),
         scannerProgressTotal = json.optInt("scanner_progress_total", APPROVED_FUTURES_CHART_SYMBOLS.size),
+        h1ReadySymbolCount = json.optInt("h1_ready_symbol_count", 0),
         scannerUniverse = scannerUniverse.toList(),
         scannerLongCandidates =
             json.optInt("scanner_long_candidates", 0),
