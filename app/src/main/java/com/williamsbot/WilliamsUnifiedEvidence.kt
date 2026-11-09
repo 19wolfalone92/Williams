@@ -23,12 +23,12 @@ internal fun buildWilliamsUnifiedEvidence(
     val scanning = scanner.optBoolean("scanning", true)
     val at = scanner.optLong("last_scan_at", 0L)
     val recent = CockpitDiagnostics.fresh(at, nowMs, 120_000L)
-    // READY_BLOCKED means all ten H1 analyses finished, but execution is
+    // READY_BLOCKED means all approved H1 analyses finished, but execution is
     // intentionally blocked (e.g., a confirmed Futures risk breach).
     // It is a complete observation, NOT a ready-to-trade authorization.
     val complete = !scanning &&
         scanner.optString("scanner_state") in setOf("READY","READY_BLOCKED") && recent &&
-        scanner.optInt("symbols_scanned", -1) == 10
+        scanner.optInt("symbols_scanned", -1) == APPROVED_FUTURES_SYMBOLS.size
     val candidates = CockpitDiagnostics.rows(scanner.optJSONArray("candidates"))
     val sourceSummary = JSONObject()
     for (source in williamsSourceProfiles) {
@@ -199,7 +199,7 @@ internal fun buildWilliamsUnifiedEvidence(
         selected != williamsUnifiedProfile && !williamsVerifiedNewRiskSource(selected) -> "WRONG_PROFILE"
         !recent -> "STALE_OR_MISSING_SCAN"
         scanning -> "SCAN_IN_PROGRESS"
-        !complete || visited.size != 10 -> "INCOMPLETE_SCAN"
+        !complete || visited.size != APPROVED_FUTURES_SYMBOLS.size -> "INCOMPLETE_SCAN"
         errors.length() > 0 -> "INVALID_SNAPSHOT"
         !observerProofComplete -> "INCOMPLETE_OBSERVER_PROOF"
         else -> "COMPLETE_OBSERVATION_ONLY"
@@ -220,7 +220,7 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("scanner_state", scanner.optString("scanner_state"))
         .put("scanner_in_progress", scanning)
         .put("observed_symbols", visited.size)
-        .put("expected_symbols", 10)
+        .put("expected_symbols", APPROVED_FUTURES_SYMBOLS.size)
         .put("observed_signal_count", total)
         .put("observer_proof_complete",observerProofComplete)
         .put("by_source", sourceSummary)
