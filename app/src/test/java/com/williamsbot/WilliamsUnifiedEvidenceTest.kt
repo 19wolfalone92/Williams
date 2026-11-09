@@ -34,7 +34,7 @@ class WilliamsUnifiedEvidenceTest {
         }
         return JSONObject().put("scanner_state", "READY")
             .put("scanning", !complete).put("last_scan_at", now - 3_000L)
-            .put("symbols_scanned", 10).put("run_id", "futures-test")
+            .put("symbols_scanned", APPROVED_FUTURES_SYMBOLS.size).put("run_id", "futures-test")
             .put("candidates", candidates)
     }
 
@@ -47,7 +47,7 @@ class WilliamsUnifiedEvidenceTest {
             .put(signal("c1", williamsCourseProfile, "SHORT_COURSE_HUMP"))
         val result = buildWilliamsUnifiedEvidence(scanner(signals = signals), status(), now)
         assertEquals("COMPLETE_OBSERVATION_ONLY", result.getString("status"))
-        assertEquals(10, result.getInt("observed_symbols"))
+        assertEquals(APPROVED_FUTURES_SYMBOLS.size, result.getInt("observed_symbols"))
         assertEquals(3, result.getInt("observed_signal_count"))
         for (profile in williamsSourceProfiles) {
             assertEquals(1, result.getJSONObject("by_source").getJSONObject(profile).getInt("total"))
@@ -68,13 +68,13 @@ class WilliamsUnifiedEvidenceTest {
         val result=buildWilliamsUnifiedEvidence(snapshot,status(),now)
         assertEquals("COMPLETE_OBSERVATION_ONLY",result.getString("status"))
         assertFalse(result.getBoolean("is_execution_decision"))
-        assertEquals(10,result.getInt("observed_symbols"))
+        assertEquals(APPROVED_FUTURES_SYMBOLS.size,result.getInt("observed_symbols"))
     }
 
     @Test fun partialScanDoesNotPretendEvidenceIsFinal() {
         val result = buildWilliamsUnifiedEvidence(scanner(false), status(), now)
         assertEquals("SCAN_IN_PROGRESS", result.getString("status"))
-        assertEquals(10, result.getInt("observed_symbols"))
+        assertEquals(APPROVED_FUTURES_SYMBOLS.size, result.getInt("observed_symbols"))
         assertEquals(0, result.getInt("observed_signal_count"))
     }
 
