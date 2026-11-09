@@ -289,7 +289,9 @@ internal fun CockpitDashboard(
                     Text("Доступно • ${cockpitTime(status.accountSnapshotAtMs)}", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                 } },
                 second={ CockpitCard("Результат дня", AppColors.green) {
-                    Text(if (status.accountSnapshotAtMs > 0L) cockpitNumber(status.dailyPnlUsdt) else "—", style = MaterialTheme.typography.headlineSmall)
+                    Text(if (status.accountSnapshotAtMs > 0L &&
+                        status.cockpitReadiness.optBoolean("daily_risk_baseline_known", false))
+                        cockpitNumber(status.dailyPnlUsdt) else "—", style = MaterialTheme.typography.headlineSmall)
                     Text("USDT • день UTC", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                 } }
             )
@@ -305,7 +307,11 @@ internal fun CockpitDashboard(
                         style = MaterialTheme.typography.labelSmall)
                 } },
                 second={ CockpitCard("Резерв риска", AppColors.amber) {
-                    Text(cockpitNumber(status.reservedRiskPct * 100, 2) + "%", style = MaterialTheme.typography.headlineSmall)
+                    Text(if (status.positionsSnapshotOk &&
+                        CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,
+                            System.currentTimeMillis(), CockpitDiagnostics.POSITION_TTL_MS))
+                        cockpitNumber(status.reservedRiskPct * 100, 2) + "%" else "—",
+                        style = MaterialTheme.typography.headlineSmall)
                     Text("Лимит ${cockpitNumber(status.maxTotalRiskPct * 100)}%", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
                 } }
             )
