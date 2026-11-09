@@ -51,6 +51,18 @@ object StandaloneRuntime {
         return requireNotNull(server).dispatch(method, path, body.orEmpty())
     }
 
+    /**
+     * Full diagnostics are a large mutable JSON tree (26+ MB in November's
+     * incident). Do not serialize them to a String merely to immediately
+     * parse that String in the same process: Android OOM originated at
+     * StandaloneServer.route /api/v1/diagnostics during that conversion.
+     * The UI writes the original object directly to a streaming ZIP.
+     */
+    fun diagnosticsReport(context: Context): JSONObject {
+        start(context)
+        return requireNotNull(server).diagnosticsReport()
+    }
+
     fun autostart(context: Context) {
         start(context)
         server?.autostart()
@@ -1244,6 +1256,25 @@ private data class BaseAnalysis(
     val waveHierarchy: WilliamsWaveHierarchy? = null
 )
 
+/**
+ * Retain only the small fields read by CockpitDiagnosticScreen after ZIP export.
+ * Never copy or stringify signal_decision_history, settings, strategy journals,
+ * or observer archive here. The complete evidence remains in the exported ZIP.
+ */
+internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
+    val runtime = report.optJSONObject("status")?.optJSONObject("android_runtime")
+    return JSONObject()
+        .put("created_at_ms", report.optLong("created_at_ms"))
+        .put("status", JSONObject().put("android_runtime", runtime ?: JSONObject()))
+        .put("unified_strategy_evidence", report.optJSONObject("unified_strategy_evidence") ?: JSONObject())
+        .put("tests", report.optJSONArray("tests") ?: JSONArray())
+        .put("diagnostic_triage", report.optJSONObject("diagnostic_triage") ?: JSONObject())
+        .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
+        .put("diagnostic_summary", report.optJSONObject("diagnostic_summary") ?: JSONObject())
+        .put("event_timeline", report.optJSONArray("event_timeline") ?: JSONArray())
+        .put("execution_gate", report.optJSONObject("execution_gate") ?: JSONObject())
+}
+
 private class StandaloneServer(private val context: Context) {
     // in-process Futures Runtime API; no remote execution dependency; no loopback listener.
     private val prefs = EncryptedSharedPreferences.create(
@@ -1310,6 +1341,8 @@ private class StandaloneServer(private val context: Context) {
     fun clearCredentials(): JSONObject = e().clear()
 
     fun status(fast: Boolean = false): JSONObject = e().status(fast = fast)
+
+    fun diagnosticsReport(): JSONObject = e().diagnostics()
 
     fun startTrading() {
         e().start()
@@ -1414,8 +1447,19 @@ private class StandaloneServer(private val context: Context) {
             method == "POST" && path == "/api/v1/control/shutdown" ->
                 x.stop().toString()
 
+            // Only the in-process JSONObject API supports the full ZIP report.
+            // Returning a 26+ MB String on this legacy string API caused a
+            // confirmed Android OutOfMemoryError. Do not re-enable it.
             method == "GET" && path == "/api/v1/diagnostics" ->
-                x.diagnostics().toString()
+                JSONObject()
+                    .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
+                    .put("full_report", false)
+                    .put("message", "Полная диагностика доступна через экран приложения и экспорт ZIP")
+                    .put("created_at_ms", System.currentTimeMillis())
+                    .put("status", JSONObject()
+                        .put("state", x.status(fast = true).optString("state"))
+                        .put("execution_enabled", x.status(fast = true).optBoolean("execution_enabled")))
+                    .toString()
 
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
