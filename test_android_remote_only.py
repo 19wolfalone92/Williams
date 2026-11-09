@@ -913,7 +913,7 @@ def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe()
     assert '.put("scanner_progress_symbols", scan.optInt("progress_symbols"))' in runtime
     assert '.put("scanner_universe", scan.optJSONArray("scan_symbols") ?: JSONArray())' in runtime
     assert '.put("scanner_error", scan.opt("scanner_error") ?: JSONObject.NULL)' in runtime
-    assert '.put("scanner_progress_total", scan.optInt("progress_total", 10))' in runtime
+    assert '.put("scanner_progress_total", scan.optInt("progress_total", coreSymbols.size))' in runtime
     assert '.put("progress_total", coreSymbols.size)' in runtime
     assert '.put("scan_symbols", JSONArray().apply { scanSymbols.forEach { put(it) } })' in runtime
     assert '"Сканирование выполняется • "' in ui
