@@ -166,8 +166,12 @@ class TradingForegroundService : Service() {
                 // A live but wedged worker must not be started a second time.
                 // Existing exchange protection/monitor reconciliation remain
                 // independent of the new-entry liveness fence.
-                if(!destroyed && !stopping && (BackgroundRuntimePolicy.shouldRetry(snapshot,starting.get(),nextAttemptElapsed,now) ||
-                    snapshot.autoRunRequested && initializationRetryNeeded && !starting.get() && now>=nextAttemptElapsed))
+                // A failed secure bootstrap can leave no server to report the
+                // persisted opt-in. Retry initialization so autostart can read it.
+                if (!destroyed && !stopping && BackgroundRuntimePolicy.shouldRetry(
+                        snapshot, starting.get(), nextAttemptElapsed, now,
+                        initializationFailed = initializationRetryNeeded
+                    ))
                     requestRuntimeStart()
             }.onFailure { RuntimeServiceState.lastError="SERVICE_GUARD_FAILED: "+it.javaClass.simpleName }
         },0L,BackgroundRuntimePolicy.CHECK_MS,TimeUnit.MILLISECONDS)
@@ -285,7 +289,8 @@ class TradingForegroundService : Service() {
         // preferences or a synchronous SharedPreferences audit commit.
         runCatching { lifecycleWorker.execute {
             val snapshot=StandaloneRuntime.backgroundSnapshot()
-            if(!starting.get() && !snapshot.autoRunRequested && !(snapshot.running && snapshot.workerAlive)) {
+            if (!starting.get() && !initializationRetryNeeded && !snapshot.autoRunRequested &&
+                !BackgroundRuntimePolicy.alreadySupervising(snapshot)) {
                 RuntimeContinuityEvidence.event(applicationContext,"TASK_REMOVED_IDLE_SERVICE_STOPPED")
                 stopSelf()
             } else {

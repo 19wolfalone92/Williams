@@ -52,6 +52,15 @@ class BackgroundRuntimePolicyTest {
         val stopped=BackgroundRuntimeSnapshot(autoRunRequested=true)
         assertTrue(BackgroundRuntimePolicy.shouldRetry(stopped,false,1_000,1_000))
     }
+    @Test fun failedColdBootstrapCanRetryBeforeTheEncryptedOptInIsKnown() {
+        val cold = BackgroundRuntimeSnapshot()
+        assertFalse(BackgroundRuntimePolicy.shouldRetry(cold, false, 60_000L, 59_999L, initializationFailed = true))
+        assertTrue(BackgroundRuntimePolicy.shouldRetry(cold, false, 60_000L, 60_000L, initializationFailed = true))
+        assertFalse(BackgroundRuntimePolicy.shouldRetry(cold, true, 60_000L, 60_000L, initializationFailed = true))
+        assertFalse(BackgroundRuntimePolicy.shouldRetry(cold, false, 60_000L, 60_000L))
+        val running = cold.copy(autoRunRequested = true, running = true, workerAlive = true)
+        assertFalse(BackgroundRuntimePolicy.shouldRetry(running, false, 60_000L, 60_000L, initializationFailed = true))
+    }
     @Test fun stalledMonitorIsVisibleButNeverStartsADuplicateWorker() {
         val current=BackgroundRuntimeSnapshot(autoRunRequested=true,running=true,
             workerAlive=true,lastWorkerLoopElapsedMs=1000L)

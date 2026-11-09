@@ -18,6 +18,33 @@ import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
     @Test
+    fun protectiveStopRateRejectionBeforeTransportIsDefinitelyNotSubmitted() {
+        val guard = BinanceRateGuard()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                "/fapi/v1/premiumIndex" -> {
+                    guard.observe(okhttp3.Headers.Builder().add("Retry-After", "30").build(), 429)
+                    """{"symbol":"BTCUSDT","markPrice":"100"}"""
+                }
+                else -> throw AssertionError("Unexpected request after REST cooldown: ${request.method} ${request.url.encodedPath}")
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", http, rateGuard = guard)
+        try {
+            adapter.placeProtectiveStop("BTCUSDT", "LONG", "95", "W2S_BTC_RATE")
+            fail("The rate guard should block the STOP before transport")
+        } catch (failure: FuturesProtectionNotSubmittedException) {
+            assertTrue(failure.cause?.message.orEmpty().contains("governor wait exceeds"))
+        }
+        assertEquals(1L, guard.boundedWaitRejectedCount)
+    }
+
+    @Test
     fun selectedLeverageIsSignedAndConfirmedForEveryApprovedContract() {
         val captured = mutableListOf<Request>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->

@@ -19,7 +19,8 @@ internal class FuturesClockSyncException(detail: String, cause: Throwable? = nul
 internal class FuturesHttpException(
     val statusCode: Int,
     val exchangeCode: Int?,
-    detail: String
+    detail: String,
+    val requestPath: String? = null
 ) : IOException("Binance USD-M Futures HTTP $statusCode: $detail")
 
 /** Thrown only before entering the protective STOP POST transport. A failed
@@ -763,7 +764,17 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         } catch (failure: Exception) {
             throw FuturesProtectionNotSubmittedException(failure)
         }
-        return JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true))
+        var postStarted = false
+        return try {
+            JSONObject(requestRaw("POST", "/fapi/v1/algoOrder", params, signed = true) {
+                postStarted = true
+            })
+        } catch (failure: Exception) {
+            // Signing and rate admission can fail after the protection ID is
+            // journaled, but before any order request reaches the transport.
+            if (!postStarted) throw FuturesProtectionNotSubmittedException(failure)
+            throw failure
+        }
     }
 
     private fun request(method: String, path: String, params: Map<String, String>, signed: Boolean): JSONObject =
@@ -773,14 +784,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         method: String,
         path: String,
         params: Map<String, String>,
-        signed: Boolean
+        signed: Boolean,
+        onTransportStarting: (() -> Unit)? = null
     ): String {
         var timestampResynced = false
         var safeReadAttempt = 0
         val safeReadDelaysMs = longArrayOf(250L, 500L, 1_000L)
         while (true) {
             try {
-                return requestRawOnce(method, path, params, signed)
+                return requestRawOnce(method, path, params, signed, onTransportStarting)
             } catch (error: IOException) {
                 val message = error.message.orEmpty()
                 // Binance -1021 explicitly rejects a stale timestamp. It is the only
@@ -831,7 +843,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         path: String,
         params: Map<String, String>,
         signed: Boolean,
-        beforeNetwork: (() -> Unit)? = null
+        onTransportStarting: (() -> Unit)? = null
     ): String {
         require(path.matches(Regex("/fapi/v[1-3]/[A-Za-z0-9]+(?:/[A-Za-z0-9]+)*"))) {
             "Only canonical USD-M Futures endpoints are allowed"
@@ -883,7 +895,6 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             "DELETE" -> builder.delete(body)
             else -> throw IllegalArgumentException("Unsupported HTTP method")
         }
-        beforeNetwork?.invoke()
         // Rate admission and clock probes above can block while a disconnect,
         // fill or operator pause invalidates entry authority. This second gate
         // must be local/nonblocking and runs immediately before the transport.
@@ -895,12 +906,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
                 throw FuturesExposureNotSubmittedException(failure)
             }
         }
-        http.newCall(builder.build()).execute().use { response ->
+        val call = http.newCall(builder.build())
+        onTransportStarting?.invoke()
+        call.execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
             val text = response.body?.string().orEmpty()
             val exchangeCode = runCatching { JSONObject(text).optInt("code", 0) }.getOrNull()
             if (!response.isSuccessful || (exchangeCode != null && exchangeCode < 0)) {
-                throw FuturesHttpException(response.code, exchangeCode, text.take(500))
+                throw FuturesHttpException(response.code, exchangeCode, text.take(500), path)
             }
             // A 200 response with no body is not a valid market-history snapshot.
             // Surface it as a retryable *read-only* transport failure instead of

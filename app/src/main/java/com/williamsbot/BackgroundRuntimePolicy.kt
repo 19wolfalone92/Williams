@@ -48,8 +48,12 @@ internal object BackgroundRuntimePolicy {
 
     fun autostartComplete(snapshot:BackgroundRuntimeSnapshot):Boolean =
         !snapshot.autoRunRequested || (snapshot.running && snapshot.workerAlive)
-    fun shouldRetry(snapshot:BackgroundRuntimeSnapshot,inFlight:Boolean,nextAttemptAt:Long,now:Long):Boolean =
-        snapshot.autoRunRequested && (!snapshot.running || !snapshot.workerAlive) && !inFlight && now>=nextAttemptAt
+    fun shouldRetry(
+        snapshot: BackgroundRuntimeSnapshot, inFlight: Boolean, nextAttemptAt: Long, now: Long,
+        initializationFailed: Boolean = false
+    ): Boolean =
+        (snapshot.autoRunRequested || initializationFailed) &&
+            !alreadySupervising(snapshot) && !inFlight && now >= nextAttemptAt
     fun retryDelay(failures:Int):Long=when {
         failures<=1 -> 60_000L
         failures==2 -> 120_000L
