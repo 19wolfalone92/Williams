@@ -66,7 +66,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             assertEquals(leverage, adapter.setLeverage(symbol, leverage).getInt("leverage"))
         }
         val posts = captured.filter { it.method == "POST" }
-        assertEquals(10, posts.size)
+        assertEquals(BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.size, posts.size)
         posts.forEach {
             assertEquals("demo-fapi.binance.com", it.url.host)
             assertEquals("/fapi/v1/leverage", it.url.encodedPath)
