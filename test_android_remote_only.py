@@ -827,10 +827,13 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
     symbols = [
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+        "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT",
     ]
+    market_data = _read(ANDROID / "java/com/williamsbot/BinanceUsdMFuturesMarketData.kt")
     for symbol in symbols:
         assert f'"{symbol}"' in ui
-        assert f'"{symbol}"' in runtime
+        assert f'"{symbol}"' in market_data
+    assert "private val coreSymbols = APPROVED_FUTURES_SYMBOLS" in runtime
     assert "private fun MarketChartPanel(" in ui
     assert 'Text("ЧТО ДУМАЕТ БОТ • H4 → H1 → СИГНАЛ → РИСК"' in ui
     assert "Почему сканер так решил:" in ui
