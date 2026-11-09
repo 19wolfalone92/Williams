@@ -316,7 +316,7 @@ if __name__ == "__main__":
 
 
 
-def test_read_only_gate_checks_all_ten_approved_contracts(monkeypatch):
+def test_read_only_gate_checks_all_fifteen_approved_contracts(monkeypatch):
     class FakeClient:
         base_url = "https://demo-fapi.binance.com"
 
@@ -376,8 +376,8 @@ def test_read_only_gate_checks_all_ten_approved_contracts(monkeypatch):
     monkeypatch.setenv("BINANCE_API_KEY", "test-key")
     monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
     result = run_testnet_read_only("BTCUSDT")
-    assert result["approved_contracts_checked"] == 10
-    assert result["market_data_checked"] == 10
+    assert result["approved_contracts_checked"] == 15
+    assert result["market_data_checked"] == 15
     assert {row["symbol"] for row in result["contracts"]} == set(APPROVED_FUTURES_SYMBOLS)
     assert {row["symbol"] for row in result["market_data"]} == set(APPROVED_FUTURES_SYMBOLS)
     assert all(row["closed_candle_age_ms"] >= 0 for row in result["market_data"])
