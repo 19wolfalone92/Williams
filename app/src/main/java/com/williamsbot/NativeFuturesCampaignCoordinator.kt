@@ -585,7 +585,7 @@ internal fun isEntryCampaignReserved(intent: JSONObject): Boolean {
 }
 
 /**
- * A single pending conditional order must not freeze the whole ten-symbol scanner.
+ * A single pending conditional order must not freeze the whole approved scanner.
  * Concurrent entry admission is allowed only when every existing entry is either
  * a confirmed live pending order or an exchange-confirmed protected position.
  * Ambiguous orders, pending fills, and unresolved exits keep the account fail-closed.
@@ -1020,7 +1020,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 if (symbol !in allowedSymbols) {
                     throw IllegalStateException(
-                        "Unmanaged live Futures position $symbol detected outside the approved ten-symbol universe; manual reconciliation required"
+                        "Unmanaged live Futures position $symbol detected outside the approved ${allowedSymbols.size}-symbol universe; manual reconciliation required"
                     )
                 }
                 openBySymbol[symbol] = row
