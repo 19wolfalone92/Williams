@@ -1464,7 +1464,7 @@ private class StandaloneServer(private val context: Context) {
             // Returning a 26+ MB String on this legacy string API caused a
             // confirmed Android OutOfMemoryError. Do not re-enable it.
             method == "GET" && path == "/api/v1/diagnostics" ->
-                x.briefDiagnostics().toString()
+                briefDiagnostics().toString()
 
             method == "POST" && path == "/api/v1/config/binance" ->
                 x.configure(JSONObject(body)).toString()
