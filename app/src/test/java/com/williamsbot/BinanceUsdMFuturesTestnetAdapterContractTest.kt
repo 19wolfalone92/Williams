@@ -201,11 +201,12 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
     }
 
     @Test
-    fun approvedUniverseIsExactlyTheRequiredTenUsdtContracts() {
+    fun approvedUniverseIsExactlyTheRequiredFifteenUsdtContracts() {
         assertEquals(
             setOf(
                 "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT"
+                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+                "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT"
             ),
             BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS
         )
