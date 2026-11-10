@@ -4477,6 +4477,20 @@ private class NativeEngine(
                 // offline. A three-bar tail request missed gaps longer than 3 bars.
                 var newest = historyStore.newest(normalizedSymbol, frame)
                 if (newest <= 0L) throw IllegalStateException("Complete history has no persisted candles")
+                // At startup the full-history worker iterates 180 approved
+                // symbol/frame pairs. All 180 pairs in the operator ZIP were
+                // already complete, yet the old code performed at least one
+                // unnecessary Binance kline GET per pair, colliding with H1
+                // scanning and the independent public-time freshness budget.
+                // Do not download a tail until its NEXT candle has actually
+                // CLOSED according to freshly verified Binance server UTC.
+                // Incomplete history always takes the other paginated path.
+                val nowForTail = futuresMarketData.exchangeNowMs()
+                if (futuresMarketData.isLastClosedCandleCurrent(newest, frame, nowForTail)) {
+                    return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
+                        CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+                    }
+                }
                 for (page in 0 until pageLimit) {
                     if (!running || Thread.currentThread().isInterrupted) break
                     val array = futuresMarketData.klines(
@@ -12032,8 +12046,17 @@ private class NativeEngine(
     }
 
     private fun strategyDiagnosticEvidence(): JSONArray {
-        val now = futuresMarketData.cachedExchangeNowMs()
-        val clockFresh = futuresMarketData.clockSnapshot().optBoolean("fresh")
+        // This is a READ-ONLY diagnostic, not an execution permission. The
+        // previous path only inspected an occasionally expired 30s clock cache.
+        // The subsequent status() call renewed the public Binance clock, so
+        // the same diagnostic ZIP simultaneously said exchange_clock.fresh=true
+        // and STR-01..04 NOT_VERIFIED for all fifteen markets. Attempt one
+        // bounded public /time probe (5s maximum), retaining fail-closed
+        // NOT_VERIFIED if the exchange cannot prove current UTC time.
+        val verifiedNow = runCatching { futuresMarketData.exchangeNowMs() }.getOrNull()
+        val now = verifiedNow ?: futuresMarketData.cachedExchangeNowMs()
+        val clockFresh = verifiedNow != null &&
+            futuresMarketData.clockSnapshot().optBoolean("fresh")
         return JSONArray().apply {
             for (symbol in coreSymbols) {
                 val key = "$symbol:1h"
@@ -12455,12 +12478,12 @@ private class NativeEngine(
             executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
         )
         val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
-        // settings() includes megabytes of ten-symbol decision traces.
-        // Avoid allocating/retaining a SECOND identical mutable JSON tree;
-        // both ZIP entries retain the same complete diagnostic contents.
-        val configurationSnapshot=settings()
-        // Preserve full forensic detail only once in settings, not twice
-        // inside a 40MB+ report that is also streamed into the ZIP.
+        // The 4.64.14 phone ZIP proves settings.decision_traces is byte-for-
+        // byte identical to status.decision_traces (~5.74 MB each). Construct
+        // settings WITHOUT even allocating that duplicate tree. Retain all
+        // safety, leverage, TC2 and Demo fields and the full forensic original
+        // in status.decision_traces / signal_decision_history.json.
+        val configurationSnapshot=diagnosticSettings()
         val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
         return JSONObject()
             .put("runtime", "standalone")
@@ -12751,11 +12774,17 @@ private class NativeEngine(
             .put("message", "Настройки сохранены для следующих входов; Binance подтвердит плечо перед ордером.")
     }
 
-    fun settings(): JSONObject =
+    fun settings(): JSONObject = buildSettings(includeDecisionTraces = true)
+
+    // Diagnostics already saved the full traces in status.decision_traces.
+    // The ordinary app settings API remains unchanged for other UI callers.
+    private fun diagnosticSettings(): JSONObject = buildSettings(includeDecisionTraces = false)
+
+    private fun buildSettings(includeDecisionTraces: Boolean): JSONObject =
         JSONObject()
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
-            .put("decision_traces",decisionTraceSnapshot())
+            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
