@@ -12460,7 +12460,7 @@ private class NativeEngine(
             .ifBlank { "none" } +
             if(absentRequired.size>10) "; plus ${absentRequired.size-10}" else ""
         tests.put(JSONObject().put("id","WAVE-04").put("domain","strategy")
-            .put("name","Собственные закрытые свечи D1/H4/H1/M15 для всех десяти пар")
+            .put("name","Собственные закрытые свечи D1/H4/H1/M15 для всех ${coreSymbols.size} пар")
             .put("severity", when {
                 requiredWaves.size != requiredKeys.size -> "NOT_VERIFIED"
                 absentRequired.isEmpty() -> "PASS"
