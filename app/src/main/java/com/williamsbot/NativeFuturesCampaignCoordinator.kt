@@ -58,6 +58,49 @@ internal fun historicalFlatAlgoNeedsSymbolRefresh(
     return false
 }
 
+/**
+ * Detect a time-of-check/time-of-use drift across one long signed account
+ * reconciliation, including changes in an already-owned position. Two
+ * snapshots are NOT a continuous exchange lock, so the user WS event
+ * generation still independently fences new entries.
+ *
+ * This is a fail-closed equality check, not an ownership/admission test.
+ * Mark PnL/price fluctuations are deliberately excluded; exact signed
+ * quantity, direction, average entry, leverage and margin mode must agree.
+ */
+internal fun futuresSignedExposureStable(
+    initialPositions: JSONArray,
+    finalPositions: JSONArray
+): Boolean {
+    fun fingerprint(rows: JSONArray): Map<String, String>? {
+        val seen = mutableSetOf<String>()
+        val open = linkedMapOf<String, String>()
+        for (index in 0 until rows.length()) {
+            val position = rows.optJSONObject(index) ?: return null
+            val symbol = position.optString("symbol").uppercase(Locale.US)
+            val qty = position.optString("positionAmt").toBigDecimalOrNull()
+                ?: return null
+            if (symbol.isBlank() || !seen.add(symbol)) return null
+            if (qty.signum() == 0) continue
+            if (position.optString("positionSide") != "BOTH") return null
+            val price = position.optString("entryPrice").toBigDecimalOrNull()
+                ?.takeIf { it.signum() > 0 } ?: return null
+            val leverage = position.optString("leverage")
+            val marginMode = position.optString("marginType").uppercase(Locale.US)
+            open[symbol] = listOf(
+                qty.stripTrailingZeros().toPlainString(),
+                price.stripTrailingZeros().toPlainString(),
+                leverage,
+                marginMode
+            ).joinToString("|")
+        }
+        return open
+    }
+    val initial = fingerprint(initialPositions) ?: return false
+    val final = fingerprint(finalPositions) ?: return false
+    return initial == final
+}
+
 /** Missing/unknown algo status is never proof of an active exchange-side stop. */
 internal fun isActiveFuturesProtectionStatus(status: String): Boolean =
     status.trim().uppercase(Locale.US) in setOf("NEW", "WORKING")
@@ -2837,6 +2880,21 @@ internal class NativeFuturesCampaignCoordinator(
             noteReconciliationPhase("COURSE_FILL_AND_FLAT_HANDOFF_REPLAY")
             recordCourseStageFills(persisted,entryExecutions,openBySymbol,adapter)
             recordCourseFlatHandoffs(persisted,adapter)
+            // This reconciliation may spend seconds settling historical STOPs.
+            // A trigger, partial fill or manual position change can happen
+            // AFTER its opening signed positions() read. The previously used
+            // 90-second freshness window was NOT proof that exposure had
+            // remained unchanged through archival cleanup. A final signed
+            // positions() check blocks READY if quantity/side/entry moved.
+            //
+            // Never treat a fresh later sample as an entry or STOP authority:
+            // the same exact owner, conditional order, STOP and WS generation
+            // gates remain mandatory. The final GET fails closed on timeout.
+            noteReconciliationPhase("FINAL_SIGNED_POSITION_STABILITY_PROOF")
+            val finalPositions=validateFuturesPositionSnapshot(adapter.positions())
+            check(futuresSignedExposureStable(exchangePositions,finalPositions)) {
+                "FUTURES_POSITION_CHANGED_DURING_SIGNED_RECONCILIATION; new entries blocked; repeat full account/STOP proof"
+            }
             saveIntents(persisted)
             externalProtectionObservationsJson=protectionObservations.toString()
             // Existing unknown orders block NEW risk, but must not freeze
