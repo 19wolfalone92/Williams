@@ -12459,6 +12459,9 @@ private class NativeEngine(
         // Avoid allocating/retaining a SECOND identical mutable JSON tree;
         // both ZIP entries retain the same complete diagnostic contents.
         val configurationSnapshot=settings()
+        // Preserve full forensic detail only once in settings, not twice
+        // inside a 40MB+ report that is also streamed into the ZIP.
+        val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
         return JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -12532,7 +12535,7 @@ private class NativeEngine(
                 .put("android_sdk", android.os.Build.VERSION.SDK_INT)
                 .put("device_model", android.os.Build.MODEL)
                 .put("manufacturer", android.os.Build.MANUFACTURER))
-            .put("configuration_sanitized", configurationSnapshot)
+            .put("configuration_sanitized", sanitizedConfiguration)
             .put("tests", tests)
             .put("self_tests", tests)
             .put("diagnostic_findings", JSONArray(consistencyFindings))
