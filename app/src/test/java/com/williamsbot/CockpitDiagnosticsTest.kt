@@ -772,5 +772,59 @@ class CockpitDiagnosticsTest {
         observation.put("quantity", "-1")
         assertEquals("FAIL", CockpitDiagnostics.readiness(state, c, now).getString("protection_state"))
     }
+    @Test fun fifteenSymbolEvidenceAuditIsStrictAboutMissingOrDuplicatedMarkets() {
+        val quotes = JSONArray()
+        val history = JSONArray()
+        val observations = JSONArray()
+        val candidates = JSONArray()
+        fun quote(s: String) = JSONObject().put("symbol",s).put("price",100.0).put("at_ms",now-1000L)
+        fun bar(s: String, frame: String, elapsed: Long) =
+            JSONObject().put("symbol",s).put("interval",frame).put("count",160)
+                .put("newest_open_time",now-elapsed)
+        fun observation(s: String): JSONObject {
+            val check = JSONObject()
+            for (index in 1..4) check.put("STR-0$index",JSONObject().put("severity","PASS"))
+            return JSONObject().put("symbol",s).put("checks",check)
+        }
+        fun candidate(s: String) = JSONObject().put("symbol",s)
+            .put("directional_context_native",JSONObject()
+                .put("long_rank_tiebreak",1.0).put("short_rank_tiebreak",-1.0)
+                .put("can_place_orders",false))
+        for (symbol in APPROVED_FUTURES_SYMBOLS) {
+            quotes.put(quote(symbol))
+            history.put(bar(symbol,"1h",3_600_000L))
+            history.put(bar(symbol,"4h",14_400_000L))
+            observations.put(observation(symbol))
+            candidates.put(candidate(symbol))
+        }
+        val status=healthy().put("quote_observations",quotes)
+            .put("history",JSONObject().put("items",history))
+            .put("strategy_audit",observations)
+        val scanner=JSONObject().put("candidates",candidates)
+        fun check(id:String):JSONObject = CockpitDiagnostics.rows(
+            CockpitDiagnostics.checks(status,coordinator(),scanner,now))
+            .single { it.optString("id")==id }
+        val ids=listOf("DATA-01","DATA-02","DATA-03","STR-01","STR-02",
+            "STR-03","STR-04","STR-06")
+        for(id in ids) {
+            assertEquals(id,"PASS",check(id).optString("severity"))
+            assertTrue(check(id).optString("detail").contains("/15"))
+        }
+        // One missing pair makes ALL eight completeness checks NOT_VERIFIED.
+        quotes.remove(14)
+        history.remove(29)
+        history.remove(28)
+        observations.remove(14)
+        candidates.remove(14)
+        for(id in ids) assertEquals(id,"NOT_VERIFIED",check(id).optString("severity"))
+        // A duplicate with the same row count is also not a complete universe.
+        val duplicate=APPROVED_FUTURES_SYMBOLS.first()
+        quotes.put(quote(duplicate))
+        history.put(bar(duplicate,"1h",3_600_000L))
+        history.put(bar(duplicate,"4h",14_400_000L))
+        observations.put(observation(duplicate))
+        candidates.put(candidate(duplicate))
+        for(id in ids) assertEquals(id,"NOT_VERIFIED",check(id).optString("severity"))
+    }
 
 }
