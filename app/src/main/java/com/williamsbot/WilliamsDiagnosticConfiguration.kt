@@ -12,7 +12,7 @@ import org.json.JSONObject
  * This function never alters the source. It keeps ALL configuration and safety
  * keys (including risk, testnet, strategy and leverage), excluding only the
  * heavyweight *observational* decision_traces tree. Consumers needing the
- * full tree must read settings.decision_traces or signal_decision_history.json.
+ * full tree must read status.decision_traces or signal_decision_history.json.
  */
 internal fun williamsDiagnosticConfigurationSnapshot(settings: JSONObject): JSONObject {
     val result = JSONObject()
@@ -23,6 +23,6 @@ internal fun williamsDiagnosticConfigurationSnapshot(settings: JSONObject): JSON
     }
     result.put("diagnostic_projection", "CONFIGURATION_ONLY_V1")
     result.put("omitted_observation_fields", JSONArray().put("decision_traces"))
-    result.put("full_decision_trace_path", "settings.decision_traces")
+    result.put("full_decision_trace_path", "status.decision_traces")
     return result
 }
