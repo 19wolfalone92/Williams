@@ -384,6 +384,22 @@ internal fun privateStreamReconciliationMayRepeat(
 /** A completed signed account audit can expose a genuine risk/owner blocker.
  * Receiving that snapshot synchronizes DATA; it never grants order authority.
  * Transport/identity/partial-audit failures must retain the WS resync latch. */
+/**
+ * Read-only signed *forensic* GETs are P1. A partial signed account snapshot,
+ * outstanding WS generation, STOP/position operation or coordinator not READY
+ * always wins. This helper never grants order authorization.
+ */
+internal fun readOnlySignedForensicsMustDefer(
+    accountReconciliationRunning: Boolean,
+    privateReconciliationRunning: Boolean,
+    positionManagementRunning: Boolean,
+    privateStreamSyncRequired: Boolean,
+    runtimeReconcileRequired: Boolean,
+    coordinatorState: String
+): Boolean = accountReconciliationRunning || privateReconciliationRunning ||
+    positionManagementRunning || privateStreamSyncRequired || runtimeReconcileRequired ||
+    coordinatorState != "READY"
+
 internal fun futuresSignedSnapshotComplete(result: JSONObject): Boolean =
     result.optBoolean("exchange_snapshot_complete", false) &&
         result.optJSONArray("exchange_protection_observations") != null &&
@@ -12101,6 +12117,20 @@ private class NativeEngine(
         }
     }
 
+    // P1 read-only forensics must not contend with the P0 exchange-position,
+    // account-identity, STOP or private-stream signed reconciliation. The phone
+    // report shows this worker issued multiple signed userTrades GETs while
+    // current-session signed REST sync was still in flight.
+    private fun signedForensicsPriorityBlocked(): Boolean =
+        readOnlySignedForensicsMustDefer(
+            accountReconciliationRunning = futuresReconciliationRunning,
+            privateReconciliationRunning = futuresStreamReconcileRunning,
+            positionManagementRunning = nativeManagementRunning,
+            privateStreamSyncRequired = userStreamSyncRequired,
+            runtimeReconcileRequired = reconcileRequired,
+            coordinatorState = futuresCampaignCoordinator.state.name
+        )
+
     private fun scheduleReadOnlySignedFillAudit() {
         val nowMs=System.currentTimeMillis()
         synchronized(this) {
@@ -12121,6 +12151,13 @@ private class NativeEngine(
                 .put("report_generation_at_ms",nowMs)
                 .put("can_authorize_exchange_mutations",false)
             try {
+                // Never begin an optional seven-day sweep if the execution gate
+                // is reconciling signed positions or a socket generation.
+                if (signedForensicsPriorityBlocked()) {
+                    output.put("state","DEFERRED_ACTIVE_FUTURES_SAFETY_PRIORITY")
+                        .put("reason","P0 signed REST / private-stream / position supervision has priority")
+                    return@Thread
+                }
                 val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
                 val symbols=FuturesSignedTradeForensics.auditSymbols(
                     CockpitDiagnostics.rows(live).map { it.optString("symbol") },limit=8)
@@ -12133,13 +12170,7 @@ private class NativeEngine(
                 // Income pagination may require dozens of signed GETs. It is
                 // forensic P1 work and must not contend with active P0
                 // protection, pending fills or an in-flight reconciliation.
-                val safetyPriority = futuresReconciliationRunning ||
-                    futuresStreamReconcileRunning || nativeManagementRunning ||
-                    futuresCampaignCoordinator.state in setOf(
-                        NativeFuturesCampaignCoordinator.State.ENTRY_PENDING,
-                        NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
-                        NativeFuturesCampaignCoordinator.State.POSITION_UNPROTECTED,
-                        NativeFuturesCampaignCoordinator.State.EXIT_PENDING)
+                val safetyPriority = signedForensicsPriorityBlocked()
                 val incomeResult = if(safetyPriority)
                     runCatching<List<JSONObject>> {
                         throw IllegalStateException("Funding history deferred while active Futures safety work has priority")
@@ -12157,6 +12188,15 @@ private class NativeEngine(
                     output.put("funding_error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
                 }
                 for(symbol in symbols) {
+                    // A new live STOP/fill/reconnect can begin after the funding
+                    // snapshot. Yield before EACH additional userTrades request.
+                    if (signedForensicsPriorityBlocked()) {
+                        output.put("state","DEFERRED_AFTER_PARTIAL_SIGNED_FORENSICS")
+                            .put("symbols",audited)
+                            .put("full_campaign_pnl_verified",false)
+                            .put("reason","Live Futures safety work preempted optional signed read")
+                        return@Thread
+                    }
                     val ageMs=if(symbol in setOf("BNBUSDT","LTCUSDT")) sevenDaysMs
                         else 24L*60L*60L*1000L
                     // Never let one failing symbol erase independent signed
@@ -12178,7 +12218,19 @@ private class NativeEngine(
                 output.put("state","SIGNED_GET_FAILED")
                     .put("error",safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
             } finally {
-                signedFillAuditJson=output.toString()
+                // Retain older COMPLETE read-only proof when a P0 safety task
+                // preempts this P1 sweep. A deferred run never becomes a fake
+                // successful new signed snapshot or resets execution latches.
+                val prior = runCatching { JSONObject(signedFillAuditJson) }.getOrNull()
+                val preempted=output.optString("state").startsWith("DEFERRED_")
+                if (preempted &&
+                    prior?.optString("state")=="READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED") {
+                    prior.put("latest_read_only_refresh_deferred_at_ms",System.currentTimeMillis())
+                    prior.put("latest_read_only_refresh_deferred_reason",output.optString("state"))
+                    signedFillAuditJson=prior.toString()
+                } else {
+                    signedFillAuditJson=output.toString()
+                }
                 signedFillAuditRunning=false
             }
         },"williams-readonly-futures-fill-audit").apply { isDaemon=true; start() }
