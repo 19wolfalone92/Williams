@@ -7650,6 +7650,24 @@ private class NativeEngine(
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
+        // Signed proof can age AGAIN during D1/H4 evidence, position/slot
+        // lookups, H1 context and quantity construction. The only safe time
+        // to refresh is OUTSIDE the durable entry mutation Door and BEFORE
+        // coordinator.submitPendingEntry creates a new client-id intent.
+        // Refreshing inside the coordinator would deadlock account-wide locks.
+        // The coordinator independently rechecks current account equity,
+        // exact order quantity, STOP and H1 trigger before a Binance POST.
+        if (signedFuturesEntryRefreshNeeded(
+                lastRestReconcileMs, System.currentTimeMillis(), minimumRemainingMs = 35_000L)) {
+            val refreshed = reconcileFuturesThroughDoor(
+                purpose = "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH", waitForDoorMs = 30_000L)
+            val freshEnough = signedFuturesReconciliationFresh(
+                lastRestReconcileMs, System.currentTimeMillis(), 45_000L)
+            if (!refreshed.optBoolean("ok",false) || !freshEnough || !executionReady()) {
+                return rejectDecision(symbol, "PRE_ENTRY_SIGNED_EXCHANGE_PROOF_UNVERIFIED_BEFORE_ORDER_INTENT: " +
+                    refreshed.optString("blocker", "signed proof not fresh; no Binance POST"))
+            }
+        }
         val result = withCampaignMutation(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
@@ -7778,6 +7796,21 @@ private class NativeEngine(
                             ": last exchange-mutation H1 check deferred new TC2 entry; existing protective STOP unchanged")
                         .put("final_h1_context_as_of_ms",finalH1AsOf)
                 }
+            }
+            // This scan may have spent several seconds on fresh H1/mark/
+            // contract-price reads WHILE holding the order mutation Door.
+            // A proof with <20 seconds left in the strict 90s allowance
+            // must be deferred BEFORE writing an ENTRY intent. This rejects
+            // safely, instead of producing an archived ghost REJECTED ENTRY,
+            // an avoidable RECONCILE_REQUIRED latch, and no Binance order.
+            // The independent signed monitor will refresh before the next
+            // H1 revalidation; no new risk, STOP or 90s gate is waived.
+            if (!signedFuturesReconciliationFresh(
+                    lastRestReconcileMs, System.currentTimeMillis(), 70_000L)) {
+                return@withCampaignMutation JSONObject()
+                    .put("accepted",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                    .put("blocker","PRE_ENTRY_SIGNED_HEADROOM_EXHAUSTED_BEFORE_INTENT")
             }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
