@@ -138,6 +138,9 @@ class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
+    // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
+    // audit events are separate, unbounded durable records.
+    private var cockpitEventsSinceTrim = 0
     private val lastDeferredStopTrailFingerprint = linkedMapOf<String, String>()
     // Reduce repeating successful reconciliation messages in a bounded UI
     // event window. Failures and recovery transitions are NEVER compacted.
@@ -183,7 +186,16 @@ class TradingAuditStore(context: Context) :
             .put("direction", direction.take(10)).put("state", safeDiagnosticText(state))
             .put("detail", safeDiagnosticText(detail))
         recordRawEvent(event, requireDurable = true)
-        writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+        // The old code executed an ORDER BY + subquery + DELETE after EVERY
+        // Cockpit event, including dozens of campaign status observations.
+        // Keep at most 1031 short-lived UI events between trims while avoiding
+        // this disk-write spike in signed Futures reconciliation/STOP monitoring.
+        // This never deletes non-Cockpit order, fill, or STOP decision receipts.
+        cockpitEventsSinceTrim++
+        if (cockpitEventsSinceTrim >= 32) {
+            writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+            cockpitEventsSinceTrim = 0
+        }
     }
 
     /** The events table retains every non-COCKPIT decision, with no 1600-char
