@@ -5476,10 +5476,17 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     private fun saveIntents(array: JSONArray) {
-        check(executionStore.writeState(intentsKey, array.toString())) {
+        // Serialize once. This hot path runs inside signed reconciliation,
+        // where the journal may hold hundreds of historical campaigns.
+        // Re-encoding the entire JSONArray for the observer doubled allocation
+        // pressure and could delay exchange-position/STOP supervision.
+        val durableSnapshot = array.toString()
+        check(executionStore.writeState(intentsKey, durableSnapshot)) {
             "SQLite commit failed while persisting Futures execution intents; order mutation is blocked"
         }
-        // Observability must never turn a committed exchange intent into a retry.
-        runCatching { observationSink?.invoke(JSONArray(array.toString())) }
+        // Keep an isolated copy for read-only diagnostics so observer code can
+        // never mutate the in-flight execution object. Observer failures never
+        // turn a successfully committed intent into an order retry.
+        runCatching { observationSink?.invoke(JSONArray(durableSnapshot)) }
     }
 }
