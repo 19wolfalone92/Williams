@@ -41,8 +41,8 @@ def test_original_post_cleanup_signed_account_wide_verification_is_still_mandato
     assert 'historical STOP still open after signed cleanup; new entry blocked' in code
     assert code.index("val finalAlgos = adapter.allOpenAlgoOrders()") > code.index(
         "adapter.cancelAlgoOrderById(symbol, algoId)")
-    assert code.index("val finalAlgos = adapter.allOpenAlgoOrders()") < code.index(
-        "saveIntents(persisted)") if code.count("saveIntents(persisted)")==1 else True
+    assert code.index("val finalAlgos = adapter.allOpenAlgoOrders()") < code.rindex(
+        "saveIntents(persisted)")
 
 
 def test_helper_defaults_to_extra_signed_get_on_ambiguous_or_invalid_preflight():
