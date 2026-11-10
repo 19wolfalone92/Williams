@@ -102,6 +102,27 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
  * The raw event JSON is kept so a later reconciliation can reconstruct what
  * Binance told the bot, without relying on RAM or SharedPreferences.
  */
+/**
+ * The first journal observation after a process restart includes hundreds of
+ * already-terminal intents. Their complete state is in the durable execution
+ * ledger; do not replay them as newly occurred UI execution events.
+ * Active or malformed owners and genuine new transitions remain observable.
+ */
+internal fun campaignCockpitEventRequired(
+    previouslyObserved:Boolean, lifecycle:String, severity:String,
+    hasDurableIdentity:Boolean
+):Boolean = !hasDurableIdentity || previouslyObserved ||
+    lifecycle != "CLOSED_OR_STOPPED" || severity == "FAIL"
+
+/** A persisted terminal campaign is not an active missing-STOP incident.
+ * Signed exchange reconciliation, not UI telemetry, handles its orphan STOP.
+ */
+internal fun campaignCockpitIncidentRequired(
+    lifecycle:String, severity:String, protectionStatus:String
+):Boolean = severity == "FAIL" ||
+    (lifecycle != "CLOSED_OR_STOPPED" &&
+        protectionStatus in setOf("SUBMISSION_UNKNOWN", "UNRESOLVED_EXTRA_ORDER"))
+
 class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
@@ -226,12 +247,16 @@ class TradingAuditStore(context: Context) :
             val id = item.optString("client_id")
             val fields = listOf("campaign_status", "order_status", "exchange_status", "protection_status", "protective_stop", "actual_risk_audit_status")
             val fingerprint = fields.joinToString("|") { item.optString(it) }
+            val previouslyObserved = lastCampaignObservations.containsKey(id)
             recordChangedCampaignObservation(lastCampaignObservations,id,fingerprint) {
             val audit = CockpitDiagnostics.lifecycleAudit(item)
+            val lifecycle = campaignLifecycleStatus(item)
+            val severity = audit.optString("severity")
+            if (!campaignCockpitEventRequired(previouslyObserved,lifecycle,severity,id.isNotBlank()))
+                return@recordChangedCampaignObservation
             recordCockpitEvent("EXECUTION", item.optString("symbol"), item.optString("direction"),
-                campaignLifecycleStatus(item), "Post-change audit=${audit.optString("severity")}; " + fields.joinToString("; ") { "$it=${item.optString(it)}" })
-            if (audit.optString("severity") == "FAIL" ||
-                item.optString("protection_status") in setOf("SUBMISSION_UNKNOWN", "UNRESOLVED_EXTRA_ORDER")) {
+                lifecycle, "Post-change audit=${severity}; " + fields.joinToString("; ") { "$it=${item.optString(it)}" })
+            if (campaignCockpitIncidentRequired(lifecycle,severity,item.optString("protection_status"))) {
                 // A bounded durable incident keeps the events immediately preceding a failure.
                 val incident = recentCockpitEvents(80)
                 val values = ContentValues().apply {
