@@ -336,7 +336,7 @@ class TradingAuditStore(context: Context) :
         writableDatabase.insertOrThrow("h1_entry_passport_events",null,row)
     }.getOrDefault(0L)
 
-    /** One query serves all ten symbols; no per-symbol polling scan. */
+    /** One query serves all approved Futures symbols; no per-symbol polling scan. */
     @Synchronized
     internal fun latestEntryPassportEvents():Map<String,JSONObject> {
         val result=linkedMapOf<String,JSONObject>()
@@ -358,9 +358,19 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    fun lastCockpitIncident(): JSONObject? = readableDatabase.query("events", arrayOf("raw_json"),
+    fun lastCockpitIncident(): JSONObject? = readableDatabase.query("events",
+        arrayOf("raw_json", "received_at"),
         "event_type = ?", arrayOf("COCKPIT_INCIDENT"), null, null, "id DESC", "1").use {
-        if (it.moveToFirst()) JSONObject(it.getString(0)) else null
+        if (!it.moveToFirst()) return@use null
+        val storedAt = it.getLong(1)
+        // The latest SQLite incident can be hours older than the installed APK.
+        // Preserve its forensic contents but NEVER present it as a current
+        // signed exchange protection observation or evidence of new errors.
+        JSONObject(it.getString(0))
+            .put("stored_incident_at_ms", storedAt)
+            .put("stored_incident_age_ms", if (storedAt > 0L)
+                (System.currentTimeMillis()-storedAt).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("source_scope", "HISTORICAL_SQLITE_INCIDENT_NOT_LIVE_BINANCE_PROOF")
     }
 
     override fun onCreate(db: SQLiteDatabase) {
