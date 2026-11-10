@@ -24,7 +24,7 @@ class WilliamsDiagnosticConfigurationTest {
 
         assertFalse(copy.has("decision_traces"))
         assertEquals("CONFIGURATION_ONLY_V1", copy.getString("diagnostic_projection"))
-        assertEquals("settings.decision_traces", copy.getString("full_decision_trace_path"))
+        assertEquals("status.decision_traces", copy.getString("full_decision_trace_path"))
         assertEquals("decision_traces", copy.getJSONArray("omitted_observation_fields")
             .getString(0))
         for (key in listOf("version", "testnet_live_execution", "max_daily_loss_pct",
