@@ -332,7 +332,10 @@ internal class BinanceUsdMFuturesMarketData(
     ): Boolean {
         if (openTimeMs <= 0L || exchangeNowMs <= 0L) return false
         val closeTimeMs = klineCloseTimeMs(openTimeMs, interval)
-        if (closeTimeMs == Long.MAX_VALUE) return false
+        if (closeTimeMs == Long.MAX_VALUE || exchangeNowMs <= closeTimeMs) return false
+        // A future/forming bar is NEVER a valid cached last CLOSED candle.
+        // Without this guard, a corrupt/future SQLite timestamp could cause
+        // history backfill and chart freshness to skip Binance verification.
         val nextOpenTimeMs = closeTimeMs + 1L
         val nextCloseTimeMs = klineCloseTimeMs(nextOpenTimeMs, interval)
         return exchangeNowMs <= nextCloseTimeMs
