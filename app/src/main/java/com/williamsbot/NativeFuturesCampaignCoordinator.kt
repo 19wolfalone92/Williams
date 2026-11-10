@@ -805,9 +805,27 @@ internal class NativeFuturesCampaignCoordinator(
     // Exposes which expensive signed operation a slow coordinator is waiting for.
     @Volatile private var reconciliationPhase = "NOT_STARTED"
     @Volatile private var reconciliationPhaseStartedAtMs = 0L
+    @Volatile private var reconciliationPhaseDurationsJson = "{}"
+    // This is read-only monitoring; never reuse diagnostic durations for
+    // Binance order/STOP readiness, client ID matching, or risk authorization.
+    private val reconciliationPhaseElapsedMs = linkedMapOf<String, Long>()
     private fun noteReconciliationPhase(phase: String) {
+        val at = clock()
+        if (phase == "SIGNED_ACCOUNT_BASELINE") {
+            reconciliationPhaseElapsedMs.clear()
+        } else if (reconciliationPhaseStartedAtMs > 0L &&
+            at >= reconciliationPhaseStartedAtMs && phase != reconciliationPhase) {
+            reconciliationPhaseElapsedMs[reconciliationPhase] =
+                at - reconciliationPhaseStartedAtMs
+        }
         reconciliationPhase = phase
-        reconciliationPhaseStartedAtMs = clock()
+        reconciliationPhaseStartedAtMs = at
+        reconciliationPhaseDurationsJson =
+            JSONObject().apply {
+                reconciliationPhaseElapsedMs.forEach { (name, elapsed) ->
+                    put(name, elapsed)
+                }
+            }.toString()
     }
     @Volatile private var verifiedRiskCapManagementAtMs = 0L
     /** Signed exchange observations; never infer strategy ownership from an order prefix. */
@@ -893,7 +911,12 @@ internal class NativeFuturesCampaignCoordinator(
     }
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
         adapterFactory().userTrades(symbol, startTime, endTime, limit)
-    fun intentsSnapshot(): JSONArray = JSONArray(intents().toString())
+    // intents() already parses a NEW JSONArray from the durable SQLite bytes.
+    // Re-serializing that fresh object and parsing it a second time used to
+    // allocate another full historical campaign ledger on every diagnostics /
+    // signed-reconciliation observer read. The caller still receives an
+    // isolated mutable snapshot, never the coordinator's in-flight object.
+    fun intentsSnapshot(): JSONArray = intents()
 
     /** Persist the outcome of read-only trade-stat reconstruction; never alters exchange state. */
     fun markTradeJournalStatus(clientId: String, status: String, detail: String? = null): Boolean =
@@ -4607,6 +4630,10 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_finished_at_ms", reconciliationFinishedAtMs)
             .put("reconciliation_phase",reconciliationPhase)
             .put("reconciliation_phase_started_at_ms",reconciliationPhaseStartedAtMs)
+            .put("reconciliation_phase_elapsed_ms",if(reconciliationActive &&
+                reconciliationPhaseStartedAtMs > 0L && now >= reconciliationPhaseStartedAtMs)
+                now-reconciliationPhaseStartedAtMs else 0L)
+            .put("reconciliation_phase_durations_ms",JSONObject(reconciliationPhaseDurationsJson))
             .put("external_open_orders",JSONArray(externalOrderObservationsJson))
             .put("exchange_protection_observations",JSONArray(externalProtectionObservationsJson))
             .put("verified_external_stop_management_symbols",JSONArray(externalStopManagementSymbolsJson))
