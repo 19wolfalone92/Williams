@@ -43,6 +43,17 @@ def test_preentry_signed_refresh_only_for_valid_h1_signal_and_before_exchange_si
         "val livePositionSnapshot = futuresCampaignCoordinator.positionsSnapshot()")
     assert 'PRE_ENTRY_SIGNED_EXCHANGE_PROOF_UNVERIFIED' in block
     assert 'submitNativeFuturesCampaignEntry(candidate)' in block
+    # A second refresh happens AFTER sizing but BEFORE a durable ENTRY intent
+    # is persisted; final H1 network proof may consume the remaining headroom.
+    placement=rt.split("private fun submitNativeFuturesCampaignEntryChecked(",1)[1].split(
+        "private fun scanDailyRiskAllowsEntry()",1)[0]
+    assert 'minimumRemainingMs = 35_000L' in placement
+    assert placement.index('"PRE_ENTRY_SIGNED_ACCOUNT_REFRESH"') < placement.index(
+        'val result = withCampaignMutation(')
+    assert 'PRE_ENTRY_SIGNED_HEADROOM_EXHAUSTED_BEFORE_INTENT' in placement
+    assert 'lastRestReconcileMs, System.currentTimeMillis(), 70_000L' in placement
+    assert placement.index('PRE_ENTRY_SIGNED_HEADROOM_EXHAUSTED_BEFORE_INTENT') < placement.index(
+        'futuresCampaignCoordinator.submitPendingEntry(plan)')
 
 
 def test_original_signed_futures_and_stop_fences_remain_unchanged():
