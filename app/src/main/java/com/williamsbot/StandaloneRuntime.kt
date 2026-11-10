@@ -496,6 +496,21 @@ internal fun signedFuturesReconciliationFresh(
 ): Boolean = lastSuccessfulAtMs > 0L && nowMs >= lastSuccessfulAtMs &&
     maximumAgeMs > 0L && nowMs - lastSuccessfulAtMs <= maximumAgeMs
 
+/**
+ * A read-only scanner may identify a valid H1 setup near the 90s signed REST
+ * expiry. Reserve enough time for the final network/H1/STOP checks by asking
+ * for a NEW signed account-wide reconciliation in advance, never by extending
+ * the 90s admission TTL. An invalid/future timestamp is always a refresh need.
+ * Only a real candidate calls this; background H1 browsing does not.
+ */
+internal fun entrySignedProofNeedsRefresh(
+    lastSuccessfulAtMs: Long,
+    nowMs: Long,
+    minimumRemainingMs: Long = 45_000L
+): Boolean = lastSuccessfulAtMs <= 0L || nowMs < lastSuccessfulAtMs ||
+    !signedFuturesReconciliationFresh(lastSuccessfulAtMs, nowMs) ||
+    90_000L - (nowMs - lastSuccessfulAtMs) <= minimumRemainingMs
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -679,7 +694,9 @@ internal fun runtimeStartButtonEnabled(
  * Startup and operator recovery deliberately require a strict lock wait.
  */
 internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
-    purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
+    purpose == "POSITION_MANAGEMENT_RECONCILIATION" ||
+    purpose == "USER_STREAM_RECONCILIATION" ||
+    purpose == "WILLIAMS_PRE_ENTRY_SIGNED_REFRESH"
 
 /** A private WS reconnect MUST eventually get an account-wide signed snapshot.
  * Position management may run every 2.5s while orphaned exposure is present;
@@ -688,7 +705,8 @@ internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
  * for at most 15s, WITHOUT skipping the durable execution door. Maintenance
  * ticks stay nonblocking and all mutation/entry gates remain unchanged. */
 internal fun futuresReconciliationLockBudgetMs(purpose:String,maximumWaitMs:Long):Long = when(purpose) {
-    "POSITION_MANAGEMENT_RECONCILIATION" -> 0L
+    "POSITION_MANAGEMENT_RECONCILIATION",
+    "WILLIAMS_PRE_ENTRY_SIGNED_REFRESH" -> 0L
     "USER_STREAM_RECONCILIATION" -> minOf(15_000L,maximumWaitMs.coerceAtLeast(0L))
     else -> maximumWaitMs.coerceAtLeast(0L)
 }
@@ -7204,6 +7222,55 @@ private class NativeEngine(
         persistSafetyFlag("reconcile_required",true)
     }
 
+    /**
+     * Renew only expiring/expired signed account evidence for a confirmed
+     * candidate. Never do this INSIDE withCampaignMutation: a full account-wide
+     * reconciliation may itself replace/cancel a protective STOP and must own
+     * that Execution Door alone. Connection/paused/kill barriers are immutable.
+     */
+    private fun refreshSignedProofForEntryIfNeeded(symbol: String, stage: String): Boolean {
+        if (!entrySignedProofNeedsRefresh(lastRestReconcileMs,System.currentTimeMillis()))
+            return true
+        if (!running || paused || reconcileRequired || killLatched ||
+            !userStreamConnected || userStreamSyncRequired) {
+            rejectDecision(symbol,"PRE_ENTRY_SIGNED_REFRESH_UNAVAILABLE_$stage: runtime/private-stream safety blocker")
+            return false
+        }
+        if (futuresReconciliationRunning || futuresStreamReconcileRunning) {
+            // The already-in-flight owner has sole mutation authority. Once
+            // it completes, re-read the H1 signal from fresh closed bars.
+            scanRetryAfterReconciliation = true
+            rejectDecision(symbol,"PRE_ENTRY_SIGNED_REFRESH_DEFERRED_$stage: signed REST already running")
+            return false
+        }
+        val result=runCatching {
+            reconcileFuturesThroughDoor("WILLIAMS_PRE_ENTRY_SIGNED_REFRESH")
+        }.getOrElse { failure ->
+            rejectDecision(symbol,"PRE_ENTRY_SIGNED_REFRESH_FAILED_$stage: "+
+                (failure.message ?: failure.javaClass.simpleName))
+            return false
+        }
+        if (!result.optBoolean("ok",false)) {
+            if (result.optBoolean("deferred_to_active_reconciliation",false))
+                scanRetryAfterReconciliation = true
+            rejectDecision(symbol,"PRE_ENTRY_SIGNED_REFRESH_BLOCKED_$stage: "+
+                result.optString("blocker","no fresh signed account/STOP proof"))
+            return false
+        }
+        val fresh=signedFuturesReconciliationFresh(lastRestReconcileMs,System.currentTimeMillis())
+        if (!fresh || !userStreamConnected || userStreamSyncRequired) {
+            rejectDecision(symbol,"PRE_ENTRY_SIGNED_REFRESH_NOT_CURRENT_$stage: socket generation or signed baseline changed")
+            return false
+        }
+        // Success is only proof of completed reconciliation. It NEVER waives
+        // the final native coordinator, risk, STOP, price or transport checks.
+        runCatching { auditStore.recordCockpitEvent(
+            "ENTRY_PREFLIGHT",symbol,state="SIGNED_RECONCILED",
+            detail="stage=$stage; exchange_snapshot_started_at_ms=$lastRestReconcileMs; no entry authority assumed"
+        ) }
+        return true
+    }
+
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
         try { submitNativeFuturesCampaignEntryChecked(candidate) } catch(failure:Exception) {
             rejectDecision(candidate.symbol,failure.message ?: failure.javaClass.simpleName)
@@ -7217,7 +7284,13 @@ private class NativeEngine(
         if (forceTestnetMode) return rejectDecision(symbol,"OPERATOR_DIRECTION_MODE_ACTIVE")
         // Explicit user policy gates new exposure only; ALWAYS is the default.
         // Position protection/management and explicit exits remain active 24/7.
-        if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
+        if (!candidate.campaignReady) return rejectDecision(symbol,"H1_CANDIDATE_NOT_READY: "+candidate.reason)
+        // During a long scan signed REST can age beyond 90s. A real TC2
+        // candidate must be given a fresh account/STOP reconciliation before
+        // rejecting it as stale; all existing admission checks still apply.
+        if (!refreshSignedProofForEntryIfNeeded(symbol,"CANDIDATE")) return
+        if (!executionReady()) return rejectDecision(symbol,
+            "RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
         val sessionClockMs = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
             lastError = "FUTURES_SESSION_CLOCK_UNAVAILABLE: " +
                 (failure.message ?: failure.javaClass.simpleName)
@@ -7622,6 +7695,12 @@ private class NativeEngine(
         )
         runCatching { auditStore.recordCockpitEvent("SIGNAL_RISK", symbol, direction.name, signal.type,
             "${signal.reason}; H1 bar=${signal.signalBarTimeMs}; trigger=$trigger; stop=$stop; qty=$qty; reserved_risk=$riskPct") }
+        // Expensive wave, leverage, daily risk and order-filter checks may have
+        // consumed most of the original REST freshness budget. Refresh before
+        // reserving the durable entry Door, never while a lease is held.
+        if (!refreshSignedProofForEntryIfNeeded(symbol,"FINAL_PREFLIGHT")) return
+        if (!executionReady()) return rejectDecision(symbol,
+            "PRE_ENTRY_SIGNED_REFRESH_CHANGED_ACCOUNT_OR_EXECUTION_GATE")
         val result = withCampaignMutation(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
@@ -7751,7 +7830,28 @@ private class NativeEngine(
                         .put("final_h1_context_as_of_ms",finalH1AsOf)
                 }
             }
+            // The following coordinator may still execute additional signed
+            // pre-transport reads. If all H1 work already aged the account
+            // snapshot beyond 90s, return a NO-MUTATION safe rejection, then
+            // refresh outside the Door and re-scan. Never weaken the strict
+            // adapter beforeExposureTransport gate or replay an old signal.
+            if (!signedFuturesReconciliationFresh(lastRestReconcileMs,System.currentTimeMillis())) {
+                return@withCampaignMutation JSONObject()
+                    .put("accepted",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false)
+                    .put("entry_signed_refresh_required",true)
+                    .put("blocker","SIGNED_RECONCILIATION_EXPIRED_DURING_H1_PREFLIGHT")
+            }
             futuresCampaignCoordinator.submitPendingEntry(plan)
+        }
+        if (result.optBoolean("entry_signed_refresh_required",false)) {
+            // The lease has been released in withCampaignMutation's finally.
+            // A successful signed refresh only requests an early NEW H1 scan.
+            // The old candidate is not submitted, preventing look-ahead or a
+            // consumed STOP level from being traded after a network delay.
+            if (refreshSignedProofForEntryIfNeeded(symbol,"AFTER_SAFE_DEFER")) {
+                scanRetryAfterReconciliation = true
+            }
         }
         if(!result.optBoolean("accepted",false)) rejectDecision(symbol,result.optString("blocker","EXECUTION_DOOR_REJECTED"))
         runCatching { auditStore.recordCockpitEvent("ORDER_RESPONSE", symbol, direction.name,
