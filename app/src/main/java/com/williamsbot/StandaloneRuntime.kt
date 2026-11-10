@@ -12223,8 +12223,8 @@ private class NativeEngine(
                 // successful new signed snapshot or resets execution latches.
                 val prior = runCatching { JSONObject(signedFillAuditJson) }.getOrNull()
                 val preempted=output.optString("state").startsWith("DEFERRED_")
-                if (preempted &&
-                    prior?.optString("state")=="READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED") {
+                if (preempted && prior != null &&
+                    prior.optString("state")=="READ_COMPLETE_OR_EXPLICITLY_UNVERIFIED") {
                     prior.put("latest_read_only_refresh_deferred_at_ms",System.currentTimeMillis())
                     prior.put("latest_read_only_refresh_deferred_reason",output.optString("state"))
                     signedFillAuditJson=prior.toString()
