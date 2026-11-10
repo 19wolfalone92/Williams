@@ -31,6 +31,33 @@ private val TERMINAL_CAMPAIGN_STATUSES = setOf("CLOSED_OR_STOPPED")
 internal const val FUTURES_MAX_ENTRY_RISK_PCT = 0.0025
 internal const val FUTURES_MAX_PORTFOLIO_RISK_PCT = 0.006
 
+/**
+ * An account-wide, signed, successful Binance open-algo snapshot can rule out
+ * an archived STOP client id at the instant of that snapshot. It is a negative
+ * preflight ONLY, never authorization to cancel any order or admit new risk.
+ *
+ * An exact match or malformed/ambiguous response REQUIRES a fresh per-symbol
+ * signed GET before inspecting cancellation candidates. In all cases, the
+ * reconciliation demands a new account-wide signed GET AFTER archival cleanup;
+ * an order arriving between these snapshots blocks entry.
+ */
+internal fun historicalFlatAlgoNeedsSymbolRefresh(
+    signedAccountAlgos: JSONArray,
+    symbol: String,
+    storedProtectionIds: Set<String>
+): Boolean {
+    if (symbol.isBlank() || storedProtectionIds.isEmpty()) return true
+    for (index in 0 until signedAccountAlgos.length()) {
+        val order = signedAccountAlgos.optJSONObject(index) ?: return true
+        val seenSymbol = order.optString("symbol")
+        val seenId = order.optString("clientAlgoId")
+        if (seenSymbol.isBlank() || seenId.isBlank()) return true
+        if (seenSymbol.equals(symbol, ignoreCase = true) && seenId in storedProtectionIds)
+            return true
+    }
+    return false
+}
+
 /** Missing/unknown algo status is never proof of an active exchange-side stop. */
 internal fun isActiveFuturesProtectionStatus(status: String): Boolean =
     status.trim().uppercase(Locale.US) in setOf("NEW", "WORKING")
@@ -2632,6 +2659,13 @@ internal class NativeFuturesCampaignCoordinator(
             // successful cancellation invalidates the cache immediately. Fresh
             // account-wide proof is required below before entry admission.
             val historicalFlatAlgoBySymbol = mutableMapOf<String, JSONArray>()
+            // An old STOP absent from the already signed account-wide snapshot
+            // should not cost one more signed /openAlgoOrders GET per symbol.
+            // A new or ambiguous STOP still causes a per-symbol recheck, and
+            // every remembered historical STOP is checked against a completely
+            // new signed account-wide snapshot before the gate can turn READY.
+            val historicalFlatSymbolQueried = mutableSetOf<String>()
+            val historicalFlatMustRefresh = mutableSetOf<String>()
             val historicalFlatProtectionIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             // Once Binance reports the symbol flat, prior position intents are terminal.
             for (i in 0 until persisted.length()) {
@@ -2693,9 +2727,22 @@ internal class NativeFuturesCampaignCoordinator(
                     if (knownProtectionIds.isNotEmpty()) {
                         historicalFlatProtectionIdsBySymbol.getOrPut(symbol) { mutableSetOf() }
                             .addAll(knownProtectionIds)
-                        val algos = historicalFlatAlgoBySymbol.getOrPut(symbol) {
-                            adapter.openAlgoOrders(symbol)
-                        }
+                        val requiresFreshSymbolQuery = symbol in historicalFlatMustRefresh ||
+                            historicalFlatAlgoNeedsSymbolRefresh(
+                                allOpenAlgoOrders, symbol, knownProtectionIds
+                            )
+                        val algos = if (requiresFreshSymbolQuery &&
+                            symbol !in historicalFlatSymbolQueried) {
+                            // A matching account-wide snapshot is NOT current
+                            // mutation authority. Refetch before even considering
+                            // a DELETE. The original exact ID/side/quantity/
+                            // MARK_PRICE/STOP proof and fresh positions check stay.
+                            adapter.openAlgoOrders(symbol).also {
+                                historicalFlatAlgoBySymbol[symbol] = it
+                                historicalFlatSymbolQueried.add(symbol)
+                                historicalFlatMustRefresh.remove(symbol)
+                            }
+                        } else historicalFlatAlgoBySymbol.getOrPut(symbol) { JSONArray() }
                         var cancelledOldStop = false
                         for (j in 0 until algos.length()) {
                             val order = algos.optJSONObject(j)
@@ -2762,6 +2809,8 @@ internal class NativeFuturesCampaignCoordinator(
                             // exchange orders. Invalidate this symbol's signed
                             // snapshot even when settlement reports unresolved.
                             historicalFlatAlgoBySymbol.remove(symbol)
+                            historicalFlatSymbolQueried.remove(symbol)
+                            historicalFlatMustRefresh.add(symbol)
                             if (!nativeStopReplacementEngine(adapter, persisted).settleFlat(intent)) {
                                 actualRiskAuditBlocked = true
                                 actualRiskAuditBlocker = "$symbol flat position has an unresolved native STOP submission identity"
