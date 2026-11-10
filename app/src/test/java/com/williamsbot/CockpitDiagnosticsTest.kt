@@ -376,6 +376,46 @@ class CockpitDiagnosticsTest {
             !readiness.isNull("entry_risk_budget_remaining_pct"))
     }
 
+    @Test fun runningScannerDoesNotFlickerSignedEntryPermissionDuringFreshH1Scan() {
+        // Exact phone 4.64.17 case: 15/15 H1 scan RUNNING, native signed
+        // REST, current private WS and execution_enabled all independently true.
+        val baseline = healthy().put("scanner_state","READY")
+            .put("scanner_last_scan_at",now-45_000L)
+        val before = CockpitDiagnostics.readiness(baseline,coordinator(),now)
+        assertTrue(before.optString("new_entries_reason"),before.getBoolean("new_entries_allowed"))
+        assertTrue(before.getBoolean("scanner_last_completed_observation_ready"))
+        val running = CockpitDiagnostics.readiness(
+            baseline.put("scanner_state","RUNNING"),coordinator(),now)
+        assertTrue(running.optString("new_entries_reason"),running.getBoolean("new_entries_allowed"))
+        assertFalse(running.getBoolean("scanner_last_completed_observation_ready"))
+        assertEquals("RUNNING",running.getString("scanner_read_only_state"))
+        assertTrue(running.getString("new_entries_reason").contains("разрешены"))
+        val finished = CockpitDiagnostics.readiness(
+            baseline.put("scanner_state","READY"),coordinator(),now)
+        assertTrue(finished.getBoolean("new_entries_allowed"))
+        // READY_BLOCKED is a historical scan result; independently refreshed
+        // signed execution authority can become READY without redoing H1.
+        assertTrue(CockpitDiagnostics.readiness(
+            baseline.put("scanner_state","READY_BLOCKED"),coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+    }
+
+    @Test fun scannerDoesNotOverrideRealRiskOrExchangeStopSafetyBarriers() {
+        val s=healthy().put("scanner_state","RUNNING")
+        assertFalse(CockpitDiagnostics.readiness(
+            s.put("execution_enabled",false),coordinator(),now).getBoolean("new_entries_allowed"))
+        s.put("execution_enabled",true)
+        assertFalse(CockpitDiagnostics.readiness(s,
+            coordinator().put("ready_for_new_entry",false)
+                .put("blocker","exchange_reconciliation_in_progress"),now)
+            .getBoolean("new_entries_allowed"))
+        assertFalse(CockpitDiagnostics.readiness(s.put("paused",true),
+            coordinator(),now).getBoolean("new_entries_allowed"))
+        s.put("paused",false).put("reserved_risk_pct",0.006)
+        assertFalse(CockpitDiagnostics.readiness(s,coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+    }
+
     @Test fun staleDisplayOnlyPositionsDoNotOverrideAuthoritativeFuturesEntryGate() {
         val s = healthy().put("positions_snapshot_ok", false).put("positions_snapshot_at_ms", now - 20_000)
         val readiness = CockpitDiagnostics.readiness(s, coordinator(), now)
