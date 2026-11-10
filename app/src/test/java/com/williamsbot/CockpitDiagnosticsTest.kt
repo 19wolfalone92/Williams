@@ -405,6 +405,51 @@ class CockpitDiagnosticsTest {
         assertFalse(CockpitDiagnostics.fresh(now + 1, now, 60_000))
         assertFalse(CockpitDiagnostics.fresh(0, now, 60_000))
     }
+    @Test fun realPhoneRunningScannerDoesNotFlipNativeExecutionDoorToFalse() {
+        // Reproduce Samsung 4.64.17 at 2026-11-10 16:10 UTC:
+        // scanner=RUNNING, previous H1 scan only 45s ago, signed REST and
+        // coordinator READY, native execution_enabled=true. Old UI falsely
+        // displayed "Сканер: Работает" and prohibited entries ~every 30s.
+        val refreshing = healthy().put("scanner_state","RUNNING")
+            .put("scanner_last_scan_at",now-45_000L)
+        val result = CockpitDiagnostics.readiness(refreshing,coordinator(),now)
+        assertTrue(result.toString(),result.getBoolean("new_entries_allowed"))
+        assertTrue(result.getBoolean("execution_door_ready"))
+        assertTrue(result.getBoolean("scanner_currently_running"))
+        assertTrue(result.getBoolean("scanner_last_complete_analysis_fresh"))
+        assertFalse(result.getString("new_entries_reason").startsWith("Сканер:"))
+
+        // A genuinely blocked signed transport is still blocked regardless
+        // of RUNNING or READY; scanner freshness CANNOT grant entry authority.
+        refreshing.put("execution_enabled",false)
+        assertFalse(CockpitDiagnostics.readiness(refreshing,coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+        refreshing.put("execution_enabled",true).put("reconcile_required",true)
+        assertFalse(CockpitDiagnostics.readiness(refreshing,coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+    }
+
+    @Test fun signedCoordinatorAndRiskAlwaysOutrankScannerOrUiCache() {
+        val s = healthy().put("scanner_state","RUNNING")
+            .put("scanner_last_scan_at",now-121_000L)
+        val ready = CockpitDiagnostics.readiness(s,coordinator(),now)
+        // UI says the native signed door is ready for a NEW independently
+        // verified H1 candidate; stale chart analysis itself is never a trade.
+        assertTrue(ready.getBoolean("new_entries_allowed"))
+        assertFalse(ready.getBoolean("scanner_last_complete_analysis_fresh"))
+        val busy=coordinator().put("ready_for_new_entry",false)
+            .put("blocker","exchange_reconciliation_in_progress")
+        val blocked=CockpitDiagnostics.readiness(s,busy,now)
+        assertFalse(blocked.getBoolean("new_entries_allowed"))
+        assertTrue(blocked.getString("new_entries_reason").contains("сверка"))
+        s.put("reserved_risk_pct",0.006)
+        assertFalse(CockpitDiagnostics.readiness(s,coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+        s.put("reserved_risk_pct",0.0).put("user_stream_sync_required",true)
+        assertFalse(CockpitDiagnostics.readiness(s,coordinator(),now)
+            .getBoolean("new_entries_allowed"))
+    }
+
     @Test fun scannerBlockedAndCoordinatorBlockedAreDifferentFromTechnicalReadiness() {
         val s = healthy().put("scanner_state", "READY_BLOCKED")
         val c = coordinator().put("ready_for_new_entry", false)
