@@ -293,16 +293,20 @@ class ScannerReadinessTest {
         assertEquals(false, streamNeedsReconnect(false, 1_000L, 1_000L, 100_000L, 45_000L))
     }
 
-    @Test fun signedAccountMonitorIsNeverInitiatedInsideH1Scan() {
+    @Test fun signedSafetyMonitorIsNeverStarvedByReadOnlyH1Scan() {
         val now = 1_800_000_000_000L
-        assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
+        // The scanner is P1: it must never block a due P0 signed position,
+        // pending-entry, or STOP reconciliation. The actual trade gate still
+        // fails closed until that exchange reconciliation completes.
+        assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
             "READY", scanning = true, reconciliationActive = false))
+        // The single in-flight account-wide lock is still mandatory.
         assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 60_000, now - 60_000,
-            "READY", scanning = false, reconciliationActive = true))
+            "READY", scanning = true, reconciliationActive = true))
         assertTrue(shouldScheduleIndependentFuturesMonitor(now, now - 46_000, now - 46_000,
             "READY", scanning = false, reconciliationActive = false))
         assertFalse(shouldScheduleIndependentFuturesMonitor(now, now - 20_000, now - 20_000,
-            "READY", scanning = false, reconciliationActive = false))
+            "READY", scanning = true, reconciliationActive = false))
     }
 
     @Test fun protectedPositionAndPendingEntryStillReceiveFastIndependentMonitoring() {
