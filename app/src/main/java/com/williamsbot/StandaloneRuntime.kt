@@ -496,6 +496,26 @@ internal fun signedFuturesReconciliationFresh(
 ): Boolean = lastSuccessfulAtMs > 0L && nowMs >= lastSuccessfulAtMs &&
     maximumAgeMs > 0L && nowMs - lastSuccessfulAtMs <= maximumAgeMs
 
+/**
+ * A fresh signed baseline at the START of a scan may expire while BTC..BCH
+ * analysis, D1/H4 context, sizing and the exact H1 final verifier run.
+ * For a confirmed candidate only, proactively refresh when less than 45s of
+ * the original STRICT 90s Binance signed-provenance window remains.
+ *
+ * This only requests more fresh exchange evidence; it NEVER grants exposure,
+ * lengthens TTL, alters STOP or bypasses the durable execution door.
+ */
+internal fun signedFuturesEntryRefreshNeeded(
+    lastSignedExchangeSnapshotStartedAtMs: Long,
+    nowMs: Long,
+    minimumRemainingMs: Long = 45_000L
+): Boolean {
+    if (nowMs <= 0L || lastSignedExchangeSnapshotStartedAtMs <= 0L ||
+        lastSignedExchangeSnapshotStartedAtMs > nowMs) return true
+    val age = nowMs - lastSignedExchangeSnapshotStartedAtMs
+    return age >= 90_000L - minimumRemainingMs.coerceIn(0L, 90_000L)
+}
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -8028,6 +8048,38 @@ private class NativeEngine(
                 NativeFuturesCampaignCoordinator.State.ENTRY_PENDING
             ) || !campaignCoordinatorReadyForEntry()
         ) return
+        // Only a GENUINE completed H1 entry candidate can request this
+        // additional signed baseline. An ordinary read-only scanner NEVER
+        // triggers signed account-wide reconciliation; candidate submission
+        // requires extra margin before its slow book/sizing/final proof chain.
+        // This fixes a demonstrated XRPUSDT rejection:
+        // SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY. Without the refresh, a
+        // 60-89s-old snapshot can expire AFTER the durable order intent is
+        // created; the coordinator correctly refuses POST but leaves a
+        // RECONCILE_REQUIRED cycle. Refresh BEFORE any new entry intent,
+        // account/risk calculation, or exchange order mutation.
+        if (ranked.any { it.campaignReady } &&
+            signedFuturesEntryRefreshNeeded(lastRestReconcileMs, System.currentTimeMillis())) {
+            val refreshed = reconcileFuturesThroughDoor(
+                purpose = "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH",
+                waitForDoorMs = 30_000L
+            )
+            val stillFresh = signedFuturesReconciliationFresh(
+                lastRestReconcileMs, System.currentTimeMillis(), 45_000L)
+            if (!refreshed.optBoolean("ok", false) || !stillFresh ||
+                !executionReady()) {
+                // No order intent was created; ordinary independent P0
+                // supervision can retry and the next H1 scan revalidates all
+                // signal levels. Never convert a failed GET into an entry.
+                scannerState = "READY_BLOCKED"
+                scannerError = "PRE_ENTRY_SIGNED_EXCHANGE_PROOF_UNVERIFIED: " +
+                    refreshed.optString("blocker", "signed baseline unavailable or already stale")
+                ranked.filter { it.campaignReady }.forEach { candidate ->
+                    rejectDecision(candidate.symbol, scannerError ?: "PRE_ENTRY_SIGNED_EXCHANGE_PROOF_UNVERIFIED")
+                }
+                return
+            }
+        }
         // Fetch the exchange snapshot exactly once. The previous implementation
         // performed a signed REST request for every array element while iterating;
         // this multiplied latency and rate-limit usage by the account's row count.
