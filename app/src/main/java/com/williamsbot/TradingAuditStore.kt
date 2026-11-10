@@ -134,6 +134,13 @@ internal fun campaignCockpitIncidentRequired(
     (!historicalTerminal &&
         protectionStatus in setOf("SUBMISSION_UNKNOWN", "UNRESOLVED_EXTRA_ORDER"))
 
+// Distinct bounded retention: UI lifecycle events cannot evict safety incidents.
+// Native execution/STOP exchange receipts are outside both queries.
+internal const val COCKPIT_PROJECTION_TRIM_SQL =
+    "DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND event_type != 'COCKPIT_INCIDENT' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' AND event_type != 'COCKPIT_INCIDENT' ORDER BY id DESC LIMIT 1000)"
+internal const val COCKPIT_INCIDENT_TRIM_SQL =
+    "DELETE FROM events WHERE event_type = 'COCKPIT_INCIDENT' AND id NOT IN (SELECT id FROM events WHERE event_type = 'COCKPIT_INCIDENT' ORDER BY id DESC LIMIT 100)"
+
 class TradingAuditStore(context: Context) :
     SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
 
@@ -193,7 +200,11 @@ class TradingAuditStore(context: Context) :
         // This never deletes non-Cockpit order, fill, or STOP decision receipts.
         cockpitEventsSinceTrim++
         if (cockpitEventsSinceTrim >= 32) {
-            writableDatabase.execSQL("DELETE FROM events WHERE event_type LIKE 'COCKPIT_%' AND id NOT IN (SELECT id FROM events WHERE event_type LIKE 'COCKPIT_%' ORDER BY id DESC LIMIT 1000)")
+            // Incident archives are NOT UI timeline rows; including them in
+            // the original 1000-row projection evicted real UI context and
+            // destroyed forensic incidents just because healthy events arrived.
+            writableDatabase.execSQL(COCKPIT_PROJECTION_TRIM_SQL)
+            writableDatabase.execSQL(COCKPIT_INCIDENT_TRIM_SQL)
             cockpitEventsSinceTrim = 0
         }
     }
