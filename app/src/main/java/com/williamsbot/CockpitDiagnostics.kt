@@ -204,12 +204,14 @@ internal object CockpitDiagnostics {
                 .put("observed_at_ms", now).put("detail", detail))
         }
         val ready = readiness(status, coordinator, now)
+        val approvedCount = APPROVED_FUTURES_SYMBOLS.size
+        val approvedSet = APPROVED_FUTURES_SYMBOLS.toSet()
         val quotes = rows(status.optJSONArray("quote_observations"))
         val badQuotes = quotes.filter { !fresh(it.optLong("at_ms"), now, QUOTE_TTL_MS) ||
             !it.optDouble("price").let { v -> v.isFinite() && v > 0.0 } }
-        check("DATA-01", "binance", "Котировки десяти пар",
-            if (quotes.size != 10 || quotes.map { it.optString("symbol") }.toSet() != APPROVED_FUTURES_SYMBOLS.toSet()) "NOT_VERIFIED" else if (badQuotes.isEmpty()) "PASS" else "WARNING",
-            "Свежие котировки: ${quotes.size - badQuotes.size}/10; предел 60 с; " +
+        check("DATA-01", "binance", "Котировки $approvedCount пар",
+            if (quotes.size != approvedCount || quotes.map { it.optString("symbol") }.toSet() != approvedSet) "NOT_VERIFIED" else if (badQuotes.isEmpty()) "PASS" else "WARNING",
+            "Свежие котировки: ${quotes.size - badQuotes.size}/$approvedCount; предел 60 с; " +
                 badQuotes.joinToString { it.optString("symbol") })
         val history = status.optJSONObject("history")
         val historyRows = rows(history?.optJSONArray("items"))
@@ -219,10 +221,10 @@ internal object CockpitDiagnostics {
             val invalid = frameRows.filter { it.optInt("count") < minCount || it.optLong("newest_open_time") > now - duration ||
                 !fresh(it.optLong("newest_open_time"), now, ttl) }
             check(id, "database", "История $frame", when {
-                frameRows.size != 10 || frameRows.map { it.optString("symbol") }.toSet() != APPROVED_FUTURES_SYMBOLS.toSet() -> "NOT_VERIFIED"
+                frameRows.size != approvedCount || frameRows.map { it.optString("symbol") }.toSet() != approvedSet -> "NOT_VERIFIED"
                 invalid.isNotEmpty() -> "WARNING"
                 else -> "PASS"
-            }, "Закрытый рабочий набор $frame: ${frameRows.size - invalid.size}/10; " +
+            }, "Закрытый рабочий набор $frame: ${frameRows.size - invalid.size}/$approvedCount; " +
                 "минимум $minCount свечей. Полная архивная история проверяется отдельно.")
         }
         frameCheck("DATA-02", "1h", 150, 7_230_000L)
@@ -267,11 +269,11 @@ internal object CockpitDiagnostics {
             val verified = evidence.count { it.optString("severity") == "PASS" }
             val severity = when {
                 evidence.any { it.optString("severity") == "FAIL" } -> "FAIL"
-                observations.size == 10 && observations.map { it.optString("symbol") }.toSet() == APPROVED_FUTURES_SYMBOLS.toSet() && verified == 10 -> "PASS"
+                observations.size == approvedCount && observations.map { it.optString("symbol") }.toSet() == approvedSet && verified == approvedCount -> "PASS"
                 else -> "NOT_VERIFIED"
             }
             check(id, "strategy", name, severity,
-                "Независимый контроль значений / причинности по закрытым H1: $verified/10. " +
+                "Независимый контроль значений / причинности по закрытым H1: $verified/$approvedCount. " +
                     evidence.firstOrNull { it.optString("severity") != "PASS" }?.optString("detail").orEmpty() +
                     " Подробные наблюдения: status.strategy_audit; это не доказательство всех правил стратегии.")
         }
@@ -339,9 +341,9 @@ internal object CockpitDiagnostics {
         }
         check("STR-06", "strategy", strategyNames[5], when {
             badTraces.isNotEmpty() -> "FAIL"
-            candidates.size != 10 || traces.size != 10 -> "NOT_VERIFIED"
+            candidates.size != approvedCount || candidates.map { it.optString("symbol") }.toSet() != approvedSet || traces.size != approvedCount -> "NOT_VERIFIED"
             else -> "PASS"
-        }, "Обе оценки LONG/SHORT присутствуют в ${traces.size}/10 результатах; эвристика не может самостоятельно разрешать ордера. Исполнение сторон проверяется отдельно.")
+        }, "Обе оценки LONG/SHORT присутствуют в ${traces.size}/$approvedCount результатах; эвристика не может самостоятельно разрешать ордера. Исполнение сторон проверяется отдельно.")
         val intents = rows(coordinator.optJSONArray("pending_intent_details"))
         val entries = intents.filter { it.optString("role", "ENTRY") == "ENTRY" }
         val pending = entries.filter { it.optString("campaign_status") == "ENTRY_PENDING" }
