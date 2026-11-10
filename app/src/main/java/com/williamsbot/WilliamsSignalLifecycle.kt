@@ -43,13 +43,16 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
     private fun load(symbol:String)=store.readState("signal_timeline_"+symbol)?.let { JSONObject(it) }
         ?: JSONObject().put("signals",JSONArray()).put("events",JSONArray())
     private fun save(symbol:String,data:JSONObject)=store.writeState("signal_timeline_"+symbol,data.toString())
-    private fun event(data:JSONObject,s:JSONObject,state:String,stage:String,reason:String,now:Long,scope:String="SIGNAL") {
+    // True means an event was added, even when bounded retention keeps the
+    // JSONArray at 256 elements. The caller must persist those last-256 changes.
+    private fun event(data:JSONObject,s:JSONObject,state:String,stage:String,reason:String,now:Long,scope:String="SIGNAL"):Boolean {
         val events=data.optJSONArray("events") ?: JSONArray();val id=s.optString("signal_id")+":"+stage+":"+state+":"+safeDiagnosticText(reason)
-        if(rows(events).any { it.optString("event_id")==id }) return
+        if(rows(events).any { it.optString("event_id")==id }) return false
         val row=JSONObject(s.toString()).put("event_id",id).put("state",state).put("stage",stage)
             .put("reason",safeDiagnosticText(reason)).put("reason_category",williamsReasonCategory(reason))
             .put("observed_at_ms",now).put("attribution",scope).put("can_place_orders",false)
         data.put("events",JSONArray((rows(events)+row).takeLast(256)))
+        return true
     }
     fun observe(symbol:String,signals:JSONArray,now:Long,policy:WilliamsEntryTimePolicy):Boolean=synchronized(lock) {
         val data=load(symbol);val known=rows(data.getJSONArray("signals")).associateBy { it.optString("signal_id") }.toMutableMap()
@@ -76,8 +79,11 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
             .forEach { event(data,it,if(accepted) "ADMITTED" else "BLOCKED",stage,reason,now,if(signalId.isBlank()) "PAIR_GATE" else "SIGNAL") }
         save(symbol,data)
     }
-    fun view(symbol:String,intents:JSONArray,now:Long):JSONObject=synchronized(lock) {
-        val data=load(symbol);val owners=rows(intents).filter { it.optString("symbol")==symbol }
+
+    // One already-loaded snapshot is shared between the read-only UI projection
+    // and the exchange-observation journal. Never read the same SQLite state
+    // twice per symbol or rewrite it on an unchanged reconciliation.
+    private fun viewLoaded(symbol:String,data:JSONObject,owners:List<JSONObject>,now:Long):JSONObject {
         val facts=rows(data.getJSONArray("signals")).map { s ->
             val owner=owners.lastOrNull { signalFactMatchesIntent(s,it) }
             JSONObject(s.toString()).put("state",williamsSignalLifecycle(s,owner,now,data.optLong("snapshot_at_ms"),s.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms")))
@@ -88,14 +94,32 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
                     put("protective_stop",owner.optString("protective_stop").toDoubleOrNull() ?: s.optDouble("protective_stop"))
                 } }
         }
-        JSONObject().put("signals",JSONArray(facts)).put("events",data.getJSONArray("events"))
+        return JSONObject().put("signals",JSONArray(facts)).put("events",data.getJSONArray("events"))
             .put("snapshot_at_ms",data.optLong("snapshot_at_ms")).put("retention_events_per_symbol",256)
     }
+    fun view(symbol:String,intents:JSONArray,now:Long):JSONObject=synchronized(lock) {
+        val owners=rows(intents).filter { it.optString("symbol")==symbol }
+        viewLoaded(symbol,load(symbol),owners,now)
+    }
     fun orders(intents:JSONArray,now:Long) = synchronized(lock) {
-        rows(intents).map { it.optString("symbol") }.distinct().filter { it.isNotBlank() }.forEach { symbol ->
-            val data=load(symbol);rows(view(symbol,intents,now).getJSONArray("signals")).filter { it.has("client_id") }.forEach {
-                event(data,it,it.getString("state"),"EXCHANGE",it.optString("cancel_reason").ifBlank { it.optString("order_status") },now)
-            };save(symbol,data)
+        // Persisted coordinator snapshots can contain hundreds of historical
+        // closed campaigns. Index once rather than rescanning the whole array
+        // for each of fifteen markets on every signed REST reconciliation.
+        val bySymbol=rows(intents).filter { it.optString("symbol").isNotBlank() }
+            .groupBy { it.optString("symbol") }
+        bySymbol.forEach { (symbol,owners) ->
+            val data=load(symbol)
+            var changed=false
+            rows(viewLoaded(symbol,data,owners,now).getJSONArray("signals"))
+                .filter { it.has("client_id") }.forEach { signal ->
+                    val added=event(data,signal,signal.getString("state"),"EXCHANGE",
+                        signal.optString("cancel_reason").ifBlank { signal.optString("order_status") },now)
+                    if(added) changed=true
+                }
+            // No-op reconciliation must be read-only. Previous code wrote all
+            // fifteen JSON timelines on EVERY intent commit, even when nothing
+            // changed, adding CPU/SQLite pressure to live STOP supervision.
+            if(changed) save(symbol,data)
         }
     }
 }
