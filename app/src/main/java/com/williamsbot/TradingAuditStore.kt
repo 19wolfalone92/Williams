@@ -108,19 +108,30 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
  * ledger; do not replay them as newly occurred UI execution events.
  * Active or malformed owners and genuine new transitions remain observable.
  */
+internal fun campaignIsHistoricalTerminalForCockpit(intent:JSONObject):Boolean {
+    val role=intent.optString("intent_role","ENTRY")
+    val lifecycle=campaignLifecycleStatus(intent)
+    val exchangeStatus=intent.optString("exchange_status").uppercase(java.util.Locale.US)
+    // EXIT receipts have no campaign_status but a signed EXIT_CONFIRMED means
+    // the corresponding historical order is settled. Never infer that the
+    // *position* is flat from a bare FILLED or an EXIT_PENDING order.
+    return lifecycle == "CLOSED_OR_STOPPED" ||
+        (role == "EXIT" && exchangeStatus == "EXIT_CONFIRMED")
+}
+
 internal fun campaignCockpitEventRequired(
-    previouslyObserved:Boolean, lifecycle:String, severity:String,
+    previouslyObserved:Boolean, historicalTerminal:Boolean, severity:String,
     hasDurableIdentity:Boolean
 ):Boolean = !hasDurableIdentity || previouslyObserved ||
-    lifecycle != "CLOSED_OR_STOPPED" || severity == "FAIL"
+    !historicalTerminal || severity == "FAIL"
 
 /** A persisted terminal campaign is not an active missing-STOP incident.
  * Signed exchange reconciliation, not UI telemetry, handles its orphan STOP.
  */
 internal fun campaignCockpitIncidentRequired(
-    lifecycle:String, severity:String, protectionStatus:String
+    historicalTerminal:Boolean, severity:String, protectionStatus:String
 ):Boolean = severity == "FAIL" ||
-    (lifecycle != "CLOSED_OR_STOPPED" &&
+    (!historicalTerminal &&
         protectionStatus in setOf("SUBMISSION_UNKNOWN", "UNRESOLVED_EXTRA_ORDER"))
 
 class TradingAuditStore(context: Context) :
@@ -252,11 +263,12 @@ class TradingAuditStore(context: Context) :
             val audit = CockpitDiagnostics.lifecycleAudit(item)
             val lifecycle = campaignLifecycleStatus(item)
             val severity = audit.optString("severity")
-            if (!campaignCockpitEventRequired(previouslyObserved,lifecycle,severity,id.isNotBlank()))
+            val historicalTerminal = campaignIsHistoricalTerminalForCockpit(item)
+            if (!campaignCockpitEventRequired(previouslyObserved,historicalTerminal,severity,id.isNotBlank()))
                 return@recordChangedCampaignObservation
             recordCockpitEvent("EXECUTION", item.optString("symbol"), item.optString("direction"),
                 lifecycle, "Post-change audit=${severity}; " + fields.joinToString("; ") { "$it=${item.optString(it)}" })
-            if (campaignCockpitIncidentRequired(lifecycle,severity,item.optString("protection_status"))) {
+            if (campaignCockpitIncidentRequired(historicalTerminal,severity,item.optString("protection_status"))) {
                 // A bounded durable incident keeps the events immediately preceding a failure.
                 val incident = recentCockpitEvents(80)
                 val values = ContentValues().apply {
