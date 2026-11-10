@@ -594,8 +594,10 @@ internal fun scannerDataReadinessState(
  * Periodic signed Futures reconciliation must not be started by an H1 scan.
  * On a verified flat account, the private user stream handles exchange events,
  * with a 45-second independent REST fallback. Open exposure is monitored
- * frequently. A running scan or another reconciliation wins the I/O slot.
+ * frequently. A running signed reconciliation wins the account-wide slot;
+ * a read-only scan must NEVER starve signed position/STOP supervision.
  */
+@Suppress("UNUSED_PARAMETER") // scanning stays in the public contract; P0 cannot be gated by a P1 scan.
 internal fun shouldScheduleIndependentFuturesMonitor(
     nowMs: Long,
     lastSuccessfulMs: Long,
@@ -605,7 +607,13 @@ internal fun shouldScheduleIndependentFuturesMonitor(
     reconciliationActive: Boolean,
     safetyLatchUnresolved: Boolean = false
 ): Boolean {
-    if (nowMs <= 0L || scanning || reconciliationActive) return false
+    // Safety P0 must outrank read-only H1 scanning. Previously a long scan
+    // could suppress ALL account-wide signed REST reconciliation until it
+    // finished, leaving even an OPEN_PROTECTED position unsupervised and a flat
+    // account's <=90s entry proof stale for minutes. The separate in-flight
+    // fence prevents overlapping signed reconciliations. Scan observations
+    // remain read-only and can be rechecked after the fresh safety snapshot.
+    if (nowMs <= 0L || reconciliationActive) return false
     val interval = if (safetyLatchUnresolved) 2_500L else when (coordinatorState) {
         "READY" -> 45_000L
         "OPEN_PROTECTED" -> 3_000L
