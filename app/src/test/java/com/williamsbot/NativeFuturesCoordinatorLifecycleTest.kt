@@ -131,12 +131,19 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("protection_client_id", "W2PS_FLAT_OLD")
                 .put("protective_stop", "75")).toString())
         val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
-        var algoGets = 0
+        var signedAccountWideGets = 0
         exchange.beforeRequest = { request, _ ->
+            // This is a late exchange order appearing BETWEEN initial signed
+            // account-wide proof and the required final signed account-wide
+            // recheck. Previously the test assumed 3 GETs because the code
+            // redundantly fetched by symbol. The fixed fast path correctly
+            // takes 2 full snapshots, so identify the final query by its
+            // signed endpoint/scope, not an obsolete total request ordinal.
             if (request.method == "GET" &&
-                request.url.encodedPath == "/fapi/v1/openAlgoOrders") {
-                algoGets++
-                if (algoGets == 3) {
+                request.url.encodedPath == "/fapi/v1/openAlgoOrders" &&
+                request.url.queryParameter("symbol") == null) {
+                signedAccountWideGets++
+                if (signedAccountWideGets == 2) {
                     exchange.algos["101"] = JSONObject()
                         .put("symbol", "BTCUSDT").put("clientAlgoId", "W2PS_FLAT_OLD")
                         .put("algoId", "101").put("algoStatus", "NEW")
@@ -149,7 +156,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertFalse(result.toString(), result.getBoolean("ok"))
         assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
         assertTrue(result.optString("blocker").contains("historical STOP still open"))
-        assertEquals(3, algoGets)
+        assertEquals(2, signedAccountWideGets)
         // An unexpected STOP is evidence for a block, NEVER a reason
         // to cancel an order without fresh position/ownership proof.
         assertFalse(exchange.requests.any { it.method != "GET" })
