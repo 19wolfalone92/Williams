@@ -162,6 +162,11 @@ class StandaloneRuntimeReconciliationTest {
     fun privateStreamLockContentionIsDeferredWithoutApprovingExchangeState() {
         assertTrue(deferrableFuturesReconciliation("USER_STREAM_RECONCILIATION"))
         assertTrue(deferrableFuturesReconciliation("POSITION_MANAGEMENT_RECONCILIATION"))
+        assertTrue(deferrableFuturesReconciliation("PRE_ENTRY_SIGNED_ACCOUNT_REFRESH"))
+        assertEquals(8_000L, futuresReconciliationLockBudgetMs(
+            "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH", 30_000L))
+        assertEquals(2_000L, futuresReconciliationLockBudgetMs(
+            "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH", 2_000L))
         for (purpose in listOf("STARTUP_RECONCILIATION", "USER_APPROVED_RECOVERY",
                 "KILL_SWITCH_RECONCILIATION", "LIQUIDATION_GUARD_EXIT")) {
             assertFalse(deferrableFuturesReconciliation(purpose))
