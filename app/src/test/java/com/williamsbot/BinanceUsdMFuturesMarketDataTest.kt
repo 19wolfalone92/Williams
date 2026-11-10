@@ -262,6 +262,32 @@ class BinanceUsdMFuturesMarketDataTest {
     }
 
     @Test
+    fun completedHistoricalTailRejectsFormingAndFutureBarsAtExactUtcBoundaries() {
+        val market = BinanceUsdMFuturesMarketData()
+        val open = java.time.Instant.parse("2026-11-10T11:00:00Z").toEpochMilli()
+        val nextOpen = java.time.Instant.parse("2026-11-10T12:00:00Z").toEpochMilli()
+        val followingOpen = java.time.Instant.parse("2026-11-10T13:00:00Z").toEpochMilli()
+        // Future, still-forming, and just-before-close H1 bars cannot be
+        // accepted as a complete last-closed history tail.
+        assertTrue(!market.isLastClosedCandleCurrent(open, "1h", open - 1000L))
+        assertTrue(!market.isLastClosedCandleCurrent(open, "1h", open + 1000L))
+        assertTrue(!market.isLastClosedCandleCurrent(open, "1h", nextOpen - 1L))
+        // The H1 bar is authoritative once Binance UTC crosses its close.
+        assertTrue(market.isLastClosedCandleCurrent(open, "1h", nextOpen))
+        assertTrue(market.isLastClosedCandleCurrent(open, "1h", followingOpen - 1L))
+        // Once the NEXT H1 closes, the cached tail is no longer current.
+        assertTrue(!market.isLastClosedCandleCurrent(open, "1h", followingOpen))
+
+        val march = java.time.Instant.parse("2026-03-01T00:00:00Z").toEpochMilli()
+        val april = java.time.Instant.parse("2026-04-01T00:00:00Z").toEpochMilli()
+        val may = java.time.Instant.parse("2026-05-01T00:00:00Z").toEpochMilli()
+        assertTrue(!market.isLastClosedCandleCurrent(march, "1M", march + 1000L))
+        assertTrue(!market.isLastClosedCandleCurrent(march, "1M", april - 1L))
+        assertTrue(market.isLastClosedCandleCurrent(march, "1M", april))
+        assertTrue(!market.isLastClosedCandleCurrent(march, "1M", may))
+    }
+
+    @Test
     fun signalFreshnessUsesExchangeNowNotDecisionCandleOpen() {
         val fiveHours = 5L * 60L * 60L * 1000L
         assertTrue(isSignalFresh(1_000L, 1_000L + fiveHours, fiveHours))
