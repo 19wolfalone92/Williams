@@ -41,8 +41,13 @@ def test_original_post_cleanup_signed_account_wide_verification_is_still_mandato
     assert 'historical STOP still open after signed cleanup; new entry blocked' in code
     assert code.index("val finalAlgos = adapter.allOpenAlgoOrders()") > code.index(
         "adapter.cancelAlgoOrderById(symbol, algoId)")
-    assert code.index("val finalAlgos = adapter.allOpenAlgoOrders()") < code.rindex(
-        "saveIntents(persisted)")
+    # The final durable save is in the following COURSE_* phase, outside
+    # the sliced historical section. Check actual full-source order, rather
+    # than searching a slice that cannot contain the commit by construction.
+    final_signed = SRC.index("val finalAlgos = adapter.allOpenAlgoOrders()")
+    final_positions = SRC.index('noteReconciliationPhase("FINAL_SIGNED_POSITION_STABILITY_PROOF")')
+    final_commit = SRC.index("saveIntents(persisted)", final_positions)
+    assert final_signed < final_positions < final_commit
 
 
 def test_helper_defaults_to_extra_signed_get_on_ambiguous_or_invalid_preflight():
