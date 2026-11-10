@@ -699,7 +699,14 @@ internal fun runtimeStartButtonEnabled(
  * Startup and operator recovery deliberately require a strict lock wait.
  */
 internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
-    purpose == "POSITION_MANAGEMENT_RECONCILIATION" || purpose == "USER_STREAM_RECONCILIATION"
+    purpose in setOf(
+        "POSITION_MANAGEMENT_RECONCILIATION",
+        "USER_STREAM_RECONCILIATION",
+        // A fresh-signal P1 preflight must NEVER turn normal concurrent P0
+        // position/STOP supervision into a permanent reconcile safety latch.
+        // A deferred request does not become exchange proof or an order.
+        "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH"
+    )
 
 /** A private WS reconnect MUST eventually get an account-wide signed snapshot.
  * Position management may run every 2.5s while orphaned exposure is present;
@@ -710,6 +717,7 @@ internal fun deferrableFuturesReconciliation(purpose: String): Boolean =
 internal fun futuresReconciliationLockBudgetMs(purpose:String,maximumWaitMs:Long):Long = when(purpose) {
     "POSITION_MANAGEMENT_RECONCILIATION" -> 0L
     "USER_STREAM_RECONCILIATION" -> minOf(15_000L,maximumWaitMs.coerceAtLeast(0L))
+    "PRE_ENTRY_SIGNED_ACCOUNT_REFRESH" -> minOf(8_000L,maximumWaitMs.coerceAtLeast(0L))
     else -> maximumWaitMs.coerceAtLeast(0L)
 }
 
