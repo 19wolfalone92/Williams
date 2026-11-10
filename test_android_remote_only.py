@@ -184,7 +184,12 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "executionStore.readState" in runtime
     assert "private val executionStore: FuturesCampaignStateStore" in coordinator
     assert "DATABASE_VERSION), FuturesCampaignStateStore" in store
-    assert "executionStore.writeState(intentsKey, array.toString())" in coordinator
+    # Serialize once for the durable commit and derive the observer's isolated
+    # view from those exact bytes. A duplicate stringify in this hot path added
+    # avoidable allocation on devices with a large historical intent archive.
+    assert "val durableSnapshot = array.toString()" in coordinator
+    assert "executionStore.writeState(intentsKey, durableSnapshot)" in coordinator
+    assert "observationSink?.invoke(JSONArray(durableSnapshot))" in coordinator
     assert "SQLiteOpenHelper" in store
     assert "CREATE TABLE IF NOT EXISTS runtime_state" in store
     assert "db.transaction {" in store
