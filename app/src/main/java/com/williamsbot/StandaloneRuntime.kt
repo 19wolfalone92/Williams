@@ -511,6 +511,16 @@ internal fun entrySignedProofNeedsRefresh(
     !signedFuturesReconciliationFresh(lastSuccessfulAtMs, nowMs) ||
     90_000L - (nowMs - lastSuccessfulAtMs) <= minimumRemainingMs
 
+/**
+ * Final signed admission must retain at least twenty seconds for the
+ * coordinator's own signed position/STOP checks before any ENTRY intent.
+ * Never confuse "not yet expired" with "enough time left to submit safely".
+ * The adapter's independent 90-second hard limit is unchanged.
+ */
+internal fun entrySignedProofHasPreIntentHeadroom(
+    lastSuccessfulAtMs: Long, nowMs: Long
+): Boolean = signedFuturesReconciliationFresh(lastSuccessfulAtMs, nowMs, 70_000L)
+
 /** Prefer a live WS quote, then a fresh Futures REST ticker, then the last closed candle. */
 internal fun dashboardPrice(
     livePrice: Double?,
@@ -7830,17 +7840,20 @@ private class NativeEngine(
                         .put("final_h1_context_as_of_ms",finalH1AsOf)
                 }
             }
-            // The following coordinator may still execute additional signed
-            // pre-transport reads. If all H1 work already aged the account
-            // snapshot beyond 90s, return a NO-MUTATION safe rejection, then
-            // refresh outside the Door and re-scan. Never weaken the strict
-            // adapter beforeExposureTransport gate or replay an old signal.
-            if (!signedFuturesReconciliationFresh(lastRestReconcileMs,System.currentTimeMillis())) {
+            // The coordinator still performs signed position/STOP and transport
+            // checks. Reject BEFORE writing an ENTRY intent if fewer than 20s
+            // remain on the 90s account snapshot; the old check allowed a
+            // 89.999s-old snapshot, causing another ghost REJECTED/UNKNOWN
+            // intent when coordinator reads crossed the strict 90s boundary.
+            // Release the Door, refresh signed proof and re-scan H1; never
+            // reuse the old price trigger, extend TTL or weaken final STOP/risk.
+            if (!entrySignedProofHasPreIntentHeadroom(lastRestReconcileMs,System.currentTimeMillis())) {
                 return@withCampaignMutation JSONObject()
                     .put("accepted",false).put("safe_rejection",true)
                     .put("mutation_attempted",false)
+                    .put("order_mutation_attempted",false)
                     .put("entry_signed_refresh_required",true)
-                    .put("blocker","SIGNED_RECONCILIATION_EXPIRED_DURING_H1_PREFLIGHT")
+                    .put("blocker","SIGNED_RECONCILIATION_HEADROOM_UNSAFE_DURING_H1_PREFLIGHT")
             }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
