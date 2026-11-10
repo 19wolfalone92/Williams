@@ -24,6 +24,12 @@ internal object CockpitDiagnostics {
             status.optBoolean("market_ws_connected") && status.optBoolean("user_ws_connected") &&
             !status.optBoolean("user_stream_sync_required", true) && status.optBoolean("history_ready")
         val coordinatorReady = coordinator.optBoolean("ready_for_new_entry")
+        // Scanner RUNNING is read-only analysis, not an exchange execution
+        // prohibition. The old cockpit incorrectly required the *momentary*
+        // state READY, so a new 15-market scan made the UI flash "entries
+        // blocked" although execution_enabled=true and Binance STOP/account
+        // proof was still fresh. Report last completed H1 observation apart
+        // from actual signed trading authority; never use it as a new grant.
         val scannerReady = status.optString("scanner_state") == "READY" &&
             fresh(status.optLong("scanner_last_scan_at"), now, 120_000L)
         // The available NEW exposure budget is independent of the daily loss reset.
@@ -40,7 +46,10 @@ internal object CockpitDiagnostics {
         // Execution_enabled is decided independently by the native coordinator,
         // durable Entry Door and fresh signed account/exchange risk checks.
         // An asynchronous UI refresh must not create a fictitious order ban.
-        val entries = technical && coordinatorReady && scannerReady &&
+        // execution_enabled is the authoritative native signed REST/WS/STOP,
+        // account, risk, history and H1 entry-admission door. Requiring a
+        // second scanner READY here was a false UI-only trading latch.
+        val entries = technical && coordinatorReady &&
             status.optBoolean("execution_enabled") && !status.optBoolean("paused") &&
             !status.optBoolean("reconcile_required", true) && !status.optBoolean("kill_switch_latched") &&
             !riskBudgetExhausted
@@ -83,7 +92,9 @@ internal object CockpitDiagnostics {
             !coordinatorReady && coordinator.optString("blocker") == "exchange_reconciliation_in_progress" ->
                 "Binance: выполняется текущая сверка позиций и заявок; новые входы временно ожидают проверки"
             !coordinatorReady -> russianExecutionBlocker(coordinator.optString("blocker"))
-            !scannerReady -> "Сканер: " + russianStatus(status.optString("scanner_state", "NOT_RUN"))
+            // Scanner state is displayed in the independent scanner card.
+            // If no valid H1 signal exists, no order can be submitted, even
+            // while the technical execution door is open.
             !technical -> "Ожидание связи, истории или синхронизации"
             riskBudgetExhausted -> "Свободный резерв риска исчерпан: " +
                 "${String.format(java.util.Locale.US, "%.2f", reservedRisk * 100)}% из " +
@@ -97,6 +108,8 @@ internal object CockpitDiagnostics {
         }
         return JSONObject().put("observed_at_ms", now)
             .put("technical_ready", technical).put("new_entries_allowed", entries)
+            .put("scanner_last_completed_observation_ready", scannerReady)
+            .put("scanner_read_only_state", status.optString("scanner_state", "NOT_RUN"))
             .put("execution_door_ready", status.optBoolean("execution_enabled") && coordinatorReady)
             .put("entry_risk_budget_known", riskBudgetKnown)
             .put("entry_risk_budget_exhausted", riskBudgetExhausted)
