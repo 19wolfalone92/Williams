@@ -2,9 +2,9 @@
 
 Testnet-first реализация торгового бота по Williams (Alligator + AO + Fractals) для Binance USDⓈ-M Futures с симметричными Long/Short кампаниями, SQLite recovery и жёсткими execution/risk gates.
 
-## Тестируемый кандидат: 4.64.19-debug (Binance Futures Demo; приёмка на устройстве ещё не пройдена)
+## Тестируемый кандидат: 4.64.20-debug (Binance Futures Demo; физическая приёмка STOP после исполнения не завершена)
 
-- **Версия:** `VERSION=4.64.19`; Android пакет `com.williamsbot.debug`. Исходники и APK — ветка `fix/nov10-entry-gate-flapping-4.64.18`, PR #228. `main` пока не обновлён.
+- **Версия:** `VERSION=4.64.20`; Android пакет `com.williamsbot.debug`. Исправление диагностики №9 — ветка `fix/nov11-diagnostics9-reboot-heartbeat-4.64.20`. Проверенная CI версия 4.64.18 уже перенесена в `main`; новейший кандидат пока отдельно.
 - **Входы:** только включённые книжные TC2 H1 сигналы; signed Binance account/positions/STOP, private user WS, риск, текущее состояние STOP и финальная проверка H1 обязательны. Другие источники — read-only диагностика. Для новых заявок с signed proof возрастом более 70 секунд используется `safe_rejection` до создания ENTRY-интента и повторный подписанный запрос.
 - **Исправлено:** статус сканера `RUNNING` больше не выглядит как выдуманный запрет UI; продлён не TTL, а актуальность подписанного снимка за счёт нового REST запроса. Add-on safe rejection не ставит искусственный глобальный `reconcile_required`. Подробности: [протокол причин](docs/WILLIAMS_ENTRY_GATE_FLAPPING_ROOT_CAUSE_2026_11_10_RU.md).
 - **Ограничение:** CI, Android-эмуляторы и unit tests не подтверждают фактическую установку STOP после исполненного LONG/SHORT на физическом устройстве. Не считать эту версию допущенной к автономной работе с реальными средствами. `main` остаётся предыдущим.
