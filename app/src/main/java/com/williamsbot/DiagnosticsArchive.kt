@@ -88,6 +88,15 @@ object DiagnosticsArchive {
                         report.optJSONObject("diagnostic_summary")?.optBoolean("execution_allowed")==true)
                 val comparison=report.optJSONObject("diagnostic_comparison")
                 addJson(zip,"diagnostic_triage.json",triage)
+                // One small human/machine-readable graph of every native
+                // diagnostic core, every upstream dependency, and missing
+                // evidence. Built from immutable report snapshots only.
+                addJson(zip,"diagnostic_chain_audit.json",
+                    report.optJSONObject("diagnostic_chain_audit") ?: org.json.JSONObject()
+                        .put("status","NOT_AVAILABLE"))
+                addJson(zip,"diagnostic_chain_comparison.json",
+                    report.optJSONObject("diagnostic_chain_comparison") ?: org.json.JSONObject()
+                        .put("status","NOT_COMPARABLE"))
                 addJson(zip,"diagnostic_comparison.json",comparison
                     ?: org.json.JSONObject().put("status","NOT_COMPARABLE"))
                 add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,comparison))
@@ -202,6 +211,9 @@ object DiagnosticsArchive {
         } else {
             appendLine("Нет сопоставимого предыдущего диагностического снимка.")
         }
+        appendLine("Граф всех 22 диагностических ядер и зависимостей: diagnostic_chain_audit.json.")
+        val chain=triage.optString("schema")
+        appendLine("Источник агрегированных результатов: "+chain+"; "PASS" не означает end-to-end Demo.")
         appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
         appendLine("Для анализа волн см. chart_reading_audit.json, signal_decision_history.json.")
     }
