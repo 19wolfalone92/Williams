@@ -782,6 +782,44 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val timing=report?.optJSONObject("futures_fill_stop_timing")
+            val rows=CockpitDiagnostics.rows(timing?.optJSONArray("observations"))
+            val slow=timing?.optInt("observed_slow_confirmation_count") ?: 0
+            val headline=if(slow>0) AppColors.amber else AppColors.primary
+            CockpitCard("⏱ FILLED → STOP → защита",headline) {
+                if(timing==null) {
+                    Text("Нужно выполнить диагностику новой версии. " +
+                        "Без журнала FILLED время установки STOP не установлено.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Наблюдалось исполнений FILLED",
+                        timing.optInt("fill_event_count").toString())
+                    CockpitField("Медленная фиксация защиты >5 сек",
+                        slow.toString(),if(slow>0) AppColors.amber else AppColors.textMuted)
+                    CockpitField("Без связанного подтверждения",
+                        timing.optInt("unlinked_or_ambiguous_fill_count").toString())
+                    if(slow>0) Text("⚠️ Позиция могла оставаться без подтверждённой защиты. " +
+                        "Нельзя устанавливать дублирующий STOP только по этому отчёту.",
+                        style=MaterialTheme.typography.bodyMedium,color=AppColors.amber)
+                    for(row in rows.take(8)) {
+                        val gap=row.optLong("fill_to_protected_audit_ms",-1L)
+                        val firstAlgo=row.optLong("fill_to_algo_ws_ms",-1L)
+                        val title=row.optString("symbol")
+                        CockpitField(title,when {
+                            gap>=0L -> "ALGO NEW " +
+                                (if(firstAlgo>=0) "${firstAlgo}мс" else "не зафиксирован") +
+                                " · OPEN_PROTECTED ${gap}мс"
+                            else -> "Цепочка STOP НЕ ПОДТВЕРЖДЕНА"
+                        })
+                    }
+                    Text("Корреляция только по символу и порядку событий. " +
+                        "Это не измерение времени фактической установки STOP на бирже. " +
+                        "Для точного доказательства нужны signed clientOrderId/clientAlgoId.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             CockpitCard("Ядра и связи · ${chainAudit?.optInt("component_count",0) ?: 0} систем") {
                 if(chainAudit==null || chainCores.isEmpty()) {
                     Text("Доступен старый формат. Запустите новую диагностику для построения графа всех ядер.",
