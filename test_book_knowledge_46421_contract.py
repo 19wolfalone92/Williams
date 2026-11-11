@@ -44,7 +44,7 @@ def test_reasoner_references_only_canonical_rules_and_has_no_mutation_api():
     assert len(references) == registry["runtime_reasoning_audit"]["cited_rule_count"]
     assert references <= allowed, sorted(references - allowed)
     assert 'williamsTc2Profile' in source and 'williamsNtdProfile' in source
-    assert 'source!=williamsTc2Profile -> "OBSERVER_FORMATION_ONLY"' in source
+    assert 'profile!=williamsTc2Profile -> "OBSERVER_FORMATION_ONLY"' in source
     assert '"senior_trend_reversal_inferred_from_h1_opposite",false' in source
     assert '"knowledge_accuracy_percent_calibrated",false' in source
     assert '"whole_books_understood_and_certified",false' in source
