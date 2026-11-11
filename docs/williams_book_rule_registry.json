@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-07",
-  "release": "4.64.0",
+  "updated": "2026-11-11",
+  "release": "4.64.21",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -107,11 +107,13 @@
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_exit_policy.py",
-        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsSetupRules.kt"
       ],
       "tests": [
         "tests/test_williams_book_rules_contract.py::test_protection_and_entry_use_the_same_five_six_seven_nine_bar_geometry",
-        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals"
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::liveTc2ThirdWiseManSelectorMatchesFiveSixSevenNineClosedBarFigures"
       ],
       "fixtures": [
         "fractals/five",
@@ -119,7 +121,7 @@
         "fractals/seven-separated-ties",
         "fractals/nine-ties-and-inner-bars"
       ],
-      "remaining_evidence": "These are synthetic boundary fixtures tied to figures11.1/11.2, not digitizations of every historical bar.",
+      "remaining_evidence": "5/6/7/9-bar synthetic book figures now also exercise the actual LIVE TC2 WM3 pending selector, confirmation and current Teeth veto, on both sides. This does not digitize every historical figure or verify actual Binance trigger/STOP lifecycle.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1834,5 +1836,15 @@
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
   ],
-  "page_coverage_file": "docs/williams_source_page_coverage.json"
+  "page_coverage_file": "docs/williams_source_page_coverage.json",
+  "runtime_reasoning_audit": {
+    "path": "app/src/main/java/com/williamsbot/WilliamsBookCausalUnderstanding.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsBookCausalUnderstandingTest.kt",
+    "source_pdf_pages_reproduced_as_references_only": true,
+    "infers_higher_timeframe_reversal_from_h1_opposite": false,
+    "cited_rule_count": 9,
+    "no_trading_or_stop_authority": true,
+    "confidence_calibrated": false,
+    "scope": "READ_ONLY_CAUSAL_OBSERVATIONS_NOT_LLM_TRAINING_OR_WHOLE_BOOK_CERTIFICATION"
+  }
 }
