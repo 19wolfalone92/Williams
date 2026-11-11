@@ -12012,7 +12012,12 @@ private class NativeEngine(
         test("futures_execution_adapter", "binance", futuresExecutionAdapterReady, "FAIL", "Native USD-M Futures adapter and local coordinator wired; readiness still depends on live exchange reconciliation")
         test("local_runtime_dispatch", "runtime", true, "FAIL", "Cockpit commands dispatch in-process; no remote backend or unauthenticated loopback listener")
         test("execution_gate", "execution", executionReady(), "WARNING", "execution_ready=" + executionReady() + "; blockers=" + executionBlockers().joinToString(",") + "; an intentional entry block is not proof of component failure")
-        val displayedSettings = settings()
+        // Only two scalar keys are inspected below. Calling settings()
+        // generated a full per-symbol decisionTraceSnapshot (megabytes)
+        // just to read max_trades_per_day, then immediately discarded it.
+        // Keep the normal Settings API unchanged for normal UI callers;
+        // diagnostics must use the bounded settings view.
+        val displayedSettings = diagnosticSettings()
         val maxTradesSettingIsHonest = displayedSettings.isNull("max_trades_per_day") &&
             displayedSettings.optString("max_trades_per_day_policy").startsWith("NO_FIXED_COUNT_CAP")
         test(
