@@ -74,7 +74,8 @@ def test_zip_checks_every_entry_crc_before_replacing_previous_report():
         archive.index("java.nio.file.Files.move(temporary.toPath(),output.toPath()"))
     for expected in (
         "diagnostic_chain_audit.json","diagnostic_chain_comparison.json",
-        "futures_fill_stop_timing.json","runtime_resource_diagnostics.json",
+        "futures_fill_stop_timing.json","signed_position_stop_join.json",
+        "runtime_resource_diagnostics.json",
         "observer_paper_full_history.ndjson",
     ):
         assert expected in archive, expected
@@ -90,6 +91,7 @@ def test_ui_can_inspect_all_cores_with_export_unchanged():
     assert 'diagnostic_chain_audit' in runtime
     assert 'diagnostic_chain_comparison' in runtime
     assert 'futures_fill_stop_timing' in runtime
+    assert 'signed_position_stop_join' in runtime
     assert "compareChainWithLatest(context,report)" in main
     assert "DiagnosticsArchive.writeLatest(context,report)" in main
 
@@ -100,7 +102,22 @@ def test_all_unit_contracts_are_installed_and_have_no_demo_release_claim():
         "WilliamsFillStopTimingForensicsTest.kt",
         "WilliamsDiagnosticResourceHealthTest.kt",
         "DiagnosticsArchiveIntegrityTest.kt",
+        "WilliamsSignedStopJoinAuditTest.kt",
     ):
         assert (TESTS/file).is_file(), file
     graph=read("WilliamsDiagnosticChainAudit.kt")
     assert '"independent_book_accuracy_certified",false' in graph
+
+
+def test_authenticated_stop_join_never_trades_or_copies_private_client_ids():
+    join=read("WilliamsSignedStopJoinAudit.kt")
+    runtime=read("StandaloneRuntime.kt")
+    assert "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY" in join
+    assert '"SIGNED_STOP_PROOF' not in join
+    assert "positionAmt" in join and "positionStop" in join
+    assert "signed_full_stops_seen" in join
+    assert "strategy_ownership_verified" in join
+    assert '"can_trade_or_manage_stops",false' in join
+    assert '"raw_client_ids_exported_here",false' in join
+    assert 'WilliamsSignedStopJoinAudit.inspect(' in runtime
+    assert 'put("id","EXE-SIGNED-JOIN")' in runtime
