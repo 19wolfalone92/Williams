@@ -6,7 +6,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsBookCausalUnderstandingTest {
-    private val now = 1_800_000_000_000L
+    private val now = 1_800_000_001_000L
     private val close = now - 1_000L
     private val event = close - WILLIAMS_H1_MS
     private fun signal(type:String="SUPER_AO",profile:String=williamsTc2Profile,
@@ -19,10 +19,19 @@ class WilliamsBookCausalUnderstandingTest {
     private fun source(profile:String,role:String):JSONObject =
         JSONObject().put("profile",profile).put("execution_role",role)
             .put("as_of_close_ms",close).put("state","NO_VALID_FORMATION")
+    private fun closedH1Source(upward:Boolean=true):JSONArray=JSONArray().apply {
+        // One exact H1 interval per bar; third GREEN AO occurs at index 36.
+        // A quadratic convex midprice creates increasing 5-34 AO values.
+        for(i in 0..36) {
+            val at=event-(36-i)*WILLIAMS_H1_MS
+            val mid=if(upward) 100.0+i*i*.02 else 160.0-i*i*.02
+            put(JSONArray().put(at).put(mid).put(mid+1.0).put(mid-1.0).put(mid).put(1000.0))
+        }
+    }
     private fun candidate(s:JSONObject,details:JSONObject?=null):JSONObject =
         JSONObject().put("symbol","BTCUSDT").put("closed_h1_as_of_ms",close)
             .put("campaign_signals",JSONArray().put(s))
-            .put("decision_trace",JSONObject().put("signals",
+            .put("decision_trace",JSONObject().put("candles",closedH1Source()).put("signals",
                 JSONArray().put(details ?: JSONObject()
                     .put("signal_id",s.optString("signal_id"))
                     .put("setup_context",JSONObject()
@@ -55,6 +64,7 @@ class WilliamsBookCausalUnderstandingTest {
         val evidence=btc.getJSONArray("signals").getJSONObject(0)
         assertEquals("TC2.WM2.THREE_AO_BARS",evidence.getString("rule_id"))
         assertEquals("INTERNAL_BOOK_FORMATION_PROOF_PRESENT",evidence.getString("state"))
+        assertEquals("PASS",evidence.getString("independent_closed_h1_third_ao_status"))
         assertFalse(evidence.getBoolean("actual_exchange_trigger_verified"))
         assertTrue(evidence.getBoolean("trigger_is_only_a_pending_level"))
     }
@@ -74,6 +84,25 @@ class WilliamsBookCausalUnderstandingTest {
         assertEquals("NOT_VERIFIED_CLOSED_H1",other.getJSONArray("observed_candidates")
             .getJSONObject(0).getJSONArray("signals").getJSONObject(0).getString("state"))
         assertEquals(0,other.getInt("internal_h1_setup_proof_count"))
+    }
+
+    @Test fun independentAoDetectsContradictoryRealClosedH1AndMissingCandles() {
+        val signal=signal()
+        val oppositeSource=candidate(signal)
+        oppositeSource.getJSONObject("decision_trace").put("candles",closedH1Source(false))
+        val contradiction=WilliamsBookCausalUnderstanding.assess(
+            scanner(oppositeSource),JSONObject(),now).getJSONArray("observed_candidates")
+            .getJSONObject(0).getJSONArray("signals").getJSONObject(0)
+        assertEquals("FAIL",contradiction.getString("independent_closed_h1_third_ao_status"))
+        assertEquals("INDEPENDENT_CLOSED_H1_AO_CONTRADICTS_SETUP",
+            contradiction.getString("state"))
+        val missingSource=candidate(signal)
+        missingSource.getJSONObject("decision_trace").remove("candles")
+        val missing=WilliamsBookCausalUnderstanding.assess(
+            scanner(missingSource),JSONObject(),now).getJSONArray("observed_candidates")
+            .getJSONObject(0).getJSONArray("signals").getJSONObject(0)
+        assertEquals("NOT_VERIFIED",missing.getString("independent_closed_h1_third_ao_status"))
+        assertEquals("INDEPENDENT_CLOSED_H1_AO_NOT_VERIFIED",missing.getString("state"))
     }
 
     @Test fun oldSnapshotNeverBecomesFreshBookEvidence() {
