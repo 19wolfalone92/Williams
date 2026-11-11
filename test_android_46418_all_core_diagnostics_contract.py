@@ -52,8 +52,7 @@ def test_report_uses_single_captured_snapshots_and_not_new_rest_on_graph():
 def test_fill_to_stop_forensics_is_timing_only_never_placement_or_duplicate_stop():
     code=read("WilliamsFillStopTimingForensics.kt")
     assert "valid.sortBy { it.optLong(\"E\") }" in code
-    assert '"CORRELATION"' not in code  # only fixed string, no raw payload
-    assert '"CORRELATION"' not in code.upper()
+    assert '.put("detail",' not in code  # do not serialize arbitrary WS payloads
     assert '"SYMBOL_AND_EVENT_SEQUENCE_ONLY"' in code
     assert '"authenticated_exchange_timing_verified",false' in code
     assert '"independent_signed_protective_stop_placement_timing_verified",false' in code
