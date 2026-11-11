@@ -124,3 +124,12 @@ def test_authenticated_stop_join_never_trades_or_copies_private_client_ids():
     assert '"raw_client_ids_exported_here",false' in join
     assert 'WilliamsSignedStopJoinAudit.inspect(' in runtime
     assert 'put("id","EXE-SIGNED-JOIN")' in runtime
+
+
+def test_diagnostic_self_test_never_allocates_all_signal_history_just_for_settings():
+    runtime=read("StandaloneRuntime.kt")
+    test=runtime.split("fun diagnosticSelfTests(",1)[1].split("fun cockpit(): JSONObject",1)[0]
+    assert "val displayedSettings = diagnosticSettings()" in test
+    assert "val displayedSettings = settings()" not in test
+    assert "fun settings(): JSONObject = buildSettings(includeDecisionTraces = true)" in runtime
+    assert "private fun diagnosticSettings(): JSONObject = buildSettings(includeDecisionTraces = false)" in runtime
