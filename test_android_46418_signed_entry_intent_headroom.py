@@ -39,3 +39,27 @@ def test_pre_intent_headroom_stricter_than_still_unchanged_transport_ttl():
     )[1].split("/** Prefer a live WS quote", 1)[0]
     assert "signedFuturesReconciliationFresh(lastSuccessfulAtMs, nowMs, 70_000L)" in helper
     assert "maximumAgeMs: Long = 90_000L" in runtime
+
+
+def test_add_on_signed_proof_and_safe_rejection_never_poison_parent():
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    addition = runtime.split("private fun submitNativeFuturesAddition(", 1)[1]
+    addition = addition.split("private fun refreshSignedProofForEntryIfNeeded(", 1)[0]
+    assert 'refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_PREFLIGHT")' in addition
+    assert addition.index('refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_PREFLIGHT")') < (
+        addition.index('withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION")'))
+    guard = addition.index('entrySignedProofHasPreIntentHeadroom(')
+    intent = addition.index('futuresCampaignCoordinator.submitPendingEntry(plan)')
+    assert guard < intent
+    assert '.put("safe_rejection",true)' in addition[guard:intent]
+    assert '.put("mutation_attempted",false)' in addition[guard:intent]
+    assert '.put("entry_signed_refresh_required",true)' in addition[guard:intent]
+    assert 'refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_AFTER_SAFE_DEFER")' in addition
+    # Only accepted add-on exposure can proactively demand reconciliation;
+    # a genuinely ambiguous mutation is already fail-closed by the wrapper.
+    accepted = addition.index('if (addResult.optBoolean("accepted",false))')
+    latch = addition.index('reconcileRequired=true', accepted)
+    assert accepted < latch
+    assert 'lastRestReconcileMs=0L' in addition[accepted:latch]
+    assert addition.count("reconcileRequired=true") == 1
+    assert "rejectDecision(symbol,addResult.optString" in addition
