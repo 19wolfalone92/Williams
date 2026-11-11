@@ -7212,24 +7212,34 @@ private class NativeEngine(
         if (!refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_PREFLIGHT")) return
         if (!executionReady()) return rejectDecision(symbol,
             "ADD_ON_SIGNED_ACCOUNT_OR_STOP_GATE_CHANGED")
+        // Normal signal invalidation is not an unknown Binance mutation.
+        // Use a no-mutation rejection for deterministic read-only vetoes;
+        // network/SQLite exceptions and uncertain POST outcomes remain latched.
+        fun safeAddOnReadOnlyVeto(reason: String): JSONObject = JSONObject()
+            .put("accepted",false).put("safe_rejection",true)
+            .put("mutation_attempted",false).put("order_mutation_attempted",false)
+            .put("blocker",reason)
         val addResult=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
-            check(williamsProfileAllowsSource(williamsProfile,profile)) { "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION" }
-            check(entryTimePolicy.allows(submitNow)) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION" }
+            if (!williamsProfileAllowsSource(williamsProfile,profile))
+                return@withCampaignMutation safeAddOnReadOnlyVeto("ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION")
+            if (!entryTimePolicy.allows(submitNow))
+                return@withCampaignMutation safeAddOnReadOnlyVeto("ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION")
             check(checkFuturesDailyLoss()) { "DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION: "+lastError }
             val currentH1=fetchCandles(symbol,"1h",220)
             val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
-            check(fresh.any { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice }) { "Addition formation no longer valid" }
+            if (fresh.none { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice })
+                return@withCampaignMutation safeAddOnReadOnlyVeto("ADDITION_H1_FORMATION_INVALIDATED_BEFORE_POST")
             val addRiskReason=williamsTc2CongestionEntryBlocker(
                 profile,signal.type,direction,signal.triggerPrice,
                 currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
-            check(addRiskReason==null) {
-                (addRiskReason ?: WILLIAMS_TC2_CONGESTION_UNVERIFIED)+
-                    ": new addition withheld; existing STOP unchanged"
-            }
+            if (addRiskReason!=null)
+                return@withCampaignMutation safeAddOnReadOnlyVeto(
+                    addRiskReason+": new addition withheld; existing STOP unchanged")
             if(!market) {
                 val current=futuresMarketData.price(symbol)
-                check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
+                if (!(if(direction=="LONG") current<price else current>price))
+                    return@withCampaignMutation safeAddOnReadOnlyVeto("ADDITION_H1_TRIGGER_ALREADY_CONSUMED")
             }
             // Final H1/sizing checks can consume the original signed TTL.
             // No entry-intent audit or Binance POST if less than 20s remains.
