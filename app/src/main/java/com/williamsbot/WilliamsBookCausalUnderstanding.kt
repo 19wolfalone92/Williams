@@ -147,6 +147,64 @@ internal object WilliamsBookCausalUnderstanding {
             .put("wm3_teeth_at_actual_trigger_not_proven",profile==williamsTc2Profile && f=="FRACTAL")
     }
 
+    /**
+     * Compare independent CLOSED D1/H4/H1 observations, not wave labels inferred
+     * from an H1 counter-signal. A disagreement explains WHY an H1 reversal
+     * should not be described as the end of the senior move. This is strictly
+     * a historical context summary; not a book veto, trade action or forecast.
+     */
+    private fun seniorFrameContext(candidate:JSONObject?, nowMs:Long, validH1:Boolean):JSONObject {
+        val unverified=JSONObject().put("state","NOT_VERIFIED")
+            .put("h1_vs_senior_context","INSUFFICIENT_SENIOR_EVIDENCE")
+            .put("senior_trend_end_proven",false)
+            .put("can_veto_tc2_exit",false).put("can_place_orders",false)
+        if(!validH1 || candidate==null) return unverified
+        val phase=candidate.optJSONObject("decision_trace")?.optJSONObject("market_phase")
+            ?: return unverified
+        val asOf=phase.optLong("as_of",0L)
+        if(asOf<=0L || asOf>nowMs) return unverified
+        val frames=rows(phase.optJSONArray("frames"))
+        val extracted=JSONArray()
+        val biases=linkedMapOf<String,String>()
+        for (frame in listOf("1h","4h","1d")) {
+            val rows=frames.filter { it.optString("frame")==frame }
+            val item=rows.singleOrNull()
+            val reading=item?.optJSONObject("market_reading")
+            val asOfClose=reading?.optLong("as_of_close_ms",0L) ?: 0L
+            val frameMs=williamsWaveFrames[frame] ?: 0L
+            val fresh=frameMs>0L && asOfClose>0L && asOfClose<=asOf &&
+                asOf-asOfClose<=frameMs+120_000L
+            val verified=item?.optString("state") in setOf("PHASE_CANDIDATE","ALTERNATIVES") &&
+                reading?.optString("state")=="OBSERVED" && fresh
+            val bias=reading?.optString("observed_bias")?.takeIf {
+                verified && it in setOf("UP","DOWN","MIXED")
+            } ?: "UNVERIFIED"
+            biases[frame]=bias
+            extracted.put(JSONObject().put("frame",frame)
+                .put("state",if(verified) "OBSERVED_BUT_NOT_FORECAST" else "NOT_VERIFIED")
+                .put("observed_bias",bias)
+                .put("book_wave_hypotheses_are_provisional",true)
+                .put("competing_wave_structures",item?.optInt("distinct_structural_hypotheses") ?: JSONObject.NULL)
+                .put("causal_closed_at_ms",if(fresh) asOfClose else JSONObject.NULL)
+                .put("can_authorize_close_or_hold",false))
+        }
+        val h1=biases["1h"];val seniors=listOf(biases["4h"],biases["1d"])
+        val status=when {
+            h1 !in setOf("UP","DOWN") || seniors.any { it !in setOf("UP","DOWN") } ->
+                "INSUFFICIENT_SENIOR_EVIDENCE"
+            seniors.all { it==h1 } -> "OBSERVED_BIAS_ALIGNED_NOT_FORECAST"
+            seniors.all { it!=h1 } -> "OPPOSING_OBSERVED_BIAS_NOT_CONFIRMED_REVERSAL"
+            else -> "MIXED_SENIOR_OBSERVATIONS_NOT_REVERSAL_PROOF"
+        }
+        return JSONObject().put("state",if(status=="INSUFFICIENT_SENIOR_EVIDENCE")
+            "NOT_VERIFIED" else "OBSERVED_CONTEXT_ONLY")
+            .put("as_of_ms",asOf)
+            .put("frame_readings",extracted)
+            .put("h1_vs_senior_context",status)
+            .put("senior_trend_end_proven",false)
+            .put("can_veto_tc2_exit",false).put("can_place_orders",false)
+    }
+
     fun assess(scanner:JSONObject, exitForensics:JSONObject, nowMs:Long):JSONObject {
         val state=scanner.optString("scanner_state","NOT_VERIFIED")
         val at=scanner.optLong("last_scan_at",0L)
@@ -202,6 +260,7 @@ internal object WilliamsBookCausalUnderstanding {
                 .put("signals_omitted_for_bounded_diagnostics",
                     if(validH1) (rows(candidate?.optJSONArray("campaign_signals")).size-8).coerceAtLeast(0) else 0)
                 .put("h1_as_of_close_ms",if(validH1) close else JSONObject.NULL)
+                .put("senior_frame_context",seniorFrameContext(candidate,nowMs,validH1))
                 .put("senior_trend_end_proven",false)
                 .put("wave_degree_certified",false)
                 .put("can_place_orders",false))
