@@ -7756,6 +7756,11 @@ private class NativeEngine(
             symbol = symbol,
             purpose = "WILLIAMS_PENDING_ENTRY"
         ) {
+            // This try contains ONLY read-only final signal/market validation.
+            // A normal stale H1 signal or a failed read must not be mistaken
+            // for an UNKNOWN Binance order mutation by withCampaignMutation.
+            // Never catch the coordinator POST below: it may have reached Binance.
+            try {
             // A scan may have started just before an operator enabled manual direction.
             // Reject the automatic entry safely instead of trading the opposite side.
             if (forceTestnetMode) {
@@ -7896,6 +7901,18 @@ private class NativeEngine(
                     .put("entry_signed_refresh_required",true)
                     .put("blocker","SIGNED_RECONCILIATION_HEADROOM_UNSAFE_DURING_H1_PREFLIGHT")
             }
+            } catch (preflightFailure: Exception) {
+                // No new ENTRY intent or Binance POST was attempted in this
+                // try. Keep the existing signed STOP, daily-risk and transport
+                // fences; treat the candidate as rejected, not the account.
+                return@withCampaignMutation JSONObject()
+                    .put("accepted",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                    .put("blocker","H1_FINAL_READ_ONLY_PREFLIGHT_UNVERIFIED: " +
+                        safeDiagnosticText(preflightFailure.message ?: preflightFailure.javaClass.simpleName))
+            }
+            // EXCHANGE MUTATION CAN BEGIN HERE. Never downgrade an exception
+            // from the coordinator to a preflight safe rejection.
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
         if (result.optBoolean("entry_signed_refresh_required",false)) {
