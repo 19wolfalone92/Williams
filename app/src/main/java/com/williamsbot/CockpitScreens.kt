@@ -840,6 +840,16 @@ internal fun CockpitDiagnosticScreen(
                         else "Нет измерений")
                     CockpitField("Состояние памяти",williamsRuStatus(heapStatus),
                         if(heapStatus=="WARNING") AppColors.amber else AppColors.textMuted)
+                    val afterBuild=resources.optJSONObject("post_report_build_heap")
+                    if(afterBuild!=null) {
+                        val pct=afterBuild.optDouble("java_heap_used_pct",-1.0)
+                        CockpitField("Heap после сборки полного отчёта",
+                            if(pct>=0.0) String.format(java.util.Locale.US,"%.1f%%",pct) +
+                                " • "+williamsRuStatus(afterBuild.optString("severity"))
+                            else "Нет измерений",
+                            if(afterBuild.optString("severity")=="WARNING")
+                                AppColors.amber else AppColors.textMuted)
+                    }
                     CockpitField("Binance REST weight",
                         if(rate?.has("weight_limit_1m")==true)
                             "${rate.optLong("used_weight_1m")} / ${rate.optLong("weight_limit_1m")} · " +
