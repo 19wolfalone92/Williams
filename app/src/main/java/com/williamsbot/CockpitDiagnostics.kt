@@ -707,13 +707,16 @@ internal object CockpitDiagnostics {
             lifecycle.optInt("abnormal_process_exit_count")>0 ||
                 lifecycle.optInt("service_autostart_failure_count")>0 ||
                 lifecycle.optInt("worker_heartbeat_stale_count")>0 -> "WARNING"
-            // Normal Android service destruction or a system exit without a
-            // known reason warrants review but is not proof of lost protection.
-            lifecycle.optInt("observed_process_exit_count")>0 ||
+            // PACKAGE_UPDATED is the expected system process exit when the
+            // operator installs another signed APK. It is not a crash.
+            // Unknown/non-update exits still require review; neither is PASS.
+            lifecycle.optInt("unexpected_process_exit_count")>0 ||
                 lifecycle.optInt("service_destroyed_count")>0 -> "WARNING"
             else -> "NOT_VERIFIED"
         }, "FGS создан: ${lifecycle?.optInt("foreground_service_created_count",-1)}; " +
             "реальные завершения процесса из истории Android: ${lifecycle?.optInt("observed_process_exit_count",-1)}; " +
+            "обновления APK: ${lifecycle?.optInt("expected_package_update_exit_count",-1)}; " +
+            "неожиданные завершения: ${lifecycle?.optInt("unexpected_process_exit_count",-1)}; " +
             "аномальные завершения: ${lifecycle?.optInt("abnormal_process_exit_count",-1)}; " +
             "уничтожения сервиса: ${lifecycle?.optInt("service_destroyed_count",-1)}; " +
             "ошибки автозапуска: ${lifecycle?.optInt("service_autostart_failure_count",-1)}; " +
