@@ -57,7 +57,7 @@ internal object WilliamsSignedStopJoinAudit {
                 stopValue!=null && stopValue.signum()>0 &&
                 stopValue.compareTo(positionStop)==0
             val strategyOwned=proof?.optBoolean("strategy_ownership_verified")==true
-            val active=proof?.optString("stop_proof") in
+            val active=proof?.optString("stop_proof").orEmpty() in
                 setOf("OWNED_STOP_SEEN","NATIVE_REPLACEMENT_PROTECTION_SEEN")
             val uniqueStop=proof?.optInt("signed_full_stops_seen",0)==1
             val wellFormedProof=positionFresh && candidates.size==1 &&
