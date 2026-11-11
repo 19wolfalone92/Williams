@@ -1346,6 +1346,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
         .put("tc2_recent_exit_forensics", report.optJSONObject("tc2_recent_exit_forensics") ?: JSONObject())
+        .put("book_causal_understanding", report.optJSONObject("book_causal_understanding") ?: JSONObject())
         .put("signed_position_stop_join", report.optJSONObject("signed_position_stop_join") ?: JSONObject())
         .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
@@ -12896,6 +12897,9 @@ private class NativeEngine(
             .put("futures_fill_stop_timing",fillStopTiming)
             .put("tc2_recent_exit_forensics", WilliamsTc2RecentExitForensics.summarize(
                 statusSnapshot.optJSONArray("trade_observations")))
+            .put("book_causal_understanding", WilliamsBookCausalUnderstanding.assess(
+                scannerEvidenceSnapshot, WilliamsTc2RecentExitForensics.summarize(
+                    statusSnapshot.optJSONArray("trade_observations")), observedAtMs))
             .put("signed_position_stop_join",signedStopJoin)
             .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
