@@ -34,6 +34,18 @@ internal object AndroidRebootRecoveryEvidence {
         val serviceAt=if(requestedAt>0L) latestAfter("SERVICE_FOREGROUND_CREATED",requestedAt) else 0L
         val signedSyncAt=status.optLong("user_stream_last_successful_sync_ms",0L)
         val heartbeatAge=android.optLong("runtime_worker_heartbeat_age_ms",Long.MAX_VALUE)
+        val runtimeObservedAt=if(serviceAt>0L)
+            latestAfter("SERVICE_RUNTIME_OBSERVED",serviceAt) else 0L
+        // A verified start is NOT a verified continuing worker heartbeat.
+        // In the first service-guard interval after package replacement, the
+        // service's cached heartbeat can still be absent even though the
+        // native startup snapshot proved running+workerAlive. Report this as
+        // pending evidence, never as recovered/ready or a confirmed crash.
+        val startupHeartbeatPending=serviceAt>0L && runtimeObservedAt>=serviceAt &&
+            nowMs>=serviceAt && nowMs-serviceAt<=60_000L &&
+            heartbeatAge==Long.MAX_VALUE && status.optBoolean("running") &&
+            android.optBoolean("foreground_service_active") &&
+            android.optBoolean("cpu_wake_lock_held")
         val workerLive=status.optBoolean("running") &&
             android.optBoolean("foreground_service_active") &&
             android.optBoolean("cpu_wake_lock_held") &&
@@ -46,6 +58,7 @@ internal object AndroidRebootRecoveryEvidence {
             optedInAt==0L -> "BOOT_OPT_IN_NOT_VERIFIED"
             requestedAt==0L -> "BOOT_FGS_REQUEST_NOT_OBSERVED"
             serviceAt==0L -> "BOOT_FGS_CREATION_NOT_OBSERVED"
+            !workerLive && startupHeartbeatPending -> "BOOT_WORKER_HEARTBEAT_PENDING_AFTER_VERIFIED_START"
             !workerLive -> "BOOT_NATIVE_WORKER_NOT_PROVEN_LIVE"
             !signedAfterBoot -> "BOOT_SIGNED_RECONCILIATION_NOT_VERIFIED"
             else -> "BOOT_MONITOR_AND_SIGNED_RECONCILIATION_OBSERVED"
@@ -58,6 +71,8 @@ internal object AndroidRebootRecoveryEvidence {
             .put("fgs_created_at_ms",serviceAt)
             .put("signed_user_stream_sync_at_ms",signedSyncAt)
             .put("worker_live_now",workerLive)
+            .put("worker_startup_observed_at_ms",runtimeObservedAt)
+            .put("worker_startup_observed_pending_heartbeat",startupHeartbeatPending)
             .put("signed_sync_after_boot",signedAfterBoot)
             .put("reboot_observed",bootAt>0L)
             .put("recovery_technical_proven",statusCode=="BOOT_MONITOR_AND_SIGNED_RECONCILIATION_OBSERVED")
