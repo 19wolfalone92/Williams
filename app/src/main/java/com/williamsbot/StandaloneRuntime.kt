@@ -12831,7 +12831,7 @@ private class NativeEngine(
         // in status.decision_traces / signal_decision_history.json.
         val configurationSnapshot=diagnosticSettings()
         val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
-        return JSONObject()
+        val completedDiagnosticReport=JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
@@ -12965,6 +12965,19 @@ private class NativeEngine(
                 .put("self_heal_count", selfHealCount)
                 .put("last_self_heal_at", lastSelfHealMs)
                 .put("history_active_tasks", activeHistoryTasks.size))
+        // 34+ MB full JSON graphs can increase heap usage AFTER the early
+        // Runtime status memory sample. Measure again only after the heavy
+        // research/paper/decision report exists, without forced GC or extra
+        // JSON serialization. Preserve original read-only report object.
+        val javaHeapRuntime=Runtime.getRuntime()
+        val postBuildHeap=WilliamsDiagnosticResourceHealth.heap(JSONObject()
+            .put("java_heap_used_bytes",
+                (javaHeapRuntime.totalMemory()-javaHeapRuntime.freeMemory()).coerceAtLeast(0L))
+            .put("java_heap_committed_bytes",javaHeapRuntime.totalMemory())
+            .put("java_heap_limit_bytes",javaHeapRuntime.maxMemory())
+            .put("native_heap_allocated_bytes",android.os.Debug.getNativeHeapAllocatedSize()))
+        resourceDiagnostics.put("post_report_build_heap",postBuildHeap)
+        return completedDiagnosticReport
     }
 
     fun selfHeal(): JSONObject {
