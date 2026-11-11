@@ -1345,6 +1345,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
+        .put("signed_position_stop_join", report.optJSONObject("signed_position_stop_join") ?: JSONObject())
         .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
         .put("diagnostic_summary", report.optJSONObject("diagnostic_summary") ?: JSONObject())
@@ -12533,6 +12534,21 @@ private class NativeEngine(
                     "; полный числовой снимок в runtime_resource_diagnostics.json. " +
                     "PASS относится только к моменту измерения, пик нагрузки не восстановлен."))
         }
+        // A second, independent observational JOIN of the ALREADY CAPTURED
+        // signed position rows and signed protection proofs. Zero network
+        // calls. Never use this for order admission or duplicate STOP repair.
+        val signedStopJoin=WilliamsSignedStopJoinAudit.inspect(
+            statusSnapshot,coordinatorSnapshot,observedAtMs)
+        tests.put(JSONObject().put("id","EXE-SIGNED-JOIN")
+            .put("domain","execution")
+            .put("name","Подписанная позиция ↔ активный STOP: символ, сторона, qty, цена, владелец")
+            .put("severity",signedStopJoin.optString("severity","NOT_VERIFIED"))
+            .put("detail","Позиции="+signedStopJoin.optInt("open_position_count")+
+                "; подтверждённые соответствия="+signedStopJoin.optInt("signed_stop_matched_count")+
+                "; неразрешённые="+signedStopJoin.optInt("unresolved_position_count")+
+                "; неоднозначные="+signedStopJoin.optInt("ambiguous_proof_count")+
+                ". Это наблюдательное сравнение двух кешированных signed снимков, " +
+                "НЕ допуск к новым входам и НЕ доказательство STOP с момента FILLED."))
         val scannerEvidenceSnapshot = scannerSnapshot()
         val unifiedEvidence = buildWilliamsUnifiedEvidence(scannerEvidenceSnapshot, statusSnapshot, observedAtMs)
         val chartReadingAudit = JSONArray().apply {
@@ -12850,6 +12866,7 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("futures_fill_stop_timing",fillStopTiming)
+            .put("signed_position_stop_join",signedStopJoin)
             .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
