@@ -12812,7 +12812,13 @@ private class NativeEngine(
                 for(symbol in coreSymbols.sorted()) put(symbol,JSONObject().apply {
                     for(source in listOf(williamsNtdProfile,williamsCourseProfile,WILLIAMS_TC1_OBSERVER)) {
                         val data=runCatching {
-                            observerPaperArchive.snapshot(symbol,source,500)
+                            // Only a bounded preview belongs in the in-memory
+                            // report. The COMPLETE append-only observer
+                            // history is exported separately as streamed
+                            // observer_paper_full_history.ndjson in the ZIP.
+                            // 500 rows × 45 symbol/source pairs duplicated
+                            // megabytes of Java heap during Android diagnostics.
+                            observerPaperArchive.snapshot(symbol,source,50)
                         }.getOrElse { failure ->
                             JSONObject().put("status","OBSERVER_ARCHIVE_UNAVAILABLE")
                                 .put("error_type",failure.javaClass.simpleName)
