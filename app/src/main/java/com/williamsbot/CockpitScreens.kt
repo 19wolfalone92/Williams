@@ -820,6 +820,35 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val exitEvidence=report?.optJSONObject("tc2_recent_exit_forensics")
+            val lastExits=CockpitDiagnostics.rows(exitEvidence?.optJSONArray("recent_closed_trades"))
+            CockpitCard("Почему бот закрыл сделку") {
+                if(exitEvidence==null) {
+                    Text("Для анализа причины выхода запустите диагностику версии 4.64.19.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else if(lastExits.isEmpty()) {
+                    Text("Нет завершённых сделок с доступным биржевым журналом.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    for(row in lastExits.take(3)) {
+                        CockpitField(row.optString("symbol")+"/"+row.optString("direction"),
+                            row.optString("recorded_exit_reason","NOT_VERIFIED"))
+                        Text(row.optString("why_closed_ru"),
+                            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        if(row.optBoolean("opposite_h1_signal_confirmed_in_saved_evidence")) {
+                            CockpitField("Встречный H1",
+                                row.optString("opposite_signal_type")+" · trigger "+
+                                    row.optString("opposite_trigger","?")+" · contract "+
+                                    row.optString("observed_contract_price","?"))
+                        }
+                    }
+                    Text("Встречный TC2-сигнал не означает завершения старшего тренда. " +
+                        "Эта read-only карточка не меняет стопы и торговые правила.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val signed=report?.optJSONObject("signed_position_stop_join")
             val rows=CockpitDiagnostics.rows(signed?.optJSONArray("positions"))
             val severity=signed?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"

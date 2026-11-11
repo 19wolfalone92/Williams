@@ -241,6 +241,11 @@ object DiagnosticsArchive {
                 addJson(zip,"futures_fill_stop_timing.json",
                     report.optJSONObject("futures_fill_stop_timing") ?: org.json.JSONObject()
                         .put("severity","NOT_VERIFIED"))
+                // Explain actual historical exits without exporting private
+                // client-order IDs into another derived diagnostic file.
+                addJson(zip,"tc2_recent_exit_forensics.json",
+                    report.optJSONObject("tc2_recent_exit_forensics") ?: org.json.JSONObject()
+                        .put("trade_count",0).put("read_only",true))
                 addJson(zip,"signed_position_stop_join.json",
                     report.optJSONObject("signed_position_stop_join") ?: org.json.JSONObject()
                         .put("severity","NOT_VERIFIED"))

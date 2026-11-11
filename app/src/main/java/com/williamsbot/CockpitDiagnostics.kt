@@ -691,6 +691,7 @@ internal object CockpitDiagnostics {
         check("AND-02", "runtime", "Восстановление после перезагрузки Android", when {
             bootWitness==null || !bootWitness.optBoolean("reboot_observed") -> "NOT_VERIFIED"
             bootWitness.optBoolean("recovery_technical_proven") -> "PASS"
+            bootWitness.optBoolean("worker_startup_observed_pending_heartbeat") -> "NOT_VERIFIED"
             bootWitness.optLong("opt_in_verified_at_ms")<=0L -> "NOT_VERIFIED"
             now-bootWitness.optLong("boot_at_ms")>120_000L -> "WARNING"
             else -> "NOT_VERIFIED"
@@ -698,6 +699,8 @@ internal object CockpitDiagnostics {
             "opt-in: ${bootWitness?.optLong("opt_in_verified_at_ms")}; " +
             "FGS: ${bootWitness?.optLong("fgs_created_at_ms")}; " +
             "worker: ${bootWitness?.optBoolean("worker_live_now")}; " +
+            "verified runtime start: ${bootWitness?.optLong("worker_startup_observed_at_ms")}; " +
+            "heartbeat pending after start: ${bootWitness?.optBoolean("worker_startup_observed_pending_heartbeat")}; " +
             "post-boot signed REST sync: ${bootWitness?.optBoolean("signed_sync_after_boot")}; " +
             "код: ${bootWitness?.optString("status")}. PASS доказывает только последовательность boot->FGS->worker->signed sync, " +
             "но НЕ непрерывный 24-часовой фон, полноту защиты STOP или готовность к новым входам.")

@@ -1345,6 +1345,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
+        .put("tc2_recent_exit_forensics", report.optJSONObject("tc2_recent_exit_forensics") ?: JSONObject())
         .put("signed_position_stop_join", report.optJSONObject("signed_position_stop_join") ?: JSONObject())
         .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
@@ -3390,7 +3391,9 @@ private class NativeEngine(
         if (result == null) {
             reconcileRequired = true
             val persisted = persistSafetyFlag("reconcile_required", true)
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // Recovery transport failed: preserve the explicit monitor auto-run
+            // preference. The durable reconcile latch keeps exposure CLOSED,
+            // but shutting off account/STOP supervision here is unsafe.
             val reason = reconciliationAttempt.exceptionOrNull()?.message
                 ?: reconciliationAttempt.exceptionOrNull()?.javaClass?.simpleName
                 ?: "Futures reconciliation returned no result"
@@ -4688,6 +4691,15 @@ private class NativeEngine(
             return
         }
 
+        // An unsigned Binance /time pulse is independent of H1 discovery.
+        // Do not fan out fifteen 1h REST tasks against an expired UTC anchor.
+        // A stale clock cannot validate candle closure or authorize entries.
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) {
+            scannerState = "WAITING_FOR_EXCHANGE_CLOCK"
+            scannerError = "Binance UTC is not verified; independent 5s clock probe is retrying. H1 analysis deferred, entries blocked."
+            return
+        }
+
         synchronized(this) {
             val retryAfterVerifiedReconciliation = scanRetryAfterReconciliation &&
                 !futuresReconciliationRunning &&
@@ -5202,7 +5214,8 @@ private class NativeEngine(
                 executionStore.writeState("futures_day_start_equity_source_" + utcDayStartMs, baselineResult.second)
             ) {
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Persist a recoverable ENTRY pause, not a monitoring shutdown.
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_PERSIST_FAILED: SQLite could not durably store the reconstructed baseline"
                 return false
             }
@@ -5225,7 +5238,7 @@ private class NativeEngine(
                 baselineSourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED"
             )) {
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_SOURCE_REPAIR_FAILED: persisted baseline is valid but provenance metadata could not be repaired"
                 return false
             }
@@ -5325,7 +5338,7 @@ private class NativeEngine(
             // it into the operator's indefinite pause or disable runtime auto-run.
             if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
                 paused=true
-                prefs.edit().putBoolean("auto_run",false).commit()
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused",true).commit()
                 lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
                 return false
             }
@@ -7409,7 +7422,9 @@ private class NativeEngine(
         // or loss baseline becomes unknown at this point, fail closed for this entry.
         val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // Unknown risk information blocks entries, NOT the read-only
+            // and protective monitor. Keep the user's auto-run opt-in intact.
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
                 (failure.message ?: failure.javaClass.simpleName)
             false
@@ -8197,6 +8212,11 @@ private class NativeEngine(
             coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        // A complete outage of the shared public UTC clock is a transient
+        // market-data dependency, not proof all 15 independent analyzers are
+        // broken. Never mark this as READY or use stale H1 signals.
+        val clockUnavailable = scannerAllSymbolClockOutage(coreSymbols.size, ranked.size, symbolErrors)
+        if (clockUnavailable) scanRetryAfterReconciliation = true
         // A valid read-only scan can overlap an unrelated Binance recovery
         // and be temporarily blocked by the coordinator's in-flight marker.
         // Preserve the entry fence, but recheck promptly after it finishes.
@@ -8205,6 +8225,7 @@ private class NativeEngine(
             scanRetryAfterReconciliation = true
         }
         scannerState = when {
+            clockUnavailable -> "WAITING_FOR_EXCHANGE_CLOCK"
             !completeScan && ranked.isEmpty() -> "FAILED"
             !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
             !completeScan -> "PARTIAL"
@@ -8212,6 +8233,8 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            clockUnavailable -> "Binance public UTC clock expired while scanning all approved H1 series; " +
+                "the independent bounded probe will retry. All entries remain blocked."
             !completeScan && symbolErrors.isNotEmpty() ->
                 "Не удалось завершить H1-анализ: " + symbolErrors.entries
                     .sortedBy { it.key }.take(3)
@@ -12871,6 +12894,8 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("futures_fill_stop_timing",fillStopTiming)
+            .put("tc2_recent_exit_forensics", WilliamsTc2RecentExitForensics.summarize(
+                statusSnapshot.optJSONArray("trade_observations")))
             .put("signed_position_stop_join",signedStopJoin)
             .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())

@@ -239,6 +239,16 @@ class TradingForegroundService : Service() {
                     check(BackgroundRuntimePolicy.autostartComplete(verified)) {
                         "OPTED_IN_MONITOR_NOT_RUNNING"
                     }
+                    // The service guard's first sample may run BEFORE the
+                    // asynchronous native worker starts and its next sample
+                    // is one full CHECK_MS later. Publish the freshly verified
+                    // worker loop timestamp immediately, so a diagnostic taken
+                    // 10-30s after APK replacement does not misclassify the
+                    // native engine as dead. A zero timestamp stays unverified.
+                    if (verified.workerAlive && verified.lastWorkerLoopElapsedMs > 0L) {
+                        RuntimeServiceState.lastWorkerLoopElapsedMs =
+                            verified.lastWorkerLoopElapsedMs
+                    }
                 }.onSuccess {
                     // Foreground notification is not proof the trading engine
                     // actually started. Clear only prior service startup errors.
