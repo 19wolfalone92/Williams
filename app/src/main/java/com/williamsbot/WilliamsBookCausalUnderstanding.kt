@@ -18,33 +18,48 @@ internal object WilliamsBookCausalUnderstanding {
         val sourceStatus:String
     )
     private val rules=listOf(
-        Rule("TC2.WM1.DIVERGENT", "TC2", listOf(122,123,124,125),
-            "Countertrend reversal beyond the entire Alligator mouth; strict half-close, opposing AO colour and visually motivated angulation.",
-            "ANGULATION_NUMERICAL_PROXY"),
-        Rule("TC2.WM2.THIRD_AO", "TC2", listOf(135,136,137,139,156),
-            "Three directional AO changes; pending stop-entry belongs to the corresponding third price bar.",
-            "BOUNDED_RULE_TESTED"),
-        Rule("TC2.WM3.FRACTAL", "TC2", listOf(145,146,147,156),
-            "Closed causal 5-plus-bar confirmed fractal; actual breakout outside Teeth, not merely a formation outside Teeth.",
-            "EXTENDED_GEOMETRY_PARTIALLY_VALIDATED"),
-        Rule("TC2.STOP.STRUCTURE", "TC2", listOf(131,132,156,165),
-            "Initial Wise Man stop and monotone structural 3-5 bar trailing are different decisions.",
-            "SIGNED_EXCHANGE_STOP_NOT_PROVED_BY_BOOK"),
-        Rule("TC2.OPPOSITE.EXIT", "TC2", listOf(153,154,155,156,163),
-            "A fresh opposing Wise Man LEVEL may trigger exit/reversal; its appearance is not a fill or proof of D1/H4 trend end.",
-            "SOURCE_EVENT_MUST_BE_REVALIDATED"),
-        Rule("TC1.MFI.FOUR_WINDOWS", "TC1", listOf(40,41,42,43,44,45),
-            "Green, Fade, Fake and Squat require comparisons with prior volume and MFI; crypto base volume is only a proxy for source tick volume.",
+        Rule("TC2.WM1.DIVERGENT_BAR", "TC2", listOf(122,123,124,125),
+            "Countertrend reversal beyond whole Alligator mouth, strict upper/lower-half close.",
+            "BOUNDED_SOURCE_RULE"),
+        Rule("TC2.WM1.ANGULATION", "TC2", listOf(122,123,124),
+            "Price path must angle away from Jaw and Teeth, not run parallel after mouth passage.",
+            "ENGINEERING_NUMERICAL_PROXY_NOT_VISUAL_CERTIFICATION"),
+        Rule("TC2.WM1.AO_CONTEXT", "TC2", listOf(125,131),
+            "Countertrend WM1 takes the AO colour of the previous move, distinct from AO sign.",
+            "BOUNDED_SOURCE_RULE"),
+        Rule("TC2.WM2.THREE_AO_BARS", "TC2", listOf(135,136,137,139),
+            "Three consecutive AO colour changes, third price bar identifies pending entry.",
+            "BOUNDED_SOURCE_RULE"),
+        Rule("TC2.WM3.ACTIVATION_TEETH", "TC2", listOf(145,146,147),
+            "Fractal must BREAK beyond Teeth rather than form beyond Teeth.",
+            "ACTUAL_TRIGGER_NOT_PROVED_BY_SCANNER"),
+        Rule("TC2.FRACTAL.EQUAL_EXTREMES", "TC2", listOf(145,146),
+            "Five- to nine-bar tied extrema with two strict confirming neighbours per side.",
+            "SYNTHETIC_FIGURES_TESTED_NOT_EXHAUSTIVE"),
+        Rule("TC2.STOP.THREE_OR_FIVE", "TC2", listOf(131,132,156,165),
+            "First protective stop and 3/5-bar trailing are separate book decisions.",
+            "ACTUAL_SIGNED_BINANCE_STOP_NOT_BOOK_VERIFIED"),
+        Rule("TC2.EXIT.STOP_AND_REVERSE", "TC2", listOf(153,154,155,156,163),
+            "Opposite Wise Man TRIGGER can prompt exit/reversal; not proof senior trend ended.",
+            "IMPLEMENTED_PARTIAL_NO_AUTOMATIC_REVERSE"),
+        Rule("TC1.MFI.RANGE_OVER_VOLUME", "TC1", listOf(40,41,42,43,44,45),
+            "Original tick volume differs from crypto base-asset volume; MFI windows remain proxies.",
             "PROXY_OBSERVE_ONLY"),
-        Rule("NTD.FRACTAL.FIRST", "NTD", listOf(38,39,40,41,42,43),
-            "The first NTD entry has its own external fractal/Alligator lifecycle; not a mandatory first entry for TC2.",
+        Rule("NTD.FIRST_FRACTAL", "NTD", listOf(38,39,40,41,42,43),
+            "NTD first external fractal sequence does not override TC2 first-presenting Wise Man.",
             "OBSERVE_ONLY"),
-        Rule("NTD.FIVE_DIMENSIONS", "NTD", listOf(55,56,72,73,91,92,93,94),
-            "AO, AC, zone and Balance Line are edition-specific observations, not TC2 trade votes.",
+        Rule("NTD.INDICATORS", "NTD", listOf(55,56,72,73,91,92,93,94),
+            "AO, AC, zone and Balance Line require NTD-specific sequence and source policy.",
             "OBSERVE_ONLY"),
-        Rule("COURSE.HUMP_THUMB_RHYTHM", "COURSE", listOf(61,62,69,70,71,77,81,90),
-            "Hump, Thumb, 5/13/34 rhythm and wave allocations require independent original-figure verification.",
-            "OCR_FIGURES_NOT_FULLY_CERTIFIED")
+        Rule("COURSE.HUMP", "COURSE", listOf(61,62,63,64,65,66,67),
+            "Hump formation includes distinct Start and Signal ownership.",
+            "OCR_VISUAL_CASES_NOT_FULLY_CERTIFIED"),
+        Rule("COURSE.THUMB.FINGERS", "COURSE", listOf(69,70,71),
+            "Three structural fingers exclude inner bars and require volume confirmation.",
+            "OCR_VISUAL_CASES_NOT_FULLY_CERTIFIED"),
+        Rule("COURSE.RHYTHM", "COURSE", listOf(42,43,44,45,87,88,89,90),
+            "5/13/34 wave rhythm and phase must be interpreted in native Course context.",
+            "OCR_VISUAL_CASES_NOT_FULLY_CERTIFIED")
     )
     private fun rows(a:JSONArray?):List<JSONObject> =
         if(a==null) emptyList() else (0 until a.length()).mapNotNull { a.optJSONObject(it) }
@@ -52,9 +67,9 @@ internal object WilliamsBookCausalUnderstanding {
     private fun family(type:String):String = type.removePrefix("LONG_").removePrefix("SHORT_")
     private fun direction(type:String):String = if(type.startsWith("SHORT_")) "SHORT" else "LONG"
     private fun tc2Rule(family:String):String = when(family) {
-        "REVERSAL" -> "TC2.WM1.DIVERGENT"
-        "SUPER_AO" -> "TC2.WM2.THIRD_AO"
-        "FRACTAL" -> "TC2.WM3.FRACTAL"
+        "REVERSAL" -> "TC2.WM1.DIVERGENT_BAR"
+        "SUPER_AO" -> "TC2.WM2.THREE_AO_BARS"
+        "FRACTAL" -> "TC2.WM3.ACTIVATION_TEETH"
         else -> "UNMAPPED_WILLIAMS_FAMILY"
     }
     private fun ruleCatalog():JSONArray=JSONArray(rules.map { rule ->
@@ -86,8 +101,12 @@ internal object WilliamsBookCausalUnderstanding {
             (if(side=="LONG") stop<trigger else stop>trigger)
         val context=rawDetail?.optJSONObject("setup_context") ?: JSONObject()
         val rule=if(profile==williamsTc2Profile) tc2Rule(f) else when(profile) {
-            williamsNtdProfile -> "NTD.FIVE_DIMENSIONS"
-            williamsCourseProfile -> "COURSE.HUMP_THUMB_RHYTHM"
+            williamsNtdProfile -> if(f=="FRACTAL") "NTD.FIRST_FRACTAL" else "NTD.INDICATORS"
+            williamsCourseProfile -> when(f) {
+                "COURSE_HUMP" -> "COURSE.HUMP"
+                "COURSE_THUMB" -> "COURSE.THUMB.FINGERS"
+                else -> "COURSE.RHYTHM"
+            }
             else -> "UNKNOWN_SOURCE"
         }
         val hasInternalProof=when {
