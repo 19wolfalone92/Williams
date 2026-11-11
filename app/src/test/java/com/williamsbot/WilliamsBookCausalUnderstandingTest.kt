@@ -97,6 +97,38 @@ class WilliamsBookCausalUnderstandingTest {
         assertFalse(williamsVerifiedNewRiskSource(williamsCourseProfile))
     }
 
+    @Test fun closedH1OpposingBothSeniorFramesIsNotProofSeniorTrendReversed() {
+        fun frame(period:String,side:String,closeAt:Long):JSONObject=JSONObject()
+            .put("frame",period).put("state","PHASE_CANDIDATE")
+            .put("distinct_structural_hypotheses",1)
+            .put("market_reading",JSONObject().put("state","OBSERVED")
+                .put("observed_bias",side).put("as_of_close_ms",closeAt))
+        val c=candidate(signal())
+        val phase=JSONObject().put("as_of",now)
+            .put("frames",JSONArray()
+                .put(frame("1h","DOWN",now-1_000L))
+                .put(frame("4h","UP",now-2_000L))
+                .put(frame("1d","UP",now-3_000L)))
+        c.getJSONObject("decision_trace").put("market_phase",phase)
+        val a=WilliamsBookCausalUnderstanding.assess(scanner(c),JSONObject(),now)
+        val context=a.getJSONArray("observed_candidates").getJSONObject(0)
+            .getJSONObject("senior_frame_context")
+        assertEquals("OBSERVED_CONTEXT_ONLY",context.getString("state"))
+        assertEquals("OPPOSING_OBSERVED_BIAS_NOT_CONFIRMED_REVERSAL",
+            context.getString("h1_vs_senior_context"))
+        assertFalse(context.getBoolean("senior_trend_end_proven"))
+        assertFalse(context.getBoolean("can_veto_tc2_exit"))
+        assertFalse(context.getBoolean("can_place_orders"))
+        assertEquals(3,context.getJSONArray("frame_readings").length())
+        // A missing D1 historical chart prevents an assertive senior reading.
+        phase.getJSONArray("frames").remove(2)
+        val missing=WilliamsBookCausalUnderstanding.assess(scanner(c),JSONObject(),now)
+            .getJSONArray("observed_candidates").getJSONObject(0)
+            .getJSONObject("senior_frame_context")
+        assertEquals("NOT_VERIFIED",missing.getString("state"))
+        assertEquals("INSUFFICIENT_SENIOR_EVIDENCE",missing.getString("h1_vs_senior_context"))
+    }
+
     @Test fun originalSourcePagesNeverMasqueradeAsWholeBookCertification() {
         val a=WilliamsBookCausalUnderstanding.assess(JSONObject(),JSONObject(),now)
         val pages=a.getJSONArray("source_book_pdf_references")
