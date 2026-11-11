@@ -12840,7 +12840,7 @@ private class NativeEngine(
         // byte identical to status.decision_traces (~5.74 MB each). Construct
         // settings WITHOUT even allocating that duplicate tree. Retain all
         // safety, leverage, TC2 and Demo fields and the full forensic original
-        // in status.decision_traces / signal_decision_history.json.
+        // in signal_decision_history.json (status copy is deliberately deduplicated).
         val configurationSnapshot=diagnosticSettings()
         val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
         val completedDiagnosticReport=JSONObject()
@@ -13156,7 +13156,7 @@ private class NativeEngine(
 
     fun settings(): JSONObject = buildSettings(includeDecisionTraces = true)
 
-    // Diagnostics already saved the full traces in status.decision_traces.
+    // Diagnostics save the full decision history separately in signal_decision_history.json.
     // The ordinary app settings API remains unchanged for other UI callers.
     private fun diagnosticSettings(): JSONObject = buildSettings(includeDecisionTraces = false)
 
