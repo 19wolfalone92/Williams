@@ -1344,6 +1344,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         // market timelines, decision histories or order payloads to Compose.
         .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
+        .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
         .put("diagnostic_summary", report.optJSONObject("diagnostic_summary") ?: JSONObject())
         .put("event_timeline", report.optJSONArray("event_timeline") ?: JSONArray())
@@ -12610,6 +12611,25 @@ private class NativeEngine(
         for (item in CockpitDiagnostics.rows(tests)) {
             if (item.optString("severity") == "WARN") item.put("severity", "WARNING")
         }
+        // Read the bounded cockpit timeline ONCE. The FILLED→STOP correlator
+        // is forensics only; it never reissues an order or treats WS NEW as an
+        // independently signed protection certificate.
+        val timelineSnapshot=auditStore.recentCockpitEvents(150)
+        val fillStopTiming=WilliamsFillStopTimingForensics.analyze(
+            timelineSnapshot,observedAtMs)
+        tests.put(JSONObject().put("id","EXE-FILL-STOP-TIMING")
+            .put("domain","execution")
+            .put("name","Фактическая задержка FILLED → первое наблюдение STOP и защитной сверки")
+            .put("severity",fillStopTiming.optString("severity","NOT_VERIFIED"))
+            .put("detail","Наблюдавшихся FILLED=" +
+                fillStopTiming.optInt("fill_event_count") +
+                "; интервалов > "+fillStopTiming.optLong("warn_threshold_ms")+
+                " мс="+fillStopTiming.optInt("observed_slow_confirmation_count") +
+                "; отсутствуют/неоднозначны="+
+                fillStopTiming.optInt("unlinked_or_ambiguous_fill_count") +
+                ". Время событий из bounded device audit, не биржевой SLA. " +
+                "По одной паре и времени нельзя подтвердить соответствие clientAlgoId; " +
+                "подписанные защитные STOP сверяются независимо."))
         val cockpitReadiness = CockpitDiagnostics.readiness(statusSnapshot, coordinatorSnapshot, observedAtMs)
         val consistencyFindings = diagnosticConsistencyFindings(
             coordinatorState = coordinatorSnapshot.optString("state", "UNKNOWN"),
@@ -12770,7 +12790,8 @@ private class NativeEngine(
         // Built from the captured copies, not a second live status request.
         val chainAudit=WilliamsDiagnosticChainAudit.build(
             statusSnapshot,coordinatorSnapshot,scannerEvidenceSnapshot,tests,
-            observedAtMs, nonAtomic=concurrentCoordinatorTransition)
+            observedAtMs, timelineSnapshot,
+            nonAtomic=concurrentCoordinatorTransition)
         val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
         // The 4.64.14 phone ZIP proves settings.decision_traces is byte-for-
         // byte identical to status.decision_traces (~5.74 MB each). Construct
@@ -12784,7 +12805,8 @@ private class NativeEngine(
             .put("created_at_ms", observedAtMs)
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
             .put("cockpit_readiness", cockpitReadiness)
-            .put("event_timeline", auditStore.recentCockpitEvents(150))
+            .put("event_timeline", timelineSnapshot)
+            .put("futures_fill_stop_timing",fillStopTiming)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
