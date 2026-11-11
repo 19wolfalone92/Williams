@@ -45,6 +45,8 @@ def test_report_uses_single_captured_snapshots_and_not_new_rest_on_graph():
     assert '.put("event_timeline", timelineSnapshot)' in diag
     assert '.put("futures_fill_stop_timing",fillStopTiming)' in diag
     assert '.put("runtime_resource_diagnostics",resourceDiagnostics)' in diag
+    assert 'resourceDiagnostics.put("post_report_build_heap",postBuildHeap)' in diag
+    assert 'return completedDiagnosticReport' in diag
     assert '.put("diagnostic_chain_audit",chainAudit)' in diag
     assert "val gateReadyAtReport = !concurrentCoordinatorTransition && executionReady()" in diag
 
