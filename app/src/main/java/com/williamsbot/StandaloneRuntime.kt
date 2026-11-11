@@ -1345,6 +1345,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
+        .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
         .put("diagnostic_summary", report.optJSONObject("diagnostic_summary") ?: JSONObject())
         .put("event_timeline", report.optJSONArray("event_timeline") ?: JSONArray())
@@ -12466,6 +12467,19 @@ private class NativeEngine(
         },"williams-readonly-futures-fill-audit").apply { isDaemon=true; start() }
     }
 
+    private fun diagnosticExecutorQueueSnapshot():JSONObject {
+        val backfill=historyBackfillExecutor as? java.util.concurrent.ThreadPoolExecutor
+        val indicator=indicatorExecutor as? java.util.concurrent.ThreadPoolExecutor
+        return JSONObject()
+            .put("scanner_active_threads",scanExecutor.activeCount)
+            .put("scanner_queue_size",scanExecutor.queue.size)
+            .put("scanner_queue_capacity",
+                scanExecutor.queue.size+scanExecutor.queue.remainingCapacity())
+            .put("tc2_research_queue_size",tc2ExitResearchExecutor.queue.size)
+            .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
+            .put("indicator_queue_size",indicator?.queue?.size ?: -1)
+    }
+
     fun diagnostics(): JSONObject {
         // GET-only diagnostics run separately from the Android/UI thread and
         // never block STOP maintenance or create a position owner. A later
@@ -12490,6 +12504,23 @@ private class NativeEngine(
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
+        val resourceDiagnostics=WilliamsDiagnosticResourceHealth.snapshot(
+            statusSnapshot.optJSONObject("android_runtime")?.optJSONObject("memory_health"),
+            statusSnapshot.optJSONObject("rate_limits"),diagnosticExecutorQueueSnapshot())
+        for((id,name,row) in listOf(
+            Triple("RES-HEAP-01","Java heap, native memory и запас до OOM",
+                resourceDiagnostics.getJSONObject("heap")),
+            Triple("RES-RATE-01","Binance REST лимиты и активный cooldown",
+                resourceDiagnostics.getJSONObject("rate_limits")),
+            Triple("RES-QUEUE-01","Очереди Scanner, History, Wave и Indicator",
+                resourceDiagnostics.getJSONObject("executors"))
+        )) {
+            tests.put(JSONObject().put("id",id).put("domain","runtime")
+                .put("name",name).put("severity",row.optString("severity","NOT_VERIFIED"))
+                .put("detail","Наблюдение ресурсов: "+row.optString("reason","NOT_VERIFIED")+
+                    "; полный числовой снимок в runtime_resource_diagnostics.json. " +
+                    "PASS относится только к моменту измерения, пик нагрузки не восстановлен."))
+        }
         val scannerEvidenceSnapshot = scannerSnapshot()
         val unifiedEvidence = buildWilliamsUnifiedEvidence(scannerEvidenceSnapshot, statusSnapshot, observedAtMs)
         val chartReadingAudit = JSONArray().apply {
@@ -12807,6 +12838,7 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("futures_fill_stop_timing",fillStopTiming)
+            .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
