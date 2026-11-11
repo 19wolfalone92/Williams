@@ -274,6 +274,8 @@ internal object WilliamsBookCausalUnderstanding {
         val errors=JSONArray()
         var observed=0
         var unverified=0
+        var independentAoContradictions=0
+        var independentAoNotVerified=0
         for(symbol in APPROVED_FUTURES_SYMBOLS) {
             val matching=candidates.filter { it.optString("symbol")==symbol }
             val candidate=matching.singleOrNull()
@@ -305,8 +307,19 @@ internal object WilliamsBookCausalUnderstanding {
                     close,nowMs,candidate?.optJSONObject("decision_trace")?.optJSONArray("candles"))
                 if(signalId.isBlank() || signalId in duplicateTraceIds || signalId in duplicateLiveIds)
                     evidence.put("state","SOURCE_SIGNAL_IDENTITY_AMBIGUOUS")
-                if(evidence.optString("state")=="INTERNAL_BOOK_FORMATION_PROOF_PRESENT") observed++
-                else unverified++
+                when(evidence.optString("state")) {
+                    "INTERNAL_BOOK_FORMATION_PROOF_PRESENT" -> observed++
+                    "INDEPENDENT_CLOSED_H1_AO_CONTRADICTS_SETUP" -> {
+                        unverified++
+                        independentAoContradictions++
+                        errors.put("WM2_AO_SOURCE_CONTRADICTION:$symbol:${signalId.take(80)}")
+                    }
+                    "INDEPENDENT_CLOSED_H1_AO_NOT_VERIFIED" -> {
+                        unverified++
+                        independentAoNotVerified++
+                    }
+                    else -> unverified++
+                }
                 summaries.put(evidence)
             }
             val editions=rows(candidate?.optJSONArray("edition_observations"))
@@ -363,6 +376,8 @@ internal object WilliamsBookCausalUnderstanding {
                 it.optLong("closed_h1_as_of_ms",0L)>0L })
             .put("internal_h1_setup_proof_count",observed)
             .put("incomplete_or_non_tc2_signal_proof_count",unverified)
+            .put("independent_third_ao_source_contradictions",independentAoContradictions)
+            .put("independent_third_ao_unverified",independentAoNotVerified)
             .put("observed_candidates",inspected)
             .put("source_contract_discrepancies",errors)
             .put("confirmed_h1_opposing_exit_count",opposite)
