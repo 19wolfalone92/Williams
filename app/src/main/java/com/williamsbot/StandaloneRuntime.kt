@@ -7207,7 +7207,12 @@ private class NativeEngine(
             signalType=signal.type,signalBarTimeMs=signal.signalBarTimeMs,signalReason=signal.reason,leverage=leverage,
             strategyProfile=profile,entryClientId=parentId,executionSemantics=signal.executionSemantics,
             referenceClose=if(market) signal.triggerPrice else 0.0,setupContext=setup.toString(),signalId=signal.signalId)
-        lastOrder=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
+        // Add-ons increase exposure too: require current signed account/STOP
+        // evidence OUTSIDE the durable mutation Door, not an old H1 snapshot.
+        if (!refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_PREFLIGHT")) return
+        if (!executionReady()) return rejectDecision(symbol,
+            "ADD_ON_SIGNED_ACCOUNT_OR_STOP_GATE_CHANGED")
+        val addResult=withCampaignMutation(symbol,"WILLIAMS_CAMPAIGN_ADDITION") {
             val submitNow=futuresMarketData.exchangeNowMs()
             check(williamsProfileAllowsSource(williamsProfile,profile)) { "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION" }
             check(entryTimePolicy.allows(submitNow)) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION" }
@@ -7226,10 +7231,36 @@ private class NativeEngine(
                 val current=futuresMarketData.price(symbol)
                 check(if(direction=="LONG") current<price else current>price) { "Addition trigger already consumed" }
             }
+            // Final H1/sizing checks can consume the original signed TTL.
+            // No entry-intent audit or Binance POST if less than 20s remains.
+            if (!entrySignedProofHasPreIntentHeadroom(lastRestReconcileMs,System.currentTimeMillis())) {
+                return@withCampaignMutation JSONObject()
+                    .put("accepted",false).put("safe_rejection",true)
+                    .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                    .put("entry_signed_refresh_required",true)
+                    .put("blocker","ADD_ON_SIGNED_PROOF_HEADROOM_UNSAFE_BEFORE_INTENT")
+            }
             futuresCampaignCoordinator.submitPendingEntry(plan)
         }
-        reconcileRequired=true
-        persistSafetyFlag("reconcile_required",true)
+        lastOrder=addResult
+        if (addResult.optBoolean("entry_signed_refresh_required",false)) {
+            // Door is now released. Reconcile the actual account, then perform
+            // a fresh full H1 scan; never reuse the old add-on signal.
+            if (refreshSignedProofForEntryIfNeeded(symbol,"ADD_ON_AFTER_SAFE_DEFER"))
+                scanRetryAfterReconciliation=true
+        }
+        if (addResult.optBoolean("accepted",false)) {
+            // A truly accepted add-on must block any further exposure until
+            // signed position/entry/STOP reconciliation completes.
+            lastRestReconcileMs=0L
+            reconcileRequired=true
+            persistSafetyFlag("reconcile_required",true)
+        } else {
+            // The mutation wrapper already latches unresolved/uncertain
+            // outcomes. A proven zero-mutation safe rejection must NOT poison
+            // the already protected parent with an artificial safety latch.
+            rejectDecision(symbol,addResult.optString("blocker","ADD_ON_UNVERIFIED"))
+        }
     }
 
     /**
