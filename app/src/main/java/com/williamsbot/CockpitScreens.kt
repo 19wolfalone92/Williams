@@ -820,6 +820,41 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val signed=report?.optJSONObject("signed_position_stop_join")
+            val rows=CockpitDiagnostics.rows(signed?.optJSONArray("positions"))
+            val severity=signed?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"
+            CockpitCard("Защитный STOP · факты Binance",
+                if(severity=="WARNING") AppColors.amber else AppColors.primary) {
+                if(signed==null) {
+                    Text("Нужен новый подписанный снимок позиции и STOP. " +
+                        "Локальный экран без биржевого подтверждения недостаточен.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Открыто позиций",
+                        signed.optInt("open_position_count").toString())
+                    CockpitField("Совпадают qty/side/STOP",
+                        signed.optInt("signed_stop_matched_count").toString())
+                    CockpitField("Не подтверждены",
+                        signed.optInt("unresolved_position_count").toString(),
+                        if(signed.optInt("unresolved_position_count")>0)
+                            AppColors.amber else AppColors.textMuted)
+                    CockpitField("Неоднозначные STOP",
+                        signed.optInt("ambiguous_proof_count").toString())
+                    for(row in rows.take(10)) {
+                        val outcome=row.optString("stop_proof_state")
+                        CockpitField(row.optString("symbol")+"/"+row.optString("direction"),
+                            if(row.optBoolean("matching_side_quantity_and_stop"))
+                                "Подписанные qty/side/STOP совпали"
+                            else "Не проверено: "+outcome)
+                    }
+                    Text("Это read-only сверка двух наблюдений. " +
+                        "Не снимает защитные блокировки, не доказывает STOP с момента FILLED " +
+                        "и никогда не размещает или отменяет биржевые ордера.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val resources=report?.optJSONObject("runtime_resource_diagnostics")
             CockpitCard("Память, REST лимиты и очереди") {
                 if(resources==null) {
