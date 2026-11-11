@@ -63,3 +63,24 @@ def test_add_on_signed_proof_and_safe_rejection_never_poison_parent():
     assert 'lastRestReconcileMs=0L' in addition[accepted:latch]
     assert addition.count("reconcileRequired=true") == 1
     assert "rejectDecision(symbol,addResult.optString" in addition
+
+
+def test_normal_add_on_h1_invalidations_are_proven_zero_mutation_not_account_outages():
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    addition = runtime.split("private fun submitNativeFuturesAddition(", 1)[1]
+    addition = addition.split("private fun refreshSignedProofForEntryIfNeeded(", 1)[0]
+    assert "fun safeAddOnReadOnlyVeto(reason: String)" in addition
+    assert '.put("safe_rejection",true)' in addition
+    assert '.put("mutation_attempted",false)' in addition
+    for expected in (
+        "ADDITION_SOURCE_PROFILE_CHANGED_BEFORE_SUBMISSION",
+        "ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION",
+        "ADDITION_H1_FORMATION_INVALIDATED_BEFORE_POST",
+        "ADDITION_H1_TRIGGER_ALREADY_CONSUMED",
+    ):
+        assert "safeAddOnReadOnlyVeto(" in addition
+        assert expected in addition
+    # Unknown daily risk or exchange failures still raise into the durable
+    # fail-closed wrapper; do not classify their outcomes as a safe veto.
+    assert 'check(checkFuturesDailyLoss())' in addition
+    assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in addition
