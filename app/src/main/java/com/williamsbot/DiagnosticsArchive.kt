@@ -170,6 +170,9 @@ object DiagnosticsArchive {
                 addJson(zip,"futures_intent_stop_lifecycle.json",
                     report.optJSONObject("futures_campaign_coordinator")
                         ?.optJSONArray("pending_intent_details") ?: org.json.JSONArray())
+                addJson(zip,"futures_fill_stop_timing.json",
+                    report.optJSONObject("futures_fill_stop_timing") ?: org.json.JSONObject()
+                        .put("severity","NOT_VERIFIED"))
                 addJson(zip,"futures_exit_reconciliation.json",
                     report.optJSONObject("futures_campaign_coordinator")
                         ?.optJSONArray("exit_reconciliation_details") ?: org.json.JSONArray())
@@ -237,6 +240,8 @@ object DiagnosticsArchive {
         appendLine("Граф всех 22 диагностических ядер и зависимостей: diagnostic_chain_audit.json.")
         val chain=triage.optString("schema")
         appendLine("Источник агрегированных результатов: "+chain+"; PASS означает только компонентную проверку, не end-to-end Demo.")
+        appendLine("Время FILLED -> первое наблюдение STOP/OPEN_PROTECTED: futures_fill_stop_timing.json;")
+        appendLine("Это временные свидетельства Android, НЕ заверенный Binance SLA или доказательство отсутствия STOP.")
         appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
         appendLine("Для анализа волн см. chart_reading_audit.json, signal_decision_history.json.")
     }
