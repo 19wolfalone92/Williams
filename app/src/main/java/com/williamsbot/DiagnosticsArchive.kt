@@ -213,7 +213,7 @@ object DiagnosticsArchive {
         }
         appendLine("Граф всех 22 диагностических ядер и зависимостей: diagnostic_chain_audit.json.")
         val chain=triage.optString("schema")
-        appendLine("Источник агрегированных результатов: "+chain+"; "PASS" не означает end-to-end Demo.")
+        appendLine("Источник агрегированных результатов: "+chain+"; PASS означает только компонентную проверку, не end-to-end Demo.")
         appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
         appendLine("Для анализа волн см. chart_reading_audit.json, signal_decision_history.json.")
     }
