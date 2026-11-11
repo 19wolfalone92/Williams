@@ -25,6 +25,9 @@ internal object WilliamsDiagnosticChainAudit {
         Core("ANDROID_PROCESS","Android · процесс, фон, загрузка",
             listOf("version_consistency","runtime_lifecycle","reboot_credentials_and_engine","AND-01","AND-02","AND-04"),
             proof="Android process exits, boot witness, watchdog heartbeat and real 24h phone evidence"),
+        Core("HEAP_PRESSURE","JVM · память и риск OutOfMemoryError",
+            listOf("RES-HEAP-01"),listOf("ANDROID_PROCESS"),
+            "heap headroom, native memory, GC pressure and observed crash fingerprints"),
         Core("FOREGROUND_WORKER","Android · сервис и worker",
             listOf("local_runtime_dispatch","self_heal_contract","user_stream_reconciliation_lifecycle","state_machine"),
             listOf("ANDROID_PROCESS"),"foreground lease, generation, worker heartbeat and safe recovery"),
@@ -43,6 +46,9 @@ internal object WilliamsDiagnosticChainAudit {
         Core("SIGNED_ACCOUNT","Binance · private REST/account",
             listOf("credentials_state","rest_account","campaign_reconciliation_lifecycle"),
             listOf("EXCHANGE_CLOCK","SQLITE_JOURNAL"),"authenticated account generation and complete signed reconciliation"),
+        Core("NETWORK_GOVERNOR","Binance · REST weight / rate budget",
+            listOf("RES-RATE-01"),listOf("PUBLIC_REST","SIGNED_ACCOUNT"),
+            "request weight, 429/418 events and rate governor bounded retry/cooldown"),
         Core("PRIVATE_STREAM","Binance · user WebSocket",
             listOf("user_websocket","user_stream_freshness",
                 "user_stream_last_completed_signed_rest_duration",
@@ -57,6 +63,9 @@ internal object WilliamsDiagnosticChainAudit {
         Core("SCANNER","Scanner · полный цикл 15 пар",
             listOf("scanner_state","STR-08"),
             listOf("H1_HISTORY","PUBLIC_STREAMS"),"progress, scan age and candidate rejection reasons"),
+        Core("EXECUTOR_BACKLOG","Потоки · Scanner/Research/History очереди",
+            listOf("RES-QUEUE-01"),listOf("FOREGROUND_WORKER","HEAP_PRESSURE"),
+            "active scanner workers, queue depth, unbounded history backlog and starvation"),
         Core("TC2_RULES","Стратегия · TC2 и источники",
             listOf("STR-01","STR-02","STR-03","STR-04","STR-05","STR-06",
                 "STR-07","STR-10","STR-13","STR-15","STR-12"),
@@ -235,6 +244,17 @@ internal object WilliamsDiagnosticChainAudit {
                 "PUBLIC_REST" -> telemetry.put("last_success_age_ms",
                     age(status.optLong("rest_last_success_ms"),observedAtMs))
                     .put("rest_market_ready",status.optBoolean("rest_market_ready"))
+                "HEAP_PRESSURE" -> {
+                    val mem=status.optJSONObject("android_runtime")?.optJSONObject("memory_health")
+                    telemetry.put("java_heap_used_bytes",mem?.opt("java_heap_used_bytes") ?: JSONObject.NULL)
+                        .put("java_heap_limit_bytes",mem?.opt("java_heap_limit_bytes") ?: JSONObject.NULL)
+                }
+                "NETWORK_GOVERNOR" -> {
+                    val rate=status.optJSONObject("rate_limits")
+                    telemetry.put("used_weight_1m",rate?.opt("used_weight_1m") ?: JSONObject.NULL)
+                        .put("weight_limit_1m",rate?.opt("weight_limit_1m") ?: JSONObject.NULL)
+                        .put("cooldown_ms",rate?.opt("cooldown_ms") ?: JSONObject.NULL)
+                }
                 "PUBLIC_STREAMS" -> telemetry.put("market_ws_connected",status.optBoolean("market_ws_connected"))
                     .put("public_ws_connected",status.optBoolean("public_ws_connected"))
                 "SIGNED_ACCOUNT" -> telemetry.put("rest_account_ready",status.optBoolean("rest_account_ready"))
