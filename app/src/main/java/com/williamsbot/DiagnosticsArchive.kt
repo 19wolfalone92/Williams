@@ -307,7 +307,7 @@ object DiagnosticsArchive {
         } else {
             appendLine("Нет сопоставимого предыдущего диагностического снимка.")
         }
-        appendLine("Граф всех 22 диагностических ядер и зависимостей: diagnostic_chain_audit.json.")
+        appendLine("Граф всех диагностических ядер и зависимостей: diagnostic_chain_audit.json.")
         val chain=triage.optString("schema")
         appendLine("Источник агрегированных результатов: "+chain+"; PASS означает только компонентную проверку, не end-to-end Demo.")
         appendLine("Время FILLED -> первое наблюдение STOP/OPEN_PROTECTED: futures_fill_stop_timing.json;")
