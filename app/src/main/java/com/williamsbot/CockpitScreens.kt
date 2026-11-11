@@ -834,6 +834,10 @@ internal fun CockpitDiagnosticScreen(
                         understanding.optInt("internal_h1_setup_proof_count").toString())
                     CockpitField("Неполные доказательства",
                         understanding.optInt("incomplete_or_non_tc2_signal_proof_count").toString())
+                    CockpitField("Противоречия AO с исходными H1-свечами",
+                        understanding.optInt("independent_third_ao_source_contradictions").toString())
+                    CockpitField("AO без независимого подтверждения",
+                        understanding.optInt("independent_third_ao_unverified").toString())
                     CockpitField("Конфликты происхождения",
                         (understanding.optJSONArray("source_contract_discrepancies")?.length() ?: 0).toString())
                     CockpitField("Подтверждённые встречные H1-выходы",
