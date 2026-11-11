@@ -78,4 +78,31 @@ class RuntimeServiceLifecycleAssessmentTest {
         assertEquals(1,result.getInt("service_autostart_failure_count"))
         assertEquals("FAULT_OBSERVED",result.getString("assessment"))
     }
+
+    @Test fun repeatedSignedApkUpgradesAreNotAppCrashOrContinuousBackgroundProof() {
+        val events=JSONArray().put(event("PACKAGE_REPLACED_OBSERVED",500))
+            .put(event("SERVICE_FOREGROUND_CREATED",200))
+        val exits=JSONArray()
+            .put(JSONObject().put("reason","PACKAGE_UPDATED").put("at_ms",now-3_000))
+            .put(JSONObject().put("reason","PACKAGE_UPDATED").put("at_ms",now-2_000))
+        val result=RuntimeServiceLifecycleAssessment.summarize(continuity(events,exits),now)
+        assertEquals(2,result.getInt("observed_process_exit_count"))
+        assertEquals(2,result.getInt("expected_package_update_exit_count"))
+        assertEquals(0,result.getInt("unexpected_process_exit_count"))
+        assertEquals(0,result.getInt("abnormal_process_exit_count"))
+        assertEquals("NO_FAILURE_IN_RETAINED_EVIDENCE_ONLY",result.getString("assessment"))
+        assertFalse(result.getBoolean("continuous_24h_monitoring_verified"))
+    }
+
+    @Test fun crashCannotBeExplainedAwayBySevenOrdinaryApkUpgrades() {
+        val exits=JSONArray()
+        for(i in 1..7) exits.put(JSONObject()
+            .put("reason","PACKAGE_UPDATED").put("at_ms",now-i*1_000L))
+        exits.put(JSONObject().put("reason","CRASH").put("at_ms",now-9_000))
+        val result=RuntimeServiceLifecycleAssessment.summarize(continuity(JSONArray(),exits),now)
+        assertEquals(7,result.getInt("expected_package_update_exit_count"))
+        assertEquals(1,result.getInt("unexpected_process_exit_count"))
+        assertEquals(1,result.getInt("abnormal_process_exit_count"))
+        assertEquals("FAULT_OBSERVED",result.getString("assessment"))
+    }
 }
