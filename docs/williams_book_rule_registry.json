@@ -1842,7 +1842,7 @@
     "test": "app/src/test/java/com/williamsbot/WilliamsBookCausalUnderstandingTest.kt",
     "source_pdf_pages_reproduced_as_references_only": true,
     "infers_higher_timeframe_reversal_from_h1_opposite": false,
-    "cited_rule_count": 9,
+    "cited_rule_count": 14,
     "no_trading_or_stop_authority": true,
     "confidence_calibrated": false,
     "scope": "READ_ONLY_CAUSAL_OBSERVATIONS_NOT_LLM_TRAINING_OR_WHOLE_BOOK_CERTIFICATION"
