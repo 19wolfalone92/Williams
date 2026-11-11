@@ -81,12 +81,60 @@ internal object WilliamsBookCausalUnderstanding {
             .put("can_place_orders",false)
     })
     /**
+     * Independently recompute TC2 third-AO from the real, chronological
+     * CLOSED H1 candles copied into the decision trace, not from the native
+     * producer's own saved 'third_ao_bar_at_ms' assertion. This detects false
+     * self-certification when those two sources disagree.
+     *
+     * Return NOT_VERIFIED when insufficient source history is retained. Never
+     * manufacture a book PASS from a signal-only object.
+     */
+    private fun independentThirdAoProof(
+        type:String,signalBarAt:Long,closedH1At:Long,candles:JSONArray?
+    ):String {
+        if(candles==null || candles.length()<37 || candles.length()>160) return "NOT_VERIFIED"
+        data class Bar(val at:Long,val mid:Double)
+        val bars=mutableListOf<Bar>()
+        for(i in 0 until candles.length()) {
+            val row=candles.optJSONArray(i) ?: return "NOT_VERIFIED"
+            if(row.length()<6) return "NOT_VERIFIED"
+            val at=row.optLong(0,-1L)
+            val open=row.optDouble(1,Double.NaN)
+            val high=row.optDouble(2,Double.NaN)
+            val low=row.optDouble(3,Double.NaN)
+            val close=row.optDouble(4,Double.NaN)
+            if(at<0L || at%WILLIAMS_H1_MS!=0L ||
+                at>Long.MAX_VALUE-WILLIAMS_H1_MS ||
+                at+WILLIAMS_H1_MS>closedH1At ||
+                listOf(open,high,low,close).any { !it.isFinite() || it<=0.0 } ||
+                high<maxOf(open,low,close) || low>minOf(open,close) ||
+                bars.lastOrNull()?.let { at-it.at != WILLIAMS_H1_MS }==true)
+                return "NOT_VERIFIED"
+            bars+=Bar(at,(high+low)/2.0)
+        }
+        val index=bars.indexOfFirst { it.at==signalBarAt }
+        if(index<36) return "NOT_VERIFIED"
+        fun ao(i:Int):Double {
+            fun mean(n:Int)=bars.subList(i-n+1,i+1).sumOf { it.mid }/n
+            return mean(5)-mean(34)
+        }
+        val history=(index-3..index).map(::ao)
+        if(history.any { !it.isFinite() }) return "NOT_VERIFIED"
+        val rising=type.removePrefix("SHORT_")=="SUPER_AO" && !type.startsWith("SHORT_")
+        val falling=type=="SHORT_SUPER_AO"
+        if(!rising && !falling) return "NOT_VERIFIED"
+        return if(history.zipWithNext().all { (a,b) ->
+                if(rising) b>a else b<a }) "PASS" else "FAIL"
+    }
+
+    /**
      * A signal that is only present in a scanner is not a filled order. A
      * scanner's first-party setup_context is useful evidence but is not an
      * independent rereading of the author's figure from a real chart.
      */
     private fun signalEvidence(
-        signal:JSONObject, rawDetail:JSONObject?, closedH1At:Long, nowMs:Long
+        signal:JSONObject, rawDetail:JSONObject?, closedH1At:Long, nowMs:Long,
+        closedH1Source:JSONArray?
     ):JSONObject {
         val profile=signal.optString("strategy_profile")
         val type=signal.optString("type")
@@ -109,6 +157,9 @@ internal object WilliamsBookCausalUnderstanding {
             }
             else -> "UNKNOWN_SOURCE"
         }
+        val independentAo=if(profile==williamsTc2Profile && f=="SUPER_AO")
+            independentThirdAoProof(type,at,closedH1At,closedH1Source)
+        else "NOT_APPLICABLE"
         val hasInternalProof=when {
             profile!=williamsTc2Profile -> false
             f=="REVERSAL" ->
@@ -116,7 +167,8 @@ internal object WilliamsBookCausalUnderstanding {
                     context.optJSONObject("angulation")!=null
             f=="SUPER_AO" ->
                 context.optLong("third_ao_bar_at_ms",-1L)==at &&
-                    context.optString("initial_stop_rule")=="TC2_SUPER_AO_SIGNAL_BAR"
+                    context.optString("initial_stop_rule")=="TC2_SUPER_AO_SIGNAL_BAR" &&
+                    independentAo=="PASS"
             f=="FRACTAL" ->
                 (rawDetail?.optLong("formation_at_ms",0L) ?: 0L) in 1L until at &&
                     (if(side=="LONG") trigger>signal.optDouble("teeth_at_detection",Double.NaN)
@@ -129,6 +181,10 @@ internal object WilliamsBookCausalUnderstanding {
             !validRiskLevels -> "INVALID_PRICE_OR_PROTECTION_GEOMETRY"
             profile==williamsTc2Profile && rule=="UNMAPPED_WILLIAMS_FAMILY" -> "UNMAPPED_TC2_SIGNAL"
             profile!=williamsTc2Profile -> "OBSERVER_FORMATION_ONLY"
+            f=="SUPER_AO" && independentAo=="FAIL" ->
+                "INDEPENDENT_CLOSED_H1_AO_CONTRADICTS_SETUP"
+            f=="SUPER_AO" && independentAo=="NOT_VERIFIED" ->
+                "INDEPENDENT_CLOSED_H1_AO_NOT_VERIFIED"
             !hasInternalProof -> "INTERNAL_BOOK_FORMATION_PROOF_INCOMPLETE"
             else -> "INTERNAL_BOOK_FORMATION_PROOF_PRESENT"
         }
@@ -143,6 +199,7 @@ internal object WilliamsBookCausalUnderstanding {
             .put("trigger_is_only_a_pending_level",true)
             .put("actual_exchange_trigger_verified",false)
             .put("first_party_setup_proof_not_independent",true)
+            .put("independent_closed_h1_third_ao_status",independentAo)
             .put("wm1_angulation_is_numerical_proxy",profile==williamsTc2Profile && f=="REVERSAL")
             .put("wm3_teeth_at_actual_trigger_not_proven",profile==williamsTc2Profile && f=="FRACTAL")
     }
@@ -230,7 +287,8 @@ internal object WilliamsBookCausalUnderstanding {
                 else emptyList()
             val summaries=JSONArray()
             for(signal in signals) {
-                val evidence=signalEvidence(signal,details[signal.optString("signal_id")],close,nowMs)
+                val evidence=signalEvidence(signal,details[signal.optString("signal_id")],
+                    close,nowMs,candidate?.optJSONObject("decision_trace")?.optJSONArray("candles"))
                 if(evidence.optString("state")=="INTERNAL_BOOK_FORMATION_PROOF_PRESENT") observed++
                 else unverified++
                 summaries.put(evidence)
