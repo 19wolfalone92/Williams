@@ -252,6 +252,25 @@ internal fun isSignalFresh(
 }
 
 /**
+ * Diagnostic snapshots are observational, not a trading authorization.
+ * A signed account-wide reconciliation temporarily reports RECONCILE_REQUIRED;
+ * returning to a protected/flat state is a normal completed supervision
+ * cycle. Mark the mixed-time snapshot NOT_VERIFIED (not a new runtime fault),
+ * while ALL diagnostic execution permission stays false. Other transitions,
+ * including unknown result, unprotected position or unknown order, remain WARN.
+ */
+internal fun diagnosticCoordinatorTransitionSeverity(
+    snapshotState: String, endState: String,
+    snapshotReconciliationRunning: Boolean, snapshotBlocker: String
+): String = when {
+    snapshotState == endState -> "PASS"
+    snapshotState == "RECONCILE_REQUIRED" && snapshotReconciliationRunning &&
+        snapshotBlocker == "exchange_reconciliation_in_progress" &&
+        endState in setOf("OPEN_PROTECTED","READY") -> "NOT_VERIFIED"
+    else -> "WARNING"
+}
+
+/**
  * Auto-run means keep the on-device monitor alive. The Kill Switch forbids order
  * mutations through Execution Gate; it does not forbid safe diagnostics/reconciliation.
  */
@@ -12699,16 +12718,23 @@ private class NativeEngine(
         val coordinatorStateAtEnd=futuresCampaignCoordinator.state.name
         val coordinatorStateAtStart=coordinatorSnapshot.optString("state","UNKNOWN")
         val concurrentCoordinatorTransition=coordinatorStateAtStart!=coordinatorStateAtEnd
+        val transitionSeverity=diagnosticCoordinatorTransitionSeverity(
+            coordinatorStateAtStart, coordinatorStateAtEnd,
+            coordinatorSnapshot.optBoolean("reconciliation_running",false),
+            coordinatorSnapshot.optString("blocker",""))
         if(concurrentCoordinatorTransition) {
             tests.put(JSONObject().put("id","DIAG-STATE-RACE")
                 .put("domain","runtime")
                 .put("name","Состояние Futures изменилось во время диагностики")
-                .put("severity","WARNING")
+                .put("severity",transitionSeverity)
                 .put("detail","Coordinator at snapshot=$coordinatorStateAtStart; " +
                     "at diagnostic end=$coordinatorStateAtEnd. " +
-                    "ENTRY_PENDING may represent actual Binance-accepted STOP " +
-                    "entry orders, a still-unconfirmed submission, or a transient " +
-                    "state before rejection; it does NOT prove a filled position. " +
+                    (if(transitionSeverity=="NOT_VERIFIED")
+                        "Background signed reconciliation finished while the read-only diagnostics ran. " +
+                        "This is an expected mixed-time snapshot, not proof of a new crash or missing STOP. "
+                    else
+                        "Unverified coordinator transition; may involve a real pending entry, fill or STOP change. ") +
+                    "No new entry authority is inferred: diagnostic gate stays blocked for mixed-time data. " +
                     "Never assume exchange orders are absent or cancel them from " +
                     "this diagnostic. Obtain fresh signed positions, conditional " +
                     "orders and STOP proof before changing execution blocks."))
