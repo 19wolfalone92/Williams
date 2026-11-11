@@ -6342,13 +6342,40 @@ private class NativeEngine(
                     setupContext=JSONObject().put("tc2_book_reversal",c)
                         .put("tc2_reverse_pyramid",JSONObject().put("policy",WILLIAMS_TC2_PYRAMID_POLICY)).toString(),
                     signalId=c.getString("signal_id"),reversalOwnerId=c.getString("owner_id"))
+                // TC2 reversal is a distinct NEW exposure, despite being
+                // derived from a previously protected and now-flat campaign.
+                // Renew expiring signed STOP/account proof outside the Door.
+                if (!refreshSignedProofForEntryIfNeeded(symbol,"TC2_REVERSAL_PREFLIGHT")) continue
+                if (!executionReady()) {
+                    rejectDecision(symbol,"TC2_REVERSAL_SIGNED_ACCOUNT_GATE_CHANGED")
+                    continue
+                }
                 val before=futuresCampaignCoordinator.intentsSnapshot().length()
                 val result=withCampaignMutation(symbol,"TC2_CONFIRMED_FLAT_REVERSE_ENTRY") {
-                    check(executionReady() && !forceTestnetMode && entryTimePolicy.allows(futuresMarketData.exchangeNowMs())) {
-                        "TC2_REVERSAL_RUNTIME_CHANGED_BEFORE_SUBMISSION"
-                    }
+                    // This is a read-only admission veto, not a failed POST.
+                    // Never create an UNKNOWN order intent just because a
+                    // private WS, session clock or risk gate changed mid-scan.
+                    val finalReadiness=runCatching {
+                        executionReady() && !forceTestnetMode &&
+                            entryTimePolicy.allows(futuresMarketData.exchangeNowMs())
+                    }.getOrDefault(false)
+                    if (!finalReadiness)
+                        return@withCampaignMutation JSONObject()
+                            .put("accepted",false).put("safe_rejection",true)
+                            .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                            .put("blocker","TC2_REVERSAL_RUNTIME_CHANGED_BEFORE_SUBMISSION")
+                    if (!entrySignedProofHasPreIntentHeadroom(lastRestReconcileMs,System.currentTimeMillis()))
+                        return@withCampaignMutation JSONObject()
+                            .put("accepted",false).put("safe_rejection",true)
+                            .put("mutation_attempted",false).put("order_mutation_attempted",false)
+                            .put("entry_signed_refresh_required",true)
+                            .put("blocker","TC2_REVERSAL_SIGNED_HEADROOM_UNSAFE_BEFORE_INTENT")
+                    // A coordinator exception can mean Binance saw a MARKET
+                    // POST. Keep it outside any preflight catch: fail closed.
                     futuresCampaignCoordinator.submitPendingEntry(plan)
                 }
+                if (result.optBoolean("entry_signed_refresh_required",false))
+                    refreshSignedProofForEntryIfNeeded(symbol,"TC2_REVERSAL_AFTER_SAFE_DEFER")
                 lastOrder=result
                 if(result.optBoolean("accepted")) {
                     lastRestReconcileMs=0L
