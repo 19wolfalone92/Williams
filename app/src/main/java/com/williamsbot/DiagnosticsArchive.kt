@@ -40,6 +40,29 @@ object DiagnosticsArchive {
             priorAt,current.optLong("created_at_ms"))
     }
 
+    /** Compare two complete ZIP exports, never an in-progress Android report.
+     * A prior archive without the new chain schema is not comparable.
+     */
+    fun compareChainWithLatest(context: Context, report: org.json.JSONObject): org.json.JSONObject {
+        var previous: org.json.JSONObject?=null
+        var previousAt=0L
+        latest(context)?.let { file ->
+            runCatching {
+                ZipFile(file).use { zip ->
+                    val old=readSmallZipEntry(zip,"diagnostic_chain_audit.json")
+                    val meta=readSmallZipEntry(zip,"archive_metadata.json")
+                    if(old!=null && meta!=null) {
+                        previous=org.json.JSONObject(old)
+                        previousAt=org.json.JSONObject(meta).optLong("report_at_ms")
+                    }
+                }
+            }
+        }
+        return WilliamsDiagnosticChainAudit.compare(
+            previous,report.optJSONObject("diagnostic_chain_audit") ?: org.json.JSONObject(),
+            previousAt,report.optLong("created_at_ms"))
+    }
+
     private fun readSmallZipEntry(archive: ZipFile, name: String): String? {
         val entry = archive.getEntry(name) ?: return null
         if (entry.size !in 1L..262_144L) return null
