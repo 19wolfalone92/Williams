@@ -40,9 +40,9 @@ class WilliamsDiagnosticChainAuditTest {
     @Test fun missingSubsystemEvidenceDoesNotInventPassingSystemsOrDemoAcceptance() {
         val report=audit()
         assertEquals("WILLIAMS_ALL_CORE_CHAIN_AUDIT_V1",report.getString("schema"))
-        assertEquals(22,report.getInt("component_count"))
+        assertEquals(25,report.getInt("component_count"))
         assertTrue(report.getInt("dependency_edge_count")>=20)
-        assertEquals(22,report.getJSONObject("summary").getInt("NOT_VERIFIED"))
+        assertEquals(25,report.getJSONObject("summary").getInt("NOT_VERIFIED"))
         assertEquals(0,report.getJSONObject("summary").getInt("PASS"))
         assertFalse(report.getBoolean("e2e_demo_certified"))
         assertFalse(report.getBoolean("can_place_orders"))
@@ -52,7 +52,7 @@ class WilliamsDiagnosticChainAuditTest {
 
     @Test fun everyExistingAnchorCanPassButNeverCertifiesAnExchangeChain() {
         val report=audit(allPassingCheckRows())
-        assertEquals(22,report.getJSONObject("summary").getInt("PASS"))
+        assertEquals(25,report.getJSONObject("summary").getInt("PASS"))
         assertEquals(0,report.getJSONArray("unmapped_check_ids").length())
         val links=report.getJSONArray("dependencies")
         for(i in 0 until links.length()) {
