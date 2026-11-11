@@ -13,7 +13,8 @@ class DiagnosticsArchiveIntegrityTest {
     private val required=listOf(
         "archive_metadata.json","diagnostic_report.json","test_results.json",
         "diagnostic_chain_audit.json","diagnostic_chain_comparison.json",
-        "futures_fill_stop_timing.json","futures_positions_signed_snapshot.json",
+        "futures_fill_stop_timing.json","runtime_resource_diagnostics.json",
+        "futures_positions_signed_snapshot.json",
         "futures_exchange_stop_proofs.json","futures_intent_stop_lifecycle.json",
         "futures_exit_reconciliation.json","signal_decision_history.json",
         "observer_paper_full_history.ndjson","observer_paper_full_history_metadata.json",
