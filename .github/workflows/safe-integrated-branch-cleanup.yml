@@ -1,0 +1,102 @@
+name: Safe cleanup of integrated historical branches
+
+# One-time automatic execution for 2026-11-11 consolidation.
+# Later runs require an explicit workflow_dispatch. Never run automatically
+# on every push; no pull request may trigger branch deletion.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/safe-integrated-branch-cleanup.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  prune_verified_ancestors:
+    name: Verify ancestry and prune integrated branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore(repository): one-time safe integrated-branch cleanup' }}
+    steps:
+      - name: Archive-free, provenance-checked branch pruning
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            if (owner !== '19wolfalone92' || repo !== 'Williams') {
+              throw new Error('Cleanup is scoped only to 19wolfalone92/Williams');
+            }
+            const canonical = 'b3f18f98448269811e73b724885907c14c91a56a';
+            const meta = await github.rest.repos.get({owner, repo});
+            if (meta.data.default_branch !== 'main') throw new Error('Default branch changed');
+            const main = await github.rest.repos.getBranch({owner, repo, branch:'main'});
+            const mainSha = main.data.commit.sha;
+            const chain = await github.rest.repos.compareCommits({owner, repo, base:canonical, head:mainSha});
+            if (chain.data.behind_by !== 0) throw new Error('Main no longer contains known CI-green release');
+            const prs = await github.paginate(github.rest.pulls.list,
+              {owner, repo, state:'open', per_page:100});
+            const reserved = new Set(['main']);
+            for (const pr of prs) {
+              reserved.add(pr.base.ref);
+              if (pr.head.repo?.full_name === `${owner}/${repo}`) reserved.add(pr.head.ref);
+            }
+            const all = await github.paginate(github.rest.repos.listBranches,
+              {owner, repo, per_page:100});
+            const eligible = /^(?:audit\/|codex\/|fix\/|feature\/|integration\/|perf\/|refactor\/|hardening\/|task-|test\/|ux\/)/;
+            const keep = /^(?:backup\/|release\/|research\/|security\/|policy\/|alert-autofix-)/;
+            const candidates = all.filter(b =>
+              eligible.test(b.name) && !keep.test(b.name) &&
+              !b.protected && !reserved.has(b.name));
+            let included = 0;
+            const removed = [];
+            const skipped = [];
+            const errors = [];
+            core.info(`Branches=${all.length}, openPRs=${prs.length}, candidates=${candidates.length}, main=${mainSha}`);
+            for (const b of candidates) {
+              try {
+                // Compare pinned commit hashes, not stale branch names:
+                // 0 commits unique to candidate means all its work is IN main.
+                const cmp = await github.rest.repos.compareCommits({
+                  owner, repo, base:b.commit.sha, head:mainSha});
+                if (cmp.data.behind_by !== 0) {
+                  skipped.push(`${b.name}: ${cmp.data.behind_by} unique commits`);
+                  continue;
+                }
+                included++;
+                // Do not delete a branch someone has moved since the listing.
+                const fresh = await github.rest.repos.getBranch(
+                  {owner, repo, branch:b.name});
+                if (fresh.data.commit.sha !== b.commit.sha) {
+                  skipped.push(`${b.name}: concurrent update`);
+                  continue;
+                }
+                const currentMain = await github.rest.repos.getBranch(
+                  {owner, repo, branch:'main'});
+                if (currentMain.data.commit.sha !== mainSha) {
+                  throw new Error('Main advanced during cleanup, stop deleting');
+                }
+                await github.rest.git.deleteRef({owner, repo, ref:`heads/${b.name}`});
+                removed.push(b.name);
+                core.info(`PRUNED (fully in main): ${b.name}`);
+              } catch (error) {
+                const msg = `${b.name}: ${error.message}`;
+                errors.push(msg);
+                core.warning(msg);
+                if (msg.includes('Main advanced during cleanup')) throw error;
+              }
+            }
+            const result = {
+              main:mainSha, initial_branches:all.length,
+              open_prs_preserved:prs.length,
+              protected_or_reserved:all.length-candidates.length,
+              tested_candidates:candidates.length,
+              fully_integrated_found:included, removed_count:removed.length,
+              removed, skipped, errors
+            };
+            await core.summary.addHeading('Williams branch cleanup — verified integrated only')
+              .addCodeBlock(JSON.stringify(result,null,2),'json').write();
+            core.info(JSON.stringify(result));
