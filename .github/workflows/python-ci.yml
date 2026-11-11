@@ -37,10 +37,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
           cache: pip
@@ -63,7 +63,7 @@ jobs:
 
       - name: Archive auditable 95 percent progress and remaining gaps
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-four-book-95-progress
           path: build/book-audit/four_book_95_progress.json
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload fifteen-symbol historical TC2 campaigns and stress results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-frozen-fifteen-h1-trades-and-stress
           path: build/frozen-h1-replay/
@@ -113,7 +113,7 @@ jobs:
 
       - name: Upload wave truth and historical replay evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-wave-independent-truth-gate
           path: build/wave-audit/*.json
@@ -143,7 +143,7 @@ jobs:
 
       - name: Upload blinded chart-only independent expert packet
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-blind-h1-expert-annotation-packet
           path: build/blind-human-review/
@@ -152,7 +152,7 @@ jobs:
 
       - name: Archive 30 blind historical charts, scores and source IDs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-blind-wave-30-real-h1-review
           path: build/blind-wave-review/
@@ -176,7 +176,7 @@ jobs:
 
       - name: Upload 15-asset 90-slice wave charts and proxy analysis
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-blind-90-h1-15-asset-no-human-labels
           path: build/blind-wave-review-90/
@@ -185,7 +185,7 @@ jobs:
 
       - name: Upload pytest diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-pytest-report
           path: pytest-output.txt
