@@ -195,4 +195,31 @@ class DiagnosticConsistencyTest {
         assertTrue(findings.any { it.startsWith("STATE_MISMATCH:") })
         assertTrue(findings.any { it.startsWith("RECONCILE_LATCH_MISMATCH:") })
     }
+
+    @Test fun normalSignedReconciliationCompletionIsNonAtomicButNotRuntimeFault() {
+        // Samsung 4.64.18 ZIP: signed reconcile in progress at snapshot,
+        // OPEN_PROTECTED at report end. Never claim the mixed snapshot grants
+        // trading authority, and do not manufacture a second runtime crash.
+        assertEquals("NOT_VERIFIED", diagnosticCoordinatorTransitionSeverity(
+            "RECONCILE_REQUIRED","OPEN_PROTECTED",true,
+            "exchange_reconciliation_in_progress"))
+        assertEquals("NOT_VERIFIED", diagnosticCoordinatorTransitionSeverity(
+            "RECONCILE_REQUIRED","READY",true,
+            "exchange_reconciliation_in_progress"))
+        assertEquals("PASS", diagnosticCoordinatorTransitionSeverity(
+            "OPEN_PROTECTED","OPEN_PROTECTED",false,""))
+    }
+
+    @Test fun ambiguousOrUnprotectedCoordinatorChangesStillDemandWarnings() {
+        assertEquals("WARNING",diagnosticCoordinatorTransitionSeverity(
+            "RECONCILE_REQUIRED","OPEN_PROTECTED",false,
+            "exchange_reconciliation_in_progress"))
+        assertEquals("WARNING",diagnosticCoordinatorTransitionSeverity(
+            "RECONCILE_REQUIRED","OPEN_PROTECTED",true,
+            "unknown_position_or_stop"))
+        assertEquals("WARNING",diagnosticCoordinatorTransitionSeverity(
+            "READY","POSITION_UNPROTECTED",false,""))
+        assertEquals("WARNING",diagnosticCoordinatorTransitionSeverity(
+            "READY","ENTRY_PENDING",false,""))
+    }
 }
