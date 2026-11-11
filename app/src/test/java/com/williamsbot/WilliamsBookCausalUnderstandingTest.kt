@@ -53,7 +53,7 @@ class WilliamsBookCausalUnderstandingTest {
         assertEquals(1,proof.getInt("confirmed_h1_opposing_exit_count"))
         val btc=proof.getJSONArray("observed_candidates").getJSONObject(0)
         val evidence=btc.getJSONArray("signals").getJSONObject(0)
-        assertEquals("TC2.WM2.THIRD_AO",evidence.getString("rule_id"))
+        assertEquals("TC2.WM2.THREE_AO_BARS",evidence.getString("rule_id"))
         assertEquals("INTERNAL_BOOK_FORMATION_PROOF_PRESENT",evidence.getString("state"))
         assertFalse(evidence.getBoolean("actual_exchange_trigger_verified"))
         assertTrue(evidence.getBoolean("trigger_is_only_a_pending_level"))
@@ -92,7 +92,7 @@ class WilliamsBookCausalUnderstandingTest {
             .getJSONArray("observed_candidates").getJSONObject(0).getJSONArray("signals").getJSONObject(0)
         assertEquals("OBSERVER_FORMATION_ONLY",evidence.getString("state"))
         assertFalse(evidence.getBoolean("can_place_orders_from_this_evidence"))
-        assertEquals("NTD.FIVE_DIMENSIONS",evidence.getString("rule_id"))
+        assertEquals("NTD.FIRST_FRACTAL",evidence.getString("rule_id"))
         assertFalse(williamsVerifiedNewRiskSource(williamsNtdProfile))
         assertFalse(williamsVerifiedNewRiskSource(williamsCourseProfile))
     }
@@ -100,7 +100,7 @@ class WilliamsBookCausalUnderstandingTest {
     @Test fun originalSourcePagesNeverMasqueradeAsWholeBookCertification() {
         val a=WilliamsBookCausalUnderstanding.assess(JSONObject(),JSONObject(),now)
         val pages=a.getJSONArray("source_book_pdf_references")
-        assertEquals(9,pages.length())
+        assertEquals(14,pages.length())
         val sources=(0 until pages.length()).map { pages.getJSONObject(it).getString("book") }.toSet()
         assertEquals(setOf("TC1","TC2","NTD","COURSE"),sources)
         for(i in 0 until pages.length()) {
