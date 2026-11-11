@@ -19,7 +19,7 @@ jobs:
     name: Verify ancestry and prune integrated branches
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore(repository): one-time safe integrated-branch cleanup' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'chore(repository)') }}
     steps:
       - name: Archive-free, provenance-checked branch pruning
         uses: actions/github-script@v8
