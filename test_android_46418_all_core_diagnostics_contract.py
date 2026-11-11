@@ -112,10 +112,13 @@ def test_all_unit_contracts_are_installed_and_have_no_demo_release_claim():
 def test_authenticated_stop_join_never_trades_or_copies_private_client_ids():
     join=read("WilliamsSignedStopJoinAudit.kt")
     runtime=read("StandaloneRuntime.kt")
-    assert "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY" in join
+    assert '"proof_origin","NATIVE_COORDINATOR_SIGNED_GET_OPEN_ALGO_ORDERS"' in join
     assert '"SIGNED_STOP_PROOF' not in join
     assert "positionAmt" in join and "positionStop" in join
-    assert "signed_full_stops_seen" in join
+    assert '"OWNED_STOP_SEEN"' in join
+    assert '"STRATEGY_OWNED"' in join
+    assert '"stop_verification_status"' in join
+    assert 'proof.optString("protection_client_id").isNotBlank()' in join
     assert "strategy_ownership_verified" in join
     assert '"can_trade_or_manage_stops",false' in join
     assert '"raw_client_ids_exported_here",false' in join
