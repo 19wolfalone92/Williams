@@ -26,9 +26,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout read-only public 2025 Binance Futures OHLCV
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Standard Python 3.12, no private exchange credentials
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install research test runner (no exchange SDK)
@@ -65,7 +65,7 @@ jobs:
           print("2025 external research: complete, source-frozen, not live-authorized")
           PY
       - name: Upload machine-readable research evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tc2-external-2025-robustness-json
           path: build/tc2_context_external_2025.json
