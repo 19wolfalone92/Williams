@@ -1340,6 +1340,10 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("unified_strategy_evidence", report.optJSONObject("unified_strategy_evidence") ?: JSONObject())
         .put("tests", report.optJSONArray("tests") ?: JSONArray())
         .put("diagnostic_triage", report.optJSONObject("diagnostic_triage") ?: JSONObject())
+        // 22 compact core summaries; never attach their underlying full
+        // market timelines, decision histories or order payloads to Compose.
+        .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
+        .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
         .put("diagnostic_summary", report.optJSONObject("diagnostic_summary") ?: JSONObject())
         .put("event_timeline", report.optJSONArray("event_timeline") ?: JSONArray())
@@ -12761,6 +12765,12 @@ private class NativeEngine(
         val gateReasonsAtReport = williamsDiagnosticGateReasons(
             executionBlockers(), concurrentCoordinatorTransition, gateReadyAtReport
         )
+        // One deterministic read-only cross-core graph. No REST I/O, no
+        // SQLite queries, no JSON duplication of bulky research diaries.
+        // Built from the captured copies, not a second live status request.
+        val chainAudit=WilliamsDiagnosticChainAudit.build(
+            statusSnapshot,coordinatorSnapshot,scannerEvidenceSnapshot,tests,
+            observedAtMs, nonAtomic=concurrentCoordinatorTransition)
         val exposureCountAtReport=statusSnapshot.optJSONArray("futures_positions")?.length() ?: 0
         // The 4.64.14 phone ZIP proves settings.decision_traces is byte-for-
         // byte identical to status.decision_traces (~5.74 MB each). Construct
@@ -12828,6 +12838,7 @@ private class NativeEngine(
                     }
                 })
             })
+            .put("diagnostic_chain_audit",chainAudit)
             .put("scanner_snapshot", scannerEvidenceSnapshot)
             .put("chart_reading_audit", chartReadingAudit)
             .put("durable_history_evidence",historyEvidence)
