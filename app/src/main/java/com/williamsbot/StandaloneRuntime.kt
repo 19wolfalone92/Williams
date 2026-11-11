@@ -12501,6 +12501,18 @@ private class NativeEngine(
             .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
                 .put("refresh_running",signedFillAuditRunning)
                 .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
+        // The fast live status carries a large decision_traces tree, while
+        // this forensic export ALWAYS includes a richer full
+        // signal_decision_history.json independently. No diagnostic test reads
+        // the duplicate status field. Drop the duplicate reference before
+        // allocating 25-core maps, event history and report/ZIP buffers.
+        // The normal /status API remains unchanged.
+        val hadDuplicateStatusDecisionTraces=statusSnapshot.has("decision_traces")
+        statusSnapshot.remove("decision_traces")
+        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status",
+            hadDuplicateStatusDecisionTraces)
+        statusSnapshot.put("decision_traces_full_evidence_path",
+            "signal_decision_history.json")
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
         val tests = diagnosticSelfTests(statusSnapshot, coordinatorSnapshot)
         val observedAtMs = System.currentTimeMillis()
