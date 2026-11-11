@@ -11,15 +11,16 @@ class WilliamsSignedStopJoinAuditTest {
         .put("symbol","BCHUSDT").put("direction","SHORT")
         .put("positionAmt",qty).put("stop",stop)
         .put("exchange_confirmed",true)
+        .put("stop_verification_status","OWNED_STOP_SEEN")
+        .put("strategy_ownership_verified",true)
     private fun proof(qty:String="-0.506",stop:String="232.95",at:Long=now-1_000)=JSONObject()
         .put("symbol","BCHUSDT").put("direction","SHORT")
         .put("quantity",qty).put("stop",stop)
         .put("observed_at_ms",at)
         .put("stop_proof","OWNED_STOP_SEEN")
         .put("strategy_ownership_verified",true)
-        .put("signed_full_stops_seen",1)
         .put("protection_client_id","PRIVATE-ALGO-ID-NOT-FOR-REPORT")
-        .put("scope","SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY")
+        .put("management_mode","STRATEGY_OWNED")
 
     private fun status(row:JSONObject=position(),at:Long=now-2_000):JSONObject =
         JSONObject().put("futures_positions",JSONArray().put(row))
@@ -86,5 +87,32 @@ class WilliamsSignedStopJoinAuditTest {
         assertEquals("NOT_VERIFIED",out.getString("severity"))
         assertEquals(0,out.getInt("open_position_count"))
         assertFalse(out.getBoolean("e2e_post_fill_stop_sla_certified"))
+    }
+
+    @Test fun productionSignedStopProofDoesNotContainInventedScopeOrSignedCountFields() {
+        val actual=proof()
+        assertFalse(actual.has("scope"))
+        assertFalse(actual.has("signed_full_stops_seen"))
+        val out=WilliamsSignedStopJoinAudit.inspect(status(),JSONObject()
+            .put("state","OPEN_PROTECTED")
+            .put("exchange_protection_observations",JSONArray().put(actual)),now)
+        assertEquals("PASS",out.getString("severity"))
+        assertEquals("NATIVE_COORDINATOR_SIGNED_GET_OPEN_ALGO_ORDERS",
+            out.getString("proof_origin"))
+    }
+
+    @Test fun mixedCoordinatorStateOrMissingProtectionOwnerCannotPassJoin() {
+        val signed=JSONObject().put("state","OPEN_PROTECTED")
+            .put("reconciliation_running",true)
+            .put("exchange_protection_observations",JSONArray().put(proof()))
+        val out=WilliamsSignedStopJoinAudit.inspect(status(),signed,now)
+        assertEquals("WARNING",out.getString("severity"))
+        assertEquals("NOT_VERIFIED_COORDINATOR_RECONCILING",
+            out.getJSONArray("positions").getJSONObject(0).getString("stop_proof_state"))
+        signed.put("reconciliation_running",false)
+        val display=status(position().put("strategy_ownership_verified",false))
+        val mis=WilliamsSignedStopJoinAudit.inspect(display,signed,now)
+        assertEquals("NOT_VERIFIED_DISPLAY_AND_PROOF_NOT_SAME_GENERATION",
+            mis.getJSONArray("positions").getJSONObject(0).getString("stop_proof_state"))
     }
 }
