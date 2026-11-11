@@ -820,6 +820,47 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val resources=report?.optJSONObject("runtime_resource_diagnostics")
+            CockpitCard("Память, REST лимиты и очереди") {
+                if(resources==null) {
+                    Text("Нет нового снимка нагрузки CPU/Java/REST. " +
+                        "Отсутствие измерений не означает отсутствие перегрузки.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    val heap=resources.optJSONObject("heap")
+                    val rate=resources.optJSONObject("rate_limits")
+                    val queues=resources.optJSONObject("executors")
+                    val heapStatus=heap?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"
+                    val rateStatus=rate?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"
+                    val queueStatus=queues?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"
+                    CockpitField("Java heap",
+                        if(heap?.has("java_heap_used_pct")==true)
+                            String.format(java.util.Locale.US,"%.1f%%",heap.optDouble("java_heap_used_pct"))+
+                                " • "+(heap.optLong("java_heap_headroom_bytes")/1048576L)+" МиБ свободного лимита"
+                        else "Нет измерений")
+                    CockpitField("Состояние памяти",williamsRuStatus(heapStatus),
+                        if(heapStatus=="WARNING") AppColors.amber else AppColors.textMuted)
+                    CockpitField("Binance REST weight",
+                        if(rate?.has("weight_limit_1m")==true)
+                            "${rate.optLong("used_weight_1m")} / ${rate.optLong("weight_limit_1m")} · " +
+                                williamsRuStatus(rateStatus)
+                        else "Нет измерений")
+                    CockpitField("Очередь Scanner",
+                        if(queues?.has("scanner_queue_size")==true)
+                            "${queues.optInt("scanner_queue_size")} / ${queues.optInt("scanner_queue_capacity")}"
+                        else "Неизвестна")
+                    CockpitField("Очередь History / Indicator",
+                        if(queues?.has("history_queue_size")==true)
+                            "${queues.optInt("history_queue_size")} / ${queues.optInt("indicator_queue_size")} · " +
+                                williamsRuStatus(queueStatus)
+                        else "Неизвестна")
+                    Text("Измерение моментальное. Исторический OutOfMemoryError, ожидание Binance, " +
+                        "длинный H1-скан или перегрузка в другой момент не исчезают из журналов.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             CockpitCard("Ядра и связи · ${chainAudit?.optInt("component_count",0) ?: 0} систем") {
                 if(chainAudit==null || chainCores.isEmpty()) {
                     Text("Доступен старый формат. Запустите новую диагностику для построения графа всех ядер.",
