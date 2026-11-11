@@ -38,6 +38,8 @@ internal object RuntimeServiceLifecycleAssessment {
 
         var observedExits=0
         var abnormal=0
+        var expectedPackageUpdates=0
+        var unexpectedExits=0
         var exitThenForegroundCreated=0
         for(i in 0 until exits.length()) {
             val exit=exits.optJSONObject(i) ?: continue
@@ -45,6 +47,8 @@ internal object RuntimeServiceLifecycleAssessment {
             if(time<=0L || time<fromMs || time>nowMs) continue
             observedExits++
             val reason=exit.optString("reason")
+            if(reason == "PACKAGE_UPDATED") expectedPackageUpdates++
+            else unexpectedExits++
             if(reason in abnormalExits) abnormal++
             if(lastForegroundCreated>time) exitThenForegroundCreated++
         }
@@ -68,6 +72,8 @@ internal object RuntimeServiceLifecycleAssessment {
             .put("stale_worker_recovery_not_ready_count",
                 eventCounts["STALE_WORKER_RECOVERY_NOT_READY"] ?: 0)
             .put("observed_process_exit_count",observedExits)
+            .put("expected_package_update_exit_count",expectedPackageUpdates)
+            .put("unexpected_process_exit_count",unexpectedExits)
             .put("abnormal_process_exit_count",abnormal)
             .put("exit_followed_by_foreground_creation_count",exitThenForegroundCreated)
             .put("system_exit_history_status",exitHistory)
@@ -76,7 +82,10 @@ internal object RuntimeServiceLifecycleAssessment {
             .put("assessment",when {
                 abnormal>0 || (eventCounts["SERVICE_AUTOSTART_FAILED"] ?: 0)>0 ||
                     (eventCounts["WORKER_HEARTBEAT_STALE"] ?: 0)>0 -> "FAULT_OBSERVED"
-                observedExits>0 || (eventCounts["SERVICE_DESTROYED"] ?: 0)>0 -> "LIFECYCLE_CHANGE_OBSERVED"
+                unexpectedExits>0 || (eventCounts["SERVICE_DESTROYED"] ?: 0)>0 -> "LIFECYCLE_CHANGE_OBSERVED"
+                // Installing a new signed APK always terminates the old
+                // process. It is observable downtime, NOT an unexplained
+                // app crash. Count it separately without granting 24h PASS.
                 else -> "NO_FAILURE_IN_RETAINED_EVIDENCE_ONLY"
             })
     }
