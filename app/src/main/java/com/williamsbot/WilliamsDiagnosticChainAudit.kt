@@ -23,10 +23,10 @@ internal object WilliamsDiagnosticChainAudit {
 
     private val cores = listOf(
         Core("ANDROID_PROCESS","Android · процесс, фон, загрузка",
-            listOf("runtime_lifecycle","reboot_credentials_and_engine","AND-01","AND-02","AND-04"),
+            listOf("version_consistency","runtime_lifecycle","reboot_credentials_and_engine","AND-01","AND-02","AND-04"),
             proof="Android process exits, boot witness, watchdog heartbeat and real 24h phone evidence"),
         Core("FOREGROUND_WORKER","Android · сервис и worker",
-            listOf("local_runtime_dispatch","self_heal_contract","user_stream_reconciliation_lifecycle"),
+            listOf("local_runtime_dispatch","self_heal_contract","user_stream_reconciliation_lifecycle","state_machine"),
             listOf("ANDROID_PROCESS"),"foreground lease, generation, worker heartbeat and safe recovery"),
         Core("SQLITE_JOURNAL","SQLite · состояние и журнал",
             listOf("DB-01","history_lifecycle","HIST-01"),
@@ -45,6 +45,7 @@ internal object WilliamsDiagnosticChainAudit {
             listOf("EXCHANGE_CLOCK","SQLITE_JOURNAL"),"authenticated account generation and complete signed reconciliation"),
         Core("PRIVATE_STREAM","Binance · user WebSocket",
             listOf("user_websocket","user_stream_freshness",
+                "user_stream_last_completed_signed_rest_duration",
                 "user_stream_event_observation","DATA-04"),
             listOf("SIGNED_ACCOUNT"),"same listenKey session and signed event-driven reconciliation"),
         Core("H1_HISTORY","История · закрытые H1/H4",
@@ -65,7 +66,7 @@ internal object WilliamsDiagnosticChainAudit {
                 "RISK-03","RISK-04","EXE-09"),
             listOf("SIGNED_ACCOUNT","SQLITE_JOURNAL"),"daily equity, exposure budget, liquidation and STOP"),
         Core("EXECUTION_DOOR","Execution Door · fail-closed",
-            listOf("execution_gate","execution_config_audit",
+            listOf("execution_gate","execution_config_audit","futures_execution_adapter",
                 "signed_futures_reconciliation_freshness","SAF-LEGACY-01"),
             listOf("PRIVATE_STREAM","RISK_GATE","TC2_RULES"),
             "durable lease, signed pre-intent proof and atomic no-duplicate submission"),
@@ -101,6 +102,61 @@ internal object WilliamsDiagnosticChainAudit {
             listOf("SQLITE_JOURNAL","UI_CONSISTENCY"),
             "bounded memory, versioned chain map, full streamed ZIP and comparison")
     )
+
+    /**
+     * Compare ONLY previous saved, fully closed ZIP graph against this new
+     * capture. Statuses are observations, not proof that an issue was fixed.
+     */
+    fun compare(
+        previous: JSONObject?, current: JSONObject,
+        previousAtMs: Long, currentAtMs: Long
+    ): JSONObject {
+        val out=JSONObject().put("schema","WILLIAMS_CHAIN_COMPARISON_V1")
+            .put("previous_at_ms",previousAtMs)
+            .put("current_at_ms",currentAtMs)
+            .put("can_clear_trade_gate",false)
+        val before=previous?.optJSONArray("components")
+        val after=current.optJSONArray("components")
+        if(before==null || after==null || before.length()==0 || after.length()==0 ||
+            previousAtMs<=0L || currentAtMs<=previousAtMs)
+            return out.put("status","NOT_COMPARABLE")
+                .put("reason","No strictly older complete chain snapshot")
+        val old=linkedMapOf<String,String>()
+        for(i in 0 until before.length()) {
+            val row=before.optJSONObject(i) ?: continue
+            val id=row.optString("id")
+            if(id.isNotBlank()) old[id]=severity(row.optString("status"))
+        }
+        val next=linkedMapOf<String,String>()
+        for(i in 0 until after.length()) {
+            val row=after.optJSONObject(i) ?: continue
+            val id=row.optString("id")
+            if(id.isNotBlank()) next[id]=severity(row.optString("status"))
+        }
+        val worsened=JSONArray()
+        val lessSevere=JSONArray()
+        val added=JSONArray()
+        val disappeared=JSONArray()
+        for((id,actual) in next) {
+            val prior=old[id]
+            when {
+                prior==null -> added.put(id)
+                rank(actual)<rank(prior) -> worsened.put(JSONObject()
+                    .put("id",id).put("before",prior).put("after",actual))
+                rank(actual)>rank(prior) -> lessSevere.put(JSONObject()
+                    .put("id",id).put("before",prior).put("after",actual))
+            }
+        }
+        for(id in old.keys) if(id !in next) disappeared.put(id)
+        return out.put("status","COMPARABLE")
+            .put("worsened_count",worsened.length())
+            .put("less_severe_count",lessSevere.length())
+            .put("added_core_count",added.length())
+            .put("no_longer_observed_count",disappeared.length())
+            .put("worsened",worsened).put("less_severe",lessSevere)
+            .put("added",added).put("no_longer_observed",disappeared)
+            .put("caveat","A less severe component is not a verified repaired bug or successful signed Demo trade.")
+    }
 
     private fun severity(value: String): String = when(value.uppercase()) {
         "FAIL" -> "FAIL"
