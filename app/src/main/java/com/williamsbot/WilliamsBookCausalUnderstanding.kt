@@ -99,7 +99,7 @@ internal object WilliamsBookCausalUnderstanding {
                 context.optLong("third_ao_bar_at_ms",-1L)==at &&
                     context.optString("initial_stop_rule")=="TC2_SUPER_AO_SIGNAL_BAR"
             f=="FRACTAL" ->
-                rawDetail?.optLong("formation_at_ms",0L) in 1L until at &&
+                (rawDetail?.optLong("formation_at_ms",0L) ?: 0L) in 1L until at &&
                     (if(side=="LONG") trigger>signal.optDouble("teeth_at_detection",Double.NaN)
                      else trigger<signal.optDouble("teeth_at_detection",Double.NaN))
             else -> false
@@ -141,9 +141,9 @@ internal object WilliamsBookCausalUnderstanding {
         var observed=0
         var unverified=0
         for(symbol in APPROVED_FUTURES_SYMBOLS) {
-            val rows=candidates.filter { it.optString("symbol")==symbol }
-            val candidate=rows.singleOrNull()
-            if(rows.size>1) errors.put("DUPLICATE_CANDIDATE:$symbol")
+            val matching=candidates.filter { it.optString("symbol")==symbol }
+            val candidate=matching.singleOrNull()
+            if(matching.size>1) errors.put("DUPLICATE_CANDIDATE:$symbol")
             val close=candidate?.optLong("closed_h1_as_of_ms",0L) ?: 0L
             val validH1=close>0L && close<=nowMs &&
                 nowMs-close<=WILLIAMS_H1_MS+120_000L
