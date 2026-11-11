@@ -281,14 +281,30 @@ internal object WilliamsBookCausalUnderstanding {
             val close=candidate?.optLong("closed_h1_as_of_ms",0L) ?: 0L
             val validH1=close>0L && close<=nowMs &&
                 nowMs-close<=WILLIAMS_H1_MS+120_000L
-            val details=rows(candidate?.optJSONObject("decision_trace")?.optJSONArray("signals"))
+            val detailRows=rows(candidate?.optJSONObject("decision_trace")?.optJSONArray("signals"))
+            val duplicateTraceIds=detailRows.groupBy { it.optString("signal_id") }
+                .filter { (id,list) -> id.isNotBlank() && list.size>1 }.keys
+            for(id in duplicateTraceIds.take(8))
+                errors.put("DUPLICATE_SOURCE_TRACE_SIGNAL:$symbol:${id.take(80)}")
+            // A duplicated signal ID is ambiguous, even if two JSON objects
+            // happen to contain equal values; do not let associateBy choose
+            // whichever version appeared last.
+            val details=detailRows.filter { it.optString("signal_id") !in duplicateTraceIds }
                 .associateBy { it.optString("signal_id") }
-            val signals=if(validH1) rows(candidate?.optJSONArray("campaign_signals")).take(8)
+            val rawSignals=if(validH1) rows(candidate?.optJSONArray("campaign_signals"))
                 else emptyList()
+            val duplicateLiveIds=rawSignals.groupBy { it.optString("signal_id") }
+                .filter { (id,list) -> id.isNotBlank() && list.size>1 }.keys
+            for(id in duplicateLiveIds.take(8))
+                errors.put("DUPLICATE_LIVE_SIGNAL:$symbol:${id.take(80)}")
+            val signals=rawSignals.take(8)
             val summaries=JSONArray()
             for(signal in signals) {
-                val evidence=signalEvidence(signal,details[signal.optString("signal_id")],
+                val signalId=signal.optString("signal_id")
+                val evidence=signalEvidence(signal,details[signalId],
                     close,nowMs,candidate?.optJSONObject("decision_trace")?.optJSONArray("candles"))
+                if(signalId.isBlank() || signalId in duplicateTraceIds || signalId in duplicateLiveIds)
+                    evidence.put("state","SOURCE_SIGNAL_IDENTITY_AMBIGUOUS")
                 if(evidence.optString("state")=="INTERNAL_BOOK_FORMATION_PROOF_PRESENT") observed++
                 else unverified++
                 summaries.put(evidence)
