@@ -8,7 +8,7 @@ Testnet-first реализация торгового бота по Williams (Al
 - **Входы:** только включённые книжные TC2 H1 сигналы; signed Binance account/positions/STOP, private user WS, риск, текущее состояние STOP и финальная проверка H1 обязательны. Другие источники — read-only диагностика. Для новых заявок с signed proof возрастом более 70 секунд используется `safe_rejection` до создания ENTRY-интента и повторный подписанный запрос.
 - **Исправлено:** статус сканера `RUNNING` больше не выглядит как выдуманный запрет UI; продлён не TTL, а актуальность подписанного снимка за счёт нового REST запроса. Add-on safe rejection не ставит искусственный глобальный `reconcile_required`. Подробности: [протокол причин](docs/WILLIAMS_ENTRY_GATE_FLAPPING_ROOT_CAUSE_2026_11_10_RU.md).
 - **Ограничение:** CI, Android-эмуляторы и unit tests не подтверждают фактическую установку STOP после исполненного LONG/SHORT на физическом устройстве. Не считать эту версию допущенной к автономной работе с реальными средствами. `main` остаётся предыдущим.
-- **APK:** [GitHub Actions сборки ветки](../../actions/workflows/build-android.yml) — выбирайте только подписанный `williams-bot-debug-apk-*`, не `release-unsigned`.
+- **APK:** [GitHub Actions: Android APK](https://github.com/19wolfalone92/Williams/actions) — выбирайте только подписанный `williams-bot-debug-apk-*`, не `release-unsigned`.
 
 ## Исторический контракт версии 4.33.0
 
