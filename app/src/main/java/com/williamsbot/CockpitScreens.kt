@@ -820,6 +820,32 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val understanding=report?.optJSONObject("book_causal_understanding")
+            CockpitCard("📚 Понимание четырёх книг · причинная сверка") {
+                if(understanding==null) {
+                    Text("Нужна диагностика новой версии для сопоставления источников и решений.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Достоверная H1 серия",
+                        if(understanding.optBoolean("scanner_data_usable_for_book_observations"))
+                            "Проверена для снимка" else "НЕ подтверждена")
+                    CockpitField("Источник реальных входов", "TC2 · три мудреца")
+                    CockpitField("Чёткие внутренние доказательства H1",
+                        understanding.optInt("internal_h1_setup_proof_count").toString())
+                    CockpitField("Неполные доказательства",
+                        understanding.optInt("incomplete_or_non_tc2_signal_proof_count").toString())
+                    CockpitField("Конфликты происхождения",
+                        (understanding.optJSONArray("source_contract_discrepancies")?.length() ?: 0).toString())
+                    CockpitField("Подтверждённые встречные H1-выходы",
+                        understanding.optInt("confirmed_h1_opposing_exit_count").toString())
+                    Text("TC1, NTD и Course — наблюдение. Сигнал ≠ пробой ≠ исполнение ≠ подтверждённый STOP. " +
+                        "Встречный H1 не доказывает разворот H4/D1. Книги целиком не сертифицированы, " +
+                        "ангулляция WM1 и волны частично интерпретируются численно.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val exitEvidence=report?.optJSONObject("tc2_recent_exit_forensics")
             val lastExits=CockpitDiagnostics.rows(exitEvidence?.optJSONArray("recent_closed_trades"))
             CockpitCard("Почему бот закрыл сделку") {
