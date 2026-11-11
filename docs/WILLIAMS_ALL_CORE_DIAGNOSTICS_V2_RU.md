@@ -29,7 +29,7 @@
 17. EXECUTION_DOOR: синхронизация, TTL подписи, durable lease, safe rejection.
 18. PENDING_ORDERS: pending stop-entry, client IDs, частичное исполнение.
 19. POSITIONS: действительные позиции, владение, signed state.
-20. STOP_PROTECTION: биржевой активный STOP, сопоставление qty/side/client ID, задержка после FILLED.
+20. STOP_PROTECTION: биржевой активный STOP, независимое сравнение qty/side/цены/signed GET, задержка после FILLED.
 21. STOP_TRAILING: перенос STOP, подтверждение биржей, исторический журнал.
 22. EXITS_PNL: закрытие, расчёт комиссий/funding и PnL.
 23. RECONNECT_RECOVERY: восстановление после Wi-Fi/перезагрузки и safe monitoring.
@@ -48,6 +48,12 @@
 
 Никогда не размещать дубль STOP, не отменять существующий ордер и не снимать fail-closed блокировку из этой статистики.
 
+## Независимый JOIN позиции ↔ STOP по подписи Binance
+
+`WilliamsSignedStopJoinAudit` строит компактный **неавторизующий** read-only результат из уже сохранённых снимков `status.futures_positions` и `futures_campaign_coordinator.exchange_protection_observations`. Каждая реально ненулевая позиция требует: свежесть обоих снимков ≤15 секунд, совпадение символа, направления, **точного signed qty**, цены STOP, одного подписанного активного защитного STOP, подтверждённого владельца стратегии и правильной области `SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY`. Отсутствие/неоднозначность/неверная сторона/количество/цена даёт WARNING; устаревший snapshot отмечается как NOT_VERIFIED в деталях и не даёт PASS. Если позиций нет, не выдаётся ложная сертификация E2E.
+
+Сырые client IDs **не** переносятся в компактный новый файл. Для расследования они остаются в отдельных подписанных доказательствах `futures_exchange_stop_proofs.json` и `futures_intent_stop_lifecycle.json`. JOIN не меняет STOP, не открывает входы и не измеряет биржевой SLA между FILLED и первичной установкой защиты.
+
 ## Ресурсы и OOM
 
 `WilliamsDiagnosticResourceHealth` измеряет 3 независимых контура: текущая память JVM, лимит Binance REST weight/cooldown и размеры очередей scanner/research/history/indicator. Превышение 80% heap/малый headroom, 90% REST weight, 429/418, активный cooldown либо аномальная длина очередей → WARNING, отсутствующие счётчики → NOT_VERIFIED. Историческая запись `OutOfMemoryError` никогда не исчезает из AND-04 просто потому, что текущая память свободна.
@@ -64,6 +70,7 @@
 - `diagnostic_chain_audit.json`: 25 ядер, все зависимости, недостающие тесты, критические межъядерные противоречия.
 - `diagnostic_chain_comparison.json`: наблюдаемые ухудшения/улучшения ядер относительно последнего **полного** ZIP. Улучшение не означает доказанное исправление.
 - `futures_fill_stop_timing.json`: ретроспективный наблюдательный тайминг, с пропусками/неоднозначностью.
+- `signed_position_stop_join.json`: независимое сравнение подписанных биржевых позиций и STOP; идентификаторы не раскрываются.
 - `runtime_resource_diagnostics.json`: heap, Binance weight, многопоточные очереди.
 
 Android-экран показывает блоки «FILLED → STOP», «Память, REST лимиты и очереди», «Ядра и связи», развёртываемый список всех 25 ядер, независимые прежние компонентные проверки, сравнение, экспорт. Compose **не копирует** гигантские сырые исследования и весь биржевой журнал: только лёгкие JSON-деревья. Детальные исходные данные остаются в валидированном ZIP.
@@ -74,6 +81,7 @@ Android-экран показывает блоки «FILLED → STOP», «Пам
 - `WilliamsFillStopTimingForensicsTest.kt`: порядок событий, 11.166/13.153 с, двойной FILLED, отсутствующее подтверждение, маскировка пользовательских строк.
 - `WilliamsDiagnosticResourceHealthTest.kt`: OOM thresholds, REST weight/429, перегрузка очередей.
 - `DiagnosticsArchiveIntegrityTest.kt`: ZIP с обязательными данными, отсутствующий signed STOP, ошибка архива NDJSON, неверный timestamp.
+- `WilliamsSignedStopJoinAuditTest.kt`: подписанный BCH SHORT, точный qty/price/owner, missing/multiple/stale STOP, отсутствие утечки ID.
 - `test_android_46418_all_core_diagnostics_contract.py`: жёсткая проверка связи UI, генератора отчёта, ZIP, чистых метрик и неизменности Execution Gate.
 
 **Следующий обязательный физический критерий**: Demo LONG и SHORT stop-entry → частичный/полный fill → активная подписанная reduce-only защитная заявка, однозначно связанная с позицией и журналом, измеренное время, потеря Wi-Fi, reboot, 24 часа фоновой работы. До него НЕ утверждать 100% безопасность или пригодность для реальных средств.
