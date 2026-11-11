@@ -6,6 +6,73 @@ import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.util.zip.ZipFile
+import java.util.zip.CRC32
+
+/**
+ * Validate the entire just-written ZIP by bounded 8 KiB streaming reads.
+ * Checks every entry CRC and the complete observer NDJSON row count before
+ * replacing the LAST good diagnostic archive; never materialize the 30+ MB
+ * diagnostic_report.json or the growing research diary in Java heap.
+ * A failed verification leaves the previous ZIP untouched.
+ */
+internal fun verifyWilliamsDiagnosticZip(file: File, expectedAtMs: Long) {
+    val mandatory=setOf(
+        "archive_metadata.json","diagnostic_report.json","test_results.json",
+        "diagnostic_chain_audit.json","diagnostic_chain_comparison.json",
+        "futures_fill_stop_timing.json","futures_positions_signed_snapshot.json",
+        "futures_exchange_stop_proofs.json","futures_intent_stop_lifecycle.json",
+        "futures_exit_reconciliation.json","signal_decision_history.json",
+        "observer_paper_full_history.ndjson",
+        "observer_paper_full_history_metadata.json","stop_trail_decisions_full.json"
+    )
+    ZipFile(file).use { zip ->
+        val found=linkedSetOf<String>()
+        val buffer=ByteArray(8192)
+        var paperLineCount=0L
+        val entries=zip.entries()
+        while(entries.hasMoreElements()) {
+            val entry=entries.nextElement()
+            check(!entry.isDirectory) { "DIAG_ZIP_DIRECTORY_NOT_ALLOWED" }
+            check(entry.name !in found) { "DIAG_ZIP_DUPLICATE_ENTRY" }
+            found.add(entry.name)
+            val crc=CRC32()
+            var expanded=0L
+            zip.getInputStream(entry).use { input ->
+                while(true) {
+                    val count=input.read(buffer)
+                    if(count<0) break
+                    if(count==0) continue
+                    crc.update(buffer,0,count)
+                    expanded+=count
+                    if(entry.name=="observer_paper_full_history.ndjson") {
+                        for(index in 0 until count)
+                            if(buffer[index]=='\n'.code.toByte()) paperLineCount++
+                    }
+                }
+            }
+            check(entry.size==expanded && entry.crc==crc.value) {
+                "DIAG_ZIP_CRC_OR_SIZE_MISMATCH:" + entry.name.take(80)
+            }
+        }
+        check(found.containsAll(mandatory)) {
+            "DIAG_ZIP_REQUIRED_ENTRY_MISSING:" + (mandatory-found).joinToString(",")
+        }
+        fun readTiny(name:String):String {
+            val entry=zip.getEntry(name) ?: error("DIAG_ZIP_METADATA_MISSING")
+            check(entry.size in 1L..65_536L) { "DIAG_ZIP_METADATA_TOO_LARGE" }
+            return zip.getInputStream(entry).bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }
+        val meta=org.json.JSONObject(readTiny("archive_metadata.json"))
+        check(meta.optLong("report_at_ms")==expectedAtMs && expectedAtMs>0L) {
+            "DIAG_ZIP_CAPTURE_TIMESTAMP_MISMATCH"
+        }
+        val observerMeta=org.json.JSONObject(readTiny("observer_paper_full_history_metadata.json"))
+        check(observerMeta.optBoolean("export_complete",false) &&
+            observerMeta.optLong("record_count",-1L)==paperLineCount) {
+            "DIAG_ZIP_OBSERVER_HISTORY_INCOMPLETE"
+        }
+    }
+}
 
 /**
  * Keeps the most recent sanitized diagnostics bundle on-device.
@@ -187,8 +254,11 @@ object DiagnosticsArchive {
                 }
                 addJson(zip,"stop_trail_decisions_full.json",stops)
             }
-            // Move only a fully closed ZIP, preserving the old archive when
-            // this write fails (including disk-full and process interruption).
+            // Validate every stream/CRC after final close, before the atomic
+            // swap. A broken archive must never replace the last good file.
+            verifyWilliamsDiagnosticZip(temporary,report.optLong("created_at_ms"))
+            // Move only a fully closed and verified ZIP, preserving the old
+            // archive on disk-full, CRC mismatch or interrupted production.
             try {
                 java.nio.file.Files.move(temporary.toPath(),output.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING,
