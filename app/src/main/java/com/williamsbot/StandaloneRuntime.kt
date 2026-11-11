@@ -12888,6 +12888,11 @@ private class NativeEngine(
         // in signal_decision_history.json (status copy is deliberately deduplicated).
         val configurationSnapshot=diagnosticSettings()
         val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
+        // Build the immutable exit evidence exactly ONCE for both the phone
+        // diagnostic and book-reasoning audit. Re-parsing JSON here previously
+        // doubled potentially large allocations near an observed OOM incident.
+        val tc2RecentExits=WilliamsTc2RecentExitForensics.summarize(
+            statusSnapshot.optJSONArray("trade_observations"))
         val completedDiagnosticReport=JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -12895,11 +12900,9 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("futures_fill_stop_timing",fillStopTiming)
-            .put("tc2_recent_exit_forensics", WilliamsTc2RecentExitForensics.summarize(
-                statusSnapshot.optJSONArray("trade_observations")))
+            .put("tc2_recent_exit_forensics",tc2RecentExits)
             .put("book_causal_understanding", WilliamsBookCausalUnderstanding.assess(
-                scannerEvidenceSnapshot, WilliamsTc2RecentExitForensics.summarize(
-                    statusSnapshot.optJSONArray("trade_observations")), observedAtMs))
+                scannerEvidenceSnapshot,tc2RecentExits,observedAtMs))
             .put("signed_position_stop_join",signedStopJoin)
             .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
