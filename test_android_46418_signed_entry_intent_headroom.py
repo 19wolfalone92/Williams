@@ -107,3 +107,22 @@ def test_initial_entry_read_only_h1_failures_are_not_unknown_exchange_mutations(
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" not in mutation[
         preflight_start:preflight_catch
     ]
+
+
+def test_tc2_reversal_new_risk_uses_proven_signed_gate_and_safe_runtime_veto():
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    reversal = runtime.split("private fun processNativeTc2Reversals():Boolean", 1)[1]
+    reversal = reversal.split("private fun manageM15PendingEntry(", 1)[0]
+    assert 'refreshSignedProofForEntryIfNeeded(symbol,"TC2_REVERSAL_PREFLIGHT")' in reversal
+    opening = reversal.index('withCampaignMutation(symbol,"TC2_CONFIRMED_FLAT_REVERSE_ENTRY")')
+    assert reversal.index("TC2_REVERSAL_PREFLIGHT") < opening
+    start = reversal.index("val finalReadiness=runCatching", opening)
+    headroom = reversal.index("entrySignedProofHasPreIntentHeadroom(", start)
+    submit = reversal.index("futuresCampaignCoordinator.submitPendingEntry(plan)", headroom)
+    assert opening < start < headroom < submit
+    assert '.put("safe_rejection",true)' in reversal[start:submit]
+    assert '.put("mutation_attempted",false)' in reversal[start:submit]
+    assert '.put("entry_signed_refresh_required",true)' in reversal[headroom:submit]
+    assert 'refreshSignedProofForEntryIfNeeded(symbol,"TC2_REVERSAL_AFTER_SAFE_DEFER")' in reversal[submit:]
+    # Fail-closed coordinator POST stays outside the read-only runCatching.
+    assert "futuresCampaignCoordinator.submitPendingEntry(plan)" not in reversal[start:headroom]
