@@ -236,7 +236,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: williams-bot-debug-apk-${{ github.run_number }}
           path: smoke-apk
@@ -274,7 +274,7 @@ jobs:
         run: python3 tools/android_emulator_smoke.py --apk smoke-apk/app-debug.apk --output build/emulator-smoke
       - name: Upload UI assertions, screenshots and crash evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: williams-ui-lifecycle-api-${{ matrix.api }}
           path: build/emulator-smoke/
