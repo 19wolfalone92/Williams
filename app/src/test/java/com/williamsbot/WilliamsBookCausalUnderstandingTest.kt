@@ -105,6 +105,23 @@ class WilliamsBookCausalUnderstandingTest {
         assertEquals("INDEPENDENT_CLOSED_H1_AO_NOT_VERIFIED",missing.getString("state"))
     }
 
+    @Test fun duplicatedSignalIdCannotChooseLastProofAndClaimBookUnderstanding() {
+        val c=candidate(signal())
+        val signal=c.getJSONArray("campaign_signals").getJSONObject(0)
+        val detail=c.getJSONObject("decision_trace")
+            .getJSONArray("signals").getJSONObject(0)
+        c.getJSONObject("decision_trace").getJSONArray("signals")
+            .put(JSONObject(detail.toString()))
+        c.getJSONArray("campaign_signals").put(JSONObject(signal.toString()))
+        val report=WilliamsBookCausalUnderstanding.assess(scanner(c),JSONObject(),now)
+        assertEquals(0,report.getInt("internal_h1_setup_proof_count"))
+        assertEquals("SOURCE_SIGNAL_IDENTITY_AMBIGUOUS",report.getJSONArray("observed_candidates")
+            .getJSONObject(0).getJSONArray("signals").getJSONObject(0).getString("state"))
+        val errors=report.getJSONArray("source_contract_discrepancies").toString()
+        assertTrue(errors.contains("DUPLICATE_SOURCE_TRACE_SIGNAL"))
+        assertTrue(errors.contains("DUPLICATE_LIVE_SIGNAL"))
+    }
+
     @Test fun oldSnapshotNeverBecomesFreshBookEvidence() {
         val stale=scanner(candidate(signal())).put("last_scan_at",now-180_000L)
         val data=WilliamsBookCausalUnderstanding.assess(stale,JSONObject(),now)
