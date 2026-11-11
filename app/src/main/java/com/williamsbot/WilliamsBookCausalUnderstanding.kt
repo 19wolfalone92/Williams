@@ -149,7 +149,7 @@ internal object WilliamsBookCausalUnderstanding {
                 nowMs-close<=WILLIAMS_H1_MS+120_000L
             val details=rows(candidate?.optJSONObject("decision_trace")?.optJSONArray("signals"))
                 .associateBy { it.optString("signal_id") }
-            val signals=if(validH1) rows(candidate?.optJSONArray("campaign_signals")).take(16)
+            val signals=if(validH1) rows(candidate?.optJSONArray("campaign_signals")).take(8)
                 else emptyList()
             val summaries=JSONArray()
             for(signal in signals) {
@@ -180,6 +180,8 @@ internal object WilliamsBookCausalUnderstanding {
                     else -> "OBSERVATION_ONLY"
                 })
                 .put("signals",summaries).put("source_observations",provenance)
+                .put("signals_omitted_for_bounded_diagnostics",
+                    if(validH1) (rows(candidate?.optJSONArray("campaign_signals")).size-8).coerceAtLeast(0) else 0)
                 .put("h1_as_of_close_ms",if(validH1) close else JSONObject.NULL)
                 .put("senior_trend_end_proven",false)
                 .put("wave_degree_certified",false)
