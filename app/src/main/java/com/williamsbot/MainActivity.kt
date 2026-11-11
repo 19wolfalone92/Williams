@@ -949,6 +949,8 @@ fun WilliamsApp(context: Context) {
                 val report=api.diagnosticsReport()
                 report.put("diagnostic_comparison",
                     DiagnosticsArchive.compareWithLatest(context,report))
+                report.put("diagnostic_chain_comparison",
+                    DiagnosticsArchive.compareChainWithLatest(context,report))
                 // Archiving failure is a separate error from successful
                 // READ-ONLY diagnostic capture; always display fresh findings.
                 val stored=runCatching {
