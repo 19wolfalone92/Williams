@@ -22,9 +22,9 @@ jobs:
     timeout-minutes: 18
     steps:
       - name: Checkout frozen research code and public OHLCV (no secrets)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Python standard library
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Historical book proxy vs H4/D1 context (NO EXCHANGE ACTION)
@@ -47,7 +47,7 @@ jobs:
           print("RESEARCH VALIDATION: SUCCESS, not live-trade certification")
           PY
       - name: Upload evidence for reproducibility
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tc2-context-walkforward-2026
           path: build/tc2_context_walkforward_2026.json
