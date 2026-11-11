@@ -115,6 +115,14 @@ android {
         // OldTargetApi even though we intentionally do not ship against
         // the preview SDK yet.
         disable += "OldTargetApi"
+        // As of 2026-11-11 the official Gradle 8.x release index ends at
+        // 8.14.6. Android Lint has already flagged 8.14.7, which exists only
+        // as an unreleased distribution snapshot. Do NOT upgrade the verified,
+        // checksum-pinned wrapper to an unshipped Gradle snapshot to satisfy
+        // a version recommendation. Scope this exception to that ONE detector;
+        // abortOnError and warningsAsErrors still guard all other lint checks.
+        // Revisit this exception when Gradle 8.14.7 is officially released.
+        disable += "AndroidGradlePluginVersion"
         // Dependency freshness is reviewed separately; it must not block a stable SDK build.
         disable += "GradleDependency"
         disable += "DataExtractionRules"
