@@ -84,3 +84,26 @@ def test_normal_add_on_h1_invalidations_are_proven_zero_mutation_not_account_out
     # fail-closed wrapper; do not classify their outcomes as a safe veto.
     assert 'check(checkFuturesDailyLoss())' in addition
     assert "futuresCampaignCoordinator.submitPendingEntry(plan)" in addition
+
+
+def test_initial_entry_read_only_h1_failures_are_not_unknown_exchange_mutations():
+    runtime = RUNTIME.read_text(encoding="utf-8")
+    entry = runtime.split("private fun submitNativeFuturesCampaignEntryChecked(", 1)[1]
+    entry = entry.split("private fun scanDailyRiskAllowsEntry()", 1)[0]
+    mutation = entry.split('purpose = "WILLIAMS_PENDING_ENTRY"', 1)[1]
+    preflight_start = mutation.index("try {")
+    preflight_catch = mutation.index("} catch (preflightFailure: Exception)")
+    submit = mutation.index("futuresCampaignCoordinator.submitPendingEntry(plan)")
+    assert preflight_start < preflight_catch < submit
+    assert "H1_BOOK_SIGNAL_NO_LONGER_VALID" in mutation[preflight_start:preflight_catch]
+    assert "H1_BOOK_TRIGGER_ALREADY_CROSSED" in mutation[preflight_start:preflight_catch]
+    assert "SIGNED_RECONCILIATION_HEADROOM_UNSAFE" in mutation[preflight_start:preflight_catch]
+    safe = mutation[preflight_catch:submit]
+    assert '.put("safe_rejection",true)' in safe
+    assert '.put("mutation_attempted",false)' in safe
+    assert '.put("order_mutation_attempted",false)' in safe
+    assert "H1_FINAL_READ_ONLY_PREFLIGHT_UNVERIFIED" in safe
+    # The coordinator's POST/unknown reply path MUST be OUTSIDE the catch.
+    assert "futuresCampaignCoordinator.submitPendingEntry(plan)" not in mutation[
+        preflight_start:preflight_catch
+    ]
