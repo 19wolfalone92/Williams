@@ -19,8 +19,8 @@ internal fun verifyWilliamsDiagnosticZip(file: File, expectedAtMs: Long) {
     val mandatory=setOf(
         "archive_metadata.json","diagnostic_report.json","test_results.json",
         "diagnostic_chain_audit.json","diagnostic_chain_comparison.json",
-        "futures_fill_stop_timing.json","runtime_resource_diagnostics.json",
-        "futures_positions_signed_snapshot.json",
+        "futures_fill_stop_timing.json","signed_position_stop_join.json",
+        "runtime_resource_diagnostics.json","futures_positions_signed_snapshot.json",
         "futures_exchange_stop_proofs.json","futures_intent_stop_lifecycle.json",
         "futures_exit_reconciliation.json","signal_decision_history.json",
         "observer_paper_full_history.ndjson",
@@ -241,6 +241,9 @@ object DiagnosticsArchive {
                 addJson(zip,"futures_fill_stop_timing.json",
                     report.optJSONObject("futures_fill_stop_timing") ?: org.json.JSONObject()
                         .put("severity","NOT_VERIFIED"))
+                addJson(zip,"signed_position_stop_join.json",
+                    report.optJSONObject("signed_position_stop_join") ?: org.json.JSONObject()
+                        .put("severity","NOT_VERIFIED"))
                 addJson(zip,"runtime_resource_diagnostics.json",
                     report.optJSONObject("runtime_resource_diagnostics") ?: org.json.JSONObject()
                         .put("schema","NOT_AVAILABLE"))
@@ -315,6 +318,7 @@ object DiagnosticsArchive {
         val chain=triage.optString("schema")
         appendLine("Источник агрегированных результатов: "+chain+"; PASS означает только компонентную проверку, не end-to-end Demo.")
         appendLine("Риски OOM, REST weight и очереди потоков: runtime_resource_diagnostics.json.")
+        appendLine("Сверка позиций и подписанных STOP по qty/side/price: signed_position_stop_join.json.")
         appendLine("Время FILLED -> первое наблюдение STOP/OPEN_PROTECTED: futures_fill_stop_timing.json;")
         appendLine("Это временные свидетельства Android, НЕ заверенный Binance SLA или доказательство отсутствия STOP.")
         appendLine("Для анализа STOP см. stop_trail_decisions_full.json, futures_exchange_stop_proofs.json.")
