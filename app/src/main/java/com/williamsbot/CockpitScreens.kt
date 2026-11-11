@@ -721,6 +721,12 @@ internal fun CockpitDiagnosticScreen(
         "FAIL" -> 0; "WARNING", "WARN" -> 1; "NOT_VERIFIED" -> 2
         else -> 3
     } }.thenBy { it.optString("id",it.optString("name")) })
+    val chainAudit=report?.optJSONObject("diagnostic_chain_audit")
+    val chainComparison=report?.optJSONObject("diagnostic_chain_comparison")
+    val chainCores=remember(report) {
+        CockpitDiagnostics.rows(chainAudit?.optJSONArray("components"))
+    }
+    var showAllDiagnosticCores by rememberSaveable { mutableStateOf(false) }
     val summary = report?.optJSONObject("diagnostic_summary")
     val reportAtMs=report?.optLong("created_at_ms") ?: 0L
     var clockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -773,6 +779,76 @@ internal fun CockpitDiagnosticScreen(
                     else "Не сохранён или ещё не проверен")
                 Text(triage.optString("status_note"),style=MaterialTheme.typography.bodySmall,
                     color=AppColors.textMuted)
+            }
+        }
+        item {
+            CockpitCard("Ядра и связи · ${chainAudit?.optInt("component_count",0) ?: 0} систем") {
+                if(chainAudit==null || chainCores.isEmpty()) {
+                    Text("Доступен старый формат. Запустите новую диагностику для построения графа всех ядер.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    val sum=chainAudit.optJSONObject("summary")
+                    CockpitField("Ядра", "${chainAudit.optInt("component_count")} • цепочки ${chainAudit.optInt("dependency_edge_count")}")
+                    CockpitField("Подтверждены отдельно", "${sum?.optInt("PASS") ?: 0}")
+                    CockpitField("Ошибка / предупреждение",
+                        "${sum?.optInt("FAIL") ?: 0} / ${sum?.optInt("WARNING") ?: 0}")
+                    CockpitField("Не проверены полностью", "${sum?.optInt("NOT_VERIFIED") ?: 0}")
+                    Text("Это карта компонентных проверок. Работающий WebSocket, сканер или STOP по отдельности " +
+                        "НЕ доказывают, что вся цепочка ENTRY → FILLED → STOP проверена на Binance Demo.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    val rows=chainCores.sortedWith(compareBy<JSONObject> {
+                        when(it.optString("status")) {
+                            "FAIL" -> 0; "WARNING" -> 1; "NOT_VERIFIED" -> 2; else -> 3
+                        }
+                    }.thenBy { it.optString("id") })
+                    val selected=if(showAllDiagnosticCores) rows else rows.take(8)
+                    for(core in selected) {
+                        val sev=core.optString("status","NOT_VERIFIED")
+                        val c=when(sev) {
+                            "FAIL" -> AppColors.red
+                            "WARNING" -> AppColors.amber
+                            "PASS" -> AppColors.green
+                            else -> AppColors.textMuted
+                        }
+                        HorizontalDivider(color=AppColors.surface2)
+                        Text("${williamsRuStatus(sev)}  •  ${core.optString("name")}",
+                            color=c,style=MaterialTheme.typography.bodyMedium,
+                            fontWeight=FontWeight.SemiBold)
+                        CockpitField("Проверки",
+                            "${core.optInt("check_count")} / ${core.optInt("required_check_count")}")
+                        val missing=core.optJSONArray("missing_check_ids")
+                        if(missing!=null && missing.length()>0)
+                            Text("Нет источников: " + (0 until missing.length())
+                                .joinToString { missing.optString(it) },
+                                style=MaterialTheme.typography.bodySmall,color=AppColors.amber)
+                        if(sev!="PASS") Text("Требуется доказательство: " +
+                            core.optString("proof_needed"),
+                            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                    }
+                    if(rows.size>8) TextButton(onClick={showAllDiagnosticCores=!showAllDiagnosticCores}) {
+                        Text(if(showAllDiagnosticCores) "Свернуть ядра"
+                            else "Показать все ${rows.size} ядра")
+                    }
+                    val findings=CockpitDiagnostics.rows(
+                        chainAudit.optJSONArray("cross_chain_findings"))
+                    if(findings.isNotEmpty()) {
+                        Text("Проверка связей между ядрами",
+                            fontWeight=FontWeight.SemiBold)
+                        for(finding in findings.take(5))
+                            Text("• ${finding.optString("id")}: ${finding.optString("detail")}",
+                                style=MaterialTheme.typography.bodySmall,color=AppColors.amber)
+                    }
+                    if(chainComparison?.optString("status")=="COMPARABLE") {
+                        Text("Сравнение полного графа с прошлой диагностикой:",
+                            style=MaterialTheme.typography.bodySmall)
+                        CockpitField("Ухудшились",chainComparison.optInt("worsened_count").toString())
+                        CockpitField("Стали менее серьёзными",
+                            chainComparison.optInt("less_severe_count").toString())
+                    }
+                    Text("Снимок конечен по времени и не управляет торговлей. Полный список зависимостей, " +
+                        "первичных тестов и неподтверждённых звеньев — в diagnostic_chain_audit.json внутри ZIP.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
             }
         }
         item {
