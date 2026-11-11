@@ -31,8 +31,10 @@ internal fun williamsProfileAllowsSource(selected:String,source:String):Boolean 
     source in williamsSourceProfiles && (selected==williamsUnifiedProfile || selected==source)
 
 /** Live new exposure is deliberately narrower than signal-source visibility.
- * TC2 and NTD retain independent source lifecycles. Course remains OBSERVE;
- * an observation cannot acquire order authority through the unified selector.
+ * ONLY TC2 can request NEW risk (TC2_ONLY_NEW_EXPOSURE_V3). Existing historical
+ * NTD/Course owners keep independently pinned protective STOP/EXIT lifecycles,
+ * but TC1/NTD/Course detections remain OBSERVE for all new exposure.
+ * The unified selector does not turn observations into executable orders.
  */
 internal fun williamsVerifiedNewRiskSource(source:String):Boolean =
     williamsNewExposureBlocker(source)==null
