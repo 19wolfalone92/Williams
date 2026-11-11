@@ -50,29 +50,41 @@ internal object WilliamsSignedStopJoinAudit {
             }
             val proof=candidates.singleOrNull()
             val proofAt=proof?.optLong("observed_at_ms",0L) ?: 0L
-            val signedScope=proof?.optString("scope")==
-                "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"
+            // Coordinator creates exchange_protection_observations ONLY
+            // from signed Futures position and openAlgoOrders GET responses.
+            // The observations do NOT contain a "scope" or
+            // "signed_full_stops_seen" field: demanding invented fields
+            // caused every valid Android position to report a false WARNING.
+            // OWNED_STOP_SEEN is assigned upstream ONLY when exactly one
+            // exchange-validated full-position STOP matches the campaign
+            // protective clientAlgoId. Never infer that fact from a prefix.
+            val signedSourceObserved=proof!=null
             val stopValue=dec(proof?.opt("stop"))
             val stopsMatch=positionStop!=null && positionStop.signum()>0 &&
                 stopValue!=null && stopValue.signum()>0 &&
                 stopValue.compareTo(positionStop)==0
             val strategyOwned=proof?.optBoolean("strategy_ownership_verified")==true
-            val active=proof?.optString("stop_proof").orEmpty() in
-                setOf("OWNED_STOP_SEEN","NATIVE_REPLACEMENT_PROTECTION_SEEN")
-            val uniqueStop=proof?.optInt("signed_full_stops_seen",0)==1
+            val active=proof?.optString("stop_proof")=="OWNED_STOP_SEEN" &&
+                proof.optString("management_mode")=="STRATEGY_OWNED" &&
+                proof.optString("protection_client_id").isNotBlank()
+            val snapshotConsistent=!coordinator.optBoolean("reconciliation_running",false) &&
+                coordinator.optString("state")!="RECONCILE_REQUIRED"
+            val displayMatched=position.optString("stop_verification_status")=="OWNED_STOP_SEEN" &&
+                position.optBoolean("strategy_ownership_verified",false)
             val wellFormedProof=positionFresh && candidates.size==1 &&
-                fresh(proofAt,observedAtMs) && signedScope &&
-                stopsMatch && strategyOwned && active && uniqueStop
+                fresh(proofAt,observedAtMs) && signedSourceObserved &&
+                snapshotConsistent && displayMatched &&
+                stopsMatch && strategyOwned && active
             val state=when {
                 !positionFresh -> "NOT_VERIFIED_POSITION_SNAPSHOT_STALE"
                 candidates.isEmpty() -> "WARNING_SIGNED_STOP_PROOF_MISSING_OR_WRONG_QTY"
                 candidates.size>1 -> "WARNING_AMBIGUOUS_PROTECTION_PROOFS"
                 !fresh(proofAt,observedAtMs) -> "NOT_VERIFIED_STOP_PROOF_STALE"
-                !signedScope -> "NOT_VERIFIED_STOP_PROOF_SOURCE"
+                !snapshotConsistent -> "NOT_VERIFIED_COORDINATOR_RECONCILING"
+                !displayMatched -> "NOT_VERIFIED_DISPLAY_AND_PROOF_NOT_SAME_GENERATION"
                 !stopsMatch -> "WARNING_POSITION_STOP_PRICE_MISMATCH"
                 !strategyOwned -> "NOT_VERIFIED_STRATEGY_OWNERSHIP"
                 !active -> "WARNING_SIGNED_ACTIVE_OWNED_STOP_ABSENT"
-                !uniqueStop -> "WARNING_NONUNIQUE_SIGNED_STOP"
                 wellFormedProof -> "OBSERVED_FRESH_SIGNED_PROOF_MATCH"
                 else -> "NOT_VERIFIED"
             }
@@ -102,6 +114,8 @@ internal object WilliamsSignedStopJoinAudit {
                 if(positionAt>0L) positionAt else JSONObject.NULL)
             .put("position_snapshot_fresh",positionFresh)
             .put("required_fresh_ms",SIGNED_POSITION_STOP_TTL_MS)
+            .put("proof_origin","NATIVE_COORDINATOR_SIGNED_GET_OPEN_ALGO_ORDERS")
+            .put("stop_uniqueness_rule","OWNED_STOP_SEEN_REQUIRES_UPSTREAM_EXACTLY_ONE_SIGNED_STOP")
             .put("open_position_count",open).put("signed_stop_matched_count",matched)
             .put("unresolved_position_count",missing)
             .put("ambiguous_proof_count",ambiguous)
