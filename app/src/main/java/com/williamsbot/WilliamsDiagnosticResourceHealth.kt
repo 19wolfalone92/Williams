@@ -58,7 +58,7 @@ internal object WilliamsDiagnosticResourceHealth {
             .put("last_http_status",status).put("cooldown_ms",cooldown)
             .put("last_response_at_ms",lastResponse)
             .put("historical_rate_limit_responses",
-                rate.optLong("rate_limit_response_count",0L))
+                rate?.optLong("rate_limit_response_count",0L) ?: 0L)
             .put("reason",when {
                 blocked -> "BINANCE_RATE_LIMIT_ACTIVE"
                 fraction>=0.90 -> "RATE_BUDGET_NEAR_LIMIT"
