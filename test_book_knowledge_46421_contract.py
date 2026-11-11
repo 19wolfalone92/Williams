@@ -62,7 +62,10 @@ def test_new_book_evidence_export_is_visible_and_not_an_order_gate():
     src = REASONER.read_text(encoding="utf-8")
     assert 'scanner.optInt("symbols_scanned",-1)==APPROVED_FUTURES_SYMBOLS.size' in src
     assert "nowMs-at<=120_000L" in src
-    assert 'if(validH1) rows(candidate?.optJSONArray("campaign_signals")).take(8)' in src
+    assert 'val rawSignals=if(validH1) rows(candidate?.optJSONArray("campaign_signals"))' in src
+    assert "val signals=rawSignals.take(8)" in src
+    assert '"INDEPENDENT_CLOSED_H1_AO_CONTRADICTS_SETUP"' in src
+    assert 'independentThirdAoProof(' in src
     assert '"can_change_stop_or_exit",false' in src
 
 
