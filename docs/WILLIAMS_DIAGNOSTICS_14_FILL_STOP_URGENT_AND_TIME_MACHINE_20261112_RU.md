@@ -52,15 +52,15 @@ python tc2_time_machine_from_diagnostics.py \
 | Incoming WS → urgent wake-up | Изменение в этой ветке; регрессионный JUnit | Точный порядок callback/handler на Android, без изменения решающего signed gate |
 | Execution Door / durable intent / STOP | Без изменения опасного кода | На Demo физически проверить FILLED → однозначный clientAlgoId → правильный active STOP по qty/side/symbol/price |
 | Альтернативное происхождение 49 с (REST, clock, account) | Не установлено | Сегментные timestamps, подписанные REST расходы, запрет пропуска hard gate |
-| Android heap / crash | PR #234, **не включён** в этот PR | CI+телефон после включения #234; OOM из архива не считать починенным |
+| Android heap / crash | Исправления из PR #234 **перенесены точечными hunk-патчами** в эту ветку: исключено ненужное построение больших traces, повторный parse intents и ограничен unsigned clock probe | CI+телефон; OOM из архива не считать починенным без нагрузочного теста |
 | Новейший WM3 / старый BNB STOP-entry | PR #235 — родительский | Проверка на свежих закрытых H1 и реальных заявках |
 | График STOP / фактический выход | PR #236 — родительский | Не путать журнал initial SL и реально выставленный STOP |
 | Monte Carlo / CPCV / historical parity | Исследовательская утилита, не trading authority | Purged walk-forward без утечки, тест на замороженном независимом периоде |
 | Signed Demo LONG и SHORT + Android screen-off/reboot | **НЕ ПРОВЕРЕНО** | Жёсткая блокировка распространения как «готового безопасного» APK |
-| Android battery unrestricted | `battery_optimization_ignored=false` | Только пользователь может включить в настройках телефона |
+| Android battery unrestricted | `battery_optimization_ignored=false`; диагностическое сообщение из PR #234 включено | Только пользователь может включить в настройках телефона |
 
 ## 5. Правила релиза
 
 - Пройти Python pytest, Android JUnit/lint, exact-SHA CI и выпустить APK с постоянным **подписывающим сертификатом**. Не считать debug-подпись из случайного keystore пригодной для установки поверх существующей.
-- Не сливать PR в `main`, пока не решены открытые зависимости #234–#236 и P0 signed Binance Demo FILLED → STOP.
+- Кодовые исправления PR #234 применены сюда адресно после проверки hunks; исходный #234 остаётся открытым. Не сливать PR в `main`, пока не проверены совместимость #234–#236 и P0 signed Binance Demo FILLED → STOP.
 - Не разрешать live-торговлю и не ослаблять signed freshness, risk caps или SL ради числа зелёных тестов.
