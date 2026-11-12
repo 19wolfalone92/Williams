@@ -34,6 +34,44 @@ class BinanceRateGuardTest {
         assertEquals(1L, guard.snapshot().getLong("bounded_wait_rejected_count"))
     }
 
+    @Test fun concurrent429ResponsesCannotShortenAnExistingCooldown() {
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("Retry-After", "180"), 429)
+        val before = guard.cooldownUntilMs
+        val start = java.util.concurrent.CountDownLatch(1)
+        val threads = (0 until 24).map { i ->
+            Thread {
+                start.await()
+                guard.observe(Headers.headersOf("Retry-After", if (i % 3 == 0) "180" else "1"), 429)
+            }.apply { isDaemon = true; start() }
+        }
+        start.countDown()
+        threads.forEach { it.join(3_000L) }
+        org.junit.Assert.assertTrue("Concurrent rate-limit responses must finish", threads.none { it.isAlive })
+        org.junit.Assert.assertTrue("A short retry may not release a longer cooldown",
+            guard.cooldownUntilMs >= before)
+        org.junit.Assert.assertTrue(guard.snapshot().getLong("cooldown_ms") > 170_000L)
+        assertEquals(25L, guard.rateLimitResponseCount)
+    }
+
+    @Test fun maliciousRetryAfterCannotOverflowAndAllowFinancialRest() {
+        val deadline = binanceRateGuardCooldownDeadline(1_800_000_000_000L, Long.MAX_VALUE.toString())
+        assertEquals(Long.MAX_VALUE, deadline)
+        assertEquals(Long.MAX_VALUE,
+            binanceRateGuardSaturatingAdd(Long.MAX_VALUE - 20L, 100L))
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("Retry-After", Long.MAX_VALUE.toString()), 418)
+        assertEquals(Long.MAX_VALUE, guard.cooldownUntilMs)
+        try {
+            guard.beforeRequest(isOrder = true, maximumWaitMs = 1L)
+            throw AssertionError("Overflow must never turn a Binance ban into an allowed order")
+        } catch (expected: IllegalStateException) {
+            org.junit.Assert.assertTrue(expected.message.orEmpty().contains("request was not sent"))
+        }
+        org.junit.Assert.assertTrue(binanceRateGuardCooldownDeadline(1_800_000_000_000L, "-1") >
+            1_800_000_000_000L)
+    }
+
     @Test
     fun learnsTenSecondOrderLimitFromExchangeInfo() {
         val guard = BinanceRateGuard()
