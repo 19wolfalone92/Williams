@@ -158,6 +158,9 @@ class BinanceRateGuard {
         headers.names().forEach { name ->
             val normalized = name.lowercase(Locale.US)
             val value = headers[name]?.toLongOrNull() ?: return@forEach
+            // A malformed negative counter/limit must never disable pressure
+            // throttling by replacing a valid nonnegative exchange reading.
+            if (value < 0L) return@forEach
             when {
                 normalized == "x-mbx-used-weight-1m" -> {
                     usedWeight1m = value
@@ -187,6 +190,9 @@ class BinanceRateGuard {
         val limits = info.optJSONArray("rateLimits") ?: return
         for (i in 0 until limits.length()) {
             val row = limits.optJSONObject(i) ?: continue
+            // No zero/negative rate limit may disable the governor's ceiling.
+            val newLimit = row.optLong("limit", -1L)
+            if (newLimit <= 0L) continue
             when (row.optString("rateLimitType")) {
                 "REQUEST_WEIGHT" -> {
                     if (
@@ -194,7 +200,7 @@ class BinanceRateGuard {
                         row.optInt("intervalNum", 0) == 1
                     ) {
                         requestWeightLimit1m =
-                            row.optLong("limit", requestWeightLimit1m)
+                            newLimit
                     }
                 }
                 "ORDERS" -> {
@@ -202,11 +208,11 @@ class BinanceRateGuard {
                         row.optString("interval") == "SECOND" &&
                             row.optInt("intervalNum", 0) == 10 ->
                             orderLimit10s =
-                                row.optLong("limit", orderLimit10s)
+                                newLimit
                         row.optString("interval") == "MINUTE" &&
                             row.optInt("intervalNum", 0) == 1 ->
                             orderLimit1m =
-                                row.optLong("limit", orderLimit1m)
+                                newLimit
                     }
                 }
             }
