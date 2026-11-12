@@ -5,6 +5,21 @@ import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.max
 
+/** Add a nonnegative interval to a timestamp without wrapping Long.MAX_VALUE. */
+internal fun binanceRateGuardSaturatingAdd(timestampMs: Long, intervalMs: Long): Long {
+    require(timestampMs >= 0L && intervalMs >= 0L)
+    return if (Long.MAX_VALUE - timestampMs < intervalMs) Long.MAX_VALUE
+        else timestampMs + intervalMs
+}
+
+/** Malformed negative Retry-After never shortens a previous exchange cooldown. */
+internal fun binanceRateGuardCooldownDeadline(nowMs: Long, header: String?): Long {
+    val seconds = (header?.trim()?.toLongOrNull() ?: 1L).coerceAtLeast(1L)
+    val interval = if (seconds > Long.MAX_VALUE / 1_000L) Long.MAX_VALUE
+        else seconds * 1_000L
+    return binanceRateGuardSaturatingAdd(nowMs, interval)
+}
+
 /**
  * Global Binance REST governor.
  *
@@ -75,8 +90,9 @@ class BinanceRateGuard {
                     usedWeight1m >= requestWeightLimit1m * 0.90 -> 250L
                 else -> 0L
             }
-            val candidate = max(now, max(nextRequestAtMs, cooldownUntilMs)) + pressure
-            nextRequestAtMs = candidate + minGapMs
+            val candidate = binanceRateGuardSaturatingAdd(
+                max(now, max(nextRequestAtMs, cooldownUntilMs)), pressure)
+            nextRequestAtMs = binanceRateGuardSaturatingAdd(candidate, minGapMs)
             candidate
         }
 
@@ -88,7 +104,8 @@ class BinanceRateGuard {
                 // pressure to this request's already-reserved target.
                 if (cooldownUntilMs > targetMs) {
                     targetMs = cooldownUntilMs
-                    nextRequestAtMs = max(nextRequestAtMs, targetMs + minGapMs)
+                    nextRequestAtMs = max(nextRequestAtMs,
+                        binanceRateGuardSaturatingAdd(targetMs, minGapMs))
                 }
                 targetMs
             }
@@ -155,13 +172,14 @@ class BinanceRateGuard {
         }
 
         if (statusCode == 429 || statusCode == 418) {
-            val retryAfterSeconds =
-                headers["Retry-After"]?.toLongOrNull() ?: 1L
-            cooldownUntilMs = max(
-                cooldownUntilMs,
-                System.currentTimeMillis() +
-                    retryAfterSeconds.coerceAtLeast(1L) * 1000L
-            )
+             // All contenders, including the reservation worker, share one lock.
+            // @Volatile alone would not make max(old,new) atomic, and untrusted
+            // Retry-After can overflow Long and accidentally release the cooldown.
+            val deadline = binanceRateGuardCooldownDeadline(
+                System.currentTimeMillis(), headers["Retry-After"])
+            synchronized(lock) {
+                cooldownUntilMs = max(cooldownUntilMs, deadline)
+            }
         }
     }
 
