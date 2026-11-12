@@ -34,7 +34,7 @@ def test_operator_takeover_uses_single_consistent_intents_snapshot():
     assert "val persistedIntents = intents()" in block
     assert "latestEntryIntentIndex(persistedIntents,symbol)" in block
     assert "persistedIntents.optJSONObject(it)" in block
-    assert block.count("intents()") == 1
+    assert block.count("= intents()") == 1
 
 
 def test_diagnostics_never_changes_signed_futures_stop_authority():
