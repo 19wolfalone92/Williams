@@ -126,6 +126,73 @@ internal object WilliamsFourBookCurriculum {
                 "Final course page refers to personalized external tutorial material absent from this PDF."))
     }
 
+    /**
+     * TC2 Appendix 1, PDF p182: the chart checklist includes observed trend,
+     * Alligator state, AO sign/direction, Wise Man signal prices, risk/margin
+     * and STOP references. It is a list of **questions**, NOT a rule that each
+     * indicator must vote in the same direction. Use only already captured
+     * closed H1 observations. Fields requiring fresh signed Binance proof
+     * remain NOT_VERIFIED even when the chart itself is fresh.
+     */
+    private fun tc2ChartChecklist(scanner:JSONObject, nowMs:Long):JSONObject {
+        val at=scanner.optLong("last_scan_at",0L)
+        val global=at>0L && at<=nowMs && nowMs-at<=120_000L &&
+            scanner.optString("scanner_state") in setOf("READY","READY_BLOCKED") &&
+            !scanner.optBoolean("scanning",false) &&
+            scanner.optInt("symbols_scanned",-1)==APPROVED_FUTURES_SYMBOLS.size
+        val rows=scanner.optJSONArray("candidates")
+        val candidates=if(global && rows!=null)
+            (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+        else emptyList()
+        var explained=0
+        val per=JSONArray()
+        for(symbol in APPROVED_FUTURES_SYMBOLS) {
+            val matching=candidates.filter { it.optString("symbol")==symbol }
+            val candidate=matching.singleOrNull()
+            val close=candidate?.optLong("closed_h1_as_of_ms",0L) ?: 0L
+            val trace=candidate?.optJSONObject("decision_trace")
+            val reading=trace?.optJSONObject("market_reading")
+            val verified=global && candidate!=null && close>0L && close<=nowMs &&
+                nowMs-close<=WILLIAMS_H1_MS+120_000L &&
+                trace.optLong("as_of_close_ms",0L)==close &&
+                reading?.optString("state")=="OBSERVED" &&
+                reading.optLong("as_of_close_ms",0L)==close
+            if(verified) explained++
+            val signals=candidate?.optJSONArray("campaign_signals")
+            val tc2=if(verified && signals!=null) (0 until signals.length())
+                .mapNotNull { signals.optJSONObject(it) }
+                .filter { it.optString("strategy_profile")==williamsTc2Profile }
+                .take(3)
+            else emptyList()
+            per.put(JSONObject().put("symbol",symbol)
+                .put("chart_observation_state",
+                    if(verified) "CLOSED_H1_SNAPSHOT_OBSERVED" else "NOT_VERIFIED")
+                .put("as_of_closed_h1_ms",if(verified) close else JSONObject.NULL)
+                .put("observed_trend",if(verified)
+                    reading!!.optString("observed_bias","UNVERIFIED") else "UNVERIFIED")
+                .put("observed_alligator",if(verified)
+                    reading!!.optJSONObject("alligator")?.optString("state","UNVERIFIED") else "UNVERIFIED")
+                .put("ao_direction",if(verified)
+                    reading!!.optString("ao_direction","UNVERIFIED") else "UNVERIFIED")
+                .put("tc2_wise_man_observed_signal_ids",JSONArray(tc2.map {
+                    it.optString("signal_id").take(100)
+                }))
+                .put("initial_signed_risk_and_margin","NOT_VERIFIED_IN_THIS_CHART_OBSERVER")
+                .put("exchange_confirmed_protective_stop","NOT_VERIFIED_IN_THIS_CHART_OBSERVER")
+                .put("psychology_independently_assessed",false)
+                .put("source_book_pdf_page",182)
+                .put("can_approve_order",false).put("can_veto_tc2_order",false))
+        }
+        return JSONObject().put("schema","TC2_APPENDIX1_CLOSED_H1_CHART_CHECKLIST_V1")
+            .put("source_pdf_pages",JSONArray(listOf(182,183)))
+            .put("symbols_expected",APPROVED_FUTURES_SYMBOLS.size)
+            .put("source_chart_observed_count",explained)
+            .put("symbols",per)
+            .put("trading_authority",false)
+            .put("complete_market_account_and_stop_preflight_proven",false)
+            .put("author_discretion_is_not_a_numeric_signal",true)
+    }
+
     fun assess(scanner:JSONObject, nowMs:Long):JSONObject {
         val perSource=JSONArray()
         var allIndexed=0
@@ -168,6 +235,7 @@ internal object WilliamsFourBookCurriculum {
             .put("source_catalog",perSource)
             .put("chapters",sourceSectionCatalog())
             .put("tc2_appendix_1_preflight_research",appendixReadiness(scanner,nowMs))
+            .put("tc2_appendix_1_closed_h1_chart_checklist",tc2ChartChecklist(scanner,nowMs))
             .put("study_goal","99% reproducible agreement with independently annotated rules and book figures, not 99% winning trades.")
             .put("missing_key_evidence","Independent figure annotation + unknown source Course tutorial + real chart holdout + signed Demo execution.")
             .put("can_modify_tc2_execution",false)
