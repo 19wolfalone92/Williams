@@ -94,7 +94,9 @@ def test_monotonic_binance_cooldown_is_locked_and_overflow_safe():
     assert "internal fun binanceRateGuardCooldownDeadline(" in RATEGUARD
     assert "Long.MAX_VALUE" in RATEGUARD
     assert "synchronized(lock) {" in RATEGUARD
-    assert "cooldownUntilMs = max(cooldownUntilMs, deadline)" in RATEGUARD\n    assert "if (value < 0L) return@forEach" in RATEGUARD\n    assert "if (newLimit <= 0L) continue" in RATEGUARD
+    assert "cooldownUntilMs = max(cooldownUntilMs, deadline)" in RATEGUARD
+    assert "if (value < 0L) return@forEach" in RATEGUARD
+    assert "if (newLimit <= 0L) continue" in RATEGUARD
     assert "binanceRateGuardSaturatingAdd(" in RATEGUARD
 
 
