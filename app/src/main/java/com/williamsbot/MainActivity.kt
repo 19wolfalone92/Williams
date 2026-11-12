@@ -342,7 +342,8 @@ data class Candle(
     val ao: Double? = null,
     val ac: Double? = null,
     val mfiProxy: Double? = null,
-    val signalTypes: List<String> = emptyList()
+    val signalTypes: List<String> = emptyList(),
+    val signalProfiles: List<String> = emptyList()
 )
 
 data class Candidate(
@@ -3601,7 +3602,7 @@ private fun TradingChart(
         Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
             (pendingTrigger.trigger?.let {" · "+formatChartPrice(it)} ?: ""),
             color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
-        if(showSignals) Text("WM1/WM2/WM3 — TC2; ИССЛ. — наблюдения других систем, не торговые заявки",
+        if(showSignals) Text("WM1/WM2/WM3 — формации TC2 (не биржевые заявки); ИССЛ. — наблюдения других систем",
             color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
         if(!landscape || layerControls) {
             Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
@@ -3686,14 +3687,18 @@ private fun TradingChart(
             if(showTeeth) indicatorLine({it.teeth},AppColors.amber)
             if(showLips) indicatorLine({it.lips},AppColors.primary)
             if(showSignals) visible.forEachIndexed { index,c ->
-                c.signalTypes.distinct().forEachIndexed { order,type ->
+                // Source ownership is preserved per parallel index; never
+                // classify Course/NTD research as a TC2 executable marker.
+                c.signalTypes.withIndex().distinctBy { row ->
+                    row.value to c.signalProfiles.getOrNull(row.index)
+                }.forEachIndexed { order,row ->
+                    val type=row.value
+                    val isTc2=c.signalProfiles.getOrNull(row.index)==williamsTc2Profile
                     val short=type.startsWith("SHORT")
-                    val family=when {
-                        type.contains("REVERSAL")->"WM1";type.contains("SUPER_AO")->"WM2";type.contains("FRACTAL")->"WM3"
+                    val family=if(isTc2) when(type.removePrefix("SHORT_")) {
+                        "REVERSAL"->"WM1";"SUPER_AO"->"WM2";"FRACTAL"->"WM3"
                         else->"ИССЛ."
-                    }
-                    // A generic signal from other editions is an observer
-                    // hypothesis, NOT an automated TC2 order authorization.
+                    } else "ИССЛ."
                     label((if(short) "▼" else "▲")+family,x(index),
                         y(if(short) c.high else c.low)+(if(short) -1 else 1)*(order+1)*(paint.textSize+3f),
                         if(family=="ИССЛ.") AppColors.textMuted else if(short) AppColors.red else AppColors.green)
@@ -4250,7 +4255,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") },
             ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") },
             mfiProxy = x.optDouble("mfi_proxy").takeUnless { it.isNaN() || x.isNull("mfi_proxy") },
-            signalTypes = x.optJSONArray("signal_types")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
+            signalTypes = x.optJSONArray("signal_types")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList(),
+            signalProfiles = x.optJSONArray("signal_profiles")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
         )
     }
 
