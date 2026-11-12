@@ -11430,7 +11430,7 @@ private class NativeEngine(
         return scannerSnapshot()
     }
 
-    fun status(fast: Boolean = false): JSONObject {
+    fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true): JSONObject {
         if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
@@ -11560,7 +11560,7 @@ private class NativeEngine(
             .put("last_reconciliation_result", lastReconciliationResult)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
-            .put("decision_traces",decisionTraceSnapshot())
+            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -12527,22 +12527,21 @@ private class NativeEngine(
         }
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
-        val statusSnapshot = status(fast = true)
+        val statusSnapshot = status(fast = true, includeDecisionTraces = false)
             .put("strategy_audit", strategyEvidence)
             .put("trade_observations", tradeEvidence)
             .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
                 .put("refresh_running",signedFillAuditRunning)
                 .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
-        // The fast live status carries a large decision_traces tree, while
-        // this forensic export ALWAYS includes a richer full
-        // signal_decision_history.json independently. No diagnostic test reads
-        // the duplicate status field. Drop the duplicate reference before
-        // allocating 25-core maps, event history and report/ZIP buffers.
-        // The normal /status API remains unchanged.
-        val hadDuplicateStatusDecisionTraces=statusSnapshot.has("decision_traces")
-        statusSnapshot.remove("decision_traces")
-        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status",
-            hadDuplicateStatusDecisionTraces)
+        // Diagnostics deliberately requested status WITHOUT decision_traces:
+        // creating that multi-megabyte tree and then removing it still caused
+        // peak-heap allocation and a second full parse of persisted intents.
+        // The complete history is exported later in signal_decision_history.json.
+        // Public /status callers retain the full tree by default.
+        check(!statusSnapshot.has("decision_traces")) {
+            "Diagnostic status must not allocate duplicate decision traces"
+        }
+        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status", true)
         statusSnapshot.put("decision_traces_full_evidence_path",
             "signal_decision_history.json")
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
