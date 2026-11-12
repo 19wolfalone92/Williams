@@ -43,3 +43,13 @@ def test_diagnostics_never_changes_signed_futures_stop_authority():
     assert "scheduleReadOnlySignedFillAudit()" in diagnostics
     assert "WilliamsSignedStopJoinAudit.inspect(" in diagnostics
     assert "diagnosticCoordinatorTransitionSeverity(" in diagnostics
+
+def test_public_time_probe_deadline_bounded_without_relaxing_signed_safety():
+    src = (ROOT / "app/src/main/java/com/williamsbot/BinanceUsdMFuturesTestnetAdapter.kt").read_text(encoding="utf-8")
+    assert 'if (method == "GET" && path == "/fapi/v1/time" && !signed)' in src
+    assert "call.timeout().timeout(8_500L, TimeUnit.MILLISECONDS)" in src
+    assert "roundTripMs in 0L..8_000L" in src
+    assert "lastClockProbeRttMs > 3_000L" in src
+    assert "throw FuturesClockSyncException(" in src
+    assert "retryOnConnectionFailure(false)" in src
+    assert "if (method.equals(\"GET\", ignoreCase = true)" in src
