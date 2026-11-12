@@ -909,6 +909,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             }
         }
         val call = http.newCall(builder.build())
+        if (method == "GET" && path == "/fapi/v1/time" && !signed) {
+            // A clock sample with >8 s of network RTT is untrusted by
+            // futuresClockProbeUsableForSignedRead(). Limit ONLY the unsigned
+            // time probe to 8.5 s, instead of allowing the shared 25 s REST
+            // deadline to hold clockLock and stall signed reconciliation.
+            // Preserve the two independent GET probes; never relax entry,
+            // STOP, signature, exchange-clock or retry safety requirements.
+            call.timeout().timeout(8_500L, TimeUnit.MILLISECONDS)
+        }
         onTransportStarting?.invoke()
         call.execute().use { response ->
             rateGuard?.observe(response.headers, response.code, isOrder = orderMutation)
