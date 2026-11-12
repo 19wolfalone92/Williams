@@ -3601,6 +3601,8 @@ private fun TradingChart(
         Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
             (pendingTrigger.trigger?.let {" · "+formatChartPrice(it)} ?: ""),
             color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
+        if(showSignals) Text("WM1/WM2/WM3 — TC2; ИССЛ. — наблюдения других систем, не торговые заявки",
+            color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
         if(!landscape || layerControls) {
             Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
                 color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
@@ -3688,11 +3690,13 @@ private fun TradingChart(
                     val short=type.startsWith("SHORT")
                     val family=when {
                         type.contains("REVERSAL")->"WM1";type.contains("SUPER_AO")->"WM2";type.contains("FRACTAL")->"WM3"
-                        else->"СИГНАЛ"
+                        else->"ИССЛ."
                     }
+                    // A generic signal from other editions is an observer
+                    // hypothesis, NOT an automated TC2 order authorization.
                     label((if(short) "▼" else "▲")+family,x(index),
                         y(if(short) c.high else c.low)+(if(short) -1 else 1)*(order+1)*(paint.textSize+3f),
-                        if(short) AppColors.red else AppColors.green)
+                        if(family=="ИССЛ.") AppColors.textMuted else if(short) AppColors.red else AppColors.green)
                 }
             }
             fun tradeMarker(at:Long,price:Double?,text:String,color:Color) {
@@ -3729,7 +3733,7 @@ private fun TradingChart(
             (position?.stop ?: status.sl)?.let {Text("SL "+formatChartPrice(it),color=AppColors.red,style=MaterialTheme.typography.labelSmall)}
             (position?.take ?: status.tp)?.let {Text("TP "+formatChartPrice(it),color=AppColors.green,style=MaterialTheme.typography.labelSmall)}
             pendingTrigger.trigger?.let {Text("Заявка "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
-            pendingTrigger.stop?.let {Text("План SL "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+            pendingTrigger.stop?.let {Text("SL после исполнения "+formatChartPrice(it)+" (ещё не выставлен)",color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
         }
         Text(cockpitTime(visible.first().time)+" — "+cockpitTime(visible.last().time),
             color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
