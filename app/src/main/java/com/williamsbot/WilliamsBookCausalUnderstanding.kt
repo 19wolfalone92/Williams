@@ -205,6 +205,58 @@ internal object WilliamsBookCausalUnderstanding {
     }
 
     /**
+     * TC1 is an independent historical edition, NOT a fourth entry-voting
+     * source. Prior diagnostic output advertised TC1_HISTORICAL but lacked
+     * its per-symbol evidence. Carry forward its *real* MFI window (with
+     * explicitly NON-book base-asset volume) and already-computed five-sign
+     * Zero Point observation. Course Level I reuses the SAME market volume,
+     * not a second independent vote. Missing / stale bars remain unknown.
+     */
+    private fun tc1SourceEvidence(trace:JSONObject?,closedH1:Long,validH1:Boolean):JSONObject {
+        val out=JSONObject().put("source","TC1_HISTORICAL")
+            .put("execution_role","OBSERVE")
+            .put("can_place_orders",false).put("can_close_positions",false)
+            .put("wave_degree_certified",false)
+            .put("book_tick_volume_verified",false)
+            .put("course_level_1_reuses_same_volume_not_independent_confirmation",true)
+            .put("state","NOT_VERIFIED")
+        if(!validH1 || trace==null || trace.optLong("as_of_close_ms",0L)!=closedH1)
+            return out
+        val candles=trace.optJSONArray("candles") ?: return out
+        if(candles.length()<2) return out
+        val bars=mutableListOf<WilliamsWaveBar>()
+        for(i in candles.length()-2 until candles.length()) {
+            val row=candles.optJSONArray(i) ?: return out
+            if(row.length()<6) return out
+            val t=row.optLong(0,-1L)
+            val o=row.optDouble(1,Double.NaN)
+            val h=row.optDouble(2,Double.NaN)
+            val l=row.optDouble(3,Double.NaN)
+            val c=row.optDouble(4,Double.NaN)
+            val v=row.optDouble(5,Double.NaN)
+            if(t<0L || listOf(o,h,l,c,v).any { !it.isFinite() || it<=0.0 })
+                return out
+            bars+=WilliamsWaveBar(t,o,h,l,c,v)
+        }
+        val mfi=williamsTc1MarketFacilitation(bars,"1h",closedH1)
+        val zero=trace.optJSONObject("tc1_zero_point_observation")
+        // A stored TC1 classification does not establish the wave degree,
+        // since tick-volume and annotated W3/W5 geometry are unavailable.
+        val partialZero=zero?.optString("schema")=="TC1_ZERO_POINT_FIVE_SIGNS_V1" &&
+            zero.optString("state")=="OBSERVATIONAL_PARTIAL_NOT_EXECUTABLE" &&
+            !zero.optBoolean("zero_point_confirmed") &&
+            !zero.optBoolean("wave_degree_certified")
+        return out.put("state",if(mfi.optString("status") in setOf(
+                "OBSERVED_BASE_VOLUME_PROXY","TIED_NEITHER_UP_NOR_DOWN"))
+                "HISTORICAL_TC1_MFI_PROXY_OBSERVED" else "TC1_SOURCE_UNVERIFIED")
+            .put("mfi_proxy",mfi)
+            .put("five_magic_bullets_source_state",
+                if(partialZero) "PARTIAL_CANDIDATE_NOT_WAVE_PROOF" else "NOT_VERIFIED")
+            .put("zero_point_certified",false)
+            .put("can_place_orders",false)
+    }
+
+    /**
      * Compare independent CLOSED D1/H4/H1 observations, not wave labels inferred
      * from an H1 counter-signal. A disagreement explains WHY an H1 reversal
      * should not be described as the end of the senior move. This is strictly
@@ -344,6 +396,8 @@ internal object WilliamsBookCausalUnderstanding {
                     else -> "OBSERVATION_ONLY"
                 })
                 .put("signals",summaries).put("source_observations",provenance)
+                .put("tc1_historical_observation",tc1SourceEvidence(
+                    candidate?.optJSONObject("decision_trace"),close,validH1))
                 .put("signals_omitted_for_bounded_diagnostics",
                     if(validH1) (rows(candidate?.optJSONArray("campaign_signals")).size-8).coerceAtLeast(0) else 0)
                 .put("h1_as_of_close_ms",if(validH1) close else JSONObject.NULL)
