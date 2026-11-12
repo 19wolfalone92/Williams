@@ -160,6 +160,23 @@ class CockpitDiagnosticsTest {
         lifecycle.put("worker_heartbeat_stale_count",1)
         assertEquals("WARNING",severity("AND-04",status))
     }
+    @Test fun missingAndroidBatteryExemptionExplainsBackgroundWarning() {
+        val android=JSONObject().put("foreground_service_active",true)
+            .put("battery_optimization_ignored",false)
+            .put("background_restricted",false)
+            .put("cpu_wake_lock_held",true)
+            .put("service_guard_age_ms",30_000)
+            .put("power_save_mode",false)
+        val status=healthy().put("android_runtime",android)
+        assertEquals("WARNING",severity("AND-01",status))
+        val detail=check("AND-01",status).getString("detail")
+        assertTrue(detail.contains("исключение из оптимизации батареи Android=false"))
+        assertTrue(detail.contains("Без ограничений"))
+        android.put("battery_optimization_ignored",true)
+        assertEquals("NOT_VERIFIED",severity("AND-01",status))
+        // Removing Android power restrictions does NOT prove 24-hour survival.
+    }
+
     @Test fun currentAndroidFlagsCannotCertifyUninterruptedBackgroundOperation() {
         val s=healthy().put("android_runtime",JSONObject().put("foreground_service_active",true)
             .put("battery_optimization_ignored",true).put("background_restricted",false)
