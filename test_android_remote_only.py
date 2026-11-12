@@ -882,9 +882,8 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     # self-test was removed when readiness moved into the regular runtime snapshot.
     # Read-only diagnostic fields now come from one synchronized scanner
     # snapshot. READY must never be published before scanning=false.
-    assert "@Synchronized\\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
+    assert "@Synchronized\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
     assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in runtime
-    assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
     assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
