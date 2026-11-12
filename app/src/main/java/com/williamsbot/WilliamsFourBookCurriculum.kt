@@ -158,6 +158,14 @@ internal object WilliamsFourBookCurriculum {
                 reading?.optString("state")=="OBSERVED" &&
                 reading?.optLong("as_of_close_ms",0L)==close
             if(verified) explained++
+            val ao=if(verified) reading?.optDouble("ao",Double.NaN) ?: Double.NaN
+                else Double.NaN
+            val aoZeroSide=when {
+                !ao.isFinite() -> "NOT_VERIFIED"
+                ao>0.0 -> "ABOVE_ZERO"
+                ao<0.0 -> "BELOW_ZERO"
+                else -> "AT_ZERO"
+            }
             val signals=candidate?.optJSONArray("campaign_signals")
             val tc2=if(verified && signals!=null) (0 until signals.length())
                 .mapNotNull { signals.optJSONObject(it) }
@@ -174,8 +182,23 @@ internal object WilliamsFourBookCurriculum {
                     reading!!.optJSONObject("alligator")?.optString("state","UNVERIFIED") else "UNVERIFIED")
                 .put("ao_direction",if(verified)
                     reading!!.optString("ao_direction","UNVERIFIED") else "UNVERIFIED")
+                .put("ao_position_vs_zero",aoZeroSide)
+                .put("wave_state",if(verified)
+                    reading!!.optString("wave_state","UNVERIFIED") else "UNVERIFIED")
+                .put("wave_degree_certified",false)
                 .put("tc2_wise_man_observed_signal_ids",JSONArray(tc2.map {
                     it.optString("signal_id").take(100)
+                }))
+                .put("tc2_signal_price_levels_observer_only",JSONArray(tc2.map { sig ->
+                    val price=sig.optDouble("trigger_price",Double.NaN)
+                    JSONObject().put("signal_id",sig.optString("signal_id").take(100))
+                        .put("direction",sig.optString("direction"))
+                        .put("source_signal_type",sig.optString("type"))
+                        .put("pending_price_trigger",if(price.isFinite() && price>0.0)
+                            price else JSONObject.NULL)
+                        .put("trigger_actually_crossed_verified",false)
+                        .put("order_filled_on_exchange",false)
+                        .put("can_submit_order",false)
                 }))
                 .put("initial_signed_risk_and_margin","NOT_VERIFIED_IN_THIS_CHART_OBSERVER")
                 .put("exchange_confirmed_protective_stop","NOT_VERIFIED_IN_THIS_CHART_OBSERVER")
