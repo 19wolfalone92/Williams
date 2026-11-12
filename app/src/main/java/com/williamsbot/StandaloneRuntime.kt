@@ -773,6 +773,21 @@ internal fun lastKnownFuturesPositionsForDisplay(
     return Triple(rows, error, envelope?.second ?: 0L)
 }
 
+/**
+ * A private Futures trade event is a hint to reconcile immediately, never
+ * evidence that an entry belongs to us or that a protective STOP exists.
+ * Signed account/position/algo reconciliation remains authoritative.
+ */
+internal fun privateFuturesFillDemandsImmediateReconcile(event: JSONObject): Boolean {
+    if (event.optString("e") != "ORDER_TRADE_UPDATE") return false
+    val order = event.optJSONObject("o") ?: return false
+    val status = order.optString("X").uppercase(Locale.US)
+    if (status != "FILLED" && status != "PARTIALLY_FILLED") return false
+    if (order.optString("s").isBlank()) return false
+    val totalExecuted = order.optString("z").toBigDecimalOrNull() ?: return false
+    return totalExecuted.signum() > 0
+}
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -8594,6 +8609,13 @@ private class NativeEngine(
                 if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
             }
         }
+        // A real WS fill used to wait behind the serialized cockpit/SQLite
+        // event loop before it could even request a signed STOP reconciliation.
+        // The urgent path is ONLY a wake-up: no mutation is authorized by WS.
+        // Execution Door and exact Binance signed proof still govern all orders.
+        if (privateFuturesFillDemandsImmediateReconcile(event)) {
+            scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
+        }
         tradingEventLoop.post {
             try {
                 handleUserEventSerialized(event)
@@ -8635,7 +8657,12 @@ private class NativeEngine(
         when (eventType) {
             "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
             "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
-                scheduleFuturesStreamReconciliation(eventType)
+                // The urgent fill was already queued on the WS callback,
+                // before this (possibly delayed) event-loop step. Avoid
+                // forcing a redundant full REST pass for that same update.
+                if (!privateFuturesFillDemandsImmediateReconcile(event)) {
+                    scheduleFuturesStreamReconciliation(eventType)
+                }
                 return
             }
             "listenKeyExpired" -> {
