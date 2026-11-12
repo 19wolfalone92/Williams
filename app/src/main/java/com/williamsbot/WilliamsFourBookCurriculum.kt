@@ -154,9 +154,9 @@ internal object WilliamsFourBookCurriculum {
             val reading=trace?.optJSONObject("market_reading")
             val verified=global && candidate!=null && close>0L && close<=nowMs &&
                 nowMs-close<=WILLIAMS_H1_MS+120_000L &&
-                trace.optLong("as_of_close_ms",0L)==close &&
+                trace?.optLong("as_of_close_ms",0L)==close &&
                 reading?.optString("state")=="OBSERVED" &&
-                reading.optLong("as_of_close_ms",0L)==close
+                reading?.optLong("as_of_close_ms",0L)==close
             if(verified) explained++
             val signals=candidate?.optJSONArray("campaign_signals")
             val tc2=if(verified && signals!=null) (0 until signals.length())
