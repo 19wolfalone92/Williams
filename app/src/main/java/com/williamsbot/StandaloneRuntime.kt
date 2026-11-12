@@ -1814,6 +1814,9 @@ private class NativeEngine(
     private var marketSocket: WebSocket? = null
     private var publicSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
+    // One depth snapshot fetch per symbol at a time. A burst of invalid
+    // delta update IDs must not spawn unlimited HTTP threads on Android.
+    private val depthResyncInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var marketSocketStartedMs = 0L
@@ -3923,14 +3926,30 @@ private class NativeEngine(
             bids = data.optJSONArray("b") ?: JSONArray(),
             asks = data.optJSONArray("a") ?: JSONArray()
         )
-        if (!ok) {
-            Thread {
-                runCatching { syncOrderBookSnapshot(symbol) }
-                    .onFailure { lastError = "L2 resync $symbol: " + (it.message ?: it.javaClass.simpleName) }
-            }.apply {
-                isDaemon = true
-                name = "williams-l2-resync-$symbol"
-                start()
+        if (!ok && depthResyncInFlight.add(symbol)) {
+            // Depth is an OBSERVER input and never proves the position/STOP.
+            // A singleflight reset allows a later genuine gap to retry after
+            // this worker completes; no exchange event or financial order lost.
+            try {
+                Thread {
+                    try {
+                        runCatching { syncOrderBookSnapshot(symbol) }
+                            .onFailure {
+                                lastError = "L2 resync $symbol: " +
+                                    (it.message ?: it.javaClass.simpleName)
+                            }
+                    } finally {
+                        depthResyncInFlight.remove(symbol)
+                    }
+                }.apply {
+                    isDaemon = true
+                    name = "williams-l2-resync-$symbol"
+                    start()
+                }
+            } catch (failure: Exception) {
+                depthResyncInFlight.remove(symbol)
+                lastError = "L2 resync worker unavailable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
             }
         }
     }
@@ -12647,6 +12666,7 @@ private class NativeEngine(
             .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
             .put("private_event_actor_queue_peak",tradingEventLoop.peakQueueDepth())
             .put("private_event_actor_active",tradingEventLoop.actorActive())
+            .put("depth_resync_inflight_symbols",depthResyncInFlight.size)
             .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
     }
