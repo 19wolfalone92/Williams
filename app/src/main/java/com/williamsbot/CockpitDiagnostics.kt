@@ -684,7 +684,14 @@ internal object CockpitDiagnostics {
                 android.optLong("service_guard_age_ms",Long.MAX_VALUE)>90_000L) -> "WARNING"
             else -> "NOT_VERIFIED"
         }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
-            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
+            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс; " +
+            "исключение из оптимизации батареи Android=${android?.optBoolean("battery_optimization_ignored")}; " +
+            "background_restricted=${android?.optBoolean("background_restricted")}; " +
+            "энергосбережение=${android?.optBoolean("power_save_mode")}. " +
+            "Если исключение=false: в настройках Williams (Debug) → Батарея выберите «Без ограничений» " +
+            "и на Samsung добавьте приложение в список «Без режима сна». " +
+            "Приложение не может самостоятельно изменить этот системный допуск. " +
+            "Текущие признаки не доказывают непрерывную работу с выключенным экраном.")
         val bootWitness=if(android!=null)
             AndroidRebootRecoveryEvidence.assess(android.optJSONObject("continuity") ?: JSONObject(),
                 android,status,now) else null
