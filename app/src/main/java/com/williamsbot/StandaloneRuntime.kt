@@ -7624,28 +7624,50 @@ private class NativeEngine(
             lastError = "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL: no TC2 first-Wise-Man signal survived book and risk context on $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
-        // Even with no old Binance order, prefer a newer confirmed WM3 level
-        // when it has moved TOWARD current price. Do not blindly select the
-        // oldest surviving Wise-Man hypothesis high above market.
-        val currentContractPrice=futuresMarketData.price(symbol)
-        val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
-            val side=campaignSignalDirection(baseline.type)
-            selectableSignals.filter { alt ->
-                alt.strategyProfile==williamsTc2Profile &&
-                    alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
-                    alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
-                    alt.protectivePrice>0 && alt.triggerPrice.isFinite() &&
-                    (if(side=="LONG") alt.triggerPrice>currentContractPrice &&
-                        alt.triggerPrice<baseline.triggerPrice && alt.protectivePrice<alt.triggerPrice
-                     else alt.triggerPrice<currentContractPrice &&
-                        alt.triggerPrice>baseline.triggerPrice && alt.protectivePrice>alt.triggerPrice)
-            }.maxByOrNull { it.signalBarTimeMs }
+        // TC2 H1 WM3: a newer CONFIRMED same-side fractal supersedes an
+        // older pivot. Previous code preferred the oldest pending fractal and
+        // only re-anchored when the new trigger was still beyond current price.
+        // If the newer breakout had already happened, that condition silently
+        // resurrected the OLD BNBUSDT 670.53 level (diag #13, 2026-11-12).
+        // The new level must instead be examined by the existing closed+RAW
+        // H1 trigger-consumption door. If already crossed, REJECT the entry;
+        // never fall back to the older level or open a MARKET order.
+        val latestFractalId = if(reanchorLock==null &&
+            baseline.strategyProfile==williamsTc2Profile &&
+            baseline.type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL") {
+            latestConfirmedTc2FractalId(campaignSignalDirection(baseline.type).orEmpty(),
+                baseline.signalBarTimeMs,JSONArray(candidate.campaignSignals.filter { possible ->
+                    possible.strategyProfile==williamsTc2Profile &&
+                        possible.role=="ENTRY" && possible.executionSemantics=="STOP_ENTRY" &&
+                        williamsProfileAllowsSource(williamsProfile,possible.strategyProfile) &&
+                        williamsH1SignalTimeEligible(possible.signalBarTimeMs,possible.type,
+                            possible.strategyProfile,contextNow)
+                }.map { candidateSignal ->
+                    JSONObject().put("signal_id",candidateSignal.signalId)
+                        .put("type",candidateSignal.type)
+                        .put("strategy_profile",candidateSignal.strategyProfile)
+                        .put("role",candidateSignal.role)
+                        .put("execution_semantics",candidateSignal.executionSemantics)
+                        .put("signal_bar_time_ms",candidateSignal.signalBarTimeMs)
+                        .put("formation_at_ms",candidateSignal.formationAtMs)
+                        .put("trigger_price",candidateSignal.triggerPrice)
+                        .put("protective_price",candidateSignal.protectivePrice)
+                }),contextNow)
         } else null
-        val signal = nearestFractal ?: baseline
-        if(nearestFractal!=null) runCatching { auditStore.recordCockpitEvent(
+        val newestFractal = latestFractalId?.let { id ->
+            selectableSignals.singleOrNull { it.signalId==id }
+        }
+        if(latestFractalId!=null && newestFractal==null) {
+            return rejectDecision(symbol,
+                "TC2_NEWER_CONFIRMED_WM3_INELIGIBLE_NO_OLD_FALLBACK: "+
+                (congestionAdmission[latestFractalId] ?: "H1_ADMISSION_NOT_PROVEN"))
+        }
+        val signal = newestFractal ?: baseline
+        if(newestFractal!=null) runCatching { auditStore.recordCockpitEvent(
             "FRACTAL_REANCHOR",symbol,campaignSignalDirection(signal.type).orEmpty(),"NO_EXISTING_ORDER",
             "old="+baseline.signalId+" @"+baseline.triggerPrice+
-                "; newest confirmed WM3="+signal.signalId+" @"+signal.triggerPrice) }
+                "; newest confirmed WM3="+signal.signalId+" @"+signal.triggerPrice+
+                "; raw H1 breakout-consumption preflight required; never rearm after breakout") }
         val correction = corrections[signal.signalId] ?: WilliamsCorrectionContext()
         val direction = when (campaignSignalDirection(signal.type)) {
             "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
@@ -11868,6 +11890,10 @@ private class NativeEngine(
                         .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
                         .put("signal_types", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("type") }))
+                        // Source list matches signal_types by INDEX. A generic
+                        // bullish Course hypothesis must never be drawn as an
+                        // executable TC2 WM entry on the phone.
+                        .put("signal_profiles", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("strategy_profile") }))
                         .put("fractal_up", isUpFractal(sourceCandles, i))
                         .put("fractal_down", isDownFractal(sourceCandles, i))
                 )
