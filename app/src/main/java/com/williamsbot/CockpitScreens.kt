@@ -850,6 +850,39 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val hierarchy=report?.optJSONObject("tc2_book_exit_hierarchy")
+            CockpitCard("📖 Выход по TC2 · 3/5 баров или встречный сигнал") {
+                if(hierarchy==null) {
+                    Text("Требуется новая диагностика; оригинальные бары H1 пока не сверены.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Исторические выходы с подтверждёнными 3/5 барами",
+                        hierarchy.optInt("historical_3_and_5_observed").toString())
+                    CockpitField("Полных только 3 бара",
+                        hierarchy.optInt("historical_only_3_observed").toString())
+                    CockpitField("Недостаточно данных",
+                        hierarchy.optInt("historical_unverified").toString())
+                    val examples=CockpitDiagnostics.rows(hierarchy.optJSONArray("recent_closed_trades"))
+                    for(row in examples.take(3)) {
+                        val symbol=row.optString("symbol")
+                        CockpitField(symbol+" · "+row.optString("direction"),
+                            row.optString("state","NOT_VERIFIED"))
+                        if(row.optString("state").contains("H1_EXTREMES_OBSERVED")) {
+                            CockpitField("Граница последних 3 закрытых H1",
+                                row.optString("book_3_bar_boundary"))
+                            CockpitField("Граница последних 5 закрытых H1",
+                                row.optString("book_5_bar_boundary"))
+                        }
+                    }
+                    Text("В TC2 обычный выход — структурный стоп последних 3/5 баров; " +
+                        "встречный Wise Man встречается реже. Здесь показаны только экстремумы: " +
+                        "не подтверждены биржевой STOP, цена исполнения или выгода от удержания. " +
+                        "Новые ордера и выходы эта карточка не изменяет.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val exitEvidence=report?.optJSONObject("tc2_recent_exit_forensics")
             val lastExits=CockpitDiagnostics.rows(exitEvidence?.optJSONArray("recent_closed_trades"))
             CockpitCard("Почему бот закрыл сделку") {
