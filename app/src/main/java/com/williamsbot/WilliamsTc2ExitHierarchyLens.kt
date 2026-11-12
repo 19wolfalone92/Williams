@@ -6,7 +6,7 @@ import org.json.JSONObject
 /**
  * TC2 second edition, chapter 12, Russian PDF pages 156, 161, 163 and 165.
  *
- * The book calls the 3/5-bar protective exit the usual exit and the opposing
+ * The book calls the 3/4/5-bar protective exit the usual exit and the opposing
  * Wise Man signal the less common alternative. A trade closed on an opposite
  * signal must not be reported as a finished D1/H4 trend or as a proven early
  * exit. Show both book price structures side-by-side instead.
@@ -70,6 +70,7 @@ internal object WilliamsTc2ExitHierarchyLens {
         val candidates=if(scannerValid) rows(scanner.optJSONArray("candidates")) else emptyList()
         val results=JSONArray()
         var fullFive=0
+        var partialFour=0
         var partialThree=0
         var unknown=0
         for(trade in all) {
@@ -81,6 +82,7 @@ internal object WilliamsTc2ExitHierarchyLens {
             fun unverified(reason:String) {
                 item.put("state",reason)
                 item.put("book_3_bar_boundary",JSONObject.NULL)
+                item.put("book_4_bar_boundary",JSONObject.NULL)
                 item.put("book_5_bar_boundary",JSONObject.NULL)
             }
             when {
@@ -120,23 +122,28 @@ internal object WilliamsTc2ExitHierarchyLens {
                                 observed.takeLast(n).minOf { it.low }
                                 else observed.takeLast(n).maxOf { it.high }
                             item.put("book_3_bar_boundary",boundary(3))
+                            item.put("book_4_bar_boundary",if(observed.size>=4)
+                                boundary(4) else JSONObject.NULL)
                             item.put("book_5_bar_boundary",if(observed.size>=5)
                                 boundary(5) else JSONObject.NULL)
-                            item.put("state",if(observed.size>=5)
-                                "THREE_AND_FIVE_CLOSED_H1_EXTREMES_OBSERVED"
-                                else "ONLY_THREE_CLOSED_H1_EXTREMES_OBSERVED")
+                            item.put("state",when {
+                                observed.size>=5 -> "THREE_FOUR_FIVE_CLOSED_H1_EXTREMES_OBSERVED"
+                                observed.size>=4 -> "THREE_FOUR_CLOSED_H1_EXTREMES_OBSERVED"
+                                else -> "ONLY_THREE_CLOSED_H1_EXTREMES_OBSERVED"
+                            })
                             item.put("post_entry_full_closed_h1_count",observed.size)
                             item.put("first_full_h1_ms",first)
                             item.put("last_full_h1_ms",last)
-                            item.put("book_reference_pdf_page",165)
+                            item.put("book_reference_pdf_pages",JSONArray(listOf(161,165)))
                             item.put("source_note",
-                                "TC2 p165 calls 3/5-bar structural STOP usual; opposing signal less common. Raw extrema only, tick/STOP not authenticated.")
+                                "TC2 pp161,165 discuss 3/4/5-bar structural STOP; opposite signal less common. Raw extrema only, tick/STOP not authenticated.")
                         }
                     }
                 }
             }
             when(item.optString("state")) {
-                "THREE_AND_FIVE_CLOSED_H1_EXTREMES_OBSERVED" -> fullFive++
+                "THREE_FOUR_FIVE_CLOSED_H1_EXTREMES_OBSERVED" -> fullFive++
+                "THREE_FOUR_CLOSED_H1_EXTREMES_OBSERVED" -> partialFour++
                 "ONLY_THREE_CLOSED_H1_EXTREMES_OBSERVED" -> partialThree++
                 else -> unknown++
             }
@@ -144,13 +151,14 @@ internal object WilliamsTc2ExitHierarchyLens {
         }
         return JSONObject()
             .put("schema","WILLIAMS_TC2_EXIT_HIERARCHY_BOOK_V1")
-            .put("source","TC2_RUSSIAN_PDF_165")
-            .put("book_common_exit","TRAILING_STOP_BEYOND_LOWEST_OR_HIGHEST_OF_LAST_3_OR_5_PRICE_BARS")
+            .put("source","TC2_RUSSIAN_PDF_161_AND_165")
+            .put("book_common_exit","TRAILING_STOP_BEYOND_EXTREME_OF_LAST_3_4_OR_5_PRICE_BARS")
             .put("book_less_common_exit","OPPOSITE_WISE_MAN_SIGNAL")
             .put("book_partial_profit","OPTIONAL_HALF_POSITION_WITH_REMAINING_PROTECTED_NOT_MANDATORY")
             .put("source_is_closed_h1_only",true)
             .put("closed_h1_requires_full_bar_after_entry",true)
-            .put("historical_3_and_5_observed",fullFive)
+            .put("historical_3_4_5_observed",fullFive)
+            .put("historical_3_4_only_observed",partialFour)
             .put("historical_only_3_observed",partialThree)
             .put("historical_unverified",unknown)
             .put("recent_closed_trades",results)
@@ -159,6 +167,6 @@ internal object WilliamsTc2ExitHierarchyLens {
             .put("trading_authority",false)
             .put("can_place_orders",false)
             .put("can_move_stop_or_override_tc2_exit",false)
-            .put("interpretation","Three/five previous closed H1 raw extremes at recorded exit, NOT simulated historical stop orders. No intrabar path or profit comparison.")
+            .put("interpretation","Three/four/five prior closed H1 raw extremes at recorded exit, NOT simulated historical STOP orders. No intrabar path or profit comparison.")
     }
 }
