@@ -61,6 +61,46 @@ class WilliamsFourBookCurriculumTest {
             .getJSONObject(0).getString("state"))
     }
 
+    @Test fun appendixOneChartReadsActualH1WithoutPretendingSignedStopOrHumanPsychology() {
+        val symbol=APPROVED_FUTURES_SYMBOLS.first()
+        val closed=now
+        val candidate=JSONObject().put("symbol",symbol)
+            .put("closed_h1_as_of_ms",closed)
+            .put("campaign_signals",org.json.JSONArray().put(JSONObject()
+                .put("strategy_profile",williamsTc2Profile)
+                .put("signal_id","$symbol:1h:SUPER_AO:close")))
+            .put("decision_trace",JSONObject().put("as_of_close_ms",closed)
+                .put("market_reading",JSONObject().put("state","OBSERVED")
+                    .put("as_of_close_ms",closed).put("observed_bias","UP")
+                    .put("ao_direction","UP")
+                    .put("alligator",JSONObject().put("state","EATING"))))
+        val scanner=JSONObject().put("last_scan_at",now-10_000L)
+            .put("scanner_state","READY_BLOCKED")
+            .put("symbols_scanned",APPROVED_FUTURES_SYMBOLS.size)
+            .put("scanning",false)
+            .put("candidates",org.json.JSONArray().put(candidate))
+        val summary=WilliamsFourBookCurriculum.assess(scanner,now)
+            .getJSONObject("tc2_appendix_1_closed_h1_chart_checklist")
+        assertEquals(1,summary.getInt("source_chart_observed_count"))
+        assertFalse(summary.getBoolean("complete_market_account_and_stop_preflight_proven"))
+        assertFalse(summary.getBoolean("trading_authority"))
+        val first=summary.getJSONArray("symbols").getJSONObject(0)
+        assertEquals("CLOSED_H1_SNAPSHOT_OBSERVED",first.getString("chart_observation_state"))
+        assertEquals("UP",first.getString("observed_trend"))
+        assertEquals("EATING",first.getString("observed_alligator"))
+        assertEquals("NOT_VERIFIED_IN_THIS_CHART_OBSERVER",
+            first.getString("exchange_confirmed_protective_stop"))
+        assertFalse(first.getBoolean("psychology_independently_assessed"))
+        assertFalse(first.getBoolean("can_approve_order"))
+        assertFalse(first.getBoolean("can_veto_tc2_order"))
+        // An old scan never becomes a new trusted chart just because the
+        // data is present in local preferences.
+        scanner.put("last_scan_at",now-250_000L)
+        val stale=WilliamsFourBookCurriculum.assess(scanner,now)
+            .getJSONObject("tc2_appendix_1_closed_h1_chart_checklist")
+        assertEquals(0,stale.getInt("source_chart_observed_count"))
+    }
+
     @Test fun scannedCourseExternalTutorialNotFabricatedFromBookMetadata() {
         val report=WilliamsFourBookCurriculum.assess(JSONObject(),now)
         assertFalse(report.getBoolean("source_original_course_fully_ocr_certified"))
