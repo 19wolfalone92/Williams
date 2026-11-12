@@ -820,6 +820,35 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val corpus=report?.optJSONObject("four_book_full_chapter_coverage")
+            CockpitCard("📚 Полная карта четырёх книг · 642 страницы") {
+                if(corpus==null) {
+                    Text("Новый постраничный реестр ещё не получен. Проверка книг не подтверждена.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Физически индексировано страниц",
+                        corpus.optInt("source_pages_physically_indexed").toString()+"/642")
+                    CockpitField("Разделов в источниках",
+                        corpus.optInt("source_chapters_in_inventory").toString())
+                    CockpitField("Разделы с независимым экзаменом по рисункам",
+                        corpus.optInt("chapters_with_independent_figure_exam").toString())
+                    CockpitField("Подтверждены ли 99% знаний?",
+                        if(corpus.optBoolean("book_understanding_99_percent_proven")) "ДА" else "НЕТ")
+                    val sources=CockpitDiagnostics.rows(corpus.optJSONArray("source_catalog"))
+                    for(book in sources) {
+                        CockpitField(book.optString("book")+" · страницы / разделы",
+                            book.optInt("indexed_pdf_pages").toString()+" / "+
+                            book.optInt("indexed_sections").toString())
+                    }
+                    Text("Карта всех страниц ≠ понимание всех графиков. Сканы Course, " +
+                        "психология, устаревшие торговые платформы и отсутствующее внешнее " +
+                        "пособие требуют отдельной проверки. Индикаторы TC1/NTD/Course " +
+                        "не изменяют разрешённые входы TC2. Данные доступны в ZIP.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val understanding=report?.optJSONObject("book_causal_understanding")
             CockpitCard("📚 Понимание четырёх книг · причинная сверка") {
                 if(understanding==null) {
