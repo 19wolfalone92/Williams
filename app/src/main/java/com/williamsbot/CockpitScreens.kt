@@ -832,6 +832,12 @@ internal fun CockpitDiagnosticScreen(
                         corpus.optInt("source_chapters_in_inventory").toString())
                     CockpitField("Разделы с независимым экзаменом по рисункам",
                         corpus.optInt("chapters_with_independent_figure_exam").toString())
+                    val checklist=corpus.optJSONObject("tc2_appendix_1_closed_h1_chart_checklist")
+                    CockpitField("Реальные паспорта H1 по приложению TC2",
+                        (checklist?.optInt("source_chart_observed_count") ?: 0).toString()+"/"+
+                        (checklist?.optInt("symbols_expected") ?: 15).toString())
+                    CockpitField("Завершена ли проверка STOP и рисков по книгам?",
+                        "НЕТ · требуется биржевая подписанная сверка")
                     CockpitField("Подтверждены ли 99% знаний?",
                         if(corpus.optBoolean("book_understanding_99_percent_proven")) "ДА" else "НЕТ")
                     val sources=CockpitDiagnostics.rows(corpus.optJSONArray("source_catalog"))
