@@ -7636,7 +7636,13 @@ private class NativeEngine(
             baseline.strategyProfile==williamsTc2Profile &&
             baseline.type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL") {
             latestConfirmedTc2FractalId(campaignSignalDirection(baseline.type).orEmpty(),
-                baseline.signalBarTimeMs,JSONArray(freshSignals.map { candidateSignal ->
+                baseline.signalBarTimeMs,JSONArray(candidate.campaignSignals.filter { possible ->
+                    possible.strategyProfile==williamsTc2Profile &&
+                        possible.role=="ENTRY" && possible.executionSemantics=="STOP_ENTRY" &&
+                        williamsProfileAllowsSource(williamsProfile,possible.strategyProfile) &&
+                        williamsH1SignalTimeEligible(possible.signalBarTimeMs,possible.type,
+                            possible.strategyProfile,contextNow)
+                }.map { candidateSignal ->
                     JSONObject().put("signal_id",candidateSignal.signalId)
                         .put("type",candidateSignal.type)
                         .put("strategy_profile",candidateSignal.strategyProfile)
