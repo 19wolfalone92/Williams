@@ -1776,6 +1776,16 @@ private class NativeEngine(
     )
     private val tc2ExitResearchEnqueued =
         java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    // Scheduled scanner shadow history is noncritical and independently bounded;
+    // it must not crowd out the existing TC2 open-position exit observer queue.
+    private val scannerShadowResearchExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(maxScanSymbols),
+        java.util.concurrent.ThreadFactory { task ->
+            Thread(task, "williams-scanner-shadow").apply { isDaemon = true }
+        },
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
@@ -8184,7 +8194,7 @@ private class NativeEngine(
                     val shadowKey = "SCANNER_SHADOW:" + symbol
                     if (tc2ExitResearchEnqueued.add(shadowKey)) {
                         runCatching {
-                            tc2ExitResearchExecutor.execute {
+                            scannerShadowResearchExecutor.execute {
                                 try {
                                     runCatching {
                                         val now = futuresMarketData.exchangeNowMs()
@@ -12628,6 +12638,10 @@ private class NativeEngine(
             .put("scanner_queue_capacity",
                 scanExecutor.queue.size+scanExecutor.queue.remainingCapacity())
             .put("tc2_research_queue_size",tc2ExitResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_size",scannerShadowResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_capacity",
+                scannerShadowResearchExecutor.queue.size +
+                    scannerShadowResearchExecutor.queue.remainingCapacity())
             // Never label an unbounded safety-event queue "safe" merely because
             // the scanner/research queues are bounded. Keep a real high-water mark.
             .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
