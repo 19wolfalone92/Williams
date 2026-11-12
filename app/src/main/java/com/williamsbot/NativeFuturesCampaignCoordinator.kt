@@ -4980,7 +4980,12 @@ internal class NativeFuturesCampaignCoordinator(
             row.optString("state") !in setOf("CLOSED_PENDING_EVIDENCE","CLOSED_EXCHANGE_CONFIRMED") }==true }) {
             "Supervision already exists; review its current state before retrying"
         }
-        val formerEntry=latestEntryIntentIndex(intents(),symbol)?.let { intents().optJSONObject(it) }
+        // Read one consistent SQLite snapshot; a second intents() reparses the entire
+        // journal and can exhaust the Android heap under reconciliation pressure.
+        val persistedIntents = intents()
+        val formerEntry=latestEntryIntentIndex(persistedIntents,symbol)?.let {
+            persistedIntents.optJSONObject(it)
+        }
         check(formerEntry==null ||
             campaignLifecycleStatus(formerEntry) in TERMINAL_CAMPAIGN_STATUSES ||
             (formerEntry.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&

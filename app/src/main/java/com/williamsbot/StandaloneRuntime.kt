@@ -773,6 +773,21 @@ internal fun lastKnownFuturesPositionsForDisplay(
     return Triple(rows, error, envelope?.second ?: 0L)
 }
 
+/**
+ * A private Futures trade event is a hint to reconcile immediately, never
+ * evidence that an entry belongs to us or that a protective STOP exists.
+ * Signed account/position/algo reconciliation remains authoritative.
+ */
+internal fun privateFuturesFillDemandsImmediateReconcile(event: JSONObject): Boolean {
+    if (event.optString("e") != "ORDER_TRADE_UPDATE") return false
+    val order = event.optJSONObject("o") ?: return false
+    val status = order.optString("X").uppercase(Locale.US)
+    if (status != "FILLED" && status != "PARTIALLY_FILLED") return false
+    if (order.optString("s").isBlank()) return false
+    val totalExecuted = order.optString("z").toBigDecimalOrNull() ?: return false
+    return totalExecuted.signum() > 0
+}
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -8594,6 +8609,13 @@ private class NativeEngine(
                 if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
             }
         }
+        // A real WS fill used to wait behind the serialized cockpit/SQLite
+        // event loop before it could even request a signed STOP reconciliation.
+        // The urgent path is ONLY a wake-up: no mutation is authorized by WS.
+        // Execution Door and exact Binance signed proof still govern all orders.
+        if (privateFuturesFillDemandsImmediateReconcile(event)) {
+            scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
+        }
         tradingEventLoop.post {
             try {
                 handleUserEventSerialized(event)
@@ -8635,7 +8657,12 @@ private class NativeEngine(
         when (eventType) {
             "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
             "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
-                scheduleFuturesStreamReconciliation(eventType)
+                // The urgent fill was already queued on the WS callback,
+                // before this (possibly delayed) event-loop step. Avoid
+                // forcing a redundant full REST pass for that same update.
+                if (!privateFuturesFillDemandsImmediateReconcile(event)) {
+                    scheduleFuturesStreamReconciliation(eventType)
+                }
                 return
             }
             "listenKeyExpired" -> {
@@ -11452,7 +11479,7 @@ private class NativeEngine(
         return scannerSnapshot()
     }
 
-    fun status(fast: Boolean = false): JSONObject {
+    fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true): JSONObject {
         if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
@@ -11582,7 +11609,7 @@ private class NativeEngine(
             .put("last_reconciliation_result", lastReconciliationResult)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
-            .put("decision_traces",decisionTraceSnapshot())
+            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -12553,22 +12580,21 @@ private class NativeEngine(
         }
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
-        val statusSnapshot = status(fast = true)
+        val statusSnapshot = status(fast = true, includeDecisionTraces = false)
             .put("strategy_audit", strategyEvidence)
             .put("trade_observations", tradeEvidence)
             .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
                 .put("refresh_running",signedFillAuditRunning)
                 .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
-        // The fast live status carries a large decision_traces tree, while
-        // this forensic export ALWAYS includes a richer full
-        // signal_decision_history.json independently. No diagnostic test reads
-        // the duplicate status field. Drop the duplicate reference before
-        // allocating 25-core maps, event history and report/ZIP buffers.
-        // The normal /status API remains unchanged.
-        val hadDuplicateStatusDecisionTraces=statusSnapshot.has("decision_traces")
-        statusSnapshot.remove("decision_traces")
-        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status",
-            hadDuplicateStatusDecisionTraces)
+        // Diagnostics deliberately requested status WITHOUT decision_traces:
+        // creating that multi-megabyte tree and then removing it still caused
+        // peak-heap allocation and a second full parse of persisted intents.
+        // The complete history is exported later in signal_decision_history.json.
+        // Public /status callers retain the full tree by default.
+        check(!statusSnapshot.has("decision_traces")) {
+            "Diagnostic status must not allocate duplicate decision traces"
+        }
+        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status", true)
         statusSnapshot.put("decision_traces_full_evidence_path",
             "signal_decision_history.json")
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
