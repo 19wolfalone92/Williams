@@ -78,11 +78,23 @@ def test_tc2_shadow_observer_never_blocks_h1_analysis_or_shares_live_exit_queue(
     assert "tc2ExitResearchExecutor.execute" in RUNTIME
 
 
+def test_depth_observer_has_one_inflight_resync_per_symbol_and_no_order_milestone():
+    fn = RUNTIME.split("private fun consumeDepthUpdate(data: JSONObject)", 1)[1].split(
+        "private fun scheduleIndicatorRebuild(", 1
+    )[0]
+    assert "depthResyncInFlight.add(symbol)" in fn
+    assert "depthResyncInFlight.remove(symbol)" in fn
+    assert "finally {" in fn
+    assert "syncOrderBookSnapshot(symbol)" in fn
+    assert "placeProtectiveStop" not in fn
+    assert 'depth_resync_inflight_symbols' in RUNTIME
+
+
 def test_monotonic_binance_cooldown_is_locked_and_overflow_safe():
     assert "internal fun binanceRateGuardCooldownDeadline(" in RATEGUARD
     assert "Long.MAX_VALUE" in RATEGUARD
     assert "synchronized(lock) {" in RATEGUARD
-    assert "cooldownUntilMs = max(cooldownUntilMs, deadline)" in RATEGUARD
+    assert "cooldownUntilMs = max(cooldownUntilMs, deadline)" in RATEGUARD\n    assert "if (value < 0L) return@forEach" in RATEGUARD\n    assert "if (newLimit <= 0L) continue" in RATEGUARD
     assert "binanceRateGuardSaturatingAdd(" in RATEGUARD
 
 
