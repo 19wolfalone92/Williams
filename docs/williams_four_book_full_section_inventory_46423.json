@@ -116,7 +116,8 @@
         "TC1.MFI.WINDOW_FADE",
         "TC1.MFI.WINDOW_FAKE",
         "TC1.MFI.WINDOW_SQUAT",
-        "ENGINEERING.MFI_PROXY"
+        "ENGINEERING.MFI_PROXY",
+        "TC1.FIVE_TRADER_LEVELS"
       ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
@@ -134,7 +135,8 @@
         "WAVE.AO.MINIMUM_W4",
         "WAVE.DEGREE_SCOPED_INTERPRETATION",
         "WAVE.REAL_TIMEFRAMES",
-        "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG"
+        "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG",
+        "TC1.FIVE_TRADER_LEVELS"
       ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
@@ -169,7 +171,8 @@
         "TC1.W4.RETRACE_38_50",
         "TC1.W4.OVERLAP_ALTERNATIVE",
         "TC1.W5.PROJECTION_ORIGIN_AFTER_W4",
-        "TC1.ZIGZAG.B_RETRACE_50_62"
+        "TC1.ZIGZAG.B_RETRACE_50_62",
+        "TC1.FIVE_TRADER_LEVELS"
       ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
@@ -198,7 +201,9 @@
       "pdf_end_page": 126,
       "topic": "Proficient trading and psychology",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "TC1.FIVE_TRADER_LEVELS"
+      ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -211,7 +216,9 @@
       "pdf_end_page": 140,
       "topic": "Expert trader and reflective practice",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "TC1.FIVE_TRADER_LEVELS"
+      ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -385,7 +392,9 @@
       "pdf_end_page": 156,
       "topic": "Trading mastery and attitude",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "NTD.MASTERY_IS_NOT_MARKET_SIGNAL"
+      ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -612,7 +621,9 @@
       "pdf_end_page": 183,
       "topic": "Trade preparation checklist and paper trading",
       "kind": "OPERATOR_CHECKLIST",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+      ],
       "reading_scope": "PDF_TEXT_INDEXED_AND_TARGETED_SOURCE_CHECKS",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -703,7 +714,9 @@
       "pdf_end_page": 14,
       "topic": "Disclosure, introduction, five levels of development",
       "kind": "CONTEXT",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+      ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -721,7 +734,8 @@
         "TC1.MFI.WINDOW_GREEN",
         "TC1.MFI.WINDOW_FADE",
         "TC1.MFI.WINDOW_FAKE",
-        "TC1.MFI.WINDOW_SQUAT"
+        "TC1.MFI.WINDOW_SQUAT",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
@@ -741,7 +755,8 @@
         "COURSE.W3.EXTENSION_110",
         "COURSE.W5.QUANTITY_6_OR_8",
         "COURSE.RECURSIVE_DEGREE_PRICE_GRAMMAR",
-        "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE"
+        "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
@@ -759,7 +774,8 @@
         "COURSE.HUMP",
         "COURSE.THUMB.FINGERS",
         "COURSE.THUMB.COLOUR_COMBINATION",
-        "COURSE.TERMINAL_SQUAT_EXTREME_THREE"
+        "COURSE.TERMINAL_SQUAT_EXTREME_THREE",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
@@ -780,7 +796,8 @@
         "COURSE.STAGE_TRIM.SOURCE_PINNING",
         "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
         "COURSE.SIGNED_FLAT_CORRECTION_HANDOFF",
-        "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT"
+        "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
@@ -802,7 +819,8 @@
         "COURSE.THUMB.FINGERS",
         "COURSE.THUMB.COLOUR_COMBINATION",
         "COURSE.W1_W2_W3_W4_LOCATION",
-        "COURSE.STAGE_TRIM.SOURCE_PINNING"
+        "COURSE.STAGE_TRIM.SOURCE_PINNING",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
@@ -816,7 +834,9 @@
       "pdf_end_page": 103,
       "topic": "Psychological facilitation introduction",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+      ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -829,7 +849,9 @@
       "pdf_end_page": 118,
       "topic": "Trading brains, self-preservation, money, confidence and play",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+      ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -842,7 +864,9 @@
       "pdf_end_page": 121,
       "topic": "Personal trading reflection workbook",
       "kind": "PSYCHOLOGY",
-      "registry_rule_ids": [],
+      "registry_rule_ids": [
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+      ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
       "independent_rule_exam_passed": false,
@@ -856,7 +880,8 @@
       "topic": "Missing external individual tutorial material",
       "kind": "EXTERNAL_SOURCE_MISSING",
       "registry_rule_ids": [
-        "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING"
+        "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING",
+        "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
       ],
       "reading_scope": "SCANNED_VISUAL_OVERVIEW_NOT_VERBATIM_CERTIFIED",
       "complete_figure_validation": false,
