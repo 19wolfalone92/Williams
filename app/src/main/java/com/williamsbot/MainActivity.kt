@@ -538,8 +538,12 @@ fun WilliamsApp(context: Context) {
     var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
 
-    suspend fun loadAll(scan: Boolean) {
-        if (!loadMutex.tryLock()) return
+    suspend fun loadAll(scan: Boolean, waitForLock: Boolean = false) {
+        // Periodic polling may skip a busy refresh. A user explicitly switching
+        // to a detailed screen MUST wait for the previous compact response,
+        // otherwise the one-shot detail refresh can be silently lost for 5s.
+        if (waitForLock) loadMutex.lock()
+        else if (!loadMutex.tryLock()) return
         try {
             refreshing = scan
             val payload = withContext(Dispatchers.IO) {
@@ -1055,7 +1059,7 @@ fun WilliamsApp(context: Context) {
         }
         // Switching from a compact dashboard to the market/analysis screen
         // must not show an empty or stale decision trace for another 5s tick.
-        if (tab == 1 || tab == 7 || tab == 6) loadAll(false)
+        if (tab == 1 || tab == 7 || tab == 6) loadAll(false, waitForLock = true)
         if (tab == 4 && diagnosticReport == null) runDiagnostics()
     }
     BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }
