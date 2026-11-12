@@ -72,6 +72,20 @@ class BinanceRateGuardTest {
             1_800_000_000_000L)
     }
 
+    @Test fun negativeExchangeHeadersAndNonpositiveLimitsDoNotDisableThrottling() {
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("X-MBX-USED-WEIGHT-1M", "5700"), 200)
+        guard.observe(Headers.headersOf("X-MBX-USED-WEIGHT-1M", "-1"), 200)
+        assertEquals(5700L, guard.usedWeight1m)
+        guard.updateFromExchangeInfo(JSONObject().put("rateLimits", JSONArray()
+            .put(JSONObject().put("rateLimitType", "REQUEST_WEIGHT")
+                .put("interval", "MINUTE").put("intervalNum", 1).put("limit", -1))
+            .put(JSONObject().put("rateLimitType", "ORDERS")
+                .put("interval", "SECOND").put("intervalNum", 10).put("limit", 0))))
+        assertEquals(6000L, guard.requestWeightLimit1m)
+        assertEquals(50L, guard.orderLimit10s)
+    }
+
     @Test
     fun learnsTenSecondOrderLimitFromExchangeInfo() {
         val guard = BinanceRateGuard()
