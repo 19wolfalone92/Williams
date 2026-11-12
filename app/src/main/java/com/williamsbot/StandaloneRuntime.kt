@@ -1783,6 +1783,11 @@ private class NativeEngine(
     // calculations are deliberately moved off the OkHttp WebSocket callback
     // thread so a burst of kline events cannot delay depth/aggTrade handling.
     private val indicatorExecutor = Executors.newFixedThreadPool(2)
+    // One pending indicator rebuild per 15-symbol/15-frame key, not one
+    // multikilobyte closure per incoming WebSocket kline update. Closed-bar
+    // SQLite persistence below is deliberately NOT coalesced or dropped.
+    private val indicatorGeneration = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val indicatorRebuildPending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
@@ -3920,6 +3925,52 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * Coalesce high-frequency forming-kline indicator work to the latest snapshot.
+     * Generation is incremented while the per-key candle list is locked. A stale
+     * same-candle (same open time) analysis cannot overwrite a more recent update.
+     * The final generation check + re-enqueue closes the dequeue/update race.
+     * This is READ-ONLY: closed H1 persistence and order admission are unchanged.
+     */
+    private fun scheduleIndicatorRebuild(
+        key: String, symbol: String, frame: String, list: MutableList<CandleN>
+    ) {
+        if (!indicatorRebuildPending.add(key)) return
+        try {
+            indicatorExecutor.execute {
+                var capturedGeneration = -1L
+                try {
+                    // Bound one worker's CPU budget during a busy exchange burst;
+                    // remaining changes are requeued after releasing this key.
+                    for (pass in 0 until 2) {
+                        val snapshot = synchronized(list) {
+                            capturedGeneration = indicatorGeneration[key] ?: 0L
+                            list.toList()
+                        }
+                        runCatching {
+                            val calculated = buildIndicatorSnapshot(snapshot, symbol, frame)
+                            if (indicatorGeneration[key] == capturedGeneration) {
+                                indicatorSnapshots[key] = calculated
+                            }
+                        }.onFailure { failure ->
+                            lastError = "indicator analysis: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        }
+                        if (indicatorGeneration[key] == capturedGeneration) break
+                    }
+                } finally {
+                    indicatorRebuildPending.remove(key)
+                    if (indicatorGeneration[key] != capturedGeneration) {
+                        scheduleIndicatorRebuild(key, symbol, frame, list)
+                    }
+                }
+            }
+        } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            indicatorRebuildPending.remove(key)
+            lastError = "indicator worker unavailable; read-only cache refresh deferred"
+        }
+    }
+
     private fun consumeKlineStream(envelope: JSONObject) {
         val data = envelope.optJSONObject("data") ?: return
         if (data.optString("e") != "kline") return
@@ -3948,29 +3999,11 @@ private class NativeEngine(
             val snapshotCandles = list.toList()
             candleCache[key] = System.currentTimeMillis() to snapshotCandles
 
-            // Only cache maintenance happens on the WebSocket callback thread.
-            // The heavier Williams/indicator calculation runs independently.
-            indicatorExecutor.execute {
-                runCatching {
-                    val snapshot = buildIndicatorSnapshot(
-                        snapshotCandles,
-                        symbol,
-                        frame
-                    )
-                    // Do not let an older queued calculation overwrite a newer
-                    // realtime candle snapshot.
-                    val currentTime = liveCandleCache[key]
-                        ?.lastOrNull()
-                        ?.t
-                        ?: 0L
-                    if (snapshotCandles.lastOrNull()?.t ?: 0L >= currentTime) {
-                        indicatorSnapshots[key] = snapshot
-                    }
-                }.onFailure {
-                    lastError = "indicator analysis: " +
-                        (it.message ?: it.javaClass.simpleName)
-                }
-            }
+            // This candle can update high/low/volume without changing open
+            // time; compare versions, not only timestamps. Every published
+            // cache is still a copy, never a partially-mutated candle list.
+            indicatorGeneration.compute(key) { _, prior -> (prior ?: 0L) + 1L }
+            scheduleIndicatorRebuild(key, symbol, frame, list)
 
             if (k.optBoolean("x", false)) {
                 val closedCandle = MarketHistoryStore.Candle(
