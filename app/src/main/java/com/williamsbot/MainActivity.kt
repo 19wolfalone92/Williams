@@ -538,13 +538,22 @@ fun WilliamsApp(context: Context) {
     var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
 
-    suspend fun loadAll(scan: Boolean) {
-        if (!loadMutex.tryLock()) return
+    suspend fun loadAll(scan: Boolean, waitForLock: Boolean = false) {
+        // Periodic polling may skip a busy refresh. A user explicitly switching
+        // to a detailed screen MUST wait for the previous compact response,
+        // otherwise the one-shot detail refresh can be silently lost for 5s.
+        if (waitForLock) loadMutex.lock()
+        else if (!loadMutex.tryLock()) return
         try {
             refreshing = scan
             val payload = withContext(Dispatchers.IO) {
                 if (scan) api.get("/api/v1/scanner?refresh=true")
-                JSONObject(api.get("/api/v1/cockpit"))
+                // Keep signed safety/risk/status updates at the same 5s cadence.
+                // Only dashboard/trades omit large read-only 15-symbol decision
+                // traces. The market chart and analysis retain full provenance.
+                val compact = tab == 0 || tab == 2
+                JSONObject(api.get(if (compact) "/api/v1/cockpit?compact=true"
+                    else "/api/v1/cockpit"))
             }
             val source = payload.getJSONObject("status")
             val scanner = payload.getJSONObject("scanner")
@@ -1048,6 +1057,9 @@ fun WilliamsApp(context: Context) {
         withContext(Dispatchers.IO) {
             runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "NAVIGATE").put("detail", "screen=$tab").toString()) }
         }
+        // Switching from a compact dashboard to the market/analysis screen
+        // must not show an empty or stale decision trace for another 5s tick.
+        if (tab == 1 || tab == 7 || tab == 6) loadAll(false, waitForLock = true)
         if (tab == 4 && diagnosticReport == null) runDiagnostics()
     }
     BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }

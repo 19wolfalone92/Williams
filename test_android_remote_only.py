@@ -882,7 +882,8 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     # self-test was removed when readiness moved into the regular runtime snapshot.
     # Read-only diagnostic fields now come from one synchronized scanner
     # snapshot. READY must never be published before scanning=false.
-    assert "@Synchronized\n    private fun scannerSnapshot(): JSONObject" in runtime
+    assert "@Synchronized\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
+    assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in runtime
     assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
     assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
@@ -912,7 +913,9 @@ def test_actions_testnet_gate_distinguishes_push_warning_from_manual_signed_acce
 def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert 'api.get("/api/v1/cockpit")' in ui
+    assert 'else "/api/v1/cockpit"' in ui
+    assert '"/api/v1/cockpit?compact=true"' in ui
+    assert 'val compact = tab == 0 || tab == 2' in ui
     assert 'payload.getJSONObject("status")' in ui
     assert 'payload.getJSONObject("scanner")' in ui
     assert '.put("scanner_progress_symbols", scan.optInt("progress_symbols"))' in runtime

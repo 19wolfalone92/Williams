@@ -1443,7 +1443,9 @@ private class StandaloneServer(private val context: Context) {
 
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
-        val snapshot = e().status(fast = true)
+        // Only state+execution_enabled are used below; do not build 15 per-symbol
+        // decision traces and parse the complete signed intent journal.
+        val snapshot = e().status(fast = true, includeDecisionTraces = false)
         return JSONObject()
             .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
             .put("full_report", false)
@@ -1546,7 +1548,7 @@ private class StandaloneServer(private val context: Context) {
                 x.settings().toString()
 
             method == "GET" && path == "/api/v1/cockpit" ->
-                x.cockpit().toString()
+                x.cockpit(includeDecisionTraces = !params["compact"].equals("true", true)).toString()
 
             method == "POST" && path == "/api/v1/ui/event" ->
                 x.uiEvent(JSONObject(body)).toString()
@@ -1774,6 +1776,16 @@ private class NativeEngine(
     )
     private val tc2ExitResearchEnqueued =
         java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    // Scheduled scanner shadow history is noncritical and independently bounded;
+    // it must not crowd out the existing TC2 open-position exit observer queue.
+    private val scannerShadowResearchExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(maxScanSymbols),
+        java.util.concurrent.ThreadFactory { task ->
+            Thread(task, "williams-scanner-shadow").apply { isDaemon = true }
+        },
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
@@ -1781,6 +1793,11 @@ private class NativeEngine(
     // calculations are deliberately moved off the OkHttp WebSocket callback
     // thread so a burst of kline events cannot delay depth/aggTrade handling.
     private val indicatorExecutor = Executors.newFixedThreadPool(2)
+    // One pending indicator rebuild per 15-symbol/15-frame key, not one
+    // multikilobyte closure per incoming WebSocket kline update. Closed-bar
+    // SQLite persistence below is deliberately NOT coalesced or dropped.
+    private val indicatorGeneration = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val indicatorRebuildPending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
@@ -1797,6 +1814,9 @@ private class NativeEngine(
     private var marketSocket: WebSocket? = null
     private var publicSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
+    // One depth snapshot fetch per symbol at a time. A burst of invalid
+    // delta update IDs must not spawn unlimited HTTP threads on Android.
+    private val depthResyncInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var marketSocketStartedMs = 0L
@@ -3906,15 +3926,77 @@ private class NativeEngine(
             bids = data.optJSONArray("b") ?: JSONArray(),
             asks = data.optJSONArray("a") ?: JSONArray()
         )
-        if (!ok) {
-            Thread {
-                runCatching { syncOrderBookSnapshot(symbol) }
-                    .onFailure { lastError = "L2 resync $symbol: " + (it.message ?: it.javaClass.simpleName) }
-            }.apply {
-                isDaemon = true
-                name = "williams-l2-resync-$symbol"
-                start()
+        if (!ok && depthResyncInFlight.add(symbol)) {
+            // Depth is an OBSERVER input and never proves the position/STOP.
+            // A singleflight reset allows a later genuine gap to retry after
+            // this worker completes; no exchange event or financial order lost.
+            try {
+                Thread {
+                    try {
+                        runCatching { syncOrderBookSnapshot(symbol) }
+                            .onFailure {
+                                lastError = "L2 resync $symbol: " +
+                                    (it.message ?: it.javaClass.simpleName)
+                            }
+                    } finally {
+                        depthResyncInFlight.remove(symbol)
+                    }
+                }.apply {
+                    isDaemon = true
+                    name = "williams-l2-resync-$symbol"
+                    start()
+                }
+            } catch (failure: Exception) {
+                depthResyncInFlight.remove(symbol)
+                lastError = "L2 resync worker unavailable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
             }
+        }
+    }
+
+    /**
+     * Coalesce high-frequency forming-kline indicator work to the latest snapshot.
+     * Generation is incremented while the per-key candle list is locked. A stale
+     * same-candle (same open time) analysis cannot overwrite a more recent update.
+     * The final generation check + re-enqueue closes the dequeue/update race.
+     * This is READ-ONLY: closed H1 persistence and order admission are unchanged.
+     */
+    private fun scheduleIndicatorRebuild(
+        key: String, symbol: String, frame: String, list: MutableList<CandleN>
+    ) {
+        if (!indicatorRebuildPending.add(key)) return
+        try {
+            indicatorExecutor.execute {
+                var capturedGeneration = -1L
+                try {
+                    // Bound one worker's CPU budget during a busy exchange burst;
+                    // remaining changes are requeued after releasing this key.
+                    for (pass in 0 until 2) {
+                        val snapshot = synchronized(list) {
+                            capturedGeneration = indicatorGeneration[key] ?: 0L
+                            list.toList()
+                        }
+                        runCatching {
+                            val calculated = buildIndicatorSnapshot(snapshot, symbol, frame)
+                            if (indicatorGeneration[key] == capturedGeneration) {
+                                indicatorSnapshots[key] = calculated
+                            }
+                        }.onFailure { failure ->
+                            lastError = "indicator analysis: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        }
+                        if (indicatorGeneration[key] == capturedGeneration) break
+                    }
+                } finally {
+                    indicatorRebuildPending.remove(key)
+                    if (indicatorGeneration[key] != capturedGeneration) {
+                        scheduleIndicatorRebuild(key, symbol, frame, list)
+                    }
+                }
+            }
+        } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            indicatorRebuildPending.remove(key)
+            lastError = "indicator worker unavailable; read-only cache refresh deferred"
         }
     }
 
@@ -3946,29 +4028,11 @@ private class NativeEngine(
             val snapshotCandles = list.toList()
             candleCache[key] = System.currentTimeMillis() to snapshotCandles
 
-            // Only cache maintenance happens on the WebSocket callback thread.
-            // The heavier Williams/indicator calculation runs independently.
-            indicatorExecutor.execute {
-                runCatching {
-                    val snapshot = buildIndicatorSnapshot(
-                        snapshotCandles,
-                        symbol,
-                        frame
-                    )
-                    // Do not let an older queued calculation overwrite a newer
-                    // realtime candle snapshot.
-                    val currentTime = liveCandleCache[key]
-                        ?.lastOrNull()
-                        ?.t
-                        ?: 0L
-                    if (snapshotCandles.lastOrNull()?.t ?: 0L >= currentTime) {
-                        indicatorSnapshots[key] = snapshot
-                    }
-                }.onFailure {
-                    lastError = "indicator analysis: " +
-                        (it.message ?: it.javaClass.simpleName)
-                }
-            }
+            // This candle can update high/low/volume without changing open
+            // time; compare versions, not only timestamps. Every published
+            // cache is still a copy, never a partially-mutated candle list.
+            indicatorGeneration.compute(key) { _, prior -> (prior ?: 0L) + 1L }
+            scheduleIndicatorRebuild(key, symbol, frame, list)
 
             if (k.optBoolean("x", false)) {
                 val closedCandle = MarketHistoryStore.Candle(
@@ -8141,28 +8205,54 @@ private class NativeEngine(
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
-                    // Forward-score existing opposite-exit paper samples on
-                    // the scanner's ALREADY FETCHED H1 candles (no extra REST).
-                    // Only run after a newly CLOSED H1 bar; this does not
-                    // participate in readiness, signal or trade execution.
-                    runCatching {
-                        val now=futuresMarketData.exchangeNowMs()
-                        val lastClosed=candles.lastOrNull { it.t+WILLIAMS_H1_MS<=now }
-                            ?.let { it.t+WILLIAMS_H1_MS } ?: 0L
-                        if(lastClosed>0L) synchronized(tc2ExitShadowLock) {
-                            val key="tc2_exit_shadow_ab_"+symbol
-                            val old=executionStore.readState(key)?.let { JSONObject(it) }
-                            if(old!=null && lastClosed>old.optLong("as_of_ms",0L)) {
-                                val next=williamsTc2ExitShadowAdvance(old,symbol,lastClosed,
-                                    candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })
-                                check(executionStore.writeState(key,next.toString())) {
-                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED" }
+                    // Observer-only historic TC2 exit study must not consume
+                    // the 60s H1 scanner budget or block trade admission on
+                    // SQLite/network. Reuse the already fetched immutable bars.
+                    // This bounded research queue may reject a sample safely;
+                    // it has NO permission to alter orders or risk gates.
+                    val shadowKey = "SCANNER_SHADOW:" + symbol
+                    if (tc2ExitResearchEnqueued.add(shadowKey)) {
+                        runCatching {
+                            scannerShadowResearchExecutor.execute {
+                                try {
+                                    runCatching {
+                                        val now = futuresMarketData.exchangeNowMs()
+                                        val lastClosed = candles.lastOrNull {
+                                            it.t + WILLIAMS_H1_MS <= now
+                                        }?.let { it.t + WILLIAMS_H1_MS } ?: 0L
+                                        if (lastClosed > 0L) synchronized(tc2ExitShadowLock) {
+                                            val key = "tc2_exit_shadow_ab_" + symbol
+                                            val oldShadow = executionStore.readState(key)
+                                                ?.let { JSONObject(it) }
+                                            if (oldShadow != null &&
+                                                lastClosed > oldShadow.optLong("as_of_ms", 0L)) {
+                                                val next = williamsTc2ExitShadowAdvance(
+                                                    oldShadow, symbol, lastClosed,
+                                                    candles.map {
+                                                        WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                                                    })
+                                                check(executionStore.writeState(key, next.toString())) {
+                                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED"
+                                                }
+                                            }
+                                        }
+                                    }.onFailure { error ->
+                                        runCatching { auditStore.recordCockpitEvent(
+                                            "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                            state="RESEARCH_UNAVAILABLE",
+                                            detail=error.javaClass.simpleName) }
+                                    }
+                                } finally {
+                                    tc2ExitResearchEnqueued.remove(shadowKey)
+                                }
                             }
+                        }.onFailure {
+                            tc2ExitResearchEnqueued.remove(shadowKey)
+                            runCatching { auditStore.recordCockpitEvent(
+                                "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                state="RESEARCH_SCHEDULING_UNAVAILABLE",
+                                detail=it.javaClass.simpleName) }
                         }
-                    }.onFailure { error ->
-                        runCatching { auditStore.recordCockpitEvent("TC2_EXIT_SHADOW_REPLAY",
-                            symbol=symbol,state="RESEARCH_UNAVAILABLE",
-                            detail=error.javaClass.simpleName) }
                     }
                     stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
@@ -11440,8 +11530,10 @@ private class NativeEngine(
     }
 
     @Synchronized
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
+    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject {
+        val candidateView = if (compactForCockpit)
+            cockpitCandidateDisplayProjection(candidates) else candidates
+        return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
@@ -11467,12 +11559,13 @@ private class NativeEngine(
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
+            .put("candidates", candidateView)
             .put(
                 "best_candidate",
-                if (candidates.length() > 0) candidates.getJSONObject(0)
+                if (candidateView.length() > 0) candidateView.getJSONObject(0)
                 else JSONObject().put("symbol", primarySymbol)
             )
+    }
 
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) requestScan()
@@ -12345,9 +12438,12 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(): JSONObject {
-        val captured = status(fast = true)
-        val scan = scannerSnapshot()
+    fun cockpit(includeDecisionTraces: Boolean = true): JSONObject {
+        // The default complete API remains compatible for decision/market screens.
+        // Main dashboard/trades need live signed safety fields but not a costly
+        // 15-symbol replay of journal/passport/history SQLite objects every 5s.
+        val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces)
+        val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
             .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
@@ -12561,6 +12657,16 @@ private class NativeEngine(
             .put("scanner_queue_capacity",
                 scanExecutor.queue.size+scanExecutor.queue.remainingCapacity())
             .put("tc2_research_queue_size",tc2ExitResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_size",scannerShadowResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_capacity",
+                scannerShadowResearchExecutor.queue.size +
+                    scannerShadowResearchExecutor.queue.remainingCapacity())
+            // Never label an unbounded safety-event queue "safe" merely because
+            // the scanner/research queues are bounded. Keep a real high-water mark.
+            .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
+            .put("private_event_actor_queue_peak",tradingEventLoop.peakQueueDepth())
+            .put("private_event_actor_active",tradingEventLoop.actorActive())
+            .put("depth_resync_inflight_symbols",depthResyncInFlight.size)
             .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
     }
