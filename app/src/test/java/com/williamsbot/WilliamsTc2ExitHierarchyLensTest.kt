@@ -41,11 +41,12 @@ class WilliamsTc2ExitHierarchyLensTest {
     @Test fun actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders() {
         val lens=WilliamsTc2ExitHierarchyLens.assess(scanner(candles()),exit(),now)
         val row=lens.getJSONArray("recent_closed_trades").getJSONObject(0)
-        assertEquals("THREE_AND_FIVE_CLOSED_H1_EXTREMES_OBSERVED",row.getString("state"))
+        assertEquals("THREE_FOUR_FIVE_CLOSED_H1_EXTREMES_OBSERVED",row.getString("state"))
         assertEquals(8,row.getInt("post_entry_full_closed_h1_count"))
         assertEquals(98.0,row.getDouble("book_3_bar_boundary"),1e-8)
+        assertEquals(97.0,row.getDouble("book_4_bar_boundary"),1e-8)
         assertEquals(96.0,row.getDouble("book_5_bar_boundary"),1e-8)
-        assertEquals(1,lens.getInt("historical_3_and_5_observed"))
+        assertEquals(1,lens.getInt("historical_3_4_5_observed"))
         assertFalse(lens.getBoolean("can_move_stop_or_override_tc2_exit"))
         assertFalse(lens.getBoolean("book_exit_outcome_optimality_verified"))
         assertFalse(row.getBoolean("price_extremes_are_executable_stops"))
@@ -58,9 +59,12 @@ class WilliamsTc2ExitHierarchyLensTest {
         val future=WilliamsTc2ExitHierarchyLens.assess(scanner(candles(true)),exit("SHORT"),now)
             .getJSONArray("recent_closed_trades").getJSONObject(0)
         assertEquals(160.0,baseline.getDouble("book_3_bar_boundary"),1e-8)
+        assertEquals(160.0,baseline.getDouble("book_4_bar_boundary"),1e-8)
         assertEquals(160.0,baseline.getDouble("book_5_bar_boundary"),1e-8)
         assertEquals(baseline.getDouble("book_3_bar_boundary"),
             future.getDouble("book_3_bar_boundary"),0.0)
+        assertEquals(baseline.getDouble("book_4_bar_boundary"),
+            future.getDouble("book_4_bar_boundary"),0.0)
         assertEquals(baseline.getDouble("book_5_bar_boundary"),
             future.getDouble("book_5_bar_boundary"),0.0)
     }
@@ -96,9 +100,10 @@ class WilliamsTc2ExitHierarchyLensTest {
         val data=WilliamsTc2ExitHierarchyLens.assess(
             scanner(candles()),exit(openedAt=6*hour+13*60_000L),now)
         val row=data.getJSONArray("recent_closed_trades").getJSONObject(0)
-        assertEquals("ONLY_THREE_CLOSED_H1_EXTREMES_OBSERVED",row.getString("state"))
+        assertEquals("THREE_FOUR_CLOSED_H1_EXTREMES_OBSERVED",row.getString("state"))
         assertEquals(4,row.getInt("post_entry_full_closed_h1_count"))
         assertEquals(98.0,row.getDouble("book_3_bar_boundary"),1e-8)
+        assertEquals(97.0,row.getDouble("book_4_bar_boundary"),1e-8)
         assertTrue(row.isNull("book_5_bar_boundary"))
     }
 }
