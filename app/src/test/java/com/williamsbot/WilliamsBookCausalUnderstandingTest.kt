@@ -175,6 +175,37 @@ class WilliamsBookCausalUnderstandingTest {
         assertEquals("INSUFFICIENT_SENIOR_EVIDENCE",missing.getString("h1_vs_senior_context"))
     }
 
+    @Test fun tc1MfiAndFiveMagicSignsRemainHistoricalObserverWithSharedCourseVolume() {
+        val c=candidate(signal())
+        val trace=c.getJSONObject("decision_trace")
+        trace.put("as_of_close_ms",close)
+            .put("tc1_zero_point_observation",JSONObject()
+                .put("schema","TC1_ZERO_POINT_FIVE_SIGNS_V1")
+                .put("state","OBSERVATIONAL_PARTIAL_NOT_EXECUTABLE")
+                .put("zero_point_confirmed",false)
+                .put("wave_degree_certified",false))
+        val proof=WilliamsBookCausalUnderstanding.assess(scanner(c),JSONObject(),now)
+        val source=proof.getJSONArray("observed_candidates").getJSONObject(0)
+            .getJSONObject("tc1_historical_observation")
+        assertEquals("TC1_HISTORICAL",source.getString("source"))
+        assertEquals("OBSERVE",source.getString("execution_role"))
+        assertEquals("HISTORICAL_TC1_MFI_PROXY_OBSERVED",source.getString("state"))
+        assertEquals("TC1_CH6_MFI_FOUR_WINDOWS_PROXY_V1",
+            source.getJSONObject("mfi_proxy").getString("schema"))
+        assertFalse(source.getBoolean("book_tick_volume_verified"))
+        assertTrue(source.getBoolean("course_level_1_reuses_same_volume_not_independent_confirmation"))
+        assertEquals("PARTIAL_CANDIDATE_NOT_WAVE_PROOF",
+            source.getString("five_magic_bullets_source_state"))
+        assertFalse(source.getBoolean("zero_point_certified"))
+        assertFalse(source.getBoolean("can_place_orders"))
+        trace.remove("as_of_close_ms")
+        val missing=WilliamsBookCausalUnderstanding.assess(scanner(c),JSONObject(),now)
+            .getJSONArray("observed_candidates").getJSONObject(0)
+            .getJSONObject("tc1_historical_observation")
+        assertEquals("NOT_VERIFIED",missing.getString("state"))
+        assertFalse(missing.getBoolean("can_place_orders"))
+    }
+
     @Test fun originalSourcePagesNeverMasqueradeAsWholeBookCertification() {
         val a=WilliamsBookCausalUnderstanding.assess(JSONObject(),JSONObject(),now)
         val pages=a.getJSONArray("source_book_pdf_references")
