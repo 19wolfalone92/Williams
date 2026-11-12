@@ -2,13 +2,15 @@
 
 Testnet-first реализация торгового бота по Williams (Alligator + AO + Fractals) для Binance USDⓈ-M Futures с симметричными Long/Short кампаниями, SQLite recovery и жёсткими execution/risk gates.
 
-## Тестируемый кандидат: 4.64.23-debug — постраничная карта всех четырёх книг и независимые наблюдения TC1 (только Demo)
+## Тестируемый кандидат: 4.64.24-debug — TC2 WM3 stale-order safety (только Demo)
 
-- **Версия:** `VERSION=4.64.23`; Android пакет `com.williamsbot.debug`. Сверка полного корпуса четырёх источников — ветка `feature/nov12-full-four-book-chapter-coverage-4.64.23`. Проверенная CI версия 4.64.18 уже перенесена в `main`; новейший кандидат пока отдельно.
-- **Входы:** только включённые книжные TC2 H1 сигналы; signed Binance account/positions/STOP, private user WS, риск, текущее состояние STOP и финальная проверка H1 обязательны. Другие источники — read-only диагностика. Для новых заявок с signed proof возрастом более 70 секунд используется `safe_rejection` до создания ENTRY-интента и повторный подписанный запрос.
-- **Исправлено:** статус сканера `RUNNING` больше не выглядит как выдуманный запрет UI; продлён не TTL, а актуальность подписанного снимка за счёт нового REST запроса. Add-on safe rejection не ставит искусственный глобальный `reconcile_required`. Подробности: [протокол причин](docs/WILLIAMS_ENTRY_GATE_FLAPPING_ROOT_CAUSE_2026_11_10_RU.md).
-- **Ограничение:** CI, Android-эмуляторы и unit tests не подтверждают фактическую установку STOP после исполненного LONG/SHORT на физическом устройстве. Не считать эту версию допущенной к автономной работе с реальными средствами. `main` остаётся предыдущим.
-- **APK:** [GitHub Actions: Android APK](https://github.com/19wolfalone92/Williams/actions) — выбирайте только подписанный `williams-bot-debug-apk-*`, не `release-unsigned`.
+- **Версия:** `VERSION=4.64.24`, Android `com.williamsbot.debug`; ветка `fix/nov12-tc2-wm3-supersession-4.64.24` наследует постраничную карту четырёх книг 4.64.23. `main` пока не изменён.
+- **Исправлено по диагностике №13:** старый SHORT WM3 BNBUSDT 670.53 не должен выбираться при наличии более нового подтверждённого фрактала 677.80. Если новый уровень был уже пересечён, бот отказывает в поздней заявке, не возвращается к старому фракталу и не использует MARKET.
+- **Ожидающий Binance STOP-entry:** при новом подтверждённом более благоприятном WM3 старый неисполненный ордер отменяется только через штатный Execution Door и обязательную повторную биржевую сверку; UNKNOWN/triggering/filled и protective STOP не переоформляются по догадкам.
+- **График:** наблюдения иных профилей обозначены `ИССЛ.`, условный SL ожидающей заявки помечен как ещё не выставленный.
+- **Протокол и регрессионные тесты:** [WM3 BNBUSDT, диагностика №13](docs/WILLIAMS_TC2_WM3_STALE_FRACTAL_DIAG13_FIX_2026_11_12_RU.md).
+- **Безопасность:** CI/эмулятор не доказывают своевременное выставление защитного STOP после Binance Demo FILLED на физическом Android. Не использовать на реальном депозите без end-to-end проверки.
+- **APK:** [GitHub Actions: Build Android APK](https://github.com/19wolfalone92/Williams/actions/workflows/android-apk.yml) — только успешно собранный **подписанный** `williams-bot-debug-apk-*`, не `release-unsigned`.
 
 ## Исторический контракт версии 4.33.0
 
