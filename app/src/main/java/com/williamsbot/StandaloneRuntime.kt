@@ -12625,6 +12625,11 @@ private class NativeEngine(
             .put("scanner_queue_capacity",
                 scanExecutor.queue.size+scanExecutor.queue.remainingCapacity())
             .put("tc2_research_queue_size",tc2ExitResearchExecutor.queue.size)
+            // Never label an unbounded safety-event queue "safe" merely because
+            // the scanner/research queues are bounded. Keep a real high-water mark.
+            .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
+            .put("private_event_actor_queue_peak",tradingEventLoop.peakQueueDepth())
+            .put("private_event_actor_active",tradingEventLoop.actorActive())
             .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
     }
