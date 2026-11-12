@@ -246,6 +246,9 @@ object DiagnosticsArchive {
                 addJson(zip,"tc2_recent_exit_forensics.json",
                     report.optJSONObject("tc2_recent_exit_forensics") ?: org.json.JSONObject()
                         .put("trade_count",0).put("read_only",true))
+                addJson(zip,"tc2_book_exit_hierarchy.json",
+                    report.optJSONObject("tc2_book_exit_hierarchy") ?: org.json.JSONObject()
+                        .put("state","NOT_VERIFIED").put("can_place_orders",false))
                 addJson(zip,"book_causal_understanding.json",
                     report.optJSONObject("book_causal_understanding") ?: org.json.JSONObject()
                         .put("state","NOT_VERIFIED").put("can_place_orders",false))

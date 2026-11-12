@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-11",
-  "release": "4.64.21",
+  "updated": "2026-11-12",
+  "release": "4.64.22",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -375,16 +375,18 @@
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_exit_policy.py",
-        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "tests/test_tc2_exact_exit_price_parity.py::test_shared_python_android_source_tick_contract",
         "tests/test_tc2_no_automatic_breakeven.py::test_book_five_bar_stop_still_tightens_in_both_directions",
         "app/src/test/java/com/williamsbot/WilliamsTc2ExitTickContractTest.kt::fiveClosedBarBookTrailMatchesPythonOnExactExchangeTicks",
-        "app/src/test/java/com/williamsbot/FuturesStopTrailPolicyTest.kt::tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection"
+        "app/src/test/java/com/williamsbot/FuturesStopTrailPolicyTest.kt::tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [],
-      "remaining_evidence": "Mirrorable original candle extremes, exact decimal tick, incomplete/unaligned candle failures and 3/5-bar unit tests now linked; physical Binance Demo signed STOP placement/replacement and all original charts remain unverified.",
+      "remaining_evidence": "Mirrorable original candle extremes, exact decimal tick, incomplete/unaligned candle failures and 3/5-bar unit tests now linked; physical Binance Demo signed STOP placement/replacement and all original charts remain unverified. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1061,7 +1063,8 @@
         "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt",
         "williams_tc2_reversal.py",
         "app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
@@ -1069,7 +1072,8 @@
         "tests/test_williams_tc2_reversal.py::test_shared_two_leg_contract_rejects_unconfirmed_flat_replay_and_price_chasing",
         "app/src/test/java/com/williamsbot/WilliamsTc2ReversalTest.kt::sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing",
         "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart"
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [
         "cases/valid",
@@ -1077,7 +1081,7 @@
         "cases/already-admitted",
         "cases/trigger-recovered"
       ],
-      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only.",
+      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false,
       "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json"
     },
@@ -1677,14 +1681,16 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "app/src/main/java/com/williamsbot/Tc2ThreeFiveBarStudy.kt",
-        "app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt"
+        "app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::longAndShortMirrorExactlyOnThreeFourFiveClosedBars",
-        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::thirdCompletedHourCanBeComparedButFiveIsNotPretended"
+        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::thirdCompletedHourCanBeComparedButFiveIsNotPretended",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [],
-      "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent.",
+      "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1846,5 +1852,26 @@
     "no_trading_or_stop_authority": true,
     "confidence_calibrated": false,
     "scope": "READ_ONLY_CAUSAL_OBSERVATIONS_NOT_LLM_TRAINING_OR_WHOLE_BOOK_CERTIFICATION"
+  },
+  "historical_exit_book_lens": {
+    "module": "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt",
+    "source_book": "TC2",
+    "source_pdf_pages": [
+      156,
+      161,
+      163,
+      165
+    ],
+    "comparable_historical_stop_structures": [
+      3,
+      4,
+      5
+    ],
+    "source_read_only": true,
+    "actual_signed_stop_equivalence_claimed": false,
+    "retrospective_profit_replay_completed": false,
+    "partial_profit_half_position_mandatory": false,
+    "whole_book_fidelity_99_percent_proven": false
   }
 }
