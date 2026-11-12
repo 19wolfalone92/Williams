@@ -851,13 +851,15 @@ internal fun CockpitDiagnosticScreen(
         }
         item {
             val hierarchy=report?.optJSONObject("tc2_book_exit_hierarchy")
-            CockpitCard("📖 Выход по TC2 · 3/5 баров или встречный сигнал") {
+            CockpitCard("📖 Выход по TC2 · 3/4/5 баров или встречный сигнал") {
                 if(hierarchy==null) {
                     Text("Требуется новая диагностика; оригинальные бары H1 пока не сверены.",
                         style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
                 } else {
-                    CockpitField("Исторические выходы с подтверждёнными 3/5 барами",
-                        hierarchy.optInt("historical_3_and_5_observed").toString())
+                    CockpitField("Исторические выходы с подтверждёнными 3/4/5 барами",
+                        hierarchy.optInt("historical_3_4_5_observed").toString())
+                    CockpitField("Полных 3 и 4 бара",
+                        hierarchy.optInt("historical_3_4_only_observed").toString())
                     CockpitField("Полных только 3 бара",
                         hierarchy.optInt("historical_only_3_observed").toString())
                     CockpitField("Недостаточно данных",
@@ -870,11 +872,13 @@ internal fun CockpitDiagnosticScreen(
                         if(row.optString("state").contains("H1_EXTREMES_OBSERVED")) {
                             CockpitField("Граница последних 3 закрытых H1",
                                 row.optString("book_3_bar_boundary"))
+                            CockpitField("Граница последних 4 закрытых H1",
+                                row.optString("book_4_bar_boundary"))
                             CockpitField("Граница последних 5 закрытых H1",
                                 row.optString("book_5_bar_boundary"))
                         }
                     }
-                    Text("В TC2 обычный выход — структурный стоп последних 3/5 баров; " +
+                    Text("В TC2 обычный выход — структурный стоп последних 3–5 баров; " +
                         "встречный Wise Man встречается реже. Здесь показаны только экстремумы: " +
                         "не подтверждены биржевой STOP, цена исполнения или выгода от удержания. " +
                         "Новые ордера и выходы эта карточка не изменяет.",
