@@ -1443,7 +1443,9 @@ private class StandaloneServer(private val context: Context) {
 
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
-        val snapshot = e().status(fast = true)
+        // Only state+execution_enabled are used below; do not build 15 per-symbol
+        // decision traces and parse the complete signed intent journal.
+        val snapshot = e().status(fast = true, includeDecisionTraces = false)
         return JSONObject()
             .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
             .put("full_report", false)
@@ -1546,7 +1548,7 @@ private class StandaloneServer(private val context: Context) {
                 x.settings().toString()
 
             method == "GET" && path == "/api/v1/cockpit" ->
-                x.cockpit().toString()
+                x.cockpit(includeDecisionTraces = !params["compact"].equals("true", true)).toString()
 
             method == "POST" && path == "/api/v1/ui/event" ->
                 x.uiEvent(JSONObject(body)).toString()
@@ -12345,8 +12347,11 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(): JSONObject {
-        val captured = status(fast = true)
+    fun cockpit(includeDecisionTraces: Boolean = true): JSONObject {
+        // The default complete API remains compatible for decision/market screens.
+        // Main dashboard/trades need live signed safety fields but not a costly
+        // 15-symbol replay of journal/passport/history SQLite objects every 5s.
+        val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces)
         val scan = scannerSnapshot()
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
