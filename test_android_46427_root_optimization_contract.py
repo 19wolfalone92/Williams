@@ -90,7 +90,7 @@ def test_financial_stop_post_still_persist_before_network_and_signed_verify_afte
     # There is also an earlier SUBMISSION_UNKNOWN recovery branch; scope to
     # the precise durable-write-before-network protective POST site.
     marker = ('matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")'
-              '\\n                            .put("protection_attempt_at_ms", clock())')
+              '\n                            .put("protection_attempt_at_ms", clock())')
     stop = COORDINATOR[COORDINATOR.index(marker):]
     assert stop.index("saveIntents(persisted)") < stop.index("adapter.placeProtectiveStop(")
     assert stop.index("adapter.placeProtectiveStop(") < stop.index(
