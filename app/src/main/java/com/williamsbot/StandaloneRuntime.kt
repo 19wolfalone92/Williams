@@ -11501,8 +11501,10 @@ private class NativeEngine(
     }
 
     @Synchronized
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
+    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject {
+        val candidateView = if (compactForCockpit)
+            cockpitCandidateDisplayProjection(candidates) else candidates
+        return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
@@ -11528,12 +11530,13 @@ private class NativeEngine(
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
+            .put("candidates", candidateView)
             .put(
                 "best_candidate",
-                if (candidates.length() > 0) candidates.getJSONObject(0)
+                if (candidateView.length() > 0) candidateView.getJSONObject(0)
                 else JSONObject().put("symbol", primarySymbol)
             )
+    }
 
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) requestScan()
@@ -12411,7 +12414,7 @@ private class NativeEngine(
         // Main dashboard/trades need live signed safety fields but not a costly
         // 15-symbol replay of journal/passport/history SQLite objects every 5s.
         val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces)
-        val scan = scannerSnapshot()
+        val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
             .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
