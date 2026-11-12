@@ -3753,7 +3753,7 @@ private fun TradingChart(
             horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
             if(historicalTrade!=null) {
                 historicalTrade.entry?.let {Text("Вход "+formatChartPrice(it),color=AppColors.primary,style=MaterialTheme.typography.labelSmall)}
-                historicalTrade.exit?.let {Text("Фактический выход "+formatChartPrice(it),color=AppColors.violet,style=MaterialTheme.typography.labelSmall)}
+                historicalTrade.exit?.let {Text("Выход из журнала "+formatChartPrice(it),color=AppColors.violet,style=MaterialTheme.typography.labelSmall)}
                 historicalTrade.stopPrice?.let {Text("Начальный SL (журнал, не доказательство установки) "+formatChartPrice(it),
                     color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
                 historicalTrade.lastStop?.let {Text("Последний записанный SL "+formatChartPrice(it),
