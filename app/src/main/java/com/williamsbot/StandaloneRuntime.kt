@@ -11890,6 +11890,10 @@ private class NativeEngine(
                         .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
                         .put("signal_types", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("type") }))
+                        // Source list matches signal_types by INDEX. A generic
+                        // bullish Course hypothesis must never be drawn as an
+                        // executable TC2 WM entry on the phone.
+                        .put("signal_profiles", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("strategy_profile") }))
                         .put("fractal_up", isUpFractal(sourceCandles, i))
                         .put("fractal_down", isDownFractal(sourceCandles, i))
                 )
