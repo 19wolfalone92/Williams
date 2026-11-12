@@ -8143,28 +8143,54 @@ private class NativeEngine(
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
-                    // Forward-score existing opposite-exit paper samples on
-                    // the scanner's ALREADY FETCHED H1 candles (no extra REST).
-                    // Only run after a newly CLOSED H1 bar; this does not
-                    // participate in readiness, signal or trade execution.
-                    runCatching {
-                        val now=futuresMarketData.exchangeNowMs()
-                        val lastClosed=candles.lastOrNull { it.t+WILLIAMS_H1_MS<=now }
-                            ?.let { it.t+WILLIAMS_H1_MS } ?: 0L
-                        if(lastClosed>0L) synchronized(tc2ExitShadowLock) {
-                            val key="tc2_exit_shadow_ab_"+symbol
-                            val old=executionStore.readState(key)?.let { JSONObject(it) }
-                            if(old!=null && lastClosed>old.optLong("as_of_ms",0L)) {
-                                val next=williamsTc2ExitShadowAdvance(old,symbol,lastClosed,
-                                    candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })
-                                check(executionStore.writeState(key,next.toString())) {
-                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED" }
+                    // Observer-only historic TC2 exit study must not consume
+                    // the 60s H1 scanner budget or block trade admission on
+                    // SQLite/network. Reuse the already fetched immutable bars.
+                    // This bounded research queue may reject a sample safely;
+                    // it has NO permission to alter orders or risk gates.
+                    val shadowKey = "SCANNER_SHADOW:" + symbol
+                    if (tc2ExitResearchEnqueued.add(shadowKey)) {
+                        runCatching {
+                            tc2ExitResearchExecutor.execute {
+                                try {
+                                    runCatching {
+                                        val now = futuresMarketData.exchangeNowMs()
+                                        val lastClosed = candles.lastOrNull {
+                                            it.t + WILLIAMS_H1_MS <= now
+                                        }?.let { it.t + WILLIAMS_H1_MS } ?: 0L
+                                        if (lastClosed > 0L) synchronized(tc2ExitShadowLock) {
+                                            val key = "tc2_exit_shadow_ab_" + symbol
+                                            val oldShadow = executionStore.readState(key)
+                                                ?.let { JSONObject(it) }
+                                            if (oldShadow != null &&
+                                                lastClosed > oldShadow.optLong("as_of_ms", 0L)) {
+                                                val next = williamsTc2ExitShadowAdvance(
+                                                    oldShadow, symbol, lastClosed,
+                                                    candles.map {
+                                                        WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                                                    })
+                                                check(executionStore.writeState(key, next.toString())) {
+                                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED"
+                                                }
+                                            }
+                                        }
+                                    }.onFailure { error ->
+                                        runCatching { auditStore.recordCockpitEvent(
+                                            "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                            state="RESEARCH_UNAVAILABLE",
+                                            detail=error.javaClass.simpleName) }
+                                    }
+                                } finally {
+                                    tc2ExitResearchEnqueued.remove(shadowKey)
+                                }
                             }
+                        }.onFailure {
+                            tc2ExitResearchEnqueued.remove(shadowKey)
+                            runCatching { auditStore.recordCockpitEvent(
+                                "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                state="RESEARCH_SCHEDULING_UNAVAILABLE",
+                                detail=it.javaClass.simpleName) }
                         }
-                    }.onFailure { error ->
-                        runCatching { auditStore.recordCockpitEvent("TC2_EXIT_SHADOW_REPLAY",
-                            symbol=symbol,state="RESEARCH_UNAVAILABLE",
-                            detail=error.javaClass.simpleName) }
                     }
                     stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
