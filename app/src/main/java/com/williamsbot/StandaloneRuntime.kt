@@ -1347,6 +1347,7 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
         .put("tc2_recent_exit_forensics", report.optJSONObject("tc2_recent_exit_forensics") ?: JSONObject())
         .put("tc2_book_exit_hierarchy", report.optJSONObject("tc2_book_exit_hierarchy") ?: JSONObject())
+        .put("four_book_full_chapter_coverage", report.optJSONObject("four_book_full_chapter_coverage") ?: JSONObject())
         .put("book_causal_understanding", report.optJSONObject("book_causal_understanding") ?: JSONObject())
         .put("signed_position_stop_join", report.optJSONObject("signed_position_stop_join") ?: JSONObject())
         .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
@@ -12904,6 +12905,8 @@ private class NativeEngine(
             .put("tc2_recent_exit_forensics",tc2RecentExits)
             .put("tc2_book_exit_hierarchy",WilliamsTc2ExitHierarchyLens.assess(
                 scannerEvidenceSnapshot,tc2RecentExits,observedAtMs))
+            .put("four_book_full_chapter_coverage",WilliamsFourBookCurriculum.assess(
+                scannerEvidenceSnapshot,observedAtMs))
             .put("book_causal_understanding", WilliamsBookCausalUnderstanding.assess(
                 scannerEvidenceSnapshot,tc2RecentExits,observedAtMs))
             .put("signed_position_stop_join",signedStopJoin)

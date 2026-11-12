@@ -249,6 +249,9 @@ object DiagnosticsArchive {
                 addJson(zip,"tc2_book_exit_hierarchy.json",
                     report.optJSONObject("tc2_book_exit_hierarchy") ?: org.json.JSONObject()
                         .put("state","NOT_VERIFIED").put("can_place_orders",false))
+                addJson(zip,"four_book_full_chapter_coverage.json",
+                    report.optJSONObject("four_book_full_chapter_coverage") ?: org.json.JSONObject()
+                        .put("state","NOT_VERIFIED").put("trading_authority",false))
                 addJson(zip,"book_causal_understanding.json",
                     report.optJSONObject("book_causal_understanding") ?: org.json.JSONObject()
                         .put("state","NOT_VERIFIED").put("can_place_orders",false))

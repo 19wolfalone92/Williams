@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "updated": "2026-11-12",
-  "release": "4.64.22",
+  "release": "4.64.23",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -1833,6 +1833,113 @@
       ],
       "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST",
+      "book": "TC2",
+      "pdf_pages": [
+        179,
+        180,
+        181,
+        182,
+        183
+      ],
+      "rule": "TC2 appendix 1 calls for reliable data, familiarity with margin/tick/order semantics, paper practice and operational preparedness. It is a user-readiness guide, not an algorithmic market signal.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannerFreshnessIsNotProofOfPaperTradeStopOrHumanPsychology"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.FIVE_TRADER_LEVELS",
+      "book": "TC1",
+      "pdf_pages": [
+        37,
+        49,
+        80,
+        106,
+        127
+      ],
+      "rule": "TC1 distinguishes novice, advanced beginner, competent, proficient and expert education levels; they are competence descriptions and cannot authorize real orders.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "book": "NTD",
+      "pdf_pages": [
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156
+      ],
+      "rule": "NTD final chapter explains trader development and mental process, which must not be numerically inferred as a trading signal or risk approval.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannerFreshnessIsNotProofOfPaperTradeStopOrHumanPsychology"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP",
+      "book": "COURSE",
+      "pdf_pages": [
+        2,
+        3,
+        15,
+        31,
+        75,
+        99,
+        119,
+        122
+      ],
+      "rule": "The scanned Course has five instructional levels; its final page explicitly delegates individual lessons to an external tutorial not contained in the PDF.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannedCourseExternalTutorialNotFabricatedFromBookMetadata"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
@@ -1873,5 +1980,17 @@
     "retrospective_profit_replay_completed": false,
     "partial_profit_half_position_mandatory": false,
     "whole_book_fidelity_99_percent_proven": false
+  },
+  "full_book_chapter_inventory": {
+    "path": "docs/williams_four_book_full_section_inventory_46423.json",
+    "module": "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt",
+    "source_total_physical_pdf_pages": 642,
+    "indexed_physical_pdf_pages": 642,
+    "section_count": 57,
+    "sections_independently_visual_exam_passed": 0,
+    "course_external_personal_tutorial_available": false,
+    "claimed_source_coverage_accuracy_percent": null,
+    "execution_authority": false
   }
 }

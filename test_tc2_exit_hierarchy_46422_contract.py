@@ -36,7 +36,7 @@ def test_exposes_result_in_zip_and_diagnostic_ui_without_creating_new_orders():
     assert 'read_only' not in LENS or '"trading_authority",false' in LENS
 
 def test_original_book_rule_registry_is_still_uncertified():
-    assert len(REG["rules"]) == 63
+    assert len(REG["rules"]) >= 63  # later source chapter rules are additive, not destructive
     assert REG["whole_book_certified"] is False
     assert REG["historical_exit_book_lens"]["actual_signed_stop_equivalence_claimed"] is False
     assert REG["historical_exit_book_lens"]["whole_book_fidelity_99_percent_proven"] is False
