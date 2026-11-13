@@ -20,6 +20,7 @@ import requests
 
 from binance_client import BinanceAPIError
 from williams_symbol_policy import new_risk_symbol_blocker
+from futures_account_contract import account_with_configuration, FuturesAccountContractError
 
 
 class BinanceFuturesClient:
@@ -334,11 +335,16 @@ class BinanceFuturesClient:
         )
 
     def account(self):
-        # Binance replaced the account V2 endpoint with V3. Keep the backend aligned
-        # with the Android adapter so Testnet account reconciliation uses one API contract.
+        # V3 balances omit V2 permission flags in the documented response. Obtain
+        # missing permission from signed accountConfig, never default it to true.
         raw = self._require_object(self._request("GET", "/fapi/v3/account", signed=True))
-        if not isinstance(raw.get("canTrade"), bool) or not isinstance(raw.get("assets"), list):
+        if not isinstance(raw.get("assets"), list) or any(not isinstance(row, dict) for row in raw["assets"]):
             raise BinanceAPIError("Malformed Futures account snapshot", payload=raw)
+        try:
+            configuration = self.account_configuration() if "canTrade" not in raw else None
+            raw = account_with_configuration(raw, configuration)
+        except FuturesAccountContractError as exc:
+            raise BinanceAPIError(str(exc), payload=raw) from exc
         assets = raw.get("assets", []) or []
         balances = []
         for asset in assets:
@@ -360,6 +366,9 @@ class BinanceFuturesClient:
             "totalUnrealizedProfit": raw.get("totalUnrealizedProfit", "0"),
             "availableBalance": raw.get("availableBalance", "0"),
         }
+
+    def account_configuration(self):
+        return self._require_object(self._request("GET", "/fapi/v1/accountConfig", signed=True))
 
     def position_risk(self, symbol=None):
         rows = self._require_array(self._request(

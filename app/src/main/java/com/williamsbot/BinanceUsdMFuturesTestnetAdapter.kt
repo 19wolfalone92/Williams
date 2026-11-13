@@ -274,7 +274,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONArray(body)
     }
 
-    fun account(): JSONObject = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
+    fun account(): JSONObject {
+        val raw = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
+        val configuration = if (!raw.has("canTrade")) accountConfiguration() else null
+        return futuresAccountWithConfiguration(raw, configuration)
+    }
+
+    fun accountConfiguration(): JSONObject =
+        request("GET", "/fapi/v1/accountConfig", emptyMap(), signed = true)
 
     /** Must be checked before trading; the adapter assumes one-way mode (BOTH). */
     fun positionMode(): JSONObject =
