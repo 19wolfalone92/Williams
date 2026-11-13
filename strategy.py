@@ -29,11 +29,12 @@ def _streak(mask):
     return pd.Series(out, index=mask.index, dtype=int)
 
 
-def _profitunity_window(volume_up, mfi_up, valid=None):
+def _profitunity_window(volume_up, mfi_up, valid=None, *, volume_down, mfi_down):
     """Classify relative MFI/volume states without inventing a warm-up state.
 
     UNKNOWN means at least one current/previous input is unavailable. STABLE
-    is reserved for valid equal-direction comparisons, not NaN comparisons.
+    means either input is tied. 'Not up' does not prove 'down' (TC1 PDF43-45).
+    Both strict directions are required; equality is never a Squat or Fade.
     """
     if valid is None:
         valid = volume_up.notna() & mfi_up.notna()
@@ -41,12 +42,15 @@ def _profitunity_window(volume_up, mfi_up, valid=None):
         valid = valid.astype(bool)
     volume_up = volume_up.fillna(False).astype(bool)
     mfi_up = mfi_up.fillna(False).astype(bool)
+    volume_down = volume_down.fillna(False).astype(bool)
+    mfi_down = mfi_down.fillna(False).astype(bool)
+    valid = valid & ~(volume_up & volume_down) & ~(mfi_up & mfi_down)
     result = pd.Series("UNKNOWN", index=volume_up.index, dtype=object)
     result.loc[valid] = "STABLE"
     result.loc[valid & volume_up & mfi_up] = "GREEN"
-    result.loc[valid & ~volume_up & ~mfi_up] = "FADING"
-    result.loc[valid & ~volume_up & mfi_up] = "FAKE"
-    result.loc[valid & volume_up & ~mfi_up] = "SQUAT"
+    result.loc[valid & volume_down & mfi_down] = "FADING"
+    result.loc[valid & volume_down & mfi_up] = "FAKE"
+    result.loc[valid & volume_up & mfi_down] = "SQUAT"
     return result
 
 
@@ -487,14 +491,22 @@ def calculate_indicators(df, cfg):
     volume = pd.to_numeric(x.get("volume", pd.Series(np.nan, index=x.index)), errors="coerce")
     trades = pd.to_numeric(x.get("trades", pd.Series(np.nan, index=x.index)), errors="coerce")
     x["volume"] = volume
-    if trades.notna().all() and (trades > 0).any():
-        mfi_volume = trades
-        x["mfi_proxy_source"] = "BINANCE_TRADE_COUNT_PROXY"
-    else:
-        mfi_volume = volume
-        x["mfi_proxy_source"] = "BASE_VOLUME_PROXY"
+    # Select units PER OBSERVATION, never by inspecting the whole frame. An
+    # appended missing trade count must not rewrite earlier MFI or wave signs.
+    # Explicit zero/negative/infinite counts remain invalid rather than being
+    # silently replaced with an unrelated positive base-asset volume.
+    has_trade_count = trades.notna()
+    mfi_volume = trades.where(has_trade_count, volume)
+    x["mfi_proxy_source"] = np.where(
+        has_trade_count, "BINANCE_TRADE_COUNT_PROXY", "BASE_VOLUME_PROXY"
+    )
+    usable_volume = np.isfinite(mfi_volume) & (mfi_volume > 0)
+    mfi_volume = mfi_volume.where(usable_volume)
     x["mfi_volume_proxy"] = mfi_volume
-    x["mfi_proxy"] = (x["high"] - x["low"]) / mfi_volume.replace(0, np.nan)
+    ranges = pd.to_numeric(x["high"], errors="coerce") - pd.to_numeric(x["low"], errors="coerce")
+    ranges = ranges.where(np.isfinite(ranges) & (ranges > 0))
+    x["mfi_proxy"] = ranges / mfi_volume
+    x["mfi_proxy"] = x["mfi_proxy"].where(np.isfinite(x["mfi_proxy"]) & (x["mfi_proxy"] > 0))
     # Consolidate before the MFI-derived columns to avoid fragmented frames.
     x = x.copy()
     x["volume_up"] = (mfi_volume > mfi_volume.shift(1)).fillna(False).astype(bool)
@@ -504,10 +516,13 @@ def calculate_indicators(df, cfg):
     mfi_comparison_valid = (
         mfi_volume.notna() & mfi_volume.shift(1).notna()
         & x["mfi_proxy"].notna() & x["mfi_proxy"].shift(1).notna()
+        # Trade counts and asset units are not comparable across a source switch.
+        & (x["mfi_proxy_source"] == x["mfi_proxy_source"].shift(1))
     )
     x["mfi_proxy_valid"] = mfi_comparison_valid.astype(bool)
     x["profitunity_window"] = _profitunity_window(
-        x["volume_up"], x["mfi_up"], valid=mfi_comparison_valid
+        x["volume_up"], x["mfi_up"], valid=mfi_comparison_valid,
+        volume_down=x["volume_down"], mfi_down=x["mfi_down"]
     )
     x["squatting_bar"] = (x["profitunity_window"] == "SQUAT").astype(bool)
 

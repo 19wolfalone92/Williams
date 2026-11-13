@@ -70,6 +70,7 @@ def test_live_tc2_raw_h1_miss_reason_is_not_a_new_trade_gate():
 
 
 def test_version_is_consistent_and_main_signing_not_touched():
-    assert (ROOT/"VERSION").read_text("utf-8").strip()=="4.64.28"
-    assert 'versionName = "4.64.28"' in (ROOT/"app/build.gradle.kts").read_text("utf-8")
-    assert "VERSION = '4.64.28'" in (ROOT/"server.py").read_text("utf-8")
+    version = (ROOT/"VERSION").read_text("utf-8").strip()
+    assert version
+    assert f'versionName = "{version}"' in (ROOT/"app/build.gradle.kts").read_text("utf-8")
+    assert f"VERSION = '{version}'" in (ROOT/"server.py").read_text("utf-8")

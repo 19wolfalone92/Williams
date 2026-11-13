@@ -28,7 +28,7 @@ internal object WilliamsBookCausalUnderstanding {
             "Countertrend WM1 takes the AO colour of the previous move, distinct from AO sign.",
             "BOUNDED_SOURCE_RULE"),
         Rule("TC2.WM2.THREE_AO_BARS", "TC2", listOf(135,136,137,139),
-            "Three consecutive AO colour changes, third price bar identifies pending entry.",
+            "Three consecutive same-colour AO bars (three changes in value); the third identifies pending entry.",
             "BOUNDED_SOURCE_RULE"),
         Rule("TC2.WM3.ACTIVATION_TEETH", "TC2", listOf(145,146,147),
             "Fractal must BREAK beyond Teeth rather than form beyond Teeth.",

@@ -164,7 +164,7 @@ def main() -> None:
         "def canonical_indicator_config_from_env(env=os.environ)",
         "CANONICAL_WILLIAMS_INDICATOR_PARAMS",
         "Non-canonical Williams indicator parameters are blocked",
-        "def _profitunity_window(volume_up, mfi_up, valid=None)",
+        "def _profitunity_window(volume_up, mfi_up, valid=None, *, volume_down, mfi_down)",
         '"fractal_up_confirmed"',
         '"confirmed_up_center_index"',
         '"confirmed_up_group_start_index"',

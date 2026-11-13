@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.64.28"
+        versionName = "4.64.29"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 
