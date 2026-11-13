@@ -648,6 +648,34 @@ class TradingAuditStore(context: Context) :
         return feeUsdt to known
     }
 
+    /**
+     * Read-only, bounded private Binance ALGO_UPDATE receipts for a campaign
+     * close. A page touching the limit is incomplete evidence, not a proof.
+     * Financial/STOP event retention is unchanged.
+     */
+    @Synchronized
+    fun recentPrivateAlgoExitEvents(
+        symbol: String, closedAtMs: Long, lookbackMs: Long = 300_000L
+    ): JSONArray? {
+        if (symbol.isBlank() || closedAtMs <= 0L || lookbackMs !in 1L..3_600_000L)
+            return null
+        val rows = JSONArray()
+        val lower = (closedAtMs - lookbackMs).coerceAtLeast(0L)
+        readableDatabase.query("events", arrayOf("raw_json"),
+            "event_type = ? AND event_time >= ? AND event_time <= ?",
+            arrayOf("ALGO_UPDATE", lower.toString(), (closedAtMs + 30_000L).toString()),
+            null, null, "id DESC", "501").use { cursor ->
+            while (cursor.moveToNext()) {
+                val event = JSONObject(cursor.getString(0))
+                if (event.optJSONObject("o")?.optString("s") == symbol) rows.put(event)
+                // A page may truncate other symbols. Do not claim complete proof
+                // from any potentially truncated source evidence.
+                if (cursor.position >= 500) return null
+            }
+        }
+        return rows
+    }
+
     @Synchronized
     fun executionEvents(orderId: String): List<JSONObject> {
         val rows = mutableListOf<JSONObject>()
