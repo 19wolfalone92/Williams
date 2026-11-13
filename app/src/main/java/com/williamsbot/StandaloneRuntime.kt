@@ -5923,16 +5923,38 @@ private class NativeEngine(
                 } else {
                     (trigger - summary.entryPrice) / trigger
                 }
+                // An exit order on the SAME symbol is not necessarily this
+                // campaign's exit: an old closed owner may overlap with a new
+                // independent owner. Match the exact entry-client ID and full
+                // closing (not a partial Course trim) before using its reason.
                 val exitIntent = (0 until intents.length()).mapNotNull { j -> intents.optJSONObject(j) }
                     .lastOrNull {
                         it.optString("intent_role") == "EXIT" &&
                             it.optString("symbol").equals(symbol, true) &&
+                            it.optString("entry_client_id") == clientId &&
+                            !it.optBoolean("partial_reduction", false) &&
                             it.optString("exchange_status").equals("EXIT_CONFIRMED", true) &&
                             it.optLong("created_at_ms", 0L) in startTime..closedAt
                     }
+                // This is strictly an explanatory, read-only audit of a
+                // confirmed-flat historical campaign. Missing ALGO_UPDATE,
+                // missing child order IDs, or multi-order exits stay UNKNOWN;
+                // do not infer STOP_FILLED merely from time/price proximity.
+                val stopAttribution = runCatching {
+                    val privateEvents = auditStore.recentPrivateAlgoExitEvents(symbol, closedAt)
+                        ?: JSONArray()
+                    verifiedNativeStopExitAttribution(
+                        intent, fillArray, privateEvents, startTime, closedAt)
+                }.getOrElse { error ->
+                    JSONObject().put("schema", "WILLIAMS_SIGNED_EXIT_ATTRIBUTION_V1")
+                        .put("status", "NOT_VERIFIED")
+                        .put("reason", "PRIVATE_STOP_PROOF_UNAVAILABLE:" + error.javaClass.simpleName)
+                        .put("can_place_orders", false)
+                }
                 val reason = exitIntent?.optString("reason")?.takeIf { it.isNotBlank() }
                     ?: intent.optString("close_reason").takeIf { it.isNotBlank() }
-                    ?: "EXCHANGE_RECONCILED_CLOSE"
+                    ?: if(stopAttribution.optString("status") == "VERIFIED_OWNED_PROTECTIVE_STOP_FILLED")
+                        "VERIFIED_PROTECTIVE_STOP_FILLED" else "EXCHANGE_RECONCILED_CLOSE"
                 TradeJournal.recordExchangeCompleted(
                     prefs = prefs,
                     id = "FUTURES:" + clientId,
@@ -5950,7 +5972,8 @@ private class NativeEngine(
                     reason = reason,
                     entrySnapshot = JSONObject(intent.toString()),
                     entrySlippagePct = entrySlippagePct,
-                    fillCount = summary.fillCount
+                    fillCount = summary.fillCount,
+                    exitAttribution = stopAttribution
                 )
                 futuresCampaignCoordinator.recordVerifiedCampaignResult(clientId,summary.netPnlUsdt,summary.feeKnown,summary.fillCount)
                 futuresCampaignCoordinator.markTradeJournalStatus(
