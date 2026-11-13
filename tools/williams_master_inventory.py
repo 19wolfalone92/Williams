@@ -56,6 +56,9 @@ def inventory(source_dir, catalog, reviews, output_dir, ocr_dir=None):
             })
             if 'page_kind' in note:
                 rows[-1]['page_kind'] = note['page_kind']
+            for field in ('review_text_sha256', 'review_text_provenance'):
+                if field in note:
+                    rows[-1][field] = note[field]
     output_dir.mkdir(parents=True, exist_ok=True)
     target = output_dir / 'PRIMARY_SOURCE_PAGE_REGISTER.jsonl'
     target.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows))

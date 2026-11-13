@@ -8,15 +8,16 @@
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
 2. `python tools/williams_master_inventory.py --source-dir <PDF_DIR>` с
    локальным OCR directory воспроизводит реестр; `review_notes.json` сохраняет
-   ручные receipts (сейчас579) и не выдаёт их за независимую сертификацию.
+   ручные receipts (сейчас698) и не выдаёт их за независимую сертификацию.
 3. `python tools/audit_williams_master_research.py --require-complete` должен
    завершаться2, пока source/figure/implementation/Device gates не завершены.
    Успех integrity CLI без этого флага означает только валидный реестр.
-4. Статус13.11: TC2_EN257/257, TC1_RU140/140 и NTD_RU156/156 имеют
-   первое текстовое чтение.
+4. Статус13.11: TC2_EN257/257, TC1_RU140/140, NTD_RU156/156 и
+   Course122/122 имеют первое текстовое/OCR чтение предоставленного файла.
    Полные визуальные/независимые проверки и межпереводные page maps не завершены.
-   Следующий source route — Course, выбирая ещё не REVIEWED страницы
-   строго по очереди, без пропуска психологии/сносок.
+   Следующий source route — непрочитанные страницы двух переводовTC2 и полная
+   смысловая page map. Course external tutorial/Computorial отсутствуют вPDF;
+   первое чтение122 физических листов не закрывает этот пробел.
 5. Независимое повторное чтение сложных9.10/10.7/11.2/11.7/12.1-4. Не
    реконструировать точные OHLC из нечисленных рисунков; отдельные synthetic cases.
 6. Для10 requested symbols: separate NEW risk allowlist во всех final doors,
@@ -139,3 +140,26 @@ Complete и printed-number reconciled gates ожидаемоexit2. Новое ex
 Продолжать Course по настоящим изображениям/OCR, не считать пустой raw text
 прочитанным содержимым. Затем полная translation map, независимые фигуры,
 margin ledger/final-submit, expert/holdout и actual Demo/device. Main не изменён.
+
+## Продолжение13.11.2026 — Course и отдельная OCR identity
+
+Отчёт: `COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`.
+122/122 Course physical first-pass receipts,25 visual,11 новых рисунков;
+все основные supplied копии четырёх семей имеют первое чтение. Глобально
+698/1213 receipts,190 visual,143 figures,147 rules,142 source-context rechecked,
+independent0. Остальные515 физических страниц — два переводаTC2.
+
+Новый приватный OCR получен отдельно и не заменил старые122 acquisition hashes.
+`COURSE_REVIEW_OCR_PROVENANCE.json` и тесты различают их, запрещают пустой OCR
+как прочтение без render и не выдают Level5 external tutorial за полученный материал.
+На56 действительно находится рисунок, на52 рукописноеnot, на122 — явная отсылка
+к личному занятию.7 caveat records не являются сертифицированными errata автора.
+
+Полный Python2450 passed/2 skipped/4 warnings,27.80s;ruff/releasePASS,
+static0failures/11warnings.1091 non-Course rows воспроизведены; все1213 старых
+hashes/lengths и122 новых derived hashes сверены. Complete gate ожидаемоexit2.
+Android production не менялся; exact-head CI нового source commit фиксируетсявPR240.
+
+Приоритет продолжения: полная translation map, независимые figures/atomic specs,
+aggregate half-margin ledger и final-submit обоих runtimes, expert cohort и
+заранее зафиксированный holdout. Actual Demo/device и main merge gates открыты.

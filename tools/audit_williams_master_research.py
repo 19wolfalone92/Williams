@@ -23,8 +23,12 @@ def audit(root=ROOT):
     crosswalk=json.loads((folder/'TC2_TRANSLATION_PAGE_MAP.json').read_text())
     conflict_registers=[(sid,json.loads((folder/name).read_text())) for sid,name in [
         ('TC1_RU','TC1_SOURCE_CONFLICT_REGISTER.json'),
-        ('NTD_RU','NTD_SOURCE_CONFLICT_REGISTER.json')]]
+        ('NTD_RU','NTD_SOURCE_CONFLICT_REGISTER.json'),
+        ('COURSE_EN','COURSE_SOURCE_CONFLICT_REGISTER.json')]]
+    course_ocr=json.loads((folder/'COURSE_REVIEW_OCR_PROVENANCE.json').read_text())
     errors=[]
+    if sources['COURSE_EN'].get('external_course_media_complete') is not False:
+        errors.append('COURSE_EXTERNAL_MATERIAL_FALSE_CERTIFICATION')
     keys=[(p['source_id'],p['pdf_page']) for p in pages]
     expected={(s['id'],n) for s in catalog for n in range(1,s['pdf_pages']+1)}
     if len(keys)!=len(set(keys)) or set(keys)!=expected:
@@ -43,7 +47,8 @@ def audit(root=ROOT):
             note=reviews.get(f"{p['source_id']}:{p['pdf_page']}")
             if not note or any(p.get(a)!=note.get(b) for a,b in [
                 ('content','content'),('verification_status','verification_status'),
-                ('visual_review','visual_review'),('extracted_rules','rules'),('figures','figures')]):
+                ('visual_review','visual_review'),('extracted_rules','rules'),('figures','figures'),
+                ('review_text_sha256','review_text_sha256'),('review_text_provenance','review_text_provenance')]):
                 errors.append('PAGE_REVIEW_RECEIPT_MISMATCH')
             if p['verification_status']=='REVIEWED_SINGLE_PASS' and p['visual_review'] is not True:
                 errors.append('REVIEWED_VISUAL_STAGE_WITHOUT_RENDER_REVIEW')
@@ -108,6 +113,39 @@ def audit(root=ROOT):
                 receipt=reviews.get(f'{sid}:{p}',{})
                 if p not in conflict['pdf_pages'] or receipt.get('visual_review') is not True:
                     errors.append('SOURCE_CONFLICT_WITHOUT_VISUAL_RECEIPT')
+    if (course_ocr.get('schema')!='COURSE_DERIVED_OCR_20261113_V1'
+            or course_ocr.get('source_id')!='COURSE_EN'
+            or course_ocr.get('source_sha256')!=sources['COURSE_EN']['sha256']):
+        errors.append('COURSE_REVIEW_OCR_SOURCE_OR_SCHEMA_MISMATCH')
+    if (any(course_ocr.get(k) is not False for k in ['whole_content_certified',
+            'independent_second_review','can_place_orders','training_allowed','raw_ocr_published'])
+            or course_ocr.get('new_ocr_is_not_original_acquisition') is not True
+            or course_ocr.get('original_acquisition_hashes_preserved') is not True):
+        errors.append('COURSE_REVIEW_OCR_UNSUPPORTED_CERTIFICATION_OR_PROVENANCE')
+    ocr_pages=course_ocr['pages']
+    ocr_keys=[p['pdf_page'] for p in ocr_pages]
+    if (len(ocr_keys)!=len(set(ocr_keys)) or any(type(p) is not int for p in ocr_keys)
+            or set(ocr_keys)!=set(range(1,sources['COURSE_EN']['pdf_pages']+1))):
+        errors.append('COURSE_REVIEW_OCR_PAGE_SET_INVALID')
+    page_by_key={(p['source_id'],p['pdf_page']):p for p in pages}
+    for entry in ocr_pages:
+        key=f"COURSE_EN:{entry['pdf_page']}"
+        receipt=reviews.get(key,{})
+        page=page_by_key.get(('COURSE_EN',entry['pdf_page']),{})
+        digest=entry.get('derived_ocr_sha256','')
+        if not re.fullmatch('[0-9a-f]{64}',digest):errors.append('COURSE_REVIEW_OCR_INVALID_HASH')
+        if (page.get('review_text_sha256')!=digest or receipt.get('review_text_sha256')!=digest
+                or page.get('review_text_provenance')!=course_ocr['schema']
+                or receipt.get('review_text_provenance')!=course_ocr['schema']):
+            errors.append('COURSE_REVIEW_OCR_RECEIPT_MISMATCH')
+        if entry.get('original_acquired_text_sha256')!=page.get('acquired_text_sha256'):
+            errors.append('COURSE_REVIEW_OCR_ORIGINAL_ACQUISITION_MISMATCH')
+        expected_method='OCR_PLUS_RENDER_FIRST_PASS' if receipt.get('visual_review') else 'OCR_TEXT_FIRST_PASS'
+        if (entry.get('review_method')!=expected_method
+                or type(entry.get('derived_ocr_characters')) is not int
+                or entry['derived_ocr_characters']<0
+                or (entry['derived_ocr_characters']==0 and receipt.get('visual_review') is not True)):
+            errors.append('COURSE_REVIEW_OCR_UNSUPPORTED_REVIEW_METHOD')
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
     counts=Counter(p['verification_status'] for p in pages)

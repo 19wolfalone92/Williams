@@ -1,8 +1,8 @@
 # Williams Master Research: контрольная точка 13.11.2026
 
-Актуальное продолжение: `NTD_FIRST_PASS_AND_DATA_GUARD_20261113.md`.
-579 first-pass receipts,132 figure entries,135 rules; independent0.
-Найден и исправлен Python NTD skip-NaN false-unconsumed дефект,2444 Python
+Актуальное продолжение: `COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`.
+698 first-pass receipts,143 figure entries,147 rules; independent0.
+Найден и исправлен Python NTD skip-NaN false-unconsumed дефект,2450 Python
 tests passed/2 skipped. Main не изменён; исходные контрольные точки ниже
 сохранены как история, а не как текущие счётчики или открытые дефекты.
 

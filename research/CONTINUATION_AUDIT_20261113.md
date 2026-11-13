@@ -1,13 +1,15 @@
 # Проверка плана и продолжение — 13.11.2026, 4.64.30
 
 Актуальная контрольная точка:4.64.31,
+`COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`,
 `NTD_FIRST_PASS_AND_DATA_GUARD_20261113.md`,
 `TC1_FIRST_PASS_AND_NUMERIC_AUDIT_20261113.md` и
 `ACCOUNT_V3_PERMISSION_CONTINUATION_20261113.md`. Первоначальные результаты
 этого отчёта ниже сохранены как baseline, а не как текущие счётчики.
-Теперь579/1213 страниц имеют первое текстовое чтение
-(TC2_EN257,TC1_RU140,NTD_RU156 полностью),132 figure entries и135 правил.
-Независимых проверок0; Demo/device/merge gates закрыты. Следующий source route —Course.
+Теперь698/1213 страниц имеют первое text/OCR чтение предоставленного файла
+(TC2_EN257,TC1_RU140,NTD_RU156,Course122),143 figure entries и147 правил.
+Независимых проверок0; Demo/device/merge gates закрыты. Следующий source route —
+два переводаTC2/полная page map. Внешний Course tutorial вPDF не содержится.
 
 Проверен именно план из `4ae2b2a049df2285365f3cc03cec4e4671197ea4`.
 Работа продолжается в `research/master-primary-sources-20261113`, draft PR240,

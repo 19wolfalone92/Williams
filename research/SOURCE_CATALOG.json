@@ -63,6 +63,11 @@
     "sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
     "role": "RESEARCH_ONLY",
     "publication_identity_complete": false,
-    "full_content_review_complete": false
+    "full_content_review_complete": false,
+    "external_course_media_complete": false,
+    "external_course_media_required": [
+      "Profitunity Computorial actual examples referenced on PDF84",
+      "Individual Level5 tutorial material deferred on PDF122"
+    ]
   }
 ]

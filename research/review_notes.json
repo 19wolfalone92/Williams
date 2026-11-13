@@ -919,40 +919,57 @@
   },
   "COURSE_EN:1": {
     "section": "DISCLOSURE",
-    "content": "Course disclosure and copyrighted home-study provenance; date/version not printed.",
+    "content": "Disclosure identifies Profitunity Trading Group/Bill M Williams home-study materials and expressly disclaims a profit/no-loss guarantee. Date/version not printed. Private use notice is provenance, not an operational trading rule.",
     "rules": [],
     "figures": [],
     "visual_review": true,
     "printed_page": "DISCLOSURE",
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "FRONT_MATTER",
+    "review_text_sha256": "f302a53fc57ab637c62006392ff5aee45b65cb63b883ec03d56b6a20cf609a28",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
     ]
   },
   "COURSE_EN:4": {
     "section": "INTRODUCTION",
-    "content": "Chaos as ordered nonlinear explanation and five learning levels; no artificial price signal inferred.",
+    "content": "Introduction explains chaos/map and five-stage learning; 90% loser/top10% intelligence claims not supported by reproduced sample. Chaos/higher-order and body/brain analogies are attributed coaching, not future prices or causal/accounting exemptions.",
     "rules": [],
     "figures": [],
     "visual_review": true,
     "printed_page": "INTRODUCTION 1",
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "6b97a788fa969300963bcacfcf5be19e46d0b1c9911ba4f5dfd86ae76524017f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
     ]
   },
   "COURSE_EN:44": {
     "section": "LEVEL_II",
-    "content": "Oscillator crossing zero gives only W4 minimum, not W4 completion; time and target projection remain context.",
-    "rules": [],
+    "content": "Zero passage establishes minimum W4, explicitly not its completion. Terminal c/e target, divergence, fractal and squat add context. Time window projects1.38-1.62 times(t3-t1) from t2; W5 price zone projects p0-to-p3 distance from the end of W4. Handwritten annotations are not separately authenticated.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION",
+      "COURSE.W4.ZERO_MINIMUM",
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW",
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES"
+    ],
     "figures": [
       "W4_TIME_PROJECTION"
     ],
     "visual_review": true,
     "printed_page": "LEVEL II 13",
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "c42fc2cdaf676b83d3fb0a8bace945d6b714863b77efecf4695ac43306118414",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
     ]
   },
   "TC2_EN:247": {
@@ -8909,6 +8926,2173 @@
     "uncertainties": [
       "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
       "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "COURSE_EN:2": {
+    "section": "LEVELS_OVERVIEW",
+    "content": "Rendered five-level hierarchy: novice uses OHLC/volume/MFI/windows/airbag to gain experience; advanced beginner uses Elliott/fractals on one-contract basis; competent adds multi-contract/spreads/options with Planned Trades; proficient examines belief systems; expert states of mind. OCR omitted lower two boxes, recovered visually. Human competence is not measured model accuracy or authority to enable derivatives.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+    ],
+    "figures": [
+      "LEVELS_OVERVIEW_P2"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "FRONT_MATTER",
+    "review_text_sha256": "a6f95c9f1541a75bbc55e5df0427ea6ab8d67a3cd390831a974ae5f14a10b3fb",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:3": {
+    "section": "LEVELS_OVERVIEW",
+    "content": "Colored physical divider lists five levels novice, advanced beginner, competent, proficient, expert; navigation, no substantive entry rule or actual page map.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "NAVIGATION",
+    "review_text_sha256": "7022b599668bd81494bc7573310e7524456f8f631d0e6671a0898892aee1074a",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:5": {
+    "section": "INTRODUCTION",
+    "content": "Bell-curve typography and Mandelbrot cotton/scaling quotation motivate nonlinear analysis. Perfect-scaling language, hemispheric claims and criticism of AI/statistics are source claims, not independently established market distributions or proof a current trading model is valid.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "fe69cc34f4cc7d74a4bc9897c7ca72e1a586436ee83f65e589384ae81f43b049",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:6": {
+    "section": "INTRODUCTION",
+    "content": "River/rock flow analogy progresses from stable to turbulent as energy increases. Historical/religious and left/right-brain narrative is philosophical coaching, not a numeric liquidity, trend or clinical rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "34a70b631f69c2198fca0d9dd075fd0cdd804d61c932214a0a640f280726962c",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:7": {
+    "section": "INTRODUCTION",
+    "content": "Prigogine quote and ball-of-twine scale analogy explain dependence on observation scale. Geometric dimension/brain/market claims do not identify unique causal wave degree, participant intent or validated profitability.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "061eba82f7dc87719c5d06b16bae8a5cfa79704935fb21dfc68d30e9fe5f792a",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:8": {
+    "section": "INTRODUCTION",
+    "content": "Fractal-tree bifurcations and the five learning stages are discussed; six/thirteen iteration descriptions are illustrative and not an automatic wave algorithm. Novice numerical classification is one stage of human learning, not a model training/exam result.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "62834fbbfbb8f3cab1c4201c1645c56a4a3a612ea2ad374aec763564c16014fe",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:9": {
+    "section": "INTRODUCTION",
+    "content": "Novice learns bar-by-bar OHLC, volume, MFI/windows and airbag; Holy-Grail/mechanical-system/AI criticism and five-losing-examples challenge are author opinions, not reproduced comparative benchmarks or proof causally tested automation is impossible.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "b6f227b918c46c16efe79060b8cd61cb74b0070357f2a3c717102365c87e79bb",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:10": {
+    "section": "INTRODUCTION",
+    "content": "Advanced beginner expands from adjacent bars to panoramic up-to140-bar Elliott/fractal perspective and one-contract trading. Claimed90% reduction of ambiguity/top2% profession is not an expert accuracy measurement;140 is contextual degree guidance, not universal fixed scan expiry.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "fce55250af8862077bebae1d4cc2fa7b1566e008c20ec0a5f8548886bebc935d",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:11": {
+    "section": "INTRODUCTION",
+    "content": "Competent level uses Planned Trades and Trading Partner across contracts; source distinguishes wrong analysis (stop/reverse) from out-of-touch (exit only). This is a human diagnostic distinction, not automatic reversal from any opposite signal.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "f3da370b0e1f5ecc8d697781a983e5eca664a0267f6191f00141225f114f9693",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:12": {
+    "section": "INTRODUCTION",
+    "content": "Proficient level reflects beliefs, body-type and brain metaphors as part of the trader/market relationship.486-era computing/clinical precision/least-resistance assertions are attributed and not model architecture or verified physiology.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e700dd27a8525d36c9ab4a20eee56cc35c05b180d2c9c1fa4c52b6d503529f99",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:13": {
+    "section": "INTRODUCTION",
+    "content": "Expert level emphasizes states of mind and chaos as higher order; retrospective self/market mastery and novice no-loss goals do not establish a trading guarantee or machine gate. Introduction review leads into novice tools.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "10359492a20964bfe0190a5da5ba322fd75ba6869efe6ded86b3a6e2b53ce6d1",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:14": {
+    "section": "INTRODUCTION",
+    "content": "Personal notes/questions worksheet, not substantive signal content or a blank OCR failure.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "b1a339c5cf1d1b49e12ba007c5f77ebbf4f6a3927b546d017625890a2dc5e714",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:15": {
+    "section": "LEVEL_I",
+    "content": "Level-I outline lists bar control, immediate trend, MFI, four windows, squat, review/summary. Its goals promise accurate/profitable funnel/no loss during experience; outline is navigation and claims, not achieved evidence.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "review_text_sha256": "2e0fd78dd9c5a6fafc41a8f16657cc137a0d8a1db693d1ec97b7ff3b6333a83b",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:16": {
+    "section": "LEVEL_I",
+    "content": "Novice introduction frames trading as personal learning and following market movers.80% knowledge and market/corner/intervention claims are not independently established measurements; future-direction language does not authorize future candles.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "0e965785138f43b20e4e90add0076314298436ac4070c686da2ebf31f563c4ea",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:17": {
+    "section": "LEVEL_I",
+    "content": "OHLC opening/high/low/closing balance narrative and bar division into equal thirds. The source attributes actor control, but four prices do not uniquely reveal intrabar path or participant identity. Exact third-boundary conventions need a spec.",
+    "rules": [
+      "COURSE.BAR.OHLC_NOT_PATH"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "fc738b9ec2aa9c6e439811d68b4a572147950f31083cb204f564d38254cbffcc",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:18": {
+    "section": "LEVEL_I",
+    "content": "Open first digit, close second; top1/middle2/bottom3.1-1 and3-3 are illustrated extremes;85% reversal-within1-to5-bars and inferred intrabar control remain unvalidated. Broad same-third parenthesis is inconsistent with later neutral2-2 if read literally.",
+    "rules": [
+      "COURSE.BAR.OHLC_NOT_PATH"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "a849cc6817f13d8c057cef6ed3d0328378abb8b0800ff85208529f089ca16479",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:19": {
+    "section": "LEVEL_I",
+    "content": "Neutral2-2, climbers3-1/2-1/3-2 and drifters1-3/2-3/1-2 are illustrated. The printed drifter list repeats1-2; an unattributed handwritten correction changes the final entry to1-3. Printed text, handwriting and the unambiguous diagram remain distinct evidence.",
+    "rules": [
+      "COURSE.BAR.OHLC_NOT_PATH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "04cfe5b822a544549f5b6b49e4bec2189288e99e024be7fded547a32ea3b407d",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:20": {
+    "section": "LEVEL_I",
+    "content": "Drifter explanations conclude1-3 strongest,2-3 then1-2. Immediate trend compares current midpoint to previous bar range: plus strictly above prior high, overlap inside range, minus below prior low. Exact boundary equality is not specified by this text.",
+    "rules": [
+      "COURSE.BAR.OHLC_NOT_PATH"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "6a4c2093de0c762c4017ff16f82d2b8d7b02feaebb98898bf1f093047e2ba424",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:21": {
+    "section": "LEVEL_I",
+    "content": "Course explicitly defines tick volume as number of price changes, not contracts. Claimed equivalence of tick/actual volume is a historical author assertion; Binance number-of-trades/base-volume are separately labelled proxies, not this exact statistic. Pit brokers/locals account is historical narrative.",
+    "rules": [
+      "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "76e05d054868f48b6b0e9901e5e93a7263ac93f256cf93ee21444d492c8c217e",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:22": {
+    "section": "LEVEL_I",
+    "content": "Illustrated bond chart plus decisions->tick-volume->momentum->trend narrative. Intraday volume comparison regards one tick difference as change; daily10% criterion continues next page. Market-participant/causal-success assertions and first/last10% trend goal are unvalidated; no actual actor/order-flow labels inferred.",
+    "rules": [
+      "COURSE.VOLUME.DAILY_DEADBAND",
+      "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "f019c976d36f1540b82e6e5dee87000463cb513c53230c734e399fbfdccffbe8",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:23": {
+    "section": "LEVEL_I",
+    "content": "Daily volume uses>=110% for plus,<=90% for minus,91-109% described unchanged; fractional deadband boundary remains an engineering convention. MFI=(High-Low)/volume, formerly Mud Factor/tick mileage; same volume unit must be used in comparisons.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS",
+      "COURSE.VOLUME.DAILY_DEADBAND",
+      "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "4a09c5d71532a9437128371f3193125713e690849e3e5e55b7fc2dfa2f0c97ec",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:24": {
+    "section": "LEVEL_I",
+    "content": "MFI has no absolute standalone trade threshold; compare immediately preceding values for relative facilitation. No optimization is claimed; price efficiency is not a certified participant-state or profitable-entry label.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS",
+      "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "1e057e2831bf68752983ca72f92794a083a56404e10fb8569ba14a92084ee6e4",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:25": {
+    "section": "LEVEL_I",
+    "content": "Rendered table confirms Green(volume up,MFI up), Fake(down,up), Fade(down,down), Squat(up,down). Tutorial promises of ten-second140-bar analysis and thirty-market coverage are unmeasured anecdotes, not model accuracy or application latency.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "d20fb892807cef78085dbe4bf785ffc4f544c50214bdc48166bb04e49bbe9c9b",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:26": {
+    "section": "LEVEL_I",
+    "content": "Green rising volume/MFI is active movement in the bar direction; Fade falling both is fading interest and may precede a new move. Green color does not uniquely mean LONG, Fade is not sufficient breakout/reversal.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "48ae39a44d309ee79e5fa8560d453fbebdb0987ef7bec620380f182d04f24c92",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:27": {
+    "section": "LEVEL_I",
+    "content": "Fake falling volume/risingMFI and Squat risingvolume/fallingMFI. Squat usually but explicitly not always has narrower range; may mark reversal or mid-W3 continuation. Pit-manipulation/virtually-all-endings language is not verified actor intent or guaranteed outcome.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e16a06b846dd7929928bd61b8cbf82c495fc14e63b9b74308bf06ce2cf82419c",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:28": {
+    "section": "LEVEL_I",
+    "content": "Squat breakout distinguishes continuation/reversal; increased volume belongs to Green/Squat. Eleven novice review questions cover OHLC thirds, immediate trend, tickvolume, MFI and windows. Worksheet is not an independently scored expert examination.",
+    "rules": [
+      "COURSE.MFI.STRICT_RELATIVE_WINDOWS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "b5e3b3fc5df4040fed7bd79879cbb1c3d84b20adaa648885583860d6dbb07088",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:29": {
+    "section": "LEVEL_I",
+    "content": "Summary codes +31++ for up/3-1/Green and+13+- for up/1-3/Squat, preparing a possible sell rather than assuming an executed reversal. Control-throughout and all-trends-end claims unvalidated; forecast is separate from causal conditional trigger.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "b68fbb21e393f5111a08a9dd57612f54e2295d2ad1698b26e8312d51062aefd8",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:30": {
+    "section": "LEVEL_I",
+    "content": "Personal notes/questions worksheet; no new rule, not missing OCR.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "f3ced79cdd7aac9ef8fea0a742271fa5b615a201a690232027b382ba7c70f017",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:31": {
+    "section": "LEVEL_II",
+    "content": "Advanced-beginner navigation lists Elliott personalities,5/34/5 MACD, minimumW4, initiating start/signal/stops/leverage and responsive thumb. It is a contents outline, not evidence these algorithms are fully specified.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "review_text_sha256": "82b614640b948f607c9a4e15b38ebd6a1dad64e808d7bf28b5f2d665213a412f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:32": {
+    "section": "LEVEL_II",
+    "content": "Course specifies100-to140 selected bars for Elliott analysis; Planned Trades can use virtually any count. Human level goals and1-2% claims are not independent accuracy. These edition-specific selection rules are distinct from universal raw-history warmup or automatic signal expiry.",
+    "rules": [
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "a89a16e600308cb7fbff661b2d898f803e623cc3710e216ad25b5808ee11fe6e",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:33": {
+    "section": "LEVEL_II",
+    "content": "Real-time count is contrasted with hindsight count; broad performance/sure-fire claims and emotional-balance coaching are not reproduced samples. Conditional alternatives and causal pivot confirmation remain necessary despite the claims.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "8c97f4933097e755d89aacc7a8e1fa35d00ecf451c68ec89121fa07735321c33",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:34": {
+    "section": "LEVEL_II",
+    "content": "Tide/wave/ripple correspond to genuinely different timescales and can oppose each other. Elliott/Fractal metaphors are contextual; no unanimously aligned MTF veto or fabrication of lower-timeframe candles follows.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "559d96fb6045b7b29527ded440926cac14c691c62310048ac0de221edc15c7a1",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:35": {
+    "section": "LEVEL_II",
+    "content": "Five impulse/three correction rhythm is presented across degrees. Course rule-of-thumb minimum average20 ticks per selected period is not Binance20trades nor an absolute universal law; it even notes lower-volume exceptions.",
+    "rules": [
+      "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES",
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "80339b5dc172b428a45470a786389123cc20e7735bcfe9b202ef8f71b9fe8eab",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:36": {
+    "section": "LEVEL_II",
+    "content": "Nested impulse/correction form and wave personalities; relationships are acknowledged tendencies that change. Five-wave sequence may become next-degree1/3/5,abc next-degree2/4. Degree is not unique from a stylized chart.",
+    "rules": [
+      "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e192fbd98f38ceb45731ab9d008355da08f952f676a5ea945eef5aae8b6097e1",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:37": {
+    "section": "LEVEL_II",
+    "content": "W1 target uses real lower-timeframe five-wave structure, divergence/fractal/target/squat context. W2 often50-62%retracement with38%/62% claims, unvalidated frequencies. W2 new-entry versus W4 profit-taking narrative is not directly observable participant intent.",
+    "rules": [
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "3f6b7d7c84316051cc66b74279aec2314ce78a5e71a6442da7ab023b1c216a2c",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:38": {
+    "section": "LEVEL_II",
+    "content": "W3 steepness, heavy volume and gaps are tendencies; the supplied frequencies are unvalidated. Four terminal confirmations are target, oscillator divergence, fractal and squat among three extremes. W4 alternation and whipsaw claims do not certify a unique causal count.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "39c967077bb94bd103e19bb5bc8129607e5a388c198c4eb6049b5b26f0f2f702",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:39": {
+    "section": "LEVEL_II",
+    "content": "W4 price/time tendencies allow exceptions to W1 overlap. W5 target uses the distance from W1 origin to W3 end, projected0.62-to1 times from completed W4; a later confirmed W4 cannot be backdated as known. Frequencies and trader-intent narratives are not gold.",
+    "rules": [
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "898fa8850d2a047e17b6942789328106adff48cacc6b4444c43b9a4717c799ae",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:40": {
+    "section": "LEVEL_II",
+    "content": "Per-wave MFI averaging and wave-area observations motivate a moving-average approximation. Range/volume MFI is mathematically distinct from a price-only oscillator; the claimed wave-area equalities are not independently reproduced data.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION",
+      "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "fd86ad7671a0beec16e4116e63b629b1db4ef388c84542aa0c66f167e354f725",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:41": {
+    "section": "LEVEL_II",
+    "content": "The historical Tom Joseph5/35 moving-average oscillator is introduced before the next page changes it to5/34. Graphic OCR is incomplete; do not mistake the historical setting for the final Profitunity definition.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "2c62657287e39582db381018d03f27e7533942da0d39250bd39e97f38bdb3b86",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:42": {
+    "section": "LEVEL_II",
+    "content": "Final5/34 oscillator plus5-period signal average is an approximation to per-wave MFI, not an identity. Uses include W3 peak, minimum W4, trend end and histogram-versus-signal momentum. A price peak described before the oscillator peak becomes knowable later, never retroactively.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "eaf718db3eac9c1fe9b28dfa9f2887c2d5d78cca245431814de3e2d3542f67a7",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:43": {
+    "section": "LEVEL_II",
+    "content": "Selected wave sequence should occupy100-140 bars; the example moves from60 hourly bars to a real30-minute chart of about120 bars. This is a selected-degree rule, not a raw-history limit, signal expiry or permission to manufacture lower-timeframe candles.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION",
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "9c1a5ba9d7a597fccc9bcace4f5a7ffab38f59259f539db48a5329145a04c394",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:45": {
+    "section": "LEVEL_II",
+    "content": "Current momentum compares5/34 histogram with its5-bar signal average. Same-side divergence without zero return can be W5-of-W3, not a terminal larger W5. Selected degree and causal pivots remain necessary despite universal superiority claims.",
+    "rules": [
+      "COURSE.MACD.MFI_APPROXIMATION",
+      "COURSE.RHYTHM"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "81772592cf851471ebf0024dd3afb794488cab2b264f81ad2f62700ad3cf59d0",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:46": {
+    "section": "LEVEL_II",
+    "content": "W3 cannot be shortest of1/3/5; W2 cannot go beyond W1 origin. W4 overlap exception is stated as up to10% for futures but none for cash; its denominator and exact applicability are not given, so no Binance threshold is inferred.",
+    "rules": [
+      "COURSE.RHYTHM",
+      "COURSE.W2.EXACT_ORIGIN_100_PERCENT",
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "4c0fae0d6c583211fa82b93e006b6c740eb6a2140d504183ab72228a4be538ee",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:47": {
+    "section": "LEVEL_II",
+    "content": "First-wave summary links reversal to opposing divergence, possible P0 after terminal five-in-c, and internal structure/fractal/squat. Stylized diagram is not an exact OHLC series or an automatically known origin.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "24698f566bdff39002e13756daa72c4d234c2c19f290c062d768ff3296c0d813",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:48": {
+    "section": "LEVEL_II",
+    "content": "W2 summary gives a38-62% common band and several probability claims; earlier prose uses50-62%. Exact touch up to100% differs from a breach of origin. Frequencies are source assertions, not measured accuracy.",
+    "rules": [
+      "COURSE.W2.EXACT_ORIGIN_100_PERCENT",
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "ede49c9e6658187f74dfb9ede0f589d974e0fdedec790d66d1e0f1badc6eec47",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:49": {
+    "section": "LEVEL_II",
+    "content": "W3 summary illustrates steep/faster movement, volume/gaps and target/probability bands. Text/caption first pass does not certify every graphic value or a calibrated statistical distribution.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "34da90769512364f74f29d671eff46e5f8ea3c0c2369893bf1657fa5ab009e6a",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:50": {
+    "section": "LEVEL_II",
+    "content": "W4 summary covers alternation and associates deep retracement with possible failed W5. Probability bands and85% whipsaw claim are unvalidated, not automatic failure labels.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "f63b9e89e4f8fa174e89648e784498faa1aa2e988e543a697f5a653af9ea6fa2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:51": {
+    "section": "LEVEL_II",
+    "content": "Rendered W5 sheet literally prints(W1+W3) combined while39/44 use p0-to-p3 endpoint distance. Keep the projection wording ambiguity; do not silently choose a more profitable normalization. Conditional extension and90%/17% claims are not independent evidence.",
+    "rules": [
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES"
+    ],
+    "figures": [
+      "W5_TARGET_P51"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "ac17f6ecf6ab0a65f43b260aac02cba7eacc7eef2198d5ec01ab0af0d2a18c10",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:52": {
+    "section": "LEVEL_II",
+    "content": "Correction drawings distinguish five-in-A zigzag from three-in-A flat/irregular. A handwritten not and replacement and qualify a printed hard-and-fast-rule sentence about the prior-W4 price area. Annotator identity is unknown; the corrected sentence must not be lost through OCR.",
+    "rules": [
+      "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES",
+      "WAVE.COMPLETED_MOTIVE_REMAINS_HISTORICAL_EVIDENCE"
+    ],
+    "figures": [
+      "CORRECTION_TYPES_P52"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "36812619c70fac35c4b7ada868dda6cbe1b2351fb41595ae31d4e7f43c249e28",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:53": {
+    "section": "LEVEL_II",
+    "content": "Zigzag B and C retracement/extension examples include target, fractal and squat context. OCR punctuation around0.62% needs separate visual confirmation before a numeric interpretation;92% success claim is unverified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "acc68320a7c31cda9db1d76fe5978760e649f120beb5907b34905a4d1190236b",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:54": {
+    "section": "LEVEL_II",
+    "content": "Flat and irregular correction schematics illustrate equal versus expanding legs and ratio bands. These simplified examples are not a complete grammar of all corrections or exact market candles.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "390d17bd104c1042362f4a2963b76254927a94cec67d6a0c7052308fb9f21d10",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:55": {
+    "section": "LEVEL_II",
+    "content": "Rendered triangles have a-b-c-d-e. W4 continuation is in W3 direction; B continuation is in A direction. This corroborates the TC1 diagram rather than its conflicting body, but is a different supplied work, not certification of original-English TC1 errata.",
+    "rules": [],
+    "figures": [
+      "TRIANGLES_P55"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "f045b9f39df5b8bba46732f9ef3fa66d934f137a076097f6a3565f0ae674fc40",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:56": {
+    "section": "LEVEL_II",
+    "content": "Rendered page is a nested motive/correction schematic with an empty heading box. It is graphic-dominant, not blank despite empty OCR. Higher and lower degrees and an internal triangle are shown without exact prices, times or a unique real-time count.",
+    "rules": [],
+    "figures": [
+      "NESTED_WAVES_P56"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:57": {
+    "section": "LEVEL_II",
+    "content": "Graphic psychology/wave chart credited Gabriel Inoue1986 mixes market dialogue, activity and nested waves. Text-only first pass does not certify every arrow or actor emotion; it is not observed participant-state data.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "25ce5cad217f6196674e60c25f80e7ff8314002db67d052bd2083e9f4f55b95f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:58": {
+    "section": "LEVEL_II",
+    "content": "Dense target worksheet contains wave/correction estimates and probabilities. OCR reading is not a complete visual interpretation or verified statistical distribution; no chart values become market gold.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "9b42f381fb64405e1969aa16a0f41803a383ebc037d7334feffaec38e83a124f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:59": {
+    "section": "LEVEL_II",
+    "content": "Impulse bull-market flow chart presents alternative three/five-wave branches, count checks and target projections. OCR alone does not certify exact edge topology or an executable deterministic automaton.",
+    "rules": [
+      "COURSE.RECURSIVE_DEGREE_PRICE_GRAMMAR"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "373f244201e044e59905f5591678e889df67bb96a958a7c48dd2c5b4202f9078",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:60": {
+    "section": "LEVEL_II",
+    "content": "Correction checklist was viewed upright after270-degree rotation. Three/five-wave branches distinguish sharp, sideways, triangle, extension and wrong-count alternatives, with reassessment and terminal1/X outcomes. Single visual interpretation is not an independently certified algorithm or exact market labeling.",
+    "rules": [
+      "COURSE.RECURSIVE_DEGREE_PRICE_GRAMMAR"
+    ],
+    "figures": [
+      "CORRECTION_FLOW_P60"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "fbf6cd8f62075e9f18f9354332401457f56102b192b44d3672e40998b039d6f2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:61": {
+    "section": "LEVEL_II",
+    "content": "Initiating fractal requires at least five sequential bars with strict center extreme and two qualifying neighbors each side. Equal extrema do not count and adjacent fractals may share neighbors. Behavioral-fractal analogy does not observe actual participant decisions.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "60564b3b69dcc0b8d5b6192062af1484242a7cd7335439444351883ffe634b1c",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:62": {
+    "section": "LEVEL_II",
+    "content": "Examples distinguish strict A, outside-bar up/down B, shared-neighbor C and six-bar equal-peak D. Confirmation is later than the drawn pivot; neither numeric raster tolerance nor unrestricted equality-skipping is specified.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "f717f69c81b6d82ae8d926df0a908de8257b91e89b06db1ba7c9435a9d725c48",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:63": {
+    "section": "LEVEL_II",
+    "content": "One tick beyond a confirmed fractal is a conditional breakout. Formation persists while start/signal/stop roles depend on the later sequence; the decision analogy does not prove a fill.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "b1d88ec65e85987f1717bfd148996c2014b7f57a5153c359d94d682f8e6272ff",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:64": {
+    "section": "LEVEL_II",
+    "content": "Start is followed by opposite fractal; signal follows opposite fractal. Both roles become assigned when the later formation confirms, not at the earlier drawn start. Intervening wave degree remains contextual.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "3acc47ecf69dec567b4fc97cc6c8234b9e4a2e3a2d4661e897e28800ab48975b",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:65": {
+    "section": "LEVEL_II",
+    "content": "Protective fractal is the more distant extreme of the last two opposite fractals, not necessarily the newest. Analytical golf-club leverage is separate from exchange leverage and order quantity.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "fe9be3754437ad1e4ed58139c49327d9e79776ac837771228b564b4fd2bb1887",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:66": {
+    "section": "LEVEL_II",
+    "content": "Returning one tick beyond the start extreme destroys analytical leverage and invalidates an untriggered signal. This is separate from signed cancellation/readback; an unknown submitted order still has liability.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "a7bc397e928896099b22d823271eee2a8cac3f31f4e703c7a75633b59f91113f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:67": {
+    "section": "LEVEL_II",
+    "content": "Review separates protective trailing stop from a new opposite-signal reversal and allows thumb use in ranges. Guaranteed trend participation is a source claim, not proof of fill or protection. Responsive thumb is not identical to a confirmed five-bar fractal.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "70ea301aaac2a41dae9dc0e78737bbff812b151133411574c64064663b382cdf",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:68": {
+    "section": "LEVEL_II",
+    "content": "Three-finger/right-thumb rubber-band illustration is a mnemonic for the setup, not a required physical ritual in code or a clinical intervention.",
+    "rules": [
+      "COURSE.HUMP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "c58a8bfc5f3ab67c86e98e3dc202ec6fc4b5552183774a26b14a853875fb1e64",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:69": {
+    "section": "LEVEL_II",
+    "content": "SHORT thumb counts three higher-high/higher-low fingers, skipping inside bars. Two of three must have increasing volume versus the immediately preceding physical bar; any Green/Squat mix qualifies. One-tick conditional level and improving pending setup are separate from fill.",
+    "rules": [
+      "COURSE.THUMB.COLOUR_COMBINATION",
+      "COURSE.THUMB.FINGERS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "29cef2d8b7cf62edc8318dbdd3c54ab1c4c517f37a6ec22e2f5d0887513ff497",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:70": {
+    "section": "LEVEL_II",
+    "content": "After thumb execution the text assigns an opposite protective/reverse anchor and calls it a regular fractal. Immediate execution alone does not prove two closed right-hand bars; formation, anchor, conditional fill and causal confirmation remain separate. Profit/risk claims are not guarantees.",
+    "rules": [
+      "COURSE.THUMB.FINGERS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "5a927c7f5a3d741e0b5c701133158f0f88fae6f1a34ee34adf8beb481c3a5738",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:71": {
+    "section": "LEVEL_II",
+    "content": "Rendered key-formation sheet covers higher-timeframe two-bar protection, five-plus-bar center/group fractals, and three-plus-bar thumbs. One Green plus one Squat is ideal quality; missing that mix is described as weak, not automatically invalid.",
+    "rules": [
+      "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "COURSE.THUMB.COLOUR_COMBINATION",
+      "COURSE.THUMB.FINGERS"
+    ],
+    "figures": [
+      "KEY_FORMATIONS_P71"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "6d93b913a2888e159508ee02b87d3a9ac41c32412d9e81435ee7d1428903aba6",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:72": {
+    "section": "LEVEL_II",
+    "content": "HUMP sheet distinguishes nonoverlapping extreme bars from shareable surrounding neighbors. Opposite formations assign start/signal. Illustrated xTicks requires an explicit parameter; no unrestricted automatic reverse is inferred.",
+    "rules": [
+      "COURSE.THUMB.FINGERS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "dd3def1bb011511870ee5eb39b52b3ecc4e74c8426b19a37d16c7806820b19d2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:73": {
+    "section": "LEVEL_II",
+    "content": "Review questions cover wave rules, corrections, ratios, oscillator/MFI and signal line. The question says three MACD uses while body lists four including momentum. This is an exercise, not an independent model examination.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "4d22f308f901c475c1557826adaae61d468a3b17f9d66febb73007dfc7178d32",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:74": {
+    "section": "LEVEL_II",
+    "content": "Review questions cover start/signal/stop, broker trigger, thumb and trend/range exits. Human top2% claims do not certify knowledge, trading performance or a completed automated specification.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "d5aa44ce7d9782b05cae9569c20c38517ab9a1ad81c2dcadbe0d0ad6a7750c73",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:75": {
+    "section": "LEVEL_III",
+    "content": "Competent-level navigation lists Planned Trades, airbag, market rhythm, fractal and thumb. Outline is not achieved performance or implemented code.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "review_text_sha256": "e241449fb88f2a402b620f89c096fe4d766006debf6c1a925c4dfe52870ba7d2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:76": {
+    "section": "LEVEL_III",
+    "content": "Competent pianist/practice analogy separates reading a score from interpretive mastery. No model architecture, gradient updates or training result follows from it.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e95d3198d6e0187f5965005c8b7871f761bb657810a0d451a8a58addc44a75e9",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:77": {
+    "section": "LEVEL_III",
+    "content": "Allocation is credited to Robert Balan. Longer horizons reduce the stated transaction burden. Initial terminal context combines selected100-140-bar sequence, target, divergence, fractal and squat among three extremes; least-risk/double-ROI claims are unverified.",
+    "rules": [
+      "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.TERMINAL_SQUAT_EXTREME_THREE",
+      "COURSE.W1_W2_W3_W4_LOCATION",
+      "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "192f41983cd22f9f207bbff14b8678dd0e6b59fb4992e877de041db5bf1d7dca",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:78": {
+    "section": "LEVEL_III",
+    "content": "Ten-unit PPT example initially buys3 on a50-62% pullback with real lower-frame terminal context. Ten means contract/unit maximum, not symbols or account-risk percent. Filled exposure needs protection; a drawn target is not a known fill.",
+    "rules": [
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "COURSE.W1_W2_W3_W4_LOCATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "10bd79b7f29a98f794656df66f0d9e6507096e3cf55586b669244ad580a8c084",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:79": {
+    "section": "LEVEL_III",
+    "content": "An opposite sell5 closes long3 and opens short2. Trim2 at W1 target retains1 for continuation, then await the next pullback. Text explicitly acknowledges uncertainty between W1 and A; recovery of a prior loss is not guaranteed.",
+    "rules": [
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "COURSE.W1_W2_W3_W4_LOCATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "0466ca227f6026ac0b7fa3762af21a05a8ecf0c068f43f893c5ecd6e3323ce14",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:80": {
+    "section": "LEVEL_III",
+    "content": "Add5 to retained1 gives6. Opposite order10 closes6 and opens short4 if origin fails. If emerging W3 stalls and breaks W1 top, sell6 flat because count is unclear; submitted quantity differs from new exposure.",
+    "rules": [
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.W1_W2_W3_W4_LOCATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "3b7c623a6e373f4f878e2d50d30affe2a8b8f63a3fc900a27cdb298c8c92088a",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:81": {
+    "section": "LEVEL_III",
+    "content": "At W3=1.1*W1 add4 to hold10; trim7 to retain3 at W3 target. Zero cross is minimum W4, not completion. Add3 for W3>1.62*W1 or5 if shorter; equality is unspecified. These are Course units, not TC2 pyramid tranches.",
+    "rules": [
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.STAGE_TRIM.SOURCE_PINNING",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.W1_W2_W3_W4_LOCATION",
+      "COURSE.W3.EXTENSION_110",
+      "COURSE.W5.QUANTITY_6_OR_8"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "42ca0e912e5cde39181d1732768cef3dccb5cd24f6259d87f9af086f9847d550",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:82": {
+    "section": "LEVEL_III",
+    "content": "Course W4 campaign holds6 or8 and specifies an opposite order sufficient to become NETshort7 at W1 top; this differs from TC1 plain-stop wording. Subdegree failure can instead close all flat. No Course reverse is enabled in operational TC2.",
+    "rules": [
+      "COURSE.COMPLETE_CORRECTIVE_CAMPAIGN",
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.W1_W2_W3_W4_LOCATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "3e0746ece195efad6c89917671bc83da2add248ab008d22b8cbdf77d6e1f5d7c",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:83": {
+    "section": "LEVEL_III",
+    "content": "Terminal W5 closes remaining longs. Corrective sequence sells a50-62% retracement after the initial decline and sets reverse above W5. Alternative counts remain; a generic correction label is not authority.",
+    "rules": [
+      "COURSE.COMPLETE_CORRECTIVE_CAMPAIGN",
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.SIGNED_FLAT_CORRECTION_HANDOFF",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.W1_W2_W3_W4_LOCATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "5f0814bc8afe6020a80f290dfb32165575f45e4c356223be9bfcd67d7e9a2c07",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:84": {
+    "section": "LEVEL_III",
+    "content": "Rendered text says cover2 leaving1 long while the market continues down; surrounding short campaign and later buy7-to-netlong3 require distinguishing that printed side error from an actual reversal. Actual numeric PPT examples are referred to separate Computorial media, not supplied here.",
+    "rules": [
+      "COURSE.COMPLETE_CORRECTIVE_CAMPAIGN",
+      "COURSE.EXACT_CONTRACT_UNITS_AND_SIGNED_STAGE_FILLS",
+      "COURSE.PPT.NET_REVERSE_SEVEN",
+      "COURSE.SIGNED_FLAT_CORRECTION_HANDOFF",
+      "COURSE.TERMINAL_AND_FAILED_COUNT_EXIT",
+      "COURSE.W1_W2_W3_W4_LOCATION",
+      "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "3bddbbfbd60b97c12c3f3db8039f13d42aafc71d65641748e6def3dcfac8cb0b",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:85": {
+    "section": "LEVEL_III",
+    "content": "TradingPartner prioritizes protection and condenses current positions, potential signals and rhythm. Ten-second analysis is an unmeasured claim. Buy/sell rows are reused as higher/current frame in the rhythm section, not simultaneous directional votes.",
+    "rules": [
+      "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e8b2f155440b38997416f4ed38f540a2e81d655d98a299bd9f50056ae5ff1fdd",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:86": {
+    "section": "LEVEL_III",
+    "content": "Rendered airbag uses an actual significantly higher frame, approximately factor5; old pit sessions do not define crypto calendars. LONG scan finds first earlier bar with lower high and low, skipping inside bars. Text explicitly says bottom plus one tick; reference/sign differs from other descriptions and remains unresolved.",
+    "rules": [
+      "COURSE.AIRBAG",
+      "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "de4ab0d23327ee62e9ac1afeb82f16462419350ed8d313e873fddf5b1bc18096",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:87": {
+    "section": "LEVEL_III",
+    "content": "Airbag is protection and not necessarily a reverse. TWR5/13/34 is UP when fast exceeds both slower averages, DOWN below both, otherwise neutral; no slower-average ordering or Alligator displacement is stated.",
+    "rules": [
+      "COURSE.AIRBAG",
+      "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT",
+      "COURSE.RHYTHM"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "63f30236539abf48cb552e0f94637123552b3c25179a6e1d2a09da9f9496ad6d",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:88": {
+    "section": "LEVEL_III",
+    "content": "Rhythm uses actual higher/current frames in top/bottom rows and TWR/MACD on left/right. Current-frame MACD is emphasized; all four arrows aligned may be late. Higher/lower histogram wording here is less explicit than the histogram-versus-signal rule on45.",
+    "rules": [
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT",
+      "COURSE.RHYTHM"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "6b1a1bc5644ba837e3046a16a6ba933f30fe387ad8dce22cba533ee2844b5b0f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:89": {
+    "section": "LEVEL_III",
+    "content": "Latest current-frame fractal/remaining leverage and thumb signals are considered with equity, all existing positions, PPT stage and wave context. Paper erasure is not durable exchange ownership and cannot delete unknown submitted liability.",
+    "rules": [
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT",
+      "COURSE.RHYTHM"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "e8440079f093d54307c7e378473df44330e388746af7abe7fafd1b8d21986a4e",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:90": {
+    "section": "LEVEL_III",
+    "content": "Blank TradingPartner worksheet includes historical dollar-per-point columns. OCR entries are not authenticated contract specifications or modern Binance ticks; it is a template, not a trade ledger.",
+    "rules": [
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT",
+      "COURSE.RHYTHM"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "13471086cd340d564e0e5ac2df9393aa705b959c04a0538b6bb7c88f4f4317e6",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:91": {
+    "section": "LEVEL_III",
+    "content": "Outline explicitly calls airbag protective, not initiating. TWR fast-versus-both-slower differs from MACD5/34/5; three wave uses plus current momentum are separate tasks.",
+    "rules": [
+      "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "160208c97ee87f2b256049c2c8b352f95a9462a3c6c4df2648f9f24194a5ec60",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:92": {
+    "section": "LEVEL_III",
+    "content": "Fractal direction is considered with current MACD momentum and remaining leverage. Thumb needs two rising-volume qualifying bars, ignoring inside/parallel bars in formation count. Higher/lower-frame context and FLOW acronym do not guarantee a profitable trade.",
+    "rules": [
+      "COURSE.EXECUTIVE.ACCOUNT_CONTEXT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "30983026f39746abd58997cce9056963f4e170fb20b00ca406cd025fd0567763",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:93": {
+    "section": "LEVEL_III",
+    "content": "Competent review asks about protection/rhythm priority, multiple frames, executive decisions and the limits of blind mechanical signals. It is not an independently scored examination.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "fd0cf9a91c309d3bf5375cdd9bd646e1eaeaa0199c1599f245d590b778f742a8",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:94": {
+    "section": "LEVEL_III",
+    "content": "Summary claims top5% and doubled ROI from allocation; next page says top3%. Both are unverified promotional assertions, not calibrated confidence or financial results.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "fed77ac9e7566c59314864ac06eac566c881d87c8b8853be481efa20bc11606d",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:95": {
+    "section": "LEVEL_III",
+    "content": "Losing days, weeks and months are explicitly allowed; evaluation is suggested over at least a quarter. Tools and top3% claims are not independent evidence. Athletic motivation research is introduced without a recoverable study citation.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "28ea607183026c2853553a08a179fb7b5e511373342a198138437e7a82e4a70e",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:96": {
+    "section": "LEVEL_III",
+    "content": "Intrinsic enjoyment versus later reward is illustrated through sport. Claimed4-to6-times improvement and university replications are unverified here; no automatic reinforcement-learning benefit or clinical effect follows.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "059ad9ce079341ad41893d475d8d54ca9ed4e517bb09db1bc8a3ba7a8ae67f20",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:97": {
+    "section": "LEVEL_III",
+    "content": "Olympics/doping and Bulgarian training narrative is unverified historical context. Daily journaling is recommended before human levels IV/V; it is not proof a model learned from errors.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "14df168d0835c464cfc8c652c22782884a37385dedf69e5f8717924ee67a048f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:98": {
+    "section": "LEVEL_III",
+    "content": "Personal notes/questions worksheet, not a signal or failed OCR page.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "659200d94bca1d0f2e005a7bff2e584a5cebcb1a8f5c2c38a05423de610bb15f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:99": {
+    "section": "PSYCHOLOGY",
+    "content": "Literary Need to Win poem attributed to Thomas Merton/Chuang Tzu illustrates reward pressure. It is contextual coaching, not market evidence; the poem is not republished.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP",
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "4f61c145d6a8029ea47bc9cd37149c604e92dfaff553fecfa1ae7dd6ec63fdd2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:100": {
+    "section": "PSYCHOLOGY",
+    "content": "Psychological Facilitation fill-in worksheet asks reflective life/change questions. Missing answers are intentional, not recovered facts or an executable objective function.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF",
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "3f4985ab32d0d7889848e9c7ba6a3f86ce4b055e9a50a413e077c934f8aba044",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:101": {
+    "section": "PSYCHOLOGY",
+    "content": "Embryonic-energy, somatotype, organ-risk and trading-personality assertions are attributed coaching, not established clinical observations. No health diagnosis or automated body-type trading gate is inferred.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "18583cf38526d78119edab9bea865271544c5b08577750521da42e681a4d28a9",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:102": {
+    "section": "PSYCHOLOGY",
+    "content": "Comfort/challenge/worth and body-to-job suitability assertions continue. Disk/hardware analogy does not establish that physical shape determines market returns or validate personality labels.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "06d359c9fa2d38c9404581b375f7b53a0064ae1a416241c43ccfe31eff51daf0",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:103": {
+    "section": "PSYCHOLOGY",
+    "content": "Somatotype chart was viewed upright after270-degree rotation: Plymouth/endomorph/comfort, Chevy/mesomorph/challenge and Ford/ectomorph/worth. Listed organ, emotion and alcohol-response traits are unvalidated source claims, not clinical or trading facts.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [
+      "SOMATOTYPE_P103"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "e57b7f5d3d180bacd574edb617a570ef55ed5c520124500257e47106c7722bd0",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:104": {
+    "section": "PSYCHOLOGY",
+    "content": "PartIV frames beliefs, happiness and appropriate brain use as coaching directions. Claims of complete emotional relief or trading success are not model architecture or execution requirements.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "a55da86d7759417bcb5081157e7caf7a023fac1f9c07020a4bde3dcf3568d87f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:105": {
+    "section": "PSYCHOLOGY",
+    "content": "Three functional divisions are explicitly not a one-to-one physiological map. Left/right/core,16bits/s and1/16s perception assertions are unverified; do not derive CPU/model routing or acceptable latency from them.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "38fe49bc712895f71cb86b5de91b0ce82e6e35cf005f7bba7128045876bbfbf3",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:106": {
+    "section": "PSYCHOLOGY",
+    "content": "Television frame-rate, left-only time/language/effort and dream assertions are unvalidated physiology. Planning what versus implementing how is a coaching distinction; chronology, costs and account controls still apply.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "0f0ab103c2e70c997cd9f2ac49388a5ca00ce1986ff9aba212d5fc9e4df03aa6",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:107": {
+    "section": "PSYCHOLOGY",
+    "content": "Core/analog-computer and sensory-capacity claims, including numerical bit rates and dolphin conversations, are unverified source narrative. Enjoyable nonstruggling activity is not an operational risk override or a hardware specification.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "3789806722b19a1bb72e1ee33678abb9669bfc3b381caca519c29a4c5b9b76a6",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:108": {
+    "section": "PSYCHOLOGY",
+    "content": "Right-brain inspiration/modem/universal-knowledge, immortality and holographic analogies are speculative human coaching. They do not provide unseen market data, infinite knowledge or a model memory architecture.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "7d1979d503f6d18fcd92da43e1688c541a175e3ea5feaf35499235e1fc21afbe",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:109": {
+    "section": "PSYCHOLOGY",
+    "content": "Body/mind/spirit and Seven Wonders of Soma graphic is contextual material; OCR does not resolve all visual elements and it is not a clinical or numerical market rule.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "bf7ab99ce82714c29c994451a8029647414e0928ef492d5fbecdbc6a498306f9",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:110": {
+    "section": "PSYCHOLOGY",
+    "content": "Rendered three-circle diagram labels fearful, poorly managed and reckless traders with confidence/intuition/grounding overlaps and Profitunity center. It is a coaching diagram, not measured cohorts, a brain circuit or an executable classifier.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [
+      "PROGRAM_VENN_P110"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_DOMINANT",
+    "review_text_sha256": "8b9bcb74f8ec3a944d978a98aa8b150650a71427ade711687fde774b50629b9e",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:111": {
+    "section": "PSYCHOLOGY",
+    "content": "Four trader-program metaphor introduces fear/self-preservation and a35-45% prevalence claim. Posture, oxygen and decision-quality narratives are unverified, not observed physiological labels or machine states.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "630d92650acd8952f3b5e78b9e07f07adb2f167332ec26165ec6899d125173a4",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:112": {
+    "section": "PSYCHOLOGY",
+    "content": "Fear is framed for risk planning and money/structure for analysis, with25-35% prevalence asserted. No literal risk-free trade or automatic personality recognition follows from these human categories.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "7d5cb78149998ec04233adbb3268f9478c60acac6a0dfca2cc6c50fbef78092f",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:113": {
+    "section": "PSYCHOLOGY",
+    "content": "Recognition/confidence and romance/having-fun categories are assigned15-25% and5-15% prevalence. Memory/speed and trading-success claims are unverified; emotional confidence cannot replace signed data or risk controls.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "7c3111f4daee4ef2081cbbb3c2aa2495917cade0696dd9cd5c9b57a1110c07b2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:114": {
+    "section": "PSYCHOLOGY",
+    "content": "Fear-trader worksheet lists desires, fears, motivations and behavioral stereotypes. It is reflective material, not validated personality inference, a health diagnosis or a model target label.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "a7b80c9ce0861e249b0fb9f9384070e72637c66527a0c785e92c47632b56cc09",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:115": {
+    "section": "PSYCHOLOGY",
+    "content": "Money/greed worksheet lists price/security/reward preferences and stereotypes. It is not evidence about every participant or an automatic strategy selector.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "8a6d30b939bbb24016c43c64a0da7a9351749d7d99aa0db1a07f65c874972dac",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:116": {
+    "section": "PSYCHOLOGY",
+    "content": "Recognition/confidence worksheet lists appearance/prestige/reassurance motives. Source stereotypes are not observed investor identities, clinical categories or guaranteed decision quality.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "dafddcf0779e60c31643a7ad8032c42154d28a07312f965c078f4ad7bdff1d56",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:117": {
+    "section": "PSYCHOLOGY",
+    "content": "Romance/having-fun worksheet lists novelty, attraction and adventure with behavioral stereotypes. No automated gender/personality judgment, market inference or profitability claim is certified.",
+    "rules": [
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "review_text_sha256": "2e554e14e57b65e9bbe6fe2de74ade775d424bbb62f6b8d340593679c40284b3",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:118": {
+    "section": "PSYCHOLOGY",
+    "content": "Rendered mnemonic separates pre-session risk/structure planning from confidence/enjoyment during execution. Body/brain integration and success claims remain coaching; no-risk is not monetary loss immunity and emotional state does not waive account or STOP gates.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF",
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "review_text_sha256": "1ce446fca75859fad9beec3275531c4d6f4db81b7dbed5ba2326b4807e4695ba",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:119": {
+    "section": "LEVEL_V_DIVIDER",
+    "content": "Rendered Level5 divider only, not substantive individual tutorial content or an OCR failure.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP",
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF",
+      "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "NAVIGATION",
+    "review_text_sha256": "918261f02707a4c7753274fdd1b9627a42be53729e5def44d864d3d49878a696",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:120": {
+    "section": "JOURNAL",
+    "content": "Rendered reflection journal records learning, feelings, comments and prioritized next-day actions. Empty cells are intentional; no completed improvement study or model learning result is present.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF"
+    ],
+    "figures": [
+      "JOURNAL_LEARNING_P120"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "3f814efdcf3fa37e48bfc4a7ee8aab11bb655121ff1f2b0d169675c58b48bcc2",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:121": {
+    "section": "JOURNAL",
+    "content": "Rendered journal records mistakes, good actions, ideas, problems and opportunities with lessons/actions and tomorrow priorities. The original is readable upright despite poor OCR; no fabricated historical examples or outcome labels are filled in.",
+    "rules": [
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF"
+    ],
+    "figures": [
+      "JOURNAL_ERROR_P121"
+    ],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "WORKSHEET",
+    "review_text_sha256": "f68d3d190c52da8313a1964e58d1a0162c1dd5f701c80186e75023256eb8a798",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "COURSE_EN:122": {
+    "section": "EXTERNAL_TUTORIAL_NOTICE",
+    "content": "Final rendered notice explicitly defers individual material for this section to a personal tutorial. The supplied122-page scan is physically read but does not contain all promised Course media or a complete individual Level5 curriculum.",
+    "rules": [
+      "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP",
+      "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF",
+      "SOURCE.COURSE_EXTERNAL_TUTORIAL_MISSING"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "EXTERNAL_MATERIAL_NOTICE",
+    "review_text_sha256": "0b5b1d38e3b9f5341435fc9222a41e9e641af15220605ab9a7269e91b6dda935",
+    "review_text_provenance": "COURSE_DERIVED_OCR_20261113_V1",
+    "uncertainties": [
+      "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
+      "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
     ]
   }
 }

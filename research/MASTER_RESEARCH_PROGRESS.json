@@ -10,15 +10,14 @@
     "inventory_rows": 1213
   },
   "source_coverage": {
-    "semantically_reviewed_single_pass": 579,
+    "semantically_reviewed_single_pass": 698,
     "independently_verified": 0,
     "total_physical_pages": 1213,
     "stage_counts": {
-      "REVIEWED_TEXT_ONLY": 411,
-      "REVIEWED_SINGLE_PASS": 168,
+      "REVIEWED_TEXT_ONLY": 508,
+      "REVIEWED_SINGLE_PASS": 190,
       "TEXT_ACQUIRED_UNVERIFIED": 484,
-      "IMAGE_ONLY_PENDING_OCR": 31,
-      "OCR_ACQUIRED_UNVERIFIED": 119
+      "IMAGE_ONLY_PENDING_OCR": 31
     },
     "inventory_is_not_full_reading": true,
     "physical_receipts_include_front_matter_blank_and_navigation_pages": true,
@@ -94,35 +93,41 @@
       },
       "COURSE_EN": {
         "physical_pages": 122,
-        "first_pass_receipts": 3,
-        "visual_receipts": 3,
+        "first_pass_receipts": 122,
+        "visual_receipts": 25,
         "independently_verified": 0,
-        "all_physical_pages_have_first_pass_receipts": false,
+        "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
-          "PREVIOUS_RECEIPT_UNCLASSIFIED": 3
+          "FRONT_MATTER": 2,
+          "NAVIGATION": 5,
+          "BODY": 78,
+          "WORKSHEET": 10,
+          "GRAPHIC_DOMINANT": 26,
+          "EXTERNAL_MATERIAL_NOTICE": 1
         },
         "full_content_certified": false
       }
     }
   },
   "figure_coverage": {
-    "qualitative_single_review_entries": 132,
+    "qualitative_single_review_entries": 143,
     "independent_second_reviews": 0,
     "total_substantive_figures": null,
     "percent": null
   },
   "source_conflicts": {
-    "visible_single_review_entries": 25,
+    "visible_single_review_entries": 32,
     "per_source": {
       "TC1_RU": 10,
-      "NTD_RU": 15
+      "NTD_RU": 15,
+      "COURSE_EN": 7
     },
     "independent_second_reviews": 0,
     "unseen_original_english_errata_certified": false
   },
   "rule_extraction": {
-    "registered": 135,
-    "rechecked_against_sources_this_run": 111,
+    "registered": 147,
+    "rechecked_against_sources_this_run": 142,
     "total_rules_in_books": null,
     "percent": null
   },

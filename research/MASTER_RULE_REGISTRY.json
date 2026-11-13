@@ -254,7 +254,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Ratio belongs to a provisional wave count; it cannot certify the degree or permit an order.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -263,7 +263,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -303,7 +303,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Course example includes entry location38-50 percent and other wave evidence not proved by this quantity branch.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -312,7 +312,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1462,13 +1462,13 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "All leverage/finger drawings need complete digitization.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1510,14 +1510,17 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Inside-bar/finger geometry implemented; every historical example is not yet digitized. Colour/strength evidence recorded separately.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN",
+        "COURSE.CAVEAT.THUMB_IDEAL_VS_WEAK"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1557,8 +1560,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "6h for H1 is exchange adaptation; exact plus/minus tick wording and all illustrations need review. Course PDF86-87 visually reread: both formation stop and higher-frame Air Bag are retained. Python initial protection no longer widens the formation boundary; a non-protective combined boundary blocks the entry.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -1567,7 +1572,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1611,14 +1616,16 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Full four-rhythm Trading Partner evidence not certified.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1666,8 +1673,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "4.61: mirrored 50-62/38-50 retracement and 110-percent extension predicates use causal source pivots and distinguish active labels from illustrative contract stages. Required terminal/turn qualifiers are reported explicitly. Complete independent degree proof, every entry/exit location, correction integration and Course new-risk execution remain unfinished.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -1676,7 +1686,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1872,8 +1882,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Visual pages69 and71 reconciled. Flat MFI is labelled unconfirmed; base-volume input is still a declared proxy. Full historical Thumb examples remain pending.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN",
+        "COURSE.CAVEAT.THUMB_IDEAL_VS_WEAK"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1882,7 +1895,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1925,8 +1938,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Read-only mirrored corrective planner now separates flat motive ownership and 3->1->4->0 abstract units, 50-62% first A retracement, 38-50% B retracement, causal wave proof and exact fill transitions. PDF84 leaving 1 long contradicts the short-sale arithmetic and diagram; discrepancy is explicit. Dynamic first-leg/terminal target identification, stop-and-reverse execution, independent historical source labels and full Demo lifecycle remain unaccepted. 4.62 adds independently gated C terminal/failure observations and signed-flat motive handoff; corrective new-risk entry/stage execution remains incomplete.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -1937,7 +1953,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2273,7 +2289,7 @@
         52
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "After a complete five-leg motive, A can retrace the whole sequence. Its old W1 level cannot retroactively erase W5; developing motive invalidation is a separate contract.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2297,8 +2313,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Completed motive and historical diagonal alternatives are preserved; real Elliott degree still requires independent annotation.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTION_NEGATION"
+      ],
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2307,7 +2325,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2347,7 +2365,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Python and Kotlin agree on the selected boundary examples; Binance base volume remains a proxy for original tick volume.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2356,7 +2374,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2393,14 +2411,17 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Original referenced Computorial examples and personal tutorial material are absent from these supplied PDFs; not replaced by invented source claims.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "PENDING",
       "PRIOR_REGISTRY_STATUS": "PENDING",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2499,7 +2520,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Verified directly against Course PDF46 and PDF48 raster pages. Synthetic mirrored boundary examples, not digitized book OHLC or independently verified recursive degrees.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2510,7 +2531,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2526,7 +2547,7 @@
         60
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "Course impulse/correction checklist revises W1/W3 on three internal swings; validate successive child price subdivisions only from unique real confirmed pivots at each requested degree, preserving alternatives and unresolved evidence.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2553,7 +2574,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Course PDF59/60 visual schematic branches checked. Two-degree mirrored artificial anchor grammar is bounded, not digitized historical book OHLC. Independent ground-truth labelled recursive counts and physical Android Demo acceptance remain absent.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2564,7 +2585,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2643,7 +2664,7 @@
         81
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "A Course wave label alone cannot trim an owned position. Require its actual initial unit, pinned origin, a unique contained terminal five-leg count after entry, causal pivots and source proxy signs; W3 also requires a stronger observed 5/34 peak. Revalidate exact remaining quantity before POST.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2671,7 +2692,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "The 5-hour terminal age window, positive after-cost-reserve trim requirement and kline base-volume proxy are explicit project policies/adaptations. Terminal counts remain provisional; synthetic source cases and 35 frozen historical H1-prefix regressions are not independent Elliott accuracy or physical Futures Demo acceptance. Course new-risk execution remains disabled.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2684,7 +2705,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2704,7 +2725,7 @@
         84
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "Course automatic full exits require an owned source rule: matched W5/C terminal subdivisions or explicit W3/W5/corrective price invalidation. A generic correction-range break or arbitrary reason is not authority. Every rule is rederived before mutations and POST, using CONTRACT price and causal source evidence.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2732,8 +2753,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Mirrored artificial source cases and signed-transport models do not certify independent wave genealogy, canonical tick volume, the external Compututorial projections or physical Android/Futures Demo acceptance. Positive after-cost-reserve profit-taking and the 5-hour terminal proposal window are explicit project policies; current failed-count risk exits do not expire with the peak. Course new-risk execution remains disabled.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2745,7 +2769,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2761,7 +2785,7 @@
         84
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "A separate corrective owner can be proposed only after exact signed exit FILL, signed FLAT and clean old orders. Persist handoff once after recovery and require durable consumption by the subsequent owner; never reverse via an oversized close order.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2787,8 +2811,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exchange proof fields and one-shot ownership are project execution requirements. Handoff publishing cannot place orders. Full automatic Course initial/corrective entries and stage integration still require an independently checked degree/price-location contract; no physical Demo certification.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2799,7 +2826,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2820,7 +2847,7 @@
         84
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "ENGINEERING_MAPPING_WITH_SOURCE_CONTEXT",
       "ORIGINAL_MEANING": "Preserve one original contract unit: 3/1/6/10/3/(6 or 8)/0 and a separate opposite-owner 3/1/4/0. Risk caps reject whole later tranches; established targets are not rounded. A full signed attributed fill and protected exact position, rather than current position size, confirm a stage.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -2847,8 +2874,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact decimal/lot adaptation and modeled signed-fill/restart tests do not establish source wave genealogy, independently adjudicated chart counts, full Course new-risk admission or physical Android/Futures Demo execution. Initial parent/child degree proof remains unfinished. Existing partial exposure stays protected; Course remains OBSERVE for new risk.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CONTEXT_READ_ENGINEERING_MAPPING_NOT_INDEPENDENTLY_VALIDATED",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2862,7 +2892,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3763,8 +3793,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -3773,7 +3805,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -4007,8 +4039,10 @@
       "POSITION_MANAGEMENT": "No authority",
       "EXIT_CONDITIONS": "No authority",
       "EXCEPTIONS": [],
-      "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_REVIEW",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.W5_PROJECTION_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
       "TESTS": [],
       "TEST_RESULTS": "See regression report; not certification of a whole book.",
@@ -6930,6 +6964,592 @@
       "PRIOR_REGISTRY_STATUS": null,
       "TESTS": [],
       "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.VOLUME.PRICE_CHANGES_NOT_TRADES",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        21,
+        22,
+        23,
+        24,
+        35
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Course tick volume is the number of price changes in a period, not contracts and not necessarily the number of trades. Binance number-of-trades/base-volume remain labelled proxies. Historical claimed equivalence is not a measured identity.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.VOLUME.DAILY_DEADBAND",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        22,
+        23
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Intraday strict tick-volume change differs from daily>=110% plus,<=90% minus and described91-109% neutral. Fractional boundary/equality choices need an explicit engineering spec; do not apply daily deadband to every intraday bar.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.MFI.STRICT_RELATIVE_WINDOWS",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        23,
+        24,
+        25,
+        26,
+        27,
+        28
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "MFI=(High-Low)/volume has relative value against the preceding observation, not a universal absolute threshold. Four windows use strict volume/MFI signs; squat may continue or reverse and need not have a narrower range. Data units must remain consistent.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.BAR.OHLC_NOT_PATH",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        17,
+        18,
+        19,
+        20
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "OHLC thirds encode open/close location but do not uniquely reveal intrabar path or individual buyer/seller intent. Alleged85% reversal after extremes is unvalidated; exact third boundaries and same-third wording need separate specification.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.DRIFTER_ANNOTATION"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.WAVE.SELECTED_SEQUENCE_WINDOW",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        32,
+        35,
+        37,
+        43,
+        44,
+        77
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "The selected wave sequence should occupy100-140 bars in this Course. The60-H1 example switches to actual30-minute data; raw-history size or synthetic subdivisions do not satisfy it. Minimum20 price-change ticks is contextual guidance with exceptions, not a Binance20-trade identity.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.W5_PROJECTION_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.MACD.MFI_APPROXIMATION",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        40,
+        41,
+        42,
+        43,
+        44,
+        45
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Profitunity5/34 plus5-period signal is a price-based practical approximation to per-wave average MFI, not equality with range/volume MFI. Historical5/35 is distinguished from final5/34. Histogram versus signal differs from zero side or simple color.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.W5_PROJECTION_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.WAVE.TARGET_AND_OVERLAP_AMBIGUITIES",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        39,
+        44,
+        46,
+        48,
+        51,
+        52
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Target projection is unavailable before a causally known W4; retain endpoint-versus-sum wording and unattributed annotation caveats. Futures10% overlap lacks an explicit denominator here; probabilities and stylized drawings are not executable numeric gold.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTION_NEGATION",
+        "COURSE.CAVEAT.W5_PROJECTION_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.AIRBAG.NOT_AUTOMATIC_REVERSE",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        71,
+        85,
+        86,
+        87,
+        91
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Airbag on an actual significantly higher frame protects capital before entry and is not itself an initiating or necessarily reversing signal. Approximatefactor5 uses historical session context; offset/reference ambiguity remains. It cannot remove owned exchange STOP protection.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN",
+        "COURSE.CAVEAT.THUMB_IDEAL_VS_WEAK"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.PPT.NET_REVERSE_SEVEN",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Course W4 example holds6 or8 then specifies reversal to NETshort7, requiring an opposite order of13 or15 respectively. This differs from TC1 plain-stop description. Unit schedule and net exposure are source-specific; no automatic Course reversal is enabled in TC2.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.EXECUTIVE.ACCOUNT_CONTEXT",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Executive Decision includes equity, existing positions, wave context, protection and current/higher-frame rhythm. Four unanimous arrows are not required; current MACD has priority in the discussion. Durable liabilities, authentication and aggregate margin are engineering contracts, not proven by a paper worksheet.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN",
+        "COURSE.CAVEAT.THUMB_IDEAL_VS_WEAK"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.PSYCHOLOGY.CLAIMS_NOT_MACHINE_FACTS",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Somatotype/hemisphere/core, sensory bit rates, trader-program percentages, Olympics and success claims are attributed human coaching without reproduced evidence. They do not define model architecture, emotion sensors, market intent or execution permission. Individual tutorial content is missing.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "COURSE.JOURNAL.REFLECTION_NOT_LEARNING_PROOF",
+      "SOURCE": "COURSE",
+      "SOURCE_ID": "COURSE_EN",
+      "SOURCE_SHA256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "EDITION": "Profitunity home-study scan; date/version unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        97,
+        98,
+        100,
+        118,
+        119,
+        120,
+        121,
+        122
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_WITH_REVIEWER_BOUNDARIES",
+      "ORIGINAL_MEANING": "Journal worksheets separate observations, mistakes, lessons and planned actions. Empty forms are not completed experiments or proof learning improved. Level5 divider/final deferral cannot be replaced by invented training material.",
+      "MARKET_CONTEXT": "Course observer/research; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source-pinned supplied pages; OCR/visual first pass only, independent review and full atomic specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "COURSE.CAVEAT.EXTERNAL_LEVEL5"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no independent market/exchange or model examination.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,

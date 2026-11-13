@@ -86,3 +86,20 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
   reconciled gates ожидаемоexit2. Никакого нового backtest/OOS/PnL доказательства.
 - Добавлен Kotlin зеркальный regression; native production не менялся.
   Exact-head CI нового commit проверяется отдельно и фиксируется вPR240.
+
+## Course first pass и OCR provenance
+
+- Полный Python: **2450 passed,2 skipped,4 прежних warnings,27.80s**.
+ 6 новых regression cases покрывают provenance, physical scan/external gap
+ и сохранение original acquisition hash отдельно от нового review-text hash.
+- Ruff/releasePASS, clean-CI static0failures/11existing warnings. Новый source
+ commit не меняет Android production; его exact-head CI проверяется отдельно.
+-1091 non-Course rows воспроизведены полностью,1213 old acquisition hashes/lengths
+ сохранены,122 derived OCR hashes совпали с фактическими новыми private bytes.
+ Пустой OCR на graphic page56 без visual receipt не считается прочтением.
+- Evidence integrityPASS; complete gate ожидаемоexit2. Первое чтение Course122
+ не доказывает получение отсутствующих Computorial/personal tutorial материалов,
+ полного понимания рисунков, экспертную/model accuracy или прибыльность.
+- Предыдущий NTD commit2ebadb0f завершил все7CI success: Python43502176524,
+ Campaign43502176421/43502162808, research43502176265/43502162760,
+ dependency43502162533, APK/lint/unit/API35+36 UI/lifecycle43502176443.
