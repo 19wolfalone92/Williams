@@ -153,6 +153,28 @@ internal fun WilliamsDecisionTraceCard(raw:String,symbol:String) {
                     Text("${it.optString("profile")}: анализ не выполнен (${it.optString("error_type")}); вывод о сигналах неизвестен.",
                         color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodySmall)
                 }
+                val funnel=trace.optJSONObject("h1_entry_source_funnel")
+                if(funnel!=null) {
+                    Text("Почему нет нового входа по TC2",style=MaterialTheme.typography.titleSmall)
+                    if(funnel.optString("status")=="MISSING_OR_STALE_H1_SOURCE_FUNNEL") {
+                        Text("Причины отклонения ещё не сохранены для этой закрытой H1-свечи. По внешнему виду графика нельзя утверждать, что бот пропустил SHORT.",
+                            style=MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("Найдено сырых формаций TC2: ${funnel.optInt("raw_tc2_formations")}; "+
+                            "прошли проверку H1-контекста: ${funnel.optInt("qualified_tc2_h1_signals")}. "+
+                            "Это ещё не разрешение Binance на заявку.",
+                            style=MaterialTheme.typography.bodySmall)
+                        rows(funnel.optJSONArray("source_decisions"))
+                            .filter { it.optString("source")==williamsTc2Profile ||
+                                it.optString("direction")=="SHORT" }
+                            .takeLast(5).forEach { entry ->
+                                Text("${entry.optString("source")}: ${russianDirection(entry.optString("direction"))} "+
+                                    "${russianSignalFamily(entry.optString("signal_type"))}, триггер "+
+                                    "${entry.opt("trigger_price")} · ${russianH1EntryFunnelReason(entry.optString("reason"))}",
+                                    style=MaterialTheme.typography.bodySmall)
+                            }
+                    }
+                }
                 rows(trace.optJSONArray("books")).forEach { book ->
                     val label=when(book.optString("profile")) { williamsTc2Profile -> "TC2";williamsNtdProfile -> "NTD";else -> "Course" }
                     val evidence=rows(book.optJSONArray("evidence"))

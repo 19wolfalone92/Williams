@@ -5923,16 +5923,38 @@ private class NativeEngine(
                 } else {
                     (trigger - summary.entryPrice) / trigger
                 }
+                // An exit order on the SAME symbol is not necessarily this
+                // campaign's exit: an old closed owner may overlap with a new
+                // independent owner. Match the exact entry-client ID and full
+                // closing (not a partial Course trim) before using its reason.
                 val exitIntent = (0 until intents.length()).mapNotNull { j -> intents.optJSONObject(j) }
                     .lastOrNull {
                         it.optString("intent_role") == "EXIT" &&
                             it.optString("symbol").equals(symbol, true) &&
+                            it.optString("entry_client_id") == clientId &&
+                            !it.optBoolean("partial_reduction", false) &&
                             it.optString("exchange_status").equals("EXIT_CONFIRMED", true) &&
                             it.optLong("created_at_ms", 0L) in startTime..closedAt
                     }
+                // This is strictly an explanatory, read-only audit of a
+                // confirmed-flat historical campaign. Missing ALGO_UPDATE,
+                // missing child order IDs, or multi-order exits stay UNKNOWN;
+                // do not infer STOP_FILLED merely from time/price proximity.
+                val stopAttribution = runCatching {
+                    val privateEvents = auditStore.recentPrivateAlgoExitEvents(symbol, closedAt)
+                        ?: JSONArray()
+                    verifiedNativeStopExitAttribution(
+                        intent, fillArray, privateEvents, startTime, closedAt)
+                }.getOrElse { error ->
+                    JSONObject().put("schema", "WILLIAMS_SIGNED_EXIT_ATTRIBUTION_V1")
+                        .put("status", "NOT_VERIFIED")
+                        .put("reason", "PRIVATE_STOP_PROOF_UNAVAILABLE:" + error.javaClass.simpleName)
+                        .put("can_place_orders", false)
+                }
                 val reason = exitIntent?.optString("reason")?.takeIf { it.isNotBlank() }
                     ?: intent.optString("close_reason").takeIf { it.isNotBlank() }
-                    ?: "EXCHANGE_RECONCILED_CLOSE"
+                    ?: if(stopAttribution.optString("status") == "VERIFIED_OWNED_PROTECTIVE_STOP_FILLED")
+                        "VERIFIED_PROTECTIVE_STOP_FILLED" else "EXCHANGE_RECONCILED_CLOSE"
                 TradeJournal.recordExchangeCompleted(
                     prefs = prefs,
                     id = "FUTURES:" + clientId,
@@ -5950,7 +5972,8 @@ private class NativeEngine(
                     reason = reason,
                     entrySnapshot = JSONObject(intent.toString()),
                     entrySlippagePct = entrySlippagePct,
-                    fillCount = summary.fillCount
+                    fillCount = summary.fillCount,
+                    exitAttribution = stopAttribution
                 )
                 futuresCampaignCoordinator.recordVerifiedCampaignResult(clientId,summary.netPnlUsdt,summary.feeKnown,summary.fillCount)
                 futuresCampaignCoordinator.markTradeJournalStatus(
@@ -9819,9 +9842,14 @@ private class NativeEngine(
         if(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)!=null) return emptyList()
         val contractPrice=futuresMarketData.price(symbol)
         val out=mutableListOf<CampaignSignalN>()
+        // Preserve the RAW closed-H1 candidates separately from those that
+        // survived age, fractal/level, and later-opposition lifecycle checks.
+        // A raw formation is never permission to send a Futures order.
+        val rawCurrent = mutableListOf<CampaignSignalN>()
         for(omitted in 0..minOf(4,bars.size-45)) {
             val prefix=bars.take(bars.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,if(omitted==0) williamsUnifiedProfile else williamsExecutionProfile)
+            if (omitted == 0) rawCurrent.addAll(signals)
             out+=signals.filter { signal ->
                 if(signal.strategyProfile!=williamsTc2Profile || signal.role!="ENTRY") omitted==0 &&
                     (signal.strategyProfile!=williamsNtdProfile || signal.executionSemantics=="MARKET_ON_CLOSE" ||
@@ -9850,6 +9878,63 @@ private class NativeEngine(
         }.sortedBy { it.signalBarTimeMs }
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+        // Read-only explanation of a genuinely rejected TC2 signal. The raw
+        // source count can be nonzero while the qualified H1 trade count is zero
+        // (see LTCUSDT diagnostics #17). Never conflate those scopes again.
+        val qualifiedIds=valid.filter {
+            it.strategyProfile==williamsTc2Profile && it.role=="ENTRY"
+        }.map { it.signalId }.toSet()
+        val rawTc2=rawCurrent.filter { it.strategyProfile==williamsTc2Profile }
+        val decisions=JSONArray()
+        for (signal in rawCurrent.takeLast(32)) {
+            val isTc2 = signal.strategyProfile==williamsTc2Profile
+            val reason = when {
+                !isTc2 -> "OBSERVATION_ONLY_DIFFERENT_BOOK_PROFILE"
+                signal.role != "ENTRY" -> "ADDITION_REQUIRES_OWNED_CAMPAIGN"
+                !williamsH1SignalTimeEligible(signal.signalBarTimeMs,
+                    signal.type,signal.strategyProfile,now) -> "H1_SIGNAL_TIME_NOT_ELIGIBLE"
+                else -> {
+                    val blocker = runCatching { williamsH1ParentInvalidation(
+                        h1EntryParent(signal),waveBars,contractPrice,now) }
+                    when {
+                        blocker.isFailure -> "PARENT_INVALIDATION_CHECK_UNVERIFIED"
+                        blocker.getOrNull()!=null -> "PARENT_INVALIDATED:" +
+                            safeDiagnosticText(blocker.getOrNull().orEmpty())
+                        signal.signalId !in qualifiedIds ->
+                            "H1_OPPOSITION_OR_PARENT_LIFECYCLE_REJECTED"
+                        else -> "QUALIFIED_H1_SIGNAL_NOT_ORDER_AUTHORITY"
+                    }
+                }
+            }
+            decisions.put(JSONObject()
+                .put("signal_id",signal.signalId)
+                .put("source",signal.strategyProfile)
+                .put("signal_type",signal.type)
+                .put("role",signal.role)
+                .put("direction",campaignSignalDirection(signal.type) ?: "UNKNOWN")
+                .put("signal_bar_time_ms",signal.signalBarTimeMs)
+                .put("known_at_ms",signal.signalBarTimeMs+WILLIAMS_H1_MS)
+                .put("trigger_price",signal.triggerPrice)
+                .put("protective_price",signal.protectivePrice)
+                .put("qualified_for_h1_candidate",isTc2 && signal.signalId in qualifiedIds)
+                .put("reason",reason)
+                .put("can_place_orders",false))
+        }
+        val funnel=JSONObject()
+            .put("schema","WILLIAMS_H1_SOURCE_TO_TRADE_FUNNEL_V1")
+            .put("symbol",symbol)
+            .put("as_of_close_ms",bars.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L)
+            .put("observed_at_ms",now)
+            .put("raw_tc2_formations",rawTc2.size)
+            .put("qualified_tc2_h1_signals",qualifiedIds.size)
+            .put("source_decisions",decisions)
+            .put("no_order_without_execution_door",true)
+            .put("can_place_orders",false)
+        runCatching {
+            check(executionStore.writeState("decision_h1_entry_funnel_"+symbol,funnel.toString())) {
+                "H1_SOURCE_FUNNEL_OBSERVATION_NOT_DURABLE"
+            }
+        }.onFailure { lastError="H1 entry funnel observer unavailable: " + it.javaClass.simpleName }
         return valid
     }
 
@@ -10958,6 +11043,26 @@ private class NativeEngine(
             executionStore.readState("edition_observation_"+candidate.symbol+"_"+source)
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
         })
+        val candidateCloseMs=candidate.candles.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L
+        // A raw source may see a formation which fails TC2 parent-lifecycle
+        // qualification. These are deliberately DIFFERENT evidence stages.
+        for (i in 0 until observations.length()) {
+            val source=observations.optJSONObject(i) ?: continue
+            source.put("evidence_scope","RAW_CLOSED_H1_BEFORE_PARENT_LIFECYCLE")
+                .put("qualified_h1_signal_count",candidate.campaignSignals.count {
+                    it.strategyProfile==source.optString("profile") })
+                .put("same_closed_h1_as_candidate",candidateCloseMs>0L &&
+                    source.optLong("as_of_close_ms")==candidateCloseMs)
+                .put("trade_authority",false)
+        }
+        val funnel=runCatching {
+            JSONObject(executionStore.readState("decision_h1_entry_funnel_"+candidate.symbol).orEmpty())
+        }.getOrNull()?.takeIf {
+            candidateCloseMs>0L && it.optLong("as_of_close_ms")==candidateCloseMs
+        } ?: JSONObject().put("schema","WILLIAMS_H1_SOURCE_TO_TRADE_FUNNEL_V1")
+            .put("status","MISSING_OR_STALE_H1_SOURCE_FUNNEL")
+            .put("can_place_orders",false)
+        trace.put("h1_entry_source_funnel",funnel)
         trace.put("edition_observations",observations)
         // Independent NTD/Course WHAT-IF history. Persist a causal H1
         // paper diary even when TC2 live execution is paused/blocked.
@@ -11044,6 +11149,15 @@ private class NativeEngine(
         })
         trace.put("observer_paper_history",observerPaper)
         val traceBooks=trace.getJSONArray("books")
+        for(j in 0 until traceBooks.length()) {
+            val book=traceBooks.getJSONObject(j)
+            val source=(0 until observations.length()).mapNotNull { observations.optJSONObject(it) }
+                .firstOrNull { it.optString("profile")==book.optString("profile") }
+            book.put("evidence_scope","QUALIFIED_H1_CONTEXT_AFTER_LIFECYCLE")
+                .put("raw_formation_count",source?.optInt("signal_count",0) ?: JSONObject.NULL)
+                .put("same_h1_source_as_candidate",source?.optBoolean("same_closed_h1_as_candidate",false)
+                    ?: false)
+        }
         for(index in 0 until observations.length()) {
             val observation=observations.getJSONObject(index)
             if(observation.optString("state")=="ANALYSIS_FAILED") for(j in 0 until traceBooks.length()) {
