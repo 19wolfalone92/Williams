@@ -1698,7 +1698,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Course PDF42-44 and TC1 PDF60-63 reread with figures7-18/19/20. Twenty synthetic boundary cases cover both direction normalizations, zero-touch and 100/140 scale endpoints. These are not digitized historical chart OHLC; full nested-degree classification remains unproven.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1707,7 +1707,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1751,13 +1751,13 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Time/price containment remains a hypothesis; cannot certify wave genealogy.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2091,6 +2091,8 @@
       "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
       "CHAPTER": null,
       "PAGE": [
+        40,
+        41,
         42,
         43,
         44,
@@ -2125,13 +2127,13 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exchange data source differs from original tick-volume illustrations.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "PROJECT_POLICY",
       "PRIOR_REGISTRY_STATUS": "PROJECT_POLICY",
       "TESTS": [],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2223,7 +2225,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "34 mirrored synthetic semantic cases are bounded engineering checks, not independently digitized book charts or a calibrated forecast.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2232,7 +2234,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2421,7 +2423,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "The existing standalone Android evaluator is now wired into actual hierarchy/phase/journal and implemented in Python. Ten shared semantic cases cover both directions; they are synthetic rule boundaries, not digitized book chart OHLC. The examined wave degree remains provisional.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2432,7 +2434,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2589,7 +2591,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "TC1 PDF53-54/58-59/82-83 terminology reconciled: volume MFI and the author-described 5/34 approximation stay distinguishable. Full independent degree labels, target zones and Squat tick-volume acceptance remain pending.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2600,7 +2602,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2880,7 +2882,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2890,7 +2892,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2932,7 +2934,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2942,7 +2944,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -2987,7 +2989,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -2997,7 +2999,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3041,7 +3043,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3051,7 +3053,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3063,13 +3065,15 @@
       "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
       "CHAPTER": null,
       "PAGE": [
-        54
+        54,
+        64,
+        65
       ],
       "FIGURE": [
         "7.7"
       ],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "Wave-five target calculations must not be anchored to W4 until the fourth-wave pivot is causally confirmed.",
+      "ORIGINAL_MEANING": "After W4 ends, W5 target zone is p4 + direction*[0.62,1.0]*abs(p3-p0). W4 pivot must be causally confirmed. Page65 START-of-W4 parenthesis conflicts with detailed END-of-W4 explanation on54/64.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -3094,8 +3098,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "TC1.ERRATA.W5_ANCHOR"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3105,7 +3111,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3150,7 +3156,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Bounded synthetic and common Kotlin/Python causal price-ratio fixtures, not independent author chart digitization. Internal subwaves, unique Elliott count, 5 bullets, H1 market motion, signed exchange STOP and physical Demo trades remain unverified; never treated as TC2 admission/exit rule.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3160,7 +3166,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3263,7 +3269,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3311,7 +3317,8 @@
         "tie_matches": false,
         "invalid_matches": false,
         "can_infer_long_short": false,
-        "can_prove_trend_end": false
+        "can_prove_trend_end": false,
+        "scope": "INTRADAY_STRICT_SIGNS_ONLY_DAILY_DEADBAND_REQUIRES_SEPARATE_SPEC"
       },
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
@@ -3322,7 +3329,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3372,7 +3379,8 @@
         "tie_matches": false,
         "invalid_matches": false,
         "can_infer_long_short": false,
-        "can_prove_trend_end": false
+        "can_prove_trend_end": false,
+        "scope": "INTRADAY_STRICT_SIGNS_ONLY_DAILY_DEADBAND_REQUIRES_SEPARATE_SPEC"
       },
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
@@ -3383,7 +3391,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3433,7 +3441,8 @@
         "tie_matches": false,
         "invalid_matches": false,
         "can_infer_long_short": false,
-        "can_prove_trend_end": false
+        "can_prove_trend_end": false,
+        "scope": "INTRADAY_STRICT_SIGNS_ONLY_DAILY_DEADBAND_REQUIRES_SEPARATE_SPEC"
       },
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
@@ -3444,7 +3453,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3494,7 +3503,8 @@
         "tie_matches": false,
         "invalid_matches": false,
         "can_infer_long_short": false,
-        "can_prove_trend_end": false
+        "can_prove_trend_end": false,
+        "scope": "INTRADAY_STRICT_SIGNS_ONLY_DAILY_DEADBAND_REQUIRES_SEPARATE_SPEC"
       },
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
@@ -3505,7 +3515,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -3613,7 +3623,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -3621,7 +3631,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3935,7 +3945,7 @@
       "EXIT_CONDITIONS": "No authority",
       "EXCEPTIONS": [],
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_REVIEW",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
       "TESTS": [],
       "TEST_RESULTS": "See regression report; not certification of a whole book.",
@@ -4018,7 +4028,7 @@
       "EXIT_CONDITIONS": "No authority",
       "EXCEPTIONS": [],
       "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_REVIEW",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "FIXED_TESTED",
       "TESTS": [
         "tests/test_master_mfi_causality.py"
@@ -4881,6 +4891,1158 @@
       "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
       "TESTS": [],
       "TEST_RESULTS": "Source reading only; no execution or empirical performance certification.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.BAR.THIRDS",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        38,
+        39,
+        40
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Classify open and close by thirds of range:1 upper,2 middle,3 lower; extremes1-1/3-3, neutral2-2, climbers3-1/2-1/3-2 and down1-2/2-3/1-3. Exact third-boundary/tie treatment still needs an explicit engineering spec.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MIDPOINT_SIGN: Detailed definition assigns PLUS above the previous high; the later prose assigns MINUS to the same above-range condition."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.BAR.INTRABAR_PATH_UNKNOWN",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        38,
+        39,
+        40
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "The author narrates buyer/seller control from bar shape. OHLC does not uniquely identify the intrabar high/low order or individual participant intent; narration is not a certified path label.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MIDPOINT_SIGN: Detailed definition assigns PLUS above the previous high; the later prose assigns MINUS to the same above-range condition."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.MFI.DAILY_VOLUME_DEADBAND",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        41
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Intraday volume direction compares any strict change; daily chart text assigns plus at>=110% and minus at<=90% of preceding daily volume. Intermediate movement is neutral; integer91-109 wording leaves fractional-boundary conventions unresolved.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.MFI.SQUAT_NARROW_RANGE_NOT_REQUIRED",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        45
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "A squat often has a narrow range but the author explicitly says this is not necessary. Volume up/MFI down and a later directional trigger must not be replaced by a narrow-range or automatic-reversal condition.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.AIRBAG.HIGHER_FRAME_QUALIFYING_BAR",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        45,
+        46,
+        97,
+        98
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Higher-timeframe airbag: scan back from the current bar to the first qualifying bar with both lower high and lower low for a long (mirror for short), ignoring inside bars; stop one tick beyond its relevant extreme. It protects capital, not automatically a reverse entry.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MIDPOINT_SIGN: Detailed definition assigns PLUS above the previous high; the later prose assigns MINUS to the same above-range condition.",
+        "TC1.ERRATA.SQUAT_CAPTION: Body and plotted annotation use -13+- for the falling squat example, while its figure6-10 caption starts +13+-."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.FRACTAL.AT_LEAST_FIVE_EQUAL_EXTREMES",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        68,
+        69
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Initiating fractal needs at least five bars and two qualifying lower highs/higher lows on either side. Equal extrema do not count; surrounding bars may be shared. Figure8-1D uses six bars; raster near-equality gives no exact epsilon or general unlimited-skipping algorithm.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.FRACTAL.START_SIGNAL_SEQUENCE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        70,
+        71,
+        77
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Start and signal have different roles relative to the intervening opposite fractal; extrema for the opposite initiating pair must be distinct, while surrounding bars may overlap. Roles become known on confirmation, not at the drawn pivot.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.FRACTAL.FARTHEST_LAST_TWO_STOP",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        71
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Fractal stop uses the more distant relevant extreme of the last two opposite fractals; it is not always the most recent fractal alone.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.FRACTAL.LEVER_INVALIDATION",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        72
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "A return past the start extreme by one tick destroys the analytical lever and unfilled signal. This is not exchange leverage and does not justify deleting an unconfirmed order liability.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.THUMB.THREE_QUALIFYING_BARS",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        74,
+        75
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "SHORT thumb setup uses three counted higher-high/higher-low bars (mirror LONG); inside/parallel bars are ignored in that structural count. Two of three volume increases are compared with each bar's immediately preceding physical bar. Conditional entry and reverse anchor are separate.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.THUMB.VOLUME_QUALITY_NOT_HARD_MIX",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        76,
+        102
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "One green plus one squat is stronger quality, not the only admissible pair: two green, two squat or mixed rising-volume bars are described. Do not turn a strong/weak distinction into a universal hard veto.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.THUMB.FILL_VS_CONFIRMED_FRACTAL",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        74,
+        75
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Thumb entry may occur before a standard fractal has two closed right-hand bars; an executed thumb is not proof of a causally confirmed five-bar fractal. Track formation/trigger/fill separately.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.MACD.APPROXIMATION_AND_PERIODS",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        58,
+        59,
+        60,
+        99,
+        100,
+        103
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Wave-average MFI is range/volume based.5/34 is presented as a practical approximation, with a5-period signal average (5/34/5), not an identity with MFI. TWR5/13/34 is separate; summary period typo retained. Price basis/MA kind remain unspecified in these passages.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MACD_SUMMARY_PERIODS: Detailed MACD is5/34/5; the summary twice calls MACD5/13/34, which are the TWR periods."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.W4.TIME_PROJECTION",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        63,
+        64
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Time window for possible W4 ending projects1.38 to1.62 times (t3-t1) forward from t2; a search zone, not a guaranteed timestamp or sufficient entry.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.W5_ANCHOR: Detailed projection adds W1-origin-to-W3-end distance to the END of W4; page65 parenthesis instead says START of W4.",
+        "TC1.ERRATA.FIGURE_7_20_TIMEFRAME: Figure7-20 caption says5-minute and following discussion expects a finer view, but the placed plot repeats the15-minute figure7-19/header."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.TWR.FAST_VS_BOTH",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        99
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "TWR is UP when MA5 exceeds both MA13 and MA34, DOWN when below both, otherwise neutral. No required ordering between13 and34 and no Alligator forward displacement follows from this definition.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MACD_SUMMARY_PERIODS: Detailed MACD is5/34/5; the summary twice calls MACD5/13/34, which are the TWR periods."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.RHYTHM.FOUR_CELLS_NOT_UNANIMOUS_GATE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        100
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Worksheet puts higher timeframe in upper row, operative timeframe in lower, TWR left and MACD right. Author emphasizes operative MACD; waiting for all four arrows to agree may already be late. Do not fabricate a four-unanimous-arrow entry gate.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.MACD_SUMMARY_PERIODS: Detailed MACD is5/34/5; the summary twice calls MACD5/13/34, which are the TWR periods."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PPT.INITIAL_THREE_OF_TEN",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        84
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Illustrated campaign maximum is10 contract units: initially3, trim2 at W1 target, retain1. A5-unit opposite order closes3 and opens2 net reverse. This is not10 symbols or a fixed percentage risk.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PPT.W2_W3_SCHEDULE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        85,
+        86
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Illustration adds5 at W2 end to hold6, then adds4 when W3 reaches110% of W1 to hold10; trims7 at W3 target, retains3. During W3 development the original reverse level becomes a flat protective stop near W1 extreme.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PPT.W4_W5_SCHEDULE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        87
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "After W3 trim, add3 at W4 end if W3>=1.62*W1 (hold6), otherwise add5 (hold8), protect near W1 extreme and close remaining at W5 target. Source-discretionary waves are not completed machine labels.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PPT.REVERSE_ORDER_NET_EXPOSURE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        84,
+        85,
+        88
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Reverse examples distinguish submitted opposite order quantity from net new exposure:5 closes3/opens2,10 closes6/opens4,7 closes4/opens3. Risk of currently open contracts is not risk of all reverse-order units.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PPT.NUMERIC_EXAMPLES",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        90,
+        91,
+        92,
+        93
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Explicit CHF and soybean price/quantity tables contain arithmetic and chart-price disagreements. Recompute FIFO gross only with full provenance; never use the printed totals as verified market gold or profitability evidence.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "TC1.ERRATA.CHF_EXIT_PRICE: Figure9-10 explicitly annotates sell7 at8065; body/table uses7965.",
+        "TC1.ERRATA.SOY_ADD_PRICE: Figure9-11 explicitly annotates sell5 at654.5; body/table uses654.75.",
+        "TC1.ERRATA.CHF_ARITHMETIC: Table understates first trim lot by60, substitutes hypothetical stop profit22225 for previously realized14600, and has inconsistent final loss and subtraction.",
+        "TC1.ERRATA.SOY_ARITHMETIC: Initial three-contract stop risk is825 versus printed1375; subtotal and final total omit earlier realized2550."
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_ARITHMETIC_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [
+        "tests/test_tc1_printed_number_audit.py"
+      ],
+      "TEST_RESULTS": "24 offline Decimal ledger/provenance tests passed; no OHLC backtest, fees or exchange fills.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Communication, somatotype and three-brain discussion is human coaching with unverified physiological and success-rate assertions. No anatomical diagnosis, emotion sensor, model architecture or execution permission is certified by reading it.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PSYCHOLOGY.FOUR_PROGRAMS",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        133,
+        134,
+        135,
+        136,
+        137
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Fear, greed, confidence and enjoyment are human self-reflection categories. The stated prevalence ranges and claimed benefits lack an independently reproduced sample; journaled self-report is not direct observation of all participants.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PSYCHOLOGY.AGGREGATE_STOP_BUDGET",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        136,
+        137
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Before a session, total hypothetical stop losses across open positions and reduce exposure if beyond the personal budget.6500 versus4000 implies reducing2500 of hypothetical risk. Risk-free here is explicitly psychological, not a guarantee against monetary loss or slippage.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        127,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        134,
+        135,
+        136,
+        137,
+        138,
+        139,
+        140
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Separate observed present conditions from preferred narratives and notice reactive strategy changes. Philosophy, sporting/therapy anecdotes and subjective timelessness do not remove chronological causality, stop protection, independent validation or loss controls.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC1.FIBONACCI.ASYMPTOTIC_WORDING",
+      "SOURCE": "TC1",
+      "SOURCE_ID": "TC1_RU",
+      "SOURCE_SHA256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "EDITION": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        24
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "This supplied TC1 text says the neighboring Fibonacci ratio tends toward0.618; it does not make the exact-for-any-pair assertion seen in TC2_EN52. Preserve the edition distinction and do not import one book's wording into the other.",
+      "MARKET_CONTEXT": "TC1 observer/research only; TC2 operational policy is a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No changes to operational TC2 from this TC1 receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,

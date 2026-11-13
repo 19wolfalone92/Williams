@@ -685,8 +685,12 @@
   },
   "TC1_RU:40": {
     "section": "CH6",
-    "content": "Immediate price/midpoint trend and tick-volume definition distinct from contract volume.",
+    "content": "Figure6-6 and6-7: current midpoint above prior high gives+, below prior low gives-, overlap gives0. Tick volume is explicitly number of price changes, not traded contract quantity.",
     "rules": [
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
+      "TC1.BAR.INTRABAR_PATH_UNKNOWN",
+      "TC1.BAR.THIRDS",
       "TC1.MFI.RANGE_OVER_VOLUME"
     ],
     "figures": [
@@ -696,14 +700,19 @@
     "visual_review": true,
     "printed_page": 40,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:41": {
     "section": "CH6",
-    "content": "Tick-count context, floor participation and adjacent-volume comparison.",
+    "content": "Figure6-8 volume chart. Intraday volume comparison uses any strict change; daily significance is at least110-percent or at most90-percent of prior day, with middle band neutral. Tick volume is treated by author as a proxy for actual volume; equivalence to Binance base volume/trade count is not established.",
     "rules": [
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
+      "TC1.MFI.DAILY_VOLUME_DEADBAND",
       "TC1.MFI.RANGE_OVER_VOLUME"
     ],
     "figures": [
@@ -712,78 +721,115 @@
     "visual_review": true,
     "printed_page": 41,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:42": {
     "section": "CH6",
-    "content": "MFI = range/volume; meaningful comparison is with preceding bar, not absolute scale.",
+    "content": "MFI=(high-low)/volume; informational content is change versus previous MFI, not absolute magnitude. Einstein energy analogy explicitly presented as playful speculation; zero/missing volume requires unknown rather than invented division.",
     "rules": [
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
       "TC1.MFI.RANGE_OVER_VOLUME"
     ],
     "figures": [],
     "visual_review": true,
     "printed_page": 42,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:43": {
     "section": "CH6",
-    "content": "MFI and volume combine into four strict up/down windows; no equality mapping to a decrease.",
+    "content": "MFI change is adjacent-bar relative, no optimization proposed; tick volume enters both its own comparison and the MFI denominator. Four sign combinations introduce Profitunity windows.",
     "rules": [
-      "TC1.MFI.RANGE_OVER_VOLUME"
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
+      "TC1.MFI.RANGE_OVER_VOLUME",
+      "TC1.MFI.WINDOW_FADE",
+      "TC1.MFI.WINDOW_FAKE",
+      "TC1.MFI.WINDOW_GREEN"
     ],
     "figures": [],
     "visual_review": true,
     "printed_page": 43,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:44": {
     "section": "CH6",
-    "content": "Remaining four-window table, non-directional green, fake/fade/squat interpretations.",
+    "content": "Four windows: volume+/MFI+ green, -/- fade, -/+ fake, +/- squat. Narrative explanations of floor-trader intent do not establish observable identities or guaranteed behavior.",
     "rules": [
-      "TC1.MFI.RANGE_OVER_VOLUME"
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
+      "TC1.MFI.RANGE_OVER_VOLUME",
+      "TC1.MFI.WINDOW_FADE",
+      "TC1.MFI.WINDOW_FAKE",
+      "TC1.MFI.WINDOW_GREEN",
+      "TC1.MFI.WINDOW_SQUAT"
     ],
     "figures": [],
     "visual_review": true,
     "printed_page": 44,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:45": {
     "section": "CH6",
-    "content": "Squat can occur mid-trend and is not sufficient reversal; higher-frame airbag discussion.",
+    "content": "Squat may terminate or continue a trend, including mid-wave3; a narrower range is usual but explicitly not necessary. Breakout resolves direction. Airbag higher-timeframe protective-stop discussion begins; equity risk and protection are separate.",
     "rules": [
-      "TC1.MFI.RANGE_OVER_VOLUME"
+      "ENGINEERING.MFI.PREFIX_UNITS",
+      "ENGINEERING.MFI_PROXY",
+      "TC1.AIRBAG.HIGHER_FRAME_QUALIFYING_BAR",
+      "TC1.MFI.RANGE_OVER_VOLUME",
+      "TC1.MFI.SQUAT_NARROW_RANGE_NOT_REQUIRED",
+      "TC1.MFI.WINDOW_SQUAT"
     ],
     "figures": [],
     "visual_review": true,
     "printed_page": 45,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "TC1_RU:54": {
     "section": "CH7",
-    "content": "100-140 bars specifically internal wave c in W4-to-W5 search; target zone from W1 origin to W3 end projected from W4.",
-    "rules": [],
+    "content": "Wave4 non-overlap is stated then explicitly allows exceptions. Wave5 target cannot be projected until wave4 ends: add0.62 and1.0 times absolute wave0-to3 movement to wave4 end (mirror for down moves), refine with nested degree/context. Numeric zone does not guarantee an endpoint.",
+    "rules": [
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "TC1.RHYTHM.W4_INTERNAL_C",
+      "TC1.W4.OVERLAP_ALTERNATIVE",
+      "TC1.W4.RETRACE_38_50",
+      "TC1.W5.PROJECTION_ORIGIN_AFTER_W4",
+      "TC1.ZIGZAG.B_RETRACE_50_62"
+    ],
     "figures": [
       "7.7"
     ],
     "visual_review": true,
     "printed_page": 54,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   },
   "NTD_RU:1": {
@@ -4296,6 +4342,2107 @@
     "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
       "Selected translation anchor, not full translation certification or independent review. No Binance-specific margin definition given."
+    ]
+  },
+  "TC1_RU:1": {
+    "section": "FRONT_MATTER",
+    "content": "Title attributes Trading Chaos to Bill Williams; Russian reflow footer is not complete publication identity.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 1,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:2": {
+    "section": "FRONT_MATTER",
+    "content": "Dedication to Ellen and preface: 90-percent losing trader/IQ/success claims and promises are authored narrative, not measured bot performance. Profitunity and chaos motivation.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 2,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:3": {
+    "section": "FRONT_MATTER",
+    "content": "Pendulum, waves, neurons and strange-attractor analogies; five learning stages and lifestyle/tax assertions are historical narrative, not verified scientific/legal facts or an algorithm.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 3,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:4": {
+    "section": "FRONT_MATTER",
+    "content": "Preface signed Mobile, Alabama, April1995; this does not establish the Russian publication year. Acknowledgments distinguish Larry Williams from author Bill Williams and credit TradeStation/CQG research support.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 4,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:5": {
+    "section": "FRONT_MATTER",
+    "content": "Contents maps twelve chapters, five learning levels and conclusion to physical pages; navigation is not additional rule evidence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 5,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:6": {
+    "section": "CH1",
+    "content": "Chapter1 criticizes abstract indicators, black boxes and overthinking; intuition/psychology arguments do not authorize removing testable algorithmic risk controls.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 6,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:7": {
+    "section": "CH1",
+    "content": "Self-directed trading, newsletter anecdote, market-as-animal reflection and inability to know tomorrow. Fractal method concerns present structure, not guaranteed long-range prediction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 7,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:8": {
+    "section": "CH1",
+    "content": "Uncertainty, nonrepeating history and illustrative trader gains/losses; selective testimonials and seminar narratives are not independent forecasts or performance evidence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 8,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:9": {
+    "section": "CH1",
+    "content": "Illustrative guru leverage/borrowed-capital failure and system/success-history narrative; no sizing recommendation or validated return series.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 9,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:10": {
+    "section": "CH1",
+    "content": "Changing conditions and unreliable retrospective forecasts; author fund-performance statistics remain attributed historical claims, not measured bot outcomes.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 10,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:11": {
+    "section": "CH1",
+    "content": "Author explicitly declines guaranteeing reader profit, yet claims99.5-percent pivot recognition and analogizes psychological risklessness/market energy. Distinguish mental comfort and unverified numerical claims from financial exposure.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 11,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:12": {
+    "section": "CH1",
+    "content": "Chapter map: novice bar/volume/MFI/windows/airbag; advanced waves/MACD; fractal leverage, ROI planning and trading partner, then human psychology. Ten-second analysis and ranked success percentages are authored aspirations.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 12,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:13": {
+    "section": "CH1",
+    "content": "Einstein-friendly-universe anecdote and chosen-market-animal reflection close chapter1; attribution not independently established and does not define a market classifier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 13,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:14": {
+    "section": "CH2",
+    "content": "Chapter2 guru story contrasts simple versus easy and operator expectations; not an instruction to replace quantitative controls with intuition.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 14,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:15": {
+    "section": "CH2",
+    "content": "Trade agreement on price versus disagreement on value, allocation and consensus critique. Equal matched quantity does not by itself imply equal trader counts or disprove surveyed sentiment; no automatic overbought/oversold reversal.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 15,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:16": {
+    "section": "CH2",
+    "content": "Trend following versus buying extremes, lifestyle/risk analogies and historical Treasury-bill collateral examples; these are not current Binance collateral rules or a guaranteed safe strategy.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 16,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:17": {
+    "section": "CH2",
+    "content": "Wrong-city map and cultural-history analogies; geometry/gravity and historical assertions are not independently validated here and provide no operational threshold.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 17,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:18": {
+    "section": "CH2",
+    "content": "Historical-scientific narrative about physics, turbulence and chaos; claims about quantum mechanics or scientific limits must not be encoded as market facts. Chapter2 summary reiterates map/perception metaphor.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 18,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:19": {
+    "section": "CH3",
+    "content": "Chapter3 paradigms/filter model, quoted medical analogy, watch-industry and mountain-road stories; cognition/market claims are attributed context, not validated predictors.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 19,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:20": {
+    "section": "CH3",
+    "content": "Mountain-road story resolves and nonlinear/brain/market analogy continues; Gaussian text cone and Mandelbrot cotton narrative do not establish bot distribution or accuracy.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 20,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:21": {
+    "section": "CH3",
+    "content": "Figure3-1 river flow progression and psychological stability/chaos analogy; no numeric regime or entry threshold is supplied by the conceptual illustration.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 21,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:22": {
+    "section": "CH3",
+    "content": "Fractal geometry versus smooth/linear models and quoted Mandelbrot description; broad scientific superiority assertions do not supply operational market equations.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 22,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:23": {
+    "section": "CH3",
+    "content": "Coastline ruler/scale example and asserted market self-similarity; no exact wave-degree detector follows. Brain/body recursion assertions remain theoretical author narrative.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 23,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:24": {
+    "section": "CH3",
+    "content": "Figure3-2 two-magnet attractor analogy and Fibonacci recurrence. This Russian TC1 explicitly says previous/next ratio tends to0.618, unlike TC2 EN52 exact-every-pair claim; do not silently merge these meanings. Biological0.618 examples are not independently verified.",
+    "rules": [
+      "TC1.FIBONACCI.ASYMPTOTIC_WORDING"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 24,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:25": {
+    "section": "CH3",
+    "content": "Figure3-3 Mandelbrot illustration, asserted Fibonacci geometry and distance-dependent twine analogy; qualitative scale context, not an exact market classifier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 25,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:26": {
+    "section": "CH3",
+    "content": "Figure3-4 branching-tree iteration6/13, unformalized claim that fractal number peaks at reversals, and chapter3 summary. No causal numerical fractal-dimension estimator is specified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 26,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:27": {
+    "section": "CH4",
+    "content": "Chapter4 least-resistance and underlying-structure principles with river/architecture analogies; claimed market-energy mechanisms are philosophical context.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 27,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:28": {
+    "section": "CH4",
+    "content": "Four structure components are elements, arrangement, energy and purpose; underlying-structure change is philosophical process framing, not a deterministic price rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 28,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:29": {
+    "section": "CH4",
+    "content": "Figure4-1 oscillating pendulum and tight/wide STOP changes driven by the last loss illustrate operator behavior. No automatic STOP widening follows.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 29,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:30": {
+    "section": "CH4",
+    "content": "Type2 creation versus problem solving, Jung quotation and historical/medical/quantum analogies. One extracted sentence is damaged; do not silently reconstruct it from another edition. Render inspected; no missing wording is silently reconstructed.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 30,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:31": {
+    "section": "CH4",
+    "content": "Chapter4 closes with three least-resistance/structure principles and human freedom narrative. Freedom does not authorize disabling exchange, STOP or loss-limit requirements.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 31,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:32": {
+    "section": "CH5",
+    "content": "Chapter5 five-stage learning map attributed to Dreyfuss/Dalton and piano analogy; operator education is distinct from automated bot competence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 32,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:33": {
+    "section": "CH5",
+    "content": "Novice tools OHLC, volume, MFI, windows and airbag; focus on adjacent bars and capital preservation. Claims that all mechanical systems fail and about trader survival rates are author assertions, not verified model benchmarks.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 33,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:34": {
+    "section": "CH5",
+    "content": "Advanced beginner: one-contract consistency, waves/fractals and140-or-more-bar panorama. Claimed90-percent ambiguity reduction and top-trader ranking are not bot accuracy or compulsory H1 minimums.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 34,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:35": {
+    "section": "CH5",
+    "content": "Competence centers on ROI and planning/partner tools, discretionary wrong-versus-out-of-touch choices; proficient learning focuses on human beliefs. No generic market-close or risk override inferred.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 35,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:36": {
+    "section": "CH5",
+    "content": "Expert human mind-state discussion and five-stage goals/tools table. It is an operator curriculum, not a measured machine-expertise score or stress-free financial guarantee.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 36,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:37": {
+    "section": "CH6",
+    "content": "Chapter6 novice objective and Figure6-1 OHLC bar with volume/time. Claimed superior understanding is author narrative; individual trader identities are not observable from OHLC.",
+    "rules": [
+      "TC1.FIVE_TRADER_LEVELS"
+    ],
+    "figures": [
+      "6.1"
+    ],
+    "visual_review": true,
+    "printed_page": 37,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:38": {
+    "section": "CH6",
+    "content": "Figures6-2/6-3 divide H-L into thirds, with1 top,2 middle,3 bottom and open-close code. Extreme1-1/3-3 reversal85-percent over1-5 bars is an unvalidated author claim, not a bot probability.",
+    "rules": [
+      "TC1.BAR.INTRABAR_PATH_UNKNOWN",
+      "TC1.BAR.THIRDS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 38,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:39": {
+    "section": "CH6",
+    "content": "Figures6-4/5/6: neutral2-2, climbers3-1/2-1/3-2 and downward1-2/2-3/1-3. Bare OHLC does not uniquely establish the narrated intrabar sequence or participant dominance; distinguish classification from path knowledge.",
+    "rules": [
+      "TC1.BAR.INTRABAR_PATH_UNKNOWN",
+      "TC1.BAR.THIRDS"
+    ],
+    "figures": [
+      "6.4",
+      "6.5"
+    ],
+    "visual_review": true,
+    "printed_page": 39,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:46": {
+    "section": "CH6",
+    "content": "Figure6-9 higher/operative timeframe airbag is protection, not necessarily entry. Render confirms a source typo: text says midpoint ABOVE prior range gives minus, conflicting with detailed page40 plus rule. Airbag bar indexing remains a visual/specification question.",
+    "rules": [
+      "TC1.AIRBAG.HIGHER_FRAME_QUALIFYING_BAR"
+    ],
+    "figures": [
+      "6.9"
+    ],
+    "visual_review": true,
+    "printed_page": 46,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:47": {
+    "section": "CH6",
+    "content": "Figure6-10 render: squat annotation/text versus caption sign disagree (-13 versus +13). Later panorama says at least100 bars, versus140 in page34; teaching horizons are not universal gates. Volume-up always-green-or-squat narrative omits exact MFI ties, which remain UNKNOWN.",
+    "rules": [],
+    "figures": [
+      "6.10"
+    ],
+    "visual_review": true,
+    "printed_page": 47,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:48": {
+    "section": "CH6",
+    "content": "Eleven novice self-check questions cover bar coding, extremes, neutral, trend, MFI and windows. These are author exercises, not externally scored gold answers.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 48,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:49": {
+    "section": "CH7",
+    "content": "Chapter7 expands to100-140-bar wave context and claims real-time counts; retrospective completed counts must not leak into causal states. Profitability/timing superiority is not independently measured.",
+    "rules": [
+      "TC1.FIVE_TRADER_LEVELS",
+      "WAVE.REAL_TIMEFRAMES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 49,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:50": {
+    "section": "CH7",
+    "content": "Figures7-1/7-2 five-wave movement and three-wave correction recur within larger waves. Form matters more than fixed timeframe; author practical average20 tick-volume per period is contextual, not a Binance quantity threshold.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 50,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:51": {
+    "section": "CH7",
+    "content": "Wave1 smaller-degree structure and five bullets: divergence,target zone,fractals,squat,momentum change. Wave2 starts correction. The text names an MFI oscillator here; later MACD terminology requires edition-pinned clarification, not automatic renaming to TC2 AO.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 51,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:52": {
+    "section": "CH7",
+    "content": "Wave2 typical38-62-percent retracement and author frequency claims; wave3 generally steeper/high-volume. Typical targets and narratives are not inviolable labels or calibrated probabilities.",
+    "rules": [
+      "TC1.W2.RETRACE_38_62"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 52,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:53": {
+    "section": "CH7",
+    "content": "Wave3 initial length1-1.62 of wave1 and smaller-degree five bullets. Wave4 alternation/complexity and common38-50-percent retracement;85-percent whipsaw and70-percent-time claims are author estimates.",
+    "rules": [
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "TC1.W3.EXTENSION_1_TO_1_62",
+      "TC1.W4.RETRACE_38_50"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 53,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:55": {
+    "section": "CH7",
+    "content": "Figures7-8/7-9 nested degrees and zigzag5-3-5 context; b correction commonly50-62percent (rare75) with fractal/squat as conditional continuation context, not a guaranteed entry or target.",
+    "rules": [
+      "TC1.ZIGZAG.B_RETRACE_50_62"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 55,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:56": {
+    "section": "CH7",
+    "content": "Figures7-10/7-11 flat and irregular correction, triangle a-b-c-d-e in wave4 or b. Body says b-triangle breakout follows b; compare next-page caption saying a before implementing direction.",
+    "rules": [],
+    "figures": [
+      "7.10",
+      "7.11",
+      "7.12"
+    ],
+    "visual_review": true,
+    "printed_page": 56,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:57": {
+    "section": "CH7",
+    "content": "Figures7-12/13 triangle4 and triangleb, with b-caption breakout in direction of a; this differs from preceding body wording. Figures7-14/15 introduce price-time geometry; equal price height need not mean equal momentum.",
+    "rules": [],
+    "figures": [
+      "7.13",
+      "7.14",
+      "7.15"
+    ],
+    "visual_review": true,
+    "printed_page": 57,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:58": {
+    "section": "CH7",
+    "content": "Figure7-15 price-time areas and averaged MFI within each wave; claimed Fibonacci area forecasting is qualitative/empirical narrative, not a specified validated projection engine. Divergence compares wave3 versus5 averages.",
+    "rules": [
+      "ENGINEERING.MFI_PROXY",
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "TC1.MACD.APPROXIMATION_AND_PERIODS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 58,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:59": {
+    "section": "CH7",
+    "content": "Figure7-16 averaged-MFI divergence. Joseph5/35 is changed to5/34 as an approximation to wave-averaged MFI; add a5-period average of this oscillator for Profitunity MACD5/34/5. MACD is not literally range/volume MFI; this passage leaves price basis/MA kind unspecified.",
+    "rules": [
+      "ENGINEERING.MFI_PROXY",
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION",
+      "TC1.MACD.APPROXIMATION_AND_PERIODS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 59,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:60": {
+    "section": "CH7",
+    "content": "Figure7-17: oscillator peak identifies wave3 context; associated price extreme may precede oscillator peak by1-5 bars. Histogram below its5-period signal line motivates caution/discretionary hold or exit, not a universal TC2 exit.",
+    "rules": [
+      "ENGINEERING.MFI_PROXY",
+      "TC1.MACD.APPROXIMATION_AND_PERIODS",
+      "WAVE.AO.MINIMUM_W4",
+      "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 60,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:61": {
+    "section": "CH7",
+    "content": "Figure7-18 hourly yen X-Y spans33 bars; oscillator degree is matched to a selected100-140-bar wave sequence, not merely total cached rows. Author says too short measures higher degree, too long lower degree; choose sampling context accordingly.",
+    "rules": [
+      "WAVE.AO.MINIMUM_W4",
+      "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "WAVE.REAL_TIMEFRAMES",
+      "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG"
+    ],
+    "figures": [
+      "7.18"
+    ],
+    "visual_review": true,
+    "printed_page": 61,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:62": {
+    "section": "CH7",
+    "content": "Figures7-19/20 same yen on15min/5min:102-bar X-Y and oscillator zero crossing meet a minimum condition. Price/oscillator divergence without zero return distinguishes nested wave3/5 from parent completion; actual charts need causal timestamps, not blind bar-count multiplication. Rendered figure7-20 carries a 5-minute caption but repeats a chart headed15-minute, matching7-19; its genuine series/timeframe cannot be certified from this supplied reflow.",
+    "rules": [
+      "WAVE.AO.MINIMUM_W4",
+      "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "WAVE.REAL_TIMEFRAMES",
+      "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG"
+    ],
+    "figures": [
+      "7.19",
+      "7.20"
+    ],
+    "visual_review": true,
+    "printed_page": 62,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:63": {
+    "section": "CH7",
+    "content": "Crucial qualification: zero-line crossing after wave3 means minimum wave4 requirements, NOT that wave4 has ended. Seek final corrective c/e structure and five bullets before inferring next-wave completion; Fibonacci time projection starts from wave1-to3 peaks.",
+    "rules": [
+      "TC1.W4.TIME_PROJECTION",
+      "WAVE.AO.MINIMUM_W4",
+      "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "WAVE.REAL_TIMEFRAMES",
+      "WAVE.W3.GLOBAL_MOMENTUM_AND_PRICE_LAG"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 63,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:64": {
+    "section": "CH7",
+    "content": "Figure7-21 wave4 time zone: time between wave1/3 peaks times1.38-1.62, projected from wave2 end. Figure7-22 wave5 nested targets restate wave0-to3 price span projected from wave4 end.",
+    "rules": [
+      "TC1.W4.TIME_PROJECTION",
+      "TC1.W5.PROJECTION_ORIGIN_AFTER_W4",
+      "WAVE.DEGREE_SCOPED_INTERPRETATION"
+    ],
+    "figures": [
+      "7.21",
+      "7.22"
+    ],
+    "visual_review": true,
+    "printed_page": 64,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:65": {
+    "section": "CH7",
+    "content": "Figure7-23 momentum side is oscillator5/34 above/below its5-period signal average, distinct from zero-line sign. A parenthetical says target added to START of wave4, conflicting with pages54/64 END; inspect rendered figure and quarantine inconsistent wording.",
+    "rules": [
+      "TC1.W5.PROJECTION_ORIGIN_AFTER_W4",
+      "WAVE.AO.MINIMUM_W4",
+      "WAVE.DEGREE_SCOPED_INTERPRETATION",
+      "WAVE.REAL_TIMEFRAMES"
+    ],
+    "figures": [
+      "7.23"
+    ],
+    "visual_review": true,
+    "printed_page": 65,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:66": {
+    "section": "CH7",
+    "content": "Chapter7 summary and eleven self-check questions cover wave constraints/corrections, averaged MFI proxy, signal line, four MACD uses and divergence. An exercise list is not an independently scored wave benchmark.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 66,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:67": {
+    "section": "CH8",
+    "content": "Chapter8 introduces fractal formations and leverage/lever as a signal/cancellation level, with historical indicator critiques. It does not grant exchange leverage125 or remove loss limits.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 67,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:68": {
+    "section": "CH8",
+    "content": "Initiating fractal: at least5 bars, extremum with2 lower highs/higher lows on each side; equal-level bars do not count, neighboring fractals may share bars. Author98-percent discovery claim is not a measured bot rate.",
+    "rules": [
+      "TC1.FRACTAL.AT_LEAST_FIVE_EQUAL_EXTREMES"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 68,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:69": {
+    "section": "CH8",
+    "content": "Figure8-1 A clean, B both up/down, C shared bars, D6-bar with near/equal fifth extreme; raster gives no exact tick tolerance. Only highs matter for up, lows for down; confirmed pivot and later one-tick breakout are separate.",
+    "rules": [
+      "TC1.FRACTAL.AT_LEAST_FIVE_EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "8.1"
+    ],
+    "visual_review": true,
+    "printed_page": 69,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:70": {
+    "section": "CH8",
+    "content": "Figure8-2 breakout; initiating fractal can later serve start, signal or stop. Start precedes an opposite fractal; signal follows an opposite fractal. Roles are contextual and become known only with confirmation.",
+    "rules": [
+      "TC1.FRACTAL.START_SIGNAL_SEQUENCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 70,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:71": {
+    "section": "CH8",
+    "content": "Figures8-4/5 define fractal stop as the farther extreme of the last two opposite-side fractals, often penultimate; distinct from the most recent alone. Lever analogy begins and is not exchange leverage selection.",
+    "rules": [
+      "TC1.FRACTAL.FARTHEST_LAST_TWO_STOP",
+      "TC1.FRACTAL.START_SIGNAL_SEQUENCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 71,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:72": {
+    "section": "CH8",
+    "content": "Figures8-6/7 golf/market lever: complete retracement to start plus one minimum tick loses the lever and cancels unfilled buy/sell signal. Do not retroactively change the start identity or remove unknown submitted liabilities.",
+    "rules": [
+      "TC1.FRACTAL.LEVER_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 72,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:73": {
+    "section": "CH8",
+    "content": "Confirmed fractal pair gives start/signal; farthest opposite fractals trail in trend, exit versus stop/reverse in ranges is contextual. Thumb method introduces an earlier3-bar potential fractal setup, not a confirmed5-bar fractal.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 73,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:74": {
+    "section": "CH8",
+    "content": "Figure8-8 range-to-trend and Figure8-10 thumb setup: each of3 counted bars has higher high AND higher low; inside bars do not count. Corresponding fingers image is referenced; inspect actual placements before certifying figures.",
+    "rules": [
+      "TC1.THUMB.FILL_VS_CONFIRMED_FRACTAL",
+      "TC1.THUMB.THREE_QUALIFYING_BARS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 74,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:75": {
+    "section": "CH8",
+    "content": "Figures8-11/12: at least2 of3 fingers volume-up versus immediately preceding physical bars (green/squat wording omits equality ambiguity); sell stop one tick below thumb low, trail setup upward on new highs, reverse anchor at middle-finger high after short fill. Do not infer5-bar confirmation solely from thumb fill.",
+    "rules": [
+      "TC1.THUMB.FILL_VS_CONFIRMED_FRACTAL",
+      "TC1.THUMB.THREE_QUALIFYING_BARS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 75,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:76": {
+    "section": "CH8",
+    "content": "Figure8-13 summary: thumb HH/HL short and LL/LH long; at least one squat AND one green describes strength, missing mix is weak. Distinguish this quality tier from page75 two-volume-up eligibility, do not silently tighten to a universal mixed-color veto.",
+    "rules": [
+      "TC1.THUMB.VOLUME_QUALITY_NOT_HARD_MIX"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 76,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:77": {
+    "section": "CH8",
+    "content": "Nine exercises and Figure8-14 summary: opposite fractal START/SIGNAL require non-overlapping extreme bars; surrounding bars may still be shared. Same outside-bar up/down pivots are not automatically an ordered start/signal pair.",
+    "rules": [
+      "TC1.FRACTAL.START_SIGNAL_SEQUENCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 77,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:78": {
+    "section": "CH8",
+    "content": "Figures8-14/15/16 caption pages with historical short-term examples; text extraction alone cannot certify drawn entries, fills or OHLC values.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 78,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:79": {
+    "section": "CH8",
+    "content": "Figures8-17/18/19 historical5-minute fractal examples; exact OHLC/fills unavailable from text and no prospective validation claimed.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 79,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:80": {
+    "section": "CH9",
+    "content": "Chapter9 competent trader, multi-contract ROI and Profitunity planning; doubling returns is an author objective, not measured bot or risk-adjusted performance. Choose horizon with costs/context.",
+    "rules": [
+      "TC1.FIVE_TRADER_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 80,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:81": {
+    "section": "CH9",
+    "content": "Figures9-1 onward show late short entries and candidate zero point after a completed downward five-wave sequence. Participant motives/20-percent participation are narrative; completed chart labels must not leak into live counts.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 81,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:82": {
+    "section": "CH9",
+    "content": "Figures9-2/3 late-short schematic and zero point. Five bullets require divergence wave3/5, target zone, fractal, extreme-area squat and momentum reversal; a complete chart example is not prospective certification.",
+    "rules": [
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 82,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:83": {
+    "section": "CH9",
+    "content": "Figures9-4/5: target/divergence matched to selected100-140 bars, developing fractal and momentum change; inspect smaller degree for candidate first impulse and retracement after zero point.",
+    "rules": [
+      "TC1.FIVE_MAGIC_BULLETS_SOURCE_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 83,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:84": {
+    "section": "CH9",
+    "content": "TC1 planning example maximum10 units: initial3 (30percent) around50-62percent retracement or smaller-degree bullets; below zero point one tick sell5 closes3 and opens2 short. Explicitly nobody knows yet wave1 versus a. Trim2 of3 at candidate first-wave target, retain1; not TC2 allocation.",
+    "rules": [
+      "TC1.PPT.INITIAL_THREE_OF_TEN",
+      "TC1.PPT.REVERSE_ORDER_NET_EXPOSURE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 84,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:85": {
+    "section": "CH9",
+    "content": "TC1 planning adds5 to retained1 at wave2 end, total6; below zero point sell10 closes6/opens4. At candidate wave3 length equal wave1, replace zero-point reverse with flat-exit stop one tick below wave1 top. Context is an example maximum10-unit campaign.",
+    "rules": [
+      "TC1.PPT.REVERSE_ORDER_NET_EXPOSURE",
+      "TC1.PPT.W2_W3_SCHEDULE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 85,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:86": {
+    "section": "CH9",
+    "content": "At developing wave3 length1.10 times wave1 add4, total10; trim7 at candidate wave3 target, retain3. Wave4 oscillator below zero is minimum, not completion; seek2 down fractals and extreme-area squat. Overlap triggers conservative campaign exit despite analytical exceptions elsewhere.",
+    "rules": [
+      "TC1.PPT.W2_W3_SCHEDULE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 86,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:87": {
+    "section": "CH9",
+    "content": "At wave4 end add3 if wave3>=1.62*wave1, else add5, giving total6 or8 from retained3; stop near wave1 top, close all at wave5 target. Corrective-wave planning begins; do not transfer this allocation to TC2 reverse pyramid.",
+    "rules": [
+      "TC1.PPT.W4_W5_SCHEDULE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 87,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:88": {
+    "section": "CH9",
+    "content": "Figure9-8 correction example: short3, cover2/retain1, add3 for c (total4), buy7 above wave5 closes4/opens3, flatten at projected c end. Weekly Swiss-franc example begins; not a prospective return series.",
+    "rules": [
+      "TC1.PPT.REVERSE_ORDER_NET_EXPOSURE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 88,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:89": {
+    "section": "CH9",
+    "content": "Figure9-9 monthly Swiss franc and zero-point22May1989; author explicitly calls zero point an assumption with contingency plan, not knowledge. Weekly campaign maximum10 units; historical forecast anecdote unverified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 89,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:90": {
+    "section": "CH9",
+    "content": "Figure9-10 and explicit Swiss-franc trade numbers: buy3 at5736, stop5569, risk167 points x12.50 x3=6262.50; sell2 at6320 gives14600. Add5 at5854. Printed751x0.62=465 is rounded (actual465.62), and final entry rounding must be disclosed rather than copied as exact arithmetic.",
+    "rules": [
+      "TC1.PPT.NUMERIC_EXAMPLES"
+    ],
+    "figures": [
+      "9.10"
+    ],
+    "visual_review": true,
+    "printed_page": 90,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:91": {
+    "section": "CH9",
+    "content": "Rendered Swiss-franc table confirms arithmetic inconsistencies: entry5736 to exit7965 at12.50 gives27862.50, not27802.50; hypothetical22225 stop subtotal is substituted for prior realized14600. Remaining3@6604+3@6711 exit6630 gives-2062.50, not-4125;198977.50-4125 is194852.50, not194100. Chart90 exit label8065 differs from body7965. Source also states margin<=50percent; no actual margin proof is provided.",
+    "rules": [
+      "TC1.PPT.NUMERIC_EXAMPLES"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 91,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:92": {
+    "section": "CH9",
+    "content": "Soybean explicit trades and risk example: short3@663 with668.5 stop yields825 gross stop loss at50/point, not stated1375 (which equals5 order units). Cover2@637.5 yields2550; add5@654.75 then4@622.5. Chart-label/body price differences need separate disclosure; no exact OHLC reconstructed.",
+    "rules": [
+      "TC1.PPT.NUMERIC_EXAMPLES"
+    ],
+    "figures": [
+      "9.11"
+    ],
+    "visual_review": true,
+    "printed_page": 92,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:93": {
+    "section": "CH9",
+    "content": "Rendered soybean subtotal omits prior2550 despite listing it:2550+3050+13187.50+1025=19812.50, not17262.50. Text final6 cover561 gives37737.50 gross total versus reported35187.50. Chart92 sell-five entry654.5 differs from body654.75; other extremum labels are not assigned as fills. Source-reported arithmetic, not exchange-verified performance or expert gold.",
+    "rules": [
+      "TC1.PPT.NUMERIC_EXAMPLES"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 93,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:94": {
+    "section": "CH9",
+    "content": "Chapter9 planning summary and nine self-check questions about30-percent initial size, stops/reverse, five bullets, partial trims,110-percent wave3 and wave5 sizing. Does not establish empirical doubled returns.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 94,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:95": {
+    "section": "CH10",
+    "content": "Chapter10 Trading Partner introduces compact decision worksheet; ten-second complete analysis is an author objective, not measured software accuracy or latency.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 95,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:96": {
+    "section": "CH10",
+    "content": "Figure10-1 worksheet: contract rows with separate buy/sell subrows and fill order. Front-month/contract selection is a historical workflow, not current crypto symbol-policy authorization.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 96,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:97": {
+    "section": "CH10",
+    "content": "Trading Partner starts with two-bar higher-timeframe airbag, not two arbitrary operative bars; examples of approximately5x horizon reflect historical trading sessions, not a universal crypto resampling ratio.",
+    "rules": [
+      "TC1.AIRBAG.HIGHER_FRAME_QUALIFYING_BAR"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 97,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:98": {
+    "section": "CH10",
+    "content": "Airbag clarified: scan backward from current higher-timeframe bar for first bar with both lower high/lower low (long; mirrored short), ignore inside bars, stop one tick beyond that qualifying bar. Protection does not necessarily authorize reversal.",
+    "rules": [
+      "TC1.AIRBAG.HIGHER_FRAME_QUALIFYING_BAR"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 98,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:99": {
+    "section": "CH10",
+    "content": "TWR compares MA5 with both MA13 and MA34: above both up, below both down, otherwise neutral; no13-versus34 ordering required. Distinguish oscillator change, zero-line side and signal-line relation; passage wording needs next worksheet context before collapsing them.",
+    "rules": [
+      "TC1.MACD.APPROXIMATION_AND_PERIODS",
+      "TC1.TWR.FAST_VS_BOTH"
+    ],
+    "figures": [
+      "10.3"
+    ],
+    "visual_review": true,
+    "printed_page": 99,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:100": {
+    "section": "CH10",
+    "content": "Figures10-4/5 rhythm matrix: higher timeframe on upper row, operative on lower; TWR left, MACD right. Four-arrow agreement can be late; bottom-right operative momentum is emphasized, not mandatory universal higher-timeframe consensus.",
+    "rules": [
+      "TC1.MACD.APPROXIMATION_AND_PERIODS",
+      "TC1.RHYTHM.FOUR_CELLS_NOT_UNANIMOUS_GATE"
+    ],
+    "figures": [
+      "10.4",
+      "10.5"
+    ],
+    "visual_review": true,
+    "printed_page": 100,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:101": {
+    "section": "CH10",
+    "content": "Worksheet priority: protective airbag, rhythm, latest still-levered fractals, thumb setups, current positions/equity and intentions. Erasing a human worksheet is not permission to erase a durable exchange/intent ledger.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 101,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:102": {
+    "section": "CH10",
+    "content": "Outline confirms two-of-three volume-up thumb eligibility can be GG,SS orSG; inside/parallel bars excluded. Distinguish this from page76 stronger mixed-color description. Accept fractal signals with current momentum direction; use higher/lower perspectives contextually.",
+    "rules": [
+      "TC1.THUMB.VOLUME_QUALITY_NOT_HARD_MIX"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 102,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:103": {
+    "section": "CH10",
+    "content": "Figure10-6 workflow summary. Checklist twice labels MACD5/13/34, contradicting detailed5/34/5 in59/60/99 and confusing TWR5/13/34; quarantine summary wording. Claimed top3-percent/doubled ROI is not bot validation.",
+    "rules": [
+      "TC1.MACD.APPROXIMATION_AND_PERIODS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 103,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:104": {
+    "section": "CH10",
+    "content": "Intrinsic versus deferred reward and reported sports-training studies; cited4-6x progression is an author report, not a validated AI training multiplier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 104,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:105": {
+    "section": "CH10",
+    "content": "Olympic/doping narrative and operator enjoyment/psychological transition to levels4/5; historical/health assertions not independently verified. Nine chapter self-check questions remain author exercises.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 105,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:106": {
+    "section": "CH11",
+    "content": "Chapter11 proficient operator: feelings, personal structure, body/brain metaphors and market as communication composite. This is human psychology, not machine emotion or measured market intent.",
+    "rules": [
+      "TC1.FIVE_TRADER_LEVELS",
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 106,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:107": {
+    "section": "CH11",
+    "content": "Communication principles claim90-percent spoken falsehood and multichannel intuition; attributed behavioral narrative, not validated lie detection, participant labels or financial indicators.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 107,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:108": {
+    "section": "CH11",
+    "content": "Figure11-1 communication channels and gendered body-language/leg-swing60-per-minute claims. These are unvalidated author assertions; do not infer internal state, deception or trading permission from appearance/motion.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 108,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:109": {
+    "section": "CH11",
+    "content": "Communication principles and market-news analogy: reports express a speaker perspective; quoted 90% falsehood and market-tick mind-reading claims are author assertions, not measured filters. Introduces a speculative conception-energy/body-type account, unsuitable as bot evidence or a medical fact.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 109,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:110": {
+    "section": "CH11",
+    "content": "Figures 11-2/11-3 introduce author body-type and perception typology (mass/strength/speed); text read, diagrams not visually certified. Physiology-to-trading causal assertions are not validated input features.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 110,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:111": {
+    "section": "CH11",
+    "content": "Extends body-type stereotypes to symptoms, motivation, leadership and alcohol response; asserts >95% floor traders mesomorphic without data. Retain only attributed human context, never health inference or automatic trader/market classification. Workspace comfort anecdotes do not define a price signal.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 111,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:112": {
+    "section": "CH11",
+    "content": "Bridges body/mental flexibility to trader self-management and introduces left/right/central brain metaphor. Claims that ordinary arithmetic fails in nature/quantum contexts are not a valid reason to relax numeric execution/accounting invariants. No machine entry rule.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 112,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:113": {
+    "section": "CH11",
+    "content": "Territory-before-map warning against fitting patterns to a preferred theory; criticism of Market Profile and linear statistics is authored interpretation, not a reproduced comparative study. Three internal traders metaphor motivates self-observation, not three verified neural agents.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 113,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:114": {
+    "section": "CH11",
+    "content": "Describes split-brain history then strongly simplifies hemispheres into separate personalities/languages; claimed 16-bit/s conscious processing and 1/16-second neural itinerary unvalidated here. Human coaching metaphor is not a model architecture or physiological measurement.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 114,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:115": {
+    "section": "CH11",
+    "content": "Perceptual-latency and motion account, left-brain villain metaphor, division of planning versus skilled execution. Quoted neurological timings and anatomical assignments remain unverified authored claims; no exchange latency budget follows from them. Figure 11-4 referenced, text-only receipt.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 115,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:116": {
+    "section": "CH11",
+    "content": "Five supposed left-hemisphere signs: language, time, judgment, seriousness, effort. Human coaching warns against forcing a fixed daily profit target; cannot diagnose anatomy or make time/account risk constraints optional in software.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 116,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:117": {
+    "section": "CH11",
+    "content": "Practice-to-automatic-skill and problem-solving functions described using cycling/athletics analogies; references Gallwey footnote. Useful as attributed pedagogy, not proof that repeated model training improves generalization or a causal neural implementation spec.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 117,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:118": {
+    "section": "CH11",
+    "content": "Attributes self-sabotage after success to left brain and recommends discarding ineffective ideas. Claimed central-brain throughput (500,000 to 3 billion bits/s) and hypnotic recall not established data. Not evidence of model capacity, profitability, or error-correction effectiveness.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 118,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:119": {
+    "section": "CH11",
+    "content": "Automatic behavior, hypnosis/firewalking and roller-coaster metaphors. Anatomical and injury-prevention claims remain author assertions; no experiment or trading label is derived. Figure 11-5 text reference only.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 119,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:120": {
+    "section": "CH11",
+    "content": "Continues feelings as fluid-flow metaphor, RAS/medulla filtering and sleep/serotonin account. These broad anatomical and biochemical assertions are not certified by this source-reading pass. No trading-risk, medical or account-permission rule follows. Figure 11-6 mentioned before its next-page placement.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 120,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:121": {
+    "section": "CH11",
+    "content": "RAS filtering and attention/habituation explanation; breathing observation exercise distinguishes noticing from intentional change. Retain as voluntary human practice, not a software signal or a measured neurophysiological mechanism. Figure 11-6 not visually reviewed.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 121,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:122": {
+    "section": "CH11",
+    "content": "Swallowing exercise illustrates the author's automatic-versus-conscious-performance analogy. Right-hemisphere inspiration/insight/intuition and universal-modem metaphor are not an algorithm, neural measurement or guarantee of correct trading. No unsafe bodily exercise is required of user/model.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 122,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:123": {
+    "section": "CH11",
+    "content": "Right-brain river/world-hologram metaphor, religious quotations and speculative unlimited knowledge. Notes that any single proposed brain mode can still lose, including poor money management with intuition. Figures 11-7 and 11-8 references, no exact signal.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 123,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:124": {
+    "section": "CH11",
+    "content": "Figure 11-8 three-mode overlap model; recommends combining planning, skill and intuition. Subjective mood is not proof of a dominant hemisphere; no certified neural classifier or automatic permission can be inferred. Chapter conclusion starts.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 124,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:125": {
+    "section": "CH11",
+    "content": "Chapter 11 conclusion and questions: biologically destined brain functions and 99%-letting-go/1%-knowledge improvement assertions are not measured success rates. Mozart/physics/mysticism analogies remain attributed prose, not trading logic. Questions 1-4 continue next page.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 125,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:126": {
+    "section": "CH11",
+    "content": "Chapter 11 questions 4-13 continue body type, three traders, left/central/right functions and three inspiration qualities. Navigation/exercise receipt; no new price rule and no independently validated physiological answers.",
+    "rules": [
+      "TC1.PSYCHOLOGY.METAPHOR_VS_MACHINE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 126,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "EXERCISES",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:127": {
+    "section": "CH12",
+    "content": "Chapter 12 expert level: belief sets, sporting routines and integration with market structure. Stories about Jordan/Nicklaus and fewer-than-one-sixth traders are author analogies/claims; no automatic expert certification or perfect-action promise.",
+    "rules": [
+      "TC1.FIVE_TRADER_LEVELS",
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 127,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:128": {
+    "section": "CH12",
+    "content": "Reality-now versus imagined goal (spaces 1/2), advertising anecdote and life-as-game framing; author explicitly invites readers to use concepts only if helpful. These spaces are philosophical categories, not exchange truth/state schemas. Figure 12-1 text read.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 128,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:129": {
+    "section": "CH12",
+    "content": "Self-knowledge, accepting current reality and preserving perspective instead of chasing losses. Speculates about another person's weight and motives; keep as an attributed example, not clinical or biographical verification. Neither acceptance nor losses authorize larger trades.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 129,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:130": {
+    "section": "CH12",
+    "content": "Acceptance and choice contrasted with pendulum-like repeated strategy changes; tight-stop/wide-stop anecdote illustrates reactive tuning. Not permission to widen protective stops or ignore loss limits. Figure 12-2 text read.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 130,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:131": {
+    "section": "CH12",
+    "content": "Continues changing strategies and historical psychology/rat-maze narrative. Claims about psychology's origins, animal neuroscience and scientific history are author prose, not independently verified facts or instructions for model training.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 131,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:132": {
+    "section": "CH12",
+    "content": "Rat-maze disappointment analogy urges abandoning ineffective habits rather than repeating them for a different result. No controlled trading or model-learning experiment is supplied; anecdotal criticism of professional practice is not an efficacy benchmark.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 132,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:133": {
+    "section": "CH12",
+    "content": "Introduces four trading-belief programs: self-preservation, greed, confidence, enjoyment; reports repeated population research without supplying sampling/data protocol. Programs are human self-reflection categories, not directly observed trader sentiment or machine states.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "TC1.PSYCHOLOGY.FOUR_PROGRAMS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 133,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:134": {
+    "section": "CH12",
+    "content": "Author estimates fear35-45%, greed25-35%, confidence15-25%, enjoyment5-15%; ranges are not a normalized measured distribution for Binance. Breathing/oxygen and posture claims unvalidated; recommends journaling feelings around losing trades. A journal is evidence of self-report, not anatomical diagnosis.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "TC1.PSYCHOLOGY.FOUR_PROGRAMS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 134,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:135": {
+    "section": "CH12",
+    "content": "Greed considered useful for analysis but not execution; confidence/enjoyment preferred for action. Descriptions and prevalence are authored coaching, not quantitative entry filters, performance proof or a replacement for protective STOP/risk constraints.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "TC1.PSYCHOLOGY.FOUR_PROGRAMS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 135,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:136": {
+    "section": "CH12",
+    "content": "Integration technique begins with aggregate catastrophic stop-loss planning across all open positions; example6500USD versus tolerable4000USD is a personal hypothetical risk budget, not margin usage or a universal Binance threshold. Plan exposure reduction, not stop removal. Phrase risk-free is clarified next page, not a profit guarantee.",
+    "rules": [
+      "TC1.PSYCHOLOGY.AGGREGATE_STOP_BUDGET",
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "TC1.PSYCHOLOGY.FOUR_PROGRAMS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 136,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:137": {
+    "section": "CH12",
+    "content": "Explicitly risk-free means psychologically acceptable loss, not inability to lose money. Structure combines wave context, next significant timeframe airbag, rhythm, initiating/responding fractals; green/squat more aggressive.6500-to4000 example reduces risk by2500, not contracts/dollars of margin. Author speed/confidence claims unmeasured.",
+    "rules": [
+      "TC1.PSYCHOLOGY.AGGREGATE_STOP_BUDGET",
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION",
+      "TC1.PSYCHOLOGY.FOUR_PROGRAMS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 137,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:138": {
+    "section": "CH12",
+    "content": "Extends safety/structure/confidence/enjoyment technique to therapy analogy; confidentiality statements belong to the source, not a legal guarantee for this product.450 successful pupils and youngest/oldest anecdotes are unaudited claims. Chapter closing Chip story starts.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 138,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:139": {
+    "section": "CH12",
+    "content": "Completes Chip island-trading anecdote and quoted enthusiasm; no additional order or risk rule. First reading includes this narrative continuation rather than assuming the conclusion began here.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 139,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "TC1_RU:140": {
+    "section": "CONCLUSION",
+    "content": "Final conclusion: discovery and relinquishing prior beliefs, unity and time-stopping experience with religious/literary analogies. Subjective experience does not remove event ordering, closed-bar causality, independent validation or exchange risk/accounting requirements.",
+    "rules": [
+      "TC1.PSYCHOLOGY.BELIEFS_AND_OBSERVATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 140,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; not independent certification or exact OHLC digitization.",
+      "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
     ]
   }
 }

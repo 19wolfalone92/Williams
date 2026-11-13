@@ -10,13 +10,13 @@
     "inventory_rows": 1213
   },
   "source_coverage": {
-    "semantically_reviewed_single_pass": 295,
+    "semantically_reviewed_single_pass": 428,
     "independently_verified": 0,
     "total_physical_pages": 1213,
     "stage_counts": {
-      "TEXT_ACQUIRED_UNVERIFIED": 768,
-      "REVIEWED_SINGLE_PASS": 115,
-      "REVIEWED_TEXT_ONLY": 180,
+      "REVIEWED_TEXT_ONLY": 292,
+      "REVIEWED_SINGLE_PASS": 136,
+      "TEXT_ACQUIRED_UNVERIFIED": 635,
       "IMAGE_ONLY_PENDING_OCR": 31,
       "OCR_ACQUIRED_UNVERIFIED": 119
     },
@@ -25,12 +25,15 @@
     "per_source": {
       "TC1_RU": {
         "physical_pages": 140,
-        "first_pass_receipts": 7,
-        "visual_receipts": 7,
+        "first_pass_receipts": 140,
+        "visual_receipts": 28,
         "independently_verified": 0,
-        "all_physical_pages_have_first_pass_receipts": false,
+        "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
-          "PREVIOUS_RECEIPT_UNCLASSIFIED": 7
+          "FRONT_MATTER": 4,
+          "NAVIGATION": 1,
+          "BODY": 129,
+          "EXERCISES": 6
         },
         "full_content_certified": false
       },
@@ -98,14 +101,19 @@
     }
   },
   "figure_coverage": {
-    "qualitative_single_review_entries": 85,
+    "qualitative_single_review_entries": 110,
     "independent_second_reviews": 0,
     "total_substantive_figures": null,
     "percent": null
   },
+  "source_conflicts": {
+    "visible_single_review_entries": 10,
+    "independent_second_reviews": 0,
+    "unseen_original_english_errata_certified": false
+  },
   "rule_extraction": {
-    "registered": 91,
-    "rechecked_against_sources_this_run": 42,
+    "registered": 117,
+    "rechecked_against_sources_this_run": 81,
     "total_rules_in_books": null,
     "percent": null
   },

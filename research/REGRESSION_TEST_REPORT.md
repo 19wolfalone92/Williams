@@ -48,3 +48,26 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
   это статический аудит без инспекции пользовательской production DB.
 - Новые Kotlin unit/lint/APK/emulator результаты должны быть привязаны
   к новому head SHA в Actions; старый зелёный4ae2b2a0 за них не принимается.
+
+## Продолжение4.64.31 иTC1 first pass
+
+- AccountV3/config targeted: **206 passed**, включая lifecycle и endpoint
+  regression; полного набора после account repair —2360 passed/2 skipped.
+- После TC1 evidence integrity и Decimal ledger: **2387 passed,2 skipped,
+  4 прежних FastAPI deprecation warnings,26.72s**;131 focused source/adapter/
+  arithmetic tests passed отдельно, в том числе24 для явных чиселTC1.
+- `ruff --select F821,F822,F823,E9`: PASS; `ci_release_gate.py`: PASS.
+- Clean-CI root static safety: **0 failures,11 warnings**. Предупреждения
+  относятся к существующим одноимённым методам разных классов, subprocess
+  emulator/replay helpers и AST regression test. Production DB здесь отсутствует.
+- Master evidence integrity: PASS; `--require-complete`: ожидаемыйexit2.
+  Printed-number audit воспроизводит сохранённыйJSON, но
+  `--require-reconciled`: ожидаемыйexit2, поскольку исходные итоги расходятся.
+- Повторно сверены6 PDF и1091 non-Course inventory rows: совпали все поля,
+  включая page_kind.122 исходных Course OCR acquisition rows сохранены.
+- Исторические OOS/фактические fills/стоимость сделок/портфельная маржа
+  не получены из книжных таблиц. Нет новой прибыли или процента понимания модели.
+- Коммит account repair44ffcef4 отдельно завершил всеCI: Python43454243137,
+  Campaign43454243151/43454228110, APK+API35/36 smoke43454243156,
+  research43454242985/43454228116. Это доказательства именно44ffcef4.
+  Результаты конечного source/audit commit будут указаны в PR240 по егоSHA.

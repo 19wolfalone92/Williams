@@ -28,6 +28,19 @@ def test_english_first_pass_does_not_certify_other_books_or_independent_review()
     assert not coverage['per_source']['COURSE_EN']['all_physical_pages_have_first_pass_receipts']
 
 
+def test_tc1_complete_text_pass_keeps_original_identity_and_execution_gaps():
+    tc1=audit()['source_coverage']['per_source']['TC1_RU']
+    assert tc1['first_pass_receipts']==140
+    assert tc1['all_physical_pages_have_first_pass_receipts']
+    assert tc1['visual_receipts']<140
+    assert tc1['independently_verified']==0
+    catalog=json.loads((ROOT/'research/SOURCE_CATALOG.json').read_text())
+    source=next(s for s in catalog if s['id']=='TC1_RU')
+    assert source['role']=='RESEARCH_ONLY'
+    assert not source['publication_identity_complete']
+    assert not source['full_content_review_complete']
+
+
 def copy_receipts(tmp_path):
     shutil.copytree(ROOT/'research',tmp_path/'research')
     return tmp_path/'research'
@@ -84,3 +97,25 @@ def test_reinventoried_blank_or_navigation_kind_must_match_the_manual_receipt(tm
     blank.pop('page_kind')
     path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
     assert 'PAGE_KIND_REVIEW_RECEIPT_MISMATCH' in audit(tmp_path)['errors']
+
+
+def test_new_figure_cannot_claim_visual_interpretation_of_an_unseen_page(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'FIGURE_INTERPRETATION_REGISTER.jsonl'
+    rows=[json.loads(line) for line in path.read_text().splitlines()]
+    figure=next(f for f in rows if f['source_id']=='TC1_RU')
+    figure['pdf_page']=1
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    assert 'FIGURE_WITHOUT_MATCHING_VISUAL_RECEIPT' in audit(tmp_path)['errors']
+
+
+def test_source_disagreement_receipt_is_not_independent_certification(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'TC1_SOURCE_CONFLICT_REGISTER.json'
+    payload=json.loads(path.read_text())
+    payload['conflicts'][0]['source_sha256']='0'*64
+    payload['conflicts'][0]['independent_second_review']=True
+    path.write_text(json.dumps(payload))
+    errors=audit(tmp_path)['errors']
+    assert 'SOURCE_CONFLICT_PIN_MISMATCH' in errors
+    assert 'SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION' in errors
