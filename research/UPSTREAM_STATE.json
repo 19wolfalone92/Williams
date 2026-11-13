@@ -1,0 +1,381 @@
+{
+  "main": "32e9dd64fab9e0488ea4b566347246ac44627199",
+  "base": "c71e1541ab76488dabcaae291f8dfcee3404b9f3",
+  "prs": [
+    {
+      "number": 239,
+      "title": "Williams Bot 4.64.28 — signed STOP exit proof + explain why TC2 SHORT not eligible",
+      "head": "fix/nov13-ltc-exit-attribution-missed-entry-46428",
+      "sha": "c71e1541ab76488dabcaae291f8dfcee3404b9f3",
+      "base": "fix/nov12-p0p1-root-performance-4.64.27"
+    },
+    {
+      "number": 238,
+      "title": "Williams Bot 4.64.27 — P0/P1 root optimization and safety audit (stacked on #237)",
+      "head": "fix/nov12-p0p1-root-performance-4.64.27",
+      "sha": "f1a56023ba91c1156f858e93c6a87f3cfb0de464",
+      "base": "fix/nov12-diag14-urgent-fill-and-tc2-research"
+    },
+    {
+      "number": 237,
+      "title": "fix(diag14): urgent signed reconciliation on FILLED + heap/clock safeguards + TC2 H1 Time Machine (4.64.26)",
+      "head": "fix/nov12-diag14-urgent-fill-and-tc2-research",
+      "sha": "7e6d6da2130f3804a30d33261c936ee27af42f0a",
+      "base": "fix/nov12-historical-stop-exit-visibility-4.64.25"
+    },
+    {
+      "number": 236,
+      "title": "fix(ui): historical BNB exits are not protective STOPs — show true SL and exit reason (4.64.25)",
+      "head": "fix/nov12-historical-stop-exit-visibility-4.64.25",
+      "sha": "72a27528221e1bb4c4ebefbde6fcb50162d49d38",
+      "base": "fix/nov12-tc2-wm3-supersession-4.64.24"
+    },
+    {
+      "number": 235,
+      "title": "fix: TC2 WM3 newest confirmed fractal supersedes stale BNB stop-entry (4.64.24)",
+      "head": "fix/nov12-tc2-wm3-supersession-4.64.24",
+      "sha": "e11168bbe45e896488111fa691a300147c19886d",
+      "base": "feature/nov12-full-four-book-chapter-coverage-4.64.23"
+    },
+    {
+      "number": 234,
+      "title": "fix(Android): diagnostics 10–12 — heap, clock stalls and Samsung background warning",
+      "head": "fix/diag10-memory-pressure-20261112",
+      "sha": "02c68bdb2c810149f830efd63fc4b4ec14097aaa",
+      "base": "feature/nov12-full-four-book-chapter-coverage-4.64.23"
+    },
+    {
+      "number": 233,
+      "title": "Williams Bot 4.64.23 — full 642-page four-source chapter coverage + TC2 Appendix 1 and TC1 observer evidence",
+      "head": "feature/nov12-full-four-book-chapter-coverage-4.64.23",
+      "sha": "7a274a00154b460942d5558165b69c24ca70db46",
+      "base": "feature/nov12-tc2-exit-structure-4.64.22"
+    },
+    {
+      "number": 232,
+      "title": "Williams Bot 4.64.22 — original TC2 book exit hierarchy: historical 3/4/5 H1 structural versus opposing Wise Man evidence",
+      "head": "feature/nov12-tc2-exit-structure-4.64.22",
+      "sha": "b958f5b6e70ea23a122de2aa77520716a4a8d1c2",
+      "base": "feature/nov11-four-book-causal-understanding-4.64.21"
+    },
+    {
+      "number": 231,
+      "title": "Williams Bot 4.64.21 — TC1/NTD/TC2/Course source-grounded causal understanding and live WM3 figure regressions",
+      "head": "feature/nov11-four-book-causal-understanding-4.64.21",
+      "sha": "be2aed272ce10dc048f820909beb92a09face406",
+      "base": "fix/nov11-diagnostics9-reboot-heartbeat-4.64.20"
+    },
+    {
+      "number": 230,
+      "title": "Williams Bot 4.64.20 — Samsung Diagnostics (9): fix first-guard heartbeat false warning without clearing risk/STOP gates",
+      "head": "fix/nov11-diagnostics9-reboot-heartbeat-4.64.20",
+      "sha": "a56f23dbd9c513d0b05e8943979ef460a8dc1a61",
+      "base": "main"
+    },
+    {
+      "number": 228,
+      "title": "Williams Bot 4.64.18 — stop false UI entry ban during H1 RUNNING; renew signed REST before real TC2 entry",
+      "head": "fix/nov10-entry-gate-flapping-4.64.18",
+      "sha": "38b5acc6e7b8bc3d298a32c6475e21dd34b187de",
+      "base": "main"
+    },
+    {
+      "number": 227,
+      "title": "Williams Bot 4.64.18: eliminate scanner RUNNING false entry ban; preflight signed Binance proof before H1 entry",
+      "head": "fix/nov10-accurate-gate-and-entry-preflight-4.64.18",
+      "sha": "ebcc9382bdea955928858c5f4a957a85540e8f25",
+      "base": "fix/nov10-signed-historical-stop-preflight-4.64.17"
+    },
+    {
+      "number": 185,
+      "title": "Fix Futures UTC clock pre-renewal and mixed-time loss diagnostics",
+      "head": "fix/oct31-futures-clock-risk-diagnostics",
+      "sha": "2a4d54d7ecce6c8f7c2832bad9de8b54fdc9b6ac",
+      "base": "main"
+    },
+    {
+      "number": 141,
+      "title": "Diagnostics 15 P0 UI stop truth, real five-TF decision context, and Russian market narrative",
+      "head": "fix/diagnostics15-truth-mtf-20261023",
+      "sha": "9f275552fbeff8b3a4775522898c71d2e320f78e",
+      "base": "main"
+    },
+    {
+      "number": 140,
+      "title": "Book fidelity: Course/TC1 terminal squat extremes + four-sign evidence",
+      "head": "audit/book-course-terminal-evidence-20261023",
+      "sha": "788b63de6505b8cbf1957530ba2261debf71bc8e",
+      "base": "main"
+    }
+  ],
+  "aiMain": "205685610953b2e6db49bad4f6f5319f39312a73",
+  "aiHead": "b1cafd53c0ce23566e0442b13ceaedac75732796",
+  "aiPRs": [
+    {
+      "number": 81,
+      "title": "Williams AI 5.0: verified four-book SFT database, actual GPU Qwen3-4B and rule-disjoint exam",
+      "head": "research/williams-ai-curriculum-v5-20261111",
+      "sha": "b1cafd53c0ce23566e0442b13ceaedac75732796",
+      "base": "main"
+    },
+    {
+      "number": 80,
+      "title": "Research: actual Qwen3-4B four-book knowledge exam with and without source retrieval",
+      "head": "research/real-qwen4b-knowledge-exam-20261111",
+      "sha": "fb57c4adc6886d3bcf32ab21d28d080d309dd14c",
+      "base": "main"
+    },
+    {
+      "number": 74,
+      "title": "Research: 50 consecutive focused 20-step Qwen3-4B QLoRA mini-trainings, single final blind exam",
+      "head": "research/fifty-serial-mini-cycles-20261110",
+      "sha": "3fa5c60824753afb605aaf6e7e99645d87a025f9",
+      "base": "research/deep-corrective-v2-20261110"
+    },
+    {
+      "number": 73,
+      "title": "Research: second dual-T4 Qwen3-4B corrective QLoRA from independently audited 1024-step checkpoint",
+      "head": "research/deep-corrective-v2-20261110",
+      "sha": "e427de188591136cbc022c4c26ae332a77fac8f3",
+      "base": "research/deep-corrective-20261110"
+    },
+    {
+      "number": 72,
+      "title": "Research: single guarded Qwen3-4B dual-T4 deep corrective QLoRA for risk, AC and missing STOP",
+      "head": "research/deep-corrective-20261110",
+      "sha": "3f140b36a11628b7cd2ea2add29347903c808562",
+      "base": "research/private-four-book-deep-training-20261027"
+    },
+    {
+      "number": 55,
+      "title": "Research: verified four-book Qwen3-4B training; risk and AC admission still fails",
+      "head": "research/private-four-book-deep-training-20261027",
+      "sha": "307dfaba75f326c8d9c2099dae513da0d16a4c94",
+      "base": "main"
+    },
+    {
+      "number": 54,
+      "title": "Research pending: actual 4B rank8 vs base 30-H1 blind market exam (private Kaggle dataset attachment blocked)",
+      "head": "research/qwen4b-after-training-blind-market-cohort-20261027",
+      "sha": "f936f95f43a00be4e2231c98837457642fb3678d",
+      "base": "main"
+    },
+    {
+      "number": 39,
+      "title": "Research only: Qwen reporting reproduced 0/2 — no measured improvement",
+      "head": "fix/qwen-decision-correction-20261025",
+      "sha": "618cfb32622c6a26ce4b1777da9756e6678d3a93",
+      "base": "main"
+    },
+    {
+      "number": 31,
+      "title": "Williams AI: causal learning, grounded Qwen study and correctness audit",
+      "head": "feature/continual-ai-trader-learning-20261024",
+      "sha": "2b9d7689323a7bbf259d18b8cae48927a60ba509",
+      "base": "feature/android-native-binance-waves-20261024"
+    },
+    {
+      "number": 30,
+      "title": "Williams AI Android: on-device Binance 15×15 historical candles, private wave study and local GGUF chart context",
+      "head": "feature/android-native-binance-waves-20261024",
+      "sha": "48ccd96a7aab76a7fffba784014c74b0e272f762",
+      "base": "feature/binance-all-timeframes-durable-wave-history-20261024"
+    },
+    {
+      "number": 29,
+      "title": "Williams AI: Binance USD-M Futures 15 native timeframes + durable historical wave-study cache",
+      "head": "feature/binance-all-timeframes-durable-wave-history-20261024",
+      "sha": "50afef7378fbebc22b9ef6b57d3d610ce84117ed",
+      "base": "feature/controlled-demo-pilot-readiness-20261024"
+    },
+    {
+      "number": 28,
+      "title": "Williams AI: controlled single-pair Demo pilot readiness with durable execution safety",
+      "head": "feature/controlled-demo-pilot-readiness-20261024",
+      "sha": "3a1da5ba5eaca475c72b4368405990541eefcdda",
+      "base": "feature/causal-wave-comprehension-stress-20261024"
+    },
+    {
+      "number": 27,
+      "title": "Williams AI: 45 causal wave stress checks and real Qwen on five new H1 book charts",
+      "head": "feature/causal-wave-comprehension-stress-20261024",
+      "sha": "ac913d489cd31fe042e4851aa63d7ad837775bc4",
+      "base": "feature/real-gguf-expanded-historical-20261023"
+    },
+    {
+      "number": 26,
+      "title": "Williams AI: реальные 21 045 сигналов WM1/WM2/WM3 — фактический исторический replay вместо синтетических 10 млн",
+      "head": "experiment/real-wisemen-rolling-replay-20261024",
+      "sha": "61c72f0e7c0f4500095e8f569f486db2b57b80f1",
+      "base": "fix/failclosed-walkforward-multitoken-20261023"
+    },
+    {
+      "number": 25,
+      "title": "Williams AI: честная самопроверка обучения на 49 монетах, Jan→Feb без будущих меток и запрет ложного успеха",
+      "head": "fix/failclosed-walkforward-multitoken-20261023",
+      "sha": "3af4e1bc6191a6204e0fa5628ff49d1e80d13674",
+      "base": "experiment/million-scenario-multitoken-learning-20261023"
+    },
+    {
+      "number": 24,
+      "title": "Williams AI: 10 млн уникальных стресс-сценариев и многотокенное обучение на реальных Binance H1",
+      "head": "experiment/million-scenario-multitoken-learning-20261023",
+      "sha": "44e338db029540b14c84b7581bf845c32f905b6d",
+      "base": "experiment/independent-2025-multiscale-gguf-20261023"
+    },
+    {
+      "number": 23,
+      "title": "Williams AI: 2025 новый архив, 15 пар и реальная Qwen-проверка динамики волн",
+      "head": "experiment/independent-2025-multiscale-gguf-20261023",
+      "sha": "9f6973a3da9f6cded654f9ce75923c15e2996571",
+      "base": "feature/real-gguf-expanded-historical-20261023"
+    },
+    {
+      "number": 22,
+      "title": "Williams AI: actual 1.7B GGUF audit of 16 historical Williams book charts and 15 future-withheld cases",
+      "head": "feature/real-gguf-expanded-historical-20261023",
+      "sha": "2d7b9708c3c02c345fc493b928a82713de093ae0",
+      "base": "feature/real-forward-gguf-evaluation-20261023"
+    },
+    {
+      "number": 21,
+      "title": "Williams AI: REAL 1.7B GGUF forecast on new public H1 with future-blind precommit",
+      "head": "feature/real-forward-gguf-evaluation-20261023",
+      "sha": "6d4511f44899edf556be1ab1aa8a85e72c6b951e",
+      "base": "feature/prospective-falsifiable-qualification-20261023"
+    },
+    {
+      "number": 20,
+      "title": "Williams AI: seal prospective predictions and audit future outcomes without lookahead",
+      "head": "feature/prospective-falsifiable-qualification-20261023",
+      "sha": "886a5353869d49a9209aedb25b6aa89ed3428caa",
+      "base": "feature/portfolio-risk-research-gate-20261023"
+    },
+    {
+      "number": 19,
+      "title": "Williams AI: shared-portfolio paper risk budget and fail-closed signal admission",
+      "head": "feature/portfolio-risk-research-gate-20261023",
+      "sha": "3678a696077771ffcdd43ee69ae1b81ec7c6dac0",
+      "base": "feature/unified-williams-ai-proof-and-guard-20261023"
+    },
+    {
+      "number": 18,
+      "title": "Williams AI: unify book-signal proofs, 46-case training and timezone-safe WM3 reasoning",
+      "head": "feature/unified-williams-ai-proof-and-guard-20261023",
+      "sha": "36195f5a6779933ba1d5007c378ec990c976519f",
+      "base": "experiment/williams-ai-evidence-guided-retry-20261023"
+    },
+    {
+      "number": 17,
+      "title": "Williams AI: доказательный анализ WM1/2/3 + 46 книжных контрпримеров вместо копирования графиков",
+      "head": "feature/causal-market-thesis-and-proof-20261023",
+      "sha": "f6cb5020a408ccdfc7b51dda956ad31cc297f9db",
+      "base": "experiment/williams-ai-evidence-guided-retry-20261023"
+    },
+    {
+      "number": 16,
+      "title": "Williams AI: причинное распознавание WM3, контроль GGUF по реальным графикам и защита от старых фракталов",
+      "head": "experiment/williams-ai-evidence-guided-retry-20261023",
+      "sha": "603ab55f84af1473c1bed699a4107a50936a099a",
+      "base": "fix/gguf-context-and-calibrated-historical-20261023"
+    },
+    {
+      "number": 15,
+      "title": "Williams AI: стадии WM3, противоречия GGUF и двойная историческая проверка",
+      "head": "fix/gguf-context-and-calibrated-historical-20261023",
+      "sha": "8782e1d76d4236d285608218a77259b86d3d2366",
+      "base": "experiment/causal-historical-comprehension-20261023"
+    },
+    {
+      "number": 14,
+      "title": "Williams AI: историческая проверка выявила 26% точности направленных гипотез; GGUF экзамен",
+      "head": "experiment/causal-historical-comprehension-20261023",
+      "sha": "cc9bdd34c09cfa4456879122b8dd7a152031f312",
+      "base": "feature/tc1-five-magic-bullets-psychology-20261023"
+    },
+    {
+      "number": 13,
+      "title": "Williams AI: пять волшебных пуль на всех ТФ, психология и проверка 15 пар",
+      "head": "feature/tc1-five-magic-bullets-psychology-20261023",
+      "sha": "e9fecd03b5c3d842b9cf8d283397c0a2f4bcac37",
+      "base": "feature/nonlinear-principle-first-market-reasoning-20261023"
+    },
+    {
+      "number": 12,
+      "title": "Williams AI: понимать признаки хаоса и нелинейные рыночные сценарии, не шаблоны волн",
+      "head": "feature/nonlinear-principle-first-market-reasoning-20261023",
+      "sha": "ca81ac43928069bcc46f7ac9865bc69920ef3619",
+      "base": "experiment/real-qwen3-1p7b-gguf-20261023"
+    },
+    {
+      "number": 11,
+      "title": "Williams AI: реальные GGUF 0.6/1.7B и запрет ложных WM1/старых WM3",
+      "head": "experiment/real-qwen3-1p7b-gguf-20261023",
+      "sha": "aaf9c1aaa92400c991f4a30f43b35efbc7ced404",
+      "base": "experiment/real-qwen3-gguf-reasoning-20261023"
+    },
+    {
+      "number": 10,
+      "title": "Williams AI: первый реальный GGUF — 8/10 по книгам, WM1 отклонён, обучение ошибкам",
+      "head": "experiment/real-qwen3-gguf-reasoning-20261023",
+      "sha": "d39fbee0c5dd582d7b9ee525f79883ab39448696",
+      "base": "feature/ai-adaptive-book-coach-20261023"
+    },
+    {
+      "number": 9,
+      "title": "Williams AI: обучение по 4 книгам, память ошибок, 29 заданий и 15-парный bootcamp",
+      "head": "feature/ai-adaptive-book-coach-20261023",
+      "sha": "4f00022928fd0158bb303b7761ec55b1a03765c6",
+      "base": "feature/ai-private-four-books-inference-bridge-20261023"
+    },
+    {
+      "number": 8,
+      "title": "Williams AI: первоисточники 4 книг для GGUF и самостоятельное локальное обучение",
+      "head": "feature/ai-private-four-books-inference-bridge-20261023",
+      "sha": "dbfb0ae14cefcb144aa2cb4504adc7f49e28c330",
+      "base": "fix/ai-book-algorithms-proof-gates-20261023"
+    },
+    {
+      "number": 7,
+      "title": "Williams AI: сверка 27 правил книг, исправления TC1/AC/WM1 и строгий экзамен решений",
+      "head": "fix/ai-book-algorithms-proof-gates-20261023",
+      "sha": "00e3895b6f253d20fac4f63d5911f247fe91e648",
+      "base": "fix/ai-15pair-proof-and-accounting-20261023"
+    },
+    {
+      "number": 6,
+      "title": "Williams AI: MTF графики, реальное зрение GGUF, 36 000 свечей и проверка риска",
+      "head": "fix/ai-15pair-proof-and-accounting-20261023",
+      "sha": "3ec1139652e29975f64ed9432725660b8075491c",
+      "base": "feature/ai-wave-visual-15pair-walkforward-20261023"
+    },
+    {
+      "number": 5,
+      "title": "Williams AI: волновая памятка и причинный paper replay на 15 Binance парах",
+      "head": "feature/ai-wave-visual-15pair-walkforward-20261023",
+      "sha": "41e90d3863a7c87620ab76ffcd4c21222c4a03e8",
+      "base": "fix/ai-causal-fractal-campaign-audit-20261023"
+    },
+    {
+      "number": 4,
+      "title": "Williams AI: реальные графики H1, аудит WM3/SL/выходов и экзамен по 4 книгам",
+      "head": "fix/ai-causal-fractal-campaign-audit-20261023",
+      "sha": "45457f890c24bdb95ec241ac1c12931304ecbdf4",
+      "base": "feature/book-grounded-chart-reader"
+    },
+    {
+      "number": 3,
+      "title": "Williams AI v0.7 — книги, OCR, учебная память, интернет-исследования и paper learning",
+      "head": "feature/book-grounded-chart-reader",
+      "sha": "0ca002476dce05b226826e31349b61ecc3231f47",
+      "base": "feature/web-search-demo-futures"
+    },
+    {
+      "number": 2,
+      "title": "Williams AI v0.4 — интернет-поиск + безопасный Binance Futures DEMO шлюз",
+      "head": "feature/web-search-demo-futures",
+      "sha": "a6c461aec9a5c2b5ff991f07630ef7288d6b903d",
+      "base": "feature/read-only-ai-analyst"
+    }
+  ]
+}

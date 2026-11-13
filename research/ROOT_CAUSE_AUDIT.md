@@ -31,7 +31,8 @@
 - До изменений: 2086 passed, 2 skipped, 4 warnings (40.57s).
 - После исправлений MFI: 2107 passed, 2 skipped, 4 warnings (44.99s).
 - Целевые MFI/indicator/diagnostic: 34 passed (4.49s).
-- Новый Kotlin тест границы прогрева подлежит выполнению в Android CI.
+- Android CI 43385823680 для14af4b35: SUCCESS, включая Kotlin unit/lint, signed APK и emulator lifecycle jobs API35/36. Физический телефон/Demo не проверены.
+- Финальный локальный набор с evidence tools:2111 passed,2 skipped,4 warnings; ruff PASS.
 - Не выполнены: signed Binance Demo, устройство Android, полный OOS,
   полный постраничный/независимый визуальный аудит. Main не изменён.
 

@@ -1,0 +1,68 @@
+[
+  {
+    "id": "TC1_RU",
+    "family": "TC1",
+    "filename": "1. Торговый Хаос - 1.pdf",
+    "edition": "First edition methodology; Russian reflow, exact publisher/year unresolved",
+    "pdf_pages": 140,
+    "sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+    "role": "RESEARCH_ONLY",
+    "publication_identity_complete": false,
+    "full_content_review_complete": false
+  },
+  {
+    "id": "NTD_RU",
+    "family": "NTD",
+    "filename": "Билл_Вильямс_Новые_измерения_в_биржевой_торговле_2_книга.pdf",
+    "edition": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+    "pdf_pages": 156,
+    "sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+    "role": "RESEARCH_ONLY",
+    "publication_identity_complete": false,
+    "full_content_review_complete": false
+  },
+  {
+    "id": "TC2_EN",
+    "family": "TC2",
+    "filename": "Bill Williams - Trading Chaos 2nd Ed.pdf",
+    "edition": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+    "pdf_pages": 257,
+    "sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+    "role": "PRIMARY_OPERATIONAL",
+    "publication_identity_complete": true,
+    "full_content_review_complete": false
+  },
+  {
+    "id": "TC2_RU_224",
+    "family": "TC2",
+    "filename": "Торговый Хаос 2 (3книга).pdf",
+    "edition": "Second edition, Russian title page IK Analitika Moscow 2005",
+    "pdf_pages": 224,
+    "sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+    "role": "TRANSLATION_CROSSCHECK",
+    "publication_identity_complete": true,
+    "full_content_review_complete": false
+  },
+  {
+    "id": "TC2_RU_314",
+    "family": "TC2",
+    "filename": "Билл_Вильямс_Торговый_Хаос_2_3_книга.pdf",
+    "edition": "Second edition, Alpina 2012, ISBN 978-5-9614-1601-5",
+    "pdf_pages": 314,
+    "sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+    "role": "TRANSLATION_CROSSCHECK",
+    "publication_identity_complete": true,
+    "full_content_review_complete": false
+  },
+  {
+    "id": "COURSE_EN",
+    "family": "COURSE",
+    "filename": "Bill Williams - Trading Chaos Course.pdf",
+    "edition": "Profitunity home-study scan; date/version unresolved",
+    "pdf_pages": 122,
+    "sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+    "role": "RESEARCH_ONLY",
+    "publication_identity_complete": false,
+    "full_content_review_complete": false
+  }
+]

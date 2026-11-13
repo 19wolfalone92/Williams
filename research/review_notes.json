@@ -1,0 +1,907 @@
+{
+  "TC2_EN:138": {
+    "section": "CH9",
+    "content": "Introduces countertrend entries earlier than older external-fractal approach.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 109,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:139": {
+    "section": "CH9",
+    "content": "Lower low with upper-half close defines bullish divergent price bar; not full entry permission.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR"
+    ],
+    "figures": [
+      "9.1"
+    ],
+    "visual_review": true,
+    "printed_page": 110,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:140": {
+    "section": "CH9",
+    "content": "Bearish mirror and opening angle between price path and Alligator.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR",
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.2"
+    ],
+    "visual_review": true,
+    "printed_page": 111,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:141": {
+    "section": "CH9",
+    "content": "Bond and APPX charts distinguish price edge slope from Alligator slope.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.3",
+      "9.4"
+    ],
+    "visual_review": true,
+    "printed_page": 112,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:142": {
+    "section": "CH9",
+    "content": "Four geometric rules; parallel price and mouth invalidate reversal.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.5"
+    ],
+    "visual_review": true,
+    "printed_page": 113,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:143": {
+    "section": "CH9",
+    "content": "Conditional entry beyond signal bar, old-direction AO colour, yen/diamond examples.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR",
+      "TC2.WM1.AO_CONTEXT"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 114,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:144": {
+    "section": "CH9",
+    "content": "Yen bullish signal and diamond two-direction examples; arrows distinguish setup from entry.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.6",
+      "9.7"
+    ],
+    "visual_review": true,
+    "printed_page": 115,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:145": {
+    "section": "CH9",
+    "content": "Bond valid and invalid signals; Forex lack of angle and mouth contact reject candidates.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.8"
+    ],
+    "visual_review": true,
+    "printed_page": 116,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:146": {
+    "section": "CH9",
+    "content": "Forex and Nasdaq include multiple candidates; parallel descent is not reversal angulation.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.9",
+      "9.10"
+    ],
+    "visual_review": true,
+    "printed_page": 117,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:147": {
+    "section": "CH9",
+    "content": "QLGC remains invalid despite subsequent profitable reversal: no hindsight promotion.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.11"
+    ],
+    "visual_review": true,
+    "printed_page": 118,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:148": {
+    "section": "CH9",
+    "content": "Eurodollar later bars lack fresh angle; some market tops contain no divergent bar.",
+    "rules": [
+      "TC2.WM1.ANGULATION"
+    ],
+    "figures": [
+      "9.12"
+    ],
+    "visual_review": true,
+    "printed_page": 119,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:149": {
+    "section": "CH9",
+    "content": "Home Depot counterexample; first protective stop beyond opposite end; AO countertrend context.",
+    "rules": [
+      "TC2.WM1.AO_CONTEXT",
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [
+      "9.13"
+    ],
+    "visual_review": true,
+    "printed_page": 120,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:150": {
+    "section": "CH9",
+    "content": "Opposite valid WM1 trigger reverses net exposure in book example; commissions/slippage excluded in illustration.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 121,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:151": {
+    "section": "CH9",
+    "content": "A later confirmed opposite fractal can turn initial stop into reversal level; confirmation not backdated.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [
+      "9.14"
+    ],
+    "visual_review": true,
+    "printed_page": 122,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:152": {
+    "section": "CH9",
+    "content": "Bearish signal plus two lower highs becomes buy fractal; summary requires angle and outside mouth.",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "9.15"
+    ],
+    "visual_review": true,
+    "printed_page": 123,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:153": {
+    "section": "BLANK",
+    "content": "Blank separator, no trading rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:154": {
+    "section": "CH10",
+    "content": "WM2 introduced as momentum follow-through after countertrend entry, not an inevitable fixed sequence.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 125,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:155": {
+    "section": "CH10",
+    "content": "AO SMA5 minus SMA34; printed midpoint expression uses minus and conflicts with median-price definition.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.1"
+    ],
+    "visual_review": true,
+    "printed_page": 126,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:156": {
+    "section": "CH10",
+    "content": "Colour is change versus previous AO bar; first-colour market-order illustration explicitly not recommended.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.2"
+    ],
+    "visual_review": true,
+    "printed_page": 127,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:157": {
+    "section": "CH10",
+    "content": "WM2 stop entry beyond price bar corresponding to third consecutive rising AO bar.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.3"
+    ],
+    "visual_review": true,
+    "printed_page": 128,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:158": {
+    "section": "CH10",
+    "content": "BSTE gap can fill above trigger; Canadian example waits six bars, not mandatory two-to-four.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.4"
+    ],
+    "visual_review": true,
+    "printed_page": 129,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:159": {
+    "section": "CH10",
+    "content": "Canadian short and CMTL long show independent price/momentum turning times.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.5",
+      "10.6"
+    ],
+    "visual_review": true,
+    "printed_page": 130,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:160": {
+    "section": "CH10",
+    "content": "Large divergent price bar may form its own angulation; rigid multi-outside-bar proxy needs separate audit.",
+    "rules": [
+      "TC2.WM1.ANGULATION",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.7"
+    ],
+    "visual_review": true,
+    "printed_page": 131,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:161": {
+    "section": "CH10",
+    "content": "Dollar long/short sequence; momentum speed analogy is explanation, not standalone order authority.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "10.8"
+    ],
+    "visual_review": true,
+    "printed_page": 132,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:162": {
+    "section": "CH10",
+    "content": "Protection and opposite fractal reversal are distinct from momentum illustration.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 133,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:163": {
+    "section": "BLANK",
+    "content": "Blank separator, no trading rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:164": {
+    "section": "CH11",
+    "content": "Fractal breakaway trade; choppy markets and stop whipsaws discussed.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 135,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:165": {
+    "section": "CH11",
+    "content": "An appropriate fractal can be first; minimum five-bar pattern with two strict neighbours.",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES",
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 136,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:166": {
+    "section": "CH11",
+    "content": "Outside bar may be both fractal types; overlap allowed; equal extreme extends formation.",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "11.1"
+    ],
+    "visual_review": true,
+    "printed_page": 137,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:167": {
+    "section": "CH11",
+    "content": "Extended formations up to nine pictured; raw fractal arrows are not trade permission.",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "11.2",
+      "11.3"
+    ],
+    "visual_review": true,
+    "printed_page": 138,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:168": {
+    "section": "CH11",
+    "content": "Validity determined against Teeth at trigger, not just pivot time; signal until hit/replaced.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [
+      "11.4"
+    ],
+    "visual_review": true,
+    "printed_page": 139,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:169": {
+    "section": "CH11",
+    "content": "Soybean and McDonalds examples; bracketed corrective g/h/j not traded.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH",
+      "TC2.CONGESTION"
+    ],
+    "figures": [
+      "11.5"
+    ],
+    "visual_review": true,
+    "printed_page": 140,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:170": {
+    "section": "CH11",
+    "content": "Valid/invalid Teeth crossings and congestion examples; exact numeric bracket detector unspecified.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH",
+      "TC2.CONGESTION"
+    ],
+    "figures": [
+      "11.6",
+      "11.7"
+    ],
+    "visual_review": true,
+    "printed_page": 141,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:171": {
+    "section": "CH11",
+    "content": "Boeing repeated short additions; fractal-to-wave relation does not prove unique wave degree.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [
+      "11.8",
+      "11.9"
+    ],
+    "visual_review": true,
+    "printed_page": 142,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:172": {
+    "section": "CH11",
+    "content": "WM1 then fractal a then AO between b/c; textbook counterexample to mandatory WM1-WM2-WM3 order.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [
+      "11.10"
+    ],
+    "visual_review": true,
+    "printed_page": 143,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:173": {
+    "section": "CH11",
+    "content": "Ideal sequence explicitly distinguished from actual first-presenting alternatives.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 144,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:174": {
+    "section": "CH12",
+    "content": "Ideal three-Wise-Men campaign; enumerated setup and trigger events are separate.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 145,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:175": {
+    "section": "CH12",
+    "content": "Gold notation10 is fractal entry and new opposite setup; reverse only if following bar triggers.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [
+      "12.1"
+    ],
+    "visual_review": true,
+    "printed_page": 146,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:176": {
+    "section": "CH12",
+    "content": "WM1 stop, opposite fractal after confirmation, continuation price-bar additions.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 147,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:177": {
+    "section": "CH12",
+    "content": "First WM3/Super AO permitted; several initial-stop alternatives and subsequent 3-5-bar trail.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 148,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:178": {
+    "section": "CH12",
+    "content": "Long summary mixes initial-stop descriptions; short mirror explicitly trails latest three-to-five bars.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 149,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:179": {
+    "section": "CH12",
+    "content": "Apple exits by three-bar stop while broader bearish movement continues; later reentry is separate.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [
+      "12.2"
+    ],
+    "visual_review": true,
+    "printed_page": 150,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:180": {
+    "section": "CH12",
+    "content": "Reentry and all three first-signal alternatives on short side.",
+    "rules": [
+      "TC2.WM3.ACTIVATION_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 151,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:181": {
+    "section": "CH12",
+    "content": "Yahoo and Teva annotated practice campaigns; no exact OHLC/intrabar reconstruction available.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [
+      "12.3",
+      "12.4"
+    ],
+    "visual_review": true,
+    "printed_page": 152,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:40": {
+    "section": "CH6",
+    "content": "Immediate price/midpoint trend and tick-volume definition distinct from contract volume.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [
+      "6.6",
+      "6.7"
+    ],
+    "visual_review": true,
+    "printed_page": 40,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:41": {
+    "section": "CH6",
+    "content": "Tick-count context, floor participation and adjacent-volume comparison.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [
+      "6.8"
+    ],
+    "visual_review": true,
+    "printed_page": 41,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:42": {
+    "section": "CH6",
+    "content": "MFI = range/volume; meaningful comparison is with preceding bar, not absolute scale.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 42,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:43": {
+    "section": "CH6",
+    "content": "MFI and volume combine into four strict up/down windows; no equality mapping to a decrease.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 43,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:44": {
+    "section": "CH6",
+    "content": "Remaining four-window table, non-directional green, fake/fade/squat interpretations.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 44,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:45": {
+    "section": "CH6",
+    "content": "Squat can occur mid-trend and is not sufficient reversal; higher-frame airbag discussion.",
+    "rules": [
+      "TC1.MFI.RANGE_OVER_VOLUME"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 45,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC1_RU:54": {
+    "section": "CH7",
+    "content": "100-140 bars specifically internal wave c in W4-to-W5 search; target zone from W1 origin to W3 end projected from W4.",
+    "rules": [],
+    "figures": [
+      "7.7"
+    ],
+    "visual_review": true,
+    "printed_page": 54,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "NTD_RU:1": {
+    "section": "TITLE",
+    "content": "Russian New Trading Dimensions title; no publication year/ISBN on this page.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "NTD_RU:34": {
+    "section": "CH3",
+    "content": "Alligator as trend/range context; descriptive market percentages are not calibrated bot statistics.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 34,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "NTD_RU:35": {
+    "section": "CH3",
+    "content": "Interacting balance lines, context and protective exit discussion; full figure still pending.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 35,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "NTD_RU:36": {
+    "section": "CH3",
+    "content": "13/8,8/5,5/3 in main specification; inset fig3.4 prints Lips shift2, genuine source contradiction.",
+    "rules": [],
+    "figures": [
+      "3.4"
+    ],
+    "visual_review": true,
+    "printed_page": 36,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Same page prints Lips shifts2 and3. English NTD edition not supplied; not silently resolved by OCR."
+    ]
+  },
+  "NTD_RU:37": {
+    "section": "CH3",
+    "content": "Coffee and Coca-Cola illustrate sleep, trend expansion and narrowing mouth; no numeric ATR threshold supplied.",
+    "rules": [],
+    "figures": [
+      "3.5",
+      "3.6"
+    ],
+    "visual_review": true,
+    "printed_page": 37,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "COURSE_EN:1": {
+    "section": "DISCLOSURE",
+    "content": "Course disclosure and copyrighted home-study provenance; date/version not printed.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": "DISCLOSURE",
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "COURSE_EN:4": {
+    "section": "INTRODUCTION",
+    "content": "Chaos as ordered nonlinear explanation and five learning levels; no artificial price signal inferred.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": "INTRODUCTION 1",
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "COURSE_EN:44": {
+    "section": "LEVEL_II",
+    "content": "Oscillator crossing zero gives only W4 minimum, not W4 completion; time and target projection remain context.",
+    "rules": [],
+    "figures": [
+      "W4_TIME_PROJECTION"
+    ],
+    "visual_review": true,
+    "printed_page": "LEVEL II 13",
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single reviewer; not an independent second review or exact chart digitization."
+    ]
+  },
+  "TC2_EN:247": {
+    "section": "APPENDIX3_AO_SOURCE_CODE",
+    "printed_page": 218,
+    "content": "Author EasyLanguage AO code explicitly uses PRICE((H+L)/2), SMA5-SMA34 and strict AO colour differences; adjudicates midpoint typo in fig10.1.",
+    "rules": [
+      "TC2.WM2.THREE_AO_BARS",
+      "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Independent second review pending; source code does not prove exchange/device execution."
+    ]
+  }
+}
