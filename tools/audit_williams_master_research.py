@@ -178,7 +178,7 @@ def audit(root=ROOT):
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
         'total_rules_in_books':None,'percent':None},
       'rule_implementation_coverage':None,'rule_test_coverage_of_all_books':None,
-      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':5,'whole_book_certified':False},
+      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':6,'whole_book_certified':False},
       'execution_safety':{'signed_demo_e2e':False,'physical_android_e2e':False,'main_merge_allowed':False},
       'decision_explainability_coverage':None,'can_place_orders':False}
 

@@ -1,8 +1,10 @@
 # Williams Master Research: контрольная точка 13.11.2026
 
-Актуальное продолжение: `COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`.
+Актуальное продолжение: `MARGIN_CONFIG_NONFINITE_GUARD_20261113.md` и
+`COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`.
 698 first-pass receipts,143 figure entries,147 rules; independent0.
-Найден и исправлен Python NTD skip-NaN false-unconsumed дефект,2450 Python
+Исправлены Python NTD skip-NaN false-unconsumed и NaN/Infinity в per-entry
+margin limit: неконечное значение не может стать благоприятным0.90.2458 Python
 tests passed/2 skipped. Main не изменён; исходные контрольные точки ниже
 сохранены как история, а не как текущие счётчики или открытые дефекты.
 

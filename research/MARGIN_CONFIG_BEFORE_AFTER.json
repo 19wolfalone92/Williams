@@ -1,0 +1,68 @@
+{
+  "schema": "FUTURES_MARGIN_CONFIG_BEFORE_AFTER_V1",
+  "baseline_commit": "7d1f322ec2cf291443141937ae5a6264eca6dcb3",
+  "method": "EXECUTED_ORIGINAL_AND_FIXED_SIZER_WITH_SCRIPTED_ACCOUNT",
+  "equity_usdt": 1000,
+  "available_usdt": 1000,
+  "valid_fraction": 0.25,
+  "valid_entry_margin_ceiling_usdt": 250,
+  "leverage": 2,
+  "trigger": 100,
+  "stop": 99.99,
+  "risk_fraction": 0.0025,
+  "cases": [
+    {
+      "configured_fraction": "0.25",
+      "before": {
+        "status": "SIZED",
+        "quantity": 5.0,
+        "estimated_initial_margin_usdt": 250.0
+      },
+      "after": {
+        "status": "SIZED",
+        "quantity": 5.0,
+        "estimated_initial_margin_usdt": 250.0
+      }
+    },
+    {
+      "configured_fraction": "NaN",
+      "before": {
+        "status": "SIZED",
+        "quantity": 6.944444444444346,
+        "estimated_initial_margin_usdt": 347.2222222222173
+      },
+      "after": {
+        "status": "REJECTED",
+        "reason": "FUTURES_MARGIN_FRACTION_INVALID"
+      }
+    },
+    {
+      "configured_fraction": "Infinity",
+      "before": {
+        "status": "SIZED",
+        "quantity": 6.944444444444346,
+        "estimated_initial_margin_usdt": 347.2222222222173
+      },
+      "after": {
+        "status": "REJECTED",
+        "reason": "FUTURES_MARGIN_FRACTION_INVALID"
+      }
+    },
+    {
+      "configured_fraction": "-Infinity",
+      "before": {
+        "status": "SIZED",
+        "quantity": 0.2,
+        "estimated_initial_margin_usdt": 10.0
+      },
+      "after": {
+        "status": "REJECTED",
+        "reason": "FUTURES_MARGIN_FRACTION_INVALID"
+      }
+    }
+  ],
+  "is_backtest": false,
+  "exchange_calls": 0,
+  "account_wide_half_margin_cap_enforced": false,
+  "can_place_orders": false
+}

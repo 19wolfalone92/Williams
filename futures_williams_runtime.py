@@ -1542,10 +1542,15 @@ class FuturesWilliamsRuntime:
         fee_buffer = 2.0 * fee_side
         effective_loss_fraction = distance_fraction + fee_buffer + slippage_buffer
         leverage = self.config.leverage_for(symbol)
-        max_margin_fraction = max(
-            0.01,
-            min(0.90, float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))),
-        )
+        try:
+            configured_margin_fraction = float(os.getenv("FUTURES_MAX_MARGIN_FRACTION", "0.25"))
+        except (TypeError, ValueError, OverflowError):
+            raise RuntimeError("FUTURES_MARGIN_FRACTION_INVALID") from None
+        # min/max do not validate NaN: min(0.90, NaN) selects 0.90 and silently
+        # increases the entry budget. Unknown limits must never grant sizing.
+        if not math.isfinite(configured_margin_fraction):
+            raise RuntimeError("FUTURES_MARGIN_FRACTION_INVALID")
+        max_margin_fraction = max(0.01, min(0.90, configured_margin_fraction))
         available_margin = self._available_margin()
         if not math.isfinite(available_margin) or available_margin <= 0:
             raise RuntimeError("Fresh available Futures margin is invalid or exhausted")

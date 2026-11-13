@@ -103,3 +103,15 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
 - Предыдущий NTD commit2ebadb0f завершил все7CI success: Python43502176524,
  Campaign43502176421/43502162808, research43502176265/43502162760,
  dependency43502162533, APK/lint/unit/API35+36 UI/lifecycle43502176443.
+
+## Неизвестная конфигурация per-entry маржи
+
+- До/после выполнен исходный sizer7d1f322e и исправленный код на одном
+ scripted account. NaN/Infinity больше не повышают margin fraction до0.90.
+ При конечном0.25 результат сохранён:250USDT из1000,quantity5.
+-8 новых случаев,71 targeted risk/runtime tests. Полный Python:
+ **2458 passed,2 skipped,4 прежних warnings,27.32s**.
+- Ruff/releasePASS; clean-CI static0failures/11existing warnings.
+ Новая quantity не рассчитывается при неконечном/нечисловом лимите.
+- Это не account-wide50% margin gate, не real Demo и не новый market backtest.
+ Source/OCR identities не менялись; exact-final-SHA CI фиксируется вPR240.

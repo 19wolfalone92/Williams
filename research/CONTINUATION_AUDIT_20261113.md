@@ -1,6 +1,7 @@
 # Проверка плана и продолжение — 13.11.2026, 4.64.30
 
 Актуальная контрольная точка:4.64.31,
+`MARGIN_CONFIG_NONFINITE_GUARD_20261113.md`,
 `COURSE_FIRST_PASS_AND_OCR_PROVENANCE_20261113.md`,
 `NTD_FIRST_PASS_AND_DATA_GUARD_20261113.md`,
 `TC1_FIRST_PASS_AND_NUMERIC_AUDIT_20261113.md` и
@@ -10,6 +11,9 @@
 (TC2_EN257,TC1_RU140,NTD_RU156,Course122),143 figure entries и147 правил.
 Независимых проверок0; Demo/device/merge gates закрыты. Следующий source route —
 два переводаTC2/полная page map. Внешний Course tutorial вPDF не содержится.
+После Course исправлен ещё один numeric defect: неконечный per-entry margin
+limit отклоняется вместо благоприятного clamp.2458 Python tests passed;
+общий50% cap по-прежнему требует ledger/final-submit реализации.
 
 Проверен именно план из `4ae2b2a049df2285365f3cc03cec4e4671197ea4`.
 Работа продолжается в `research/master-primary-sources-20261113`, draft PR240,

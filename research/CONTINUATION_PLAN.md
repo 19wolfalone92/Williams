@@ -163,3 +163,18 @@ Android production не менялся; exact-head CI нового source commit
 Приоритет продолжения: полная translation map, независимые figures/atomic specs,
 aggregate half-margin ledger и final-submit обоих runtimes, expert cohort и
 заранее зафиксированный holdout. Actual Demo/device и main merge gates открыты.
+
+## Продолжение13.11.2026 — неконечный per-entry margin limit
+
+Проверка risk sizing нашла ещё один воспроизводимый дефект: clamp разрешал
+NaN/Infinity превратиться в0.90, а не UNKNOWN. В scripted account1000USDT
+маржа становилась347.22 вместо установленного предела250. Теперь parser/finite
+guard отклоняет такой sizing до quantity normalization. Конечные настройки
+сохранили прежнее поведение; общий50% cap этим не реализован.
+
+Отчёт `MARGIN_CONFIG_NONFINITE_GUARD_20261113.md`, реальный BEFORE/AFTER двух
+версий `MARGIN_CONFIG_BEFORE_AFTER.json`.8 новых tests,71 targeted,
+полный Python2458 passed/2 skipped/4 warnings,27.32s;ruff/releasePASS,
+static0failures/11existing warnings. Source counters698/190/143/147 и все
+старые acquisition hashes не менялись; complete gate остаётсяexit2.
+Следующие этапы и запрет main merge из предыдущей контрольной точки сохранены.
