@@ -74,3 +74,13 @@ def test_translation_map_cannot_refer_to_a_different_pdf_edition(tmp_path):
     payload=json.loads(path.read_text());payload['anchors'][0]['pages'][0]['source_sha256']='0'*64
     path.write_text(json.dumps(payload))
     assert 'CROSSWALK_SOURCE_SHA_MISMATCH' in audit(tmp_path)['errors']
+
+
+def test_reinventoried_blank_or_navigation_kind_must_match_the_manual_receipt(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'PRIMARY_SOURCE_PAGE_REGISTER.jsonl'
+    rows=[json.loads(line) for line in path.read_text().splitlines()]
+    blank=next(row for row in rows if row.get('page_kind')=='VISUALLY_CONFIRMED_BLANK')
+    blank.pop('page_kind')
+    path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    assert 'PAGE_KIND_REVIEW_RECEIPT_MISMATCH' in audit(tmp_path)['errors']

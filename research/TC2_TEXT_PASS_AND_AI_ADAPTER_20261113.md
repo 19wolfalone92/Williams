@@ -21,7 +21,7 @@ Android-торговая логика в этом продолжении не и
 |7, Demo/device|Не выполнялись signed Demo/live ордера, физический телефон и восстановление в реальном окружении.|
 |8, подтверждённые расхождения|Разделены фактические формулы, discretionary/psychological контекст, ошибочная точная Fibonacci-пропорция и неподтверждённые performance claims. Общий half-margin найден как незавершённый mapping/implementation gap.|
 |9, AI|Реализованы offline V1 adapter, CLI и synthetic roundtrip. Старые source cards/train/test Williams-AI не менялись. Вызова модели, GPU, обучения или expert-market экзамена нет.|
-|10, проверки|2336 Python tests passed,2 skipped; release gate, ruff и static CI-mode safety прошли. Новый независимый holdout не проводился; старый seen replay не переименовывался в OOS. Точные CI результаты нового SHA — в PR.|
+|10, проверки|2337 Python tests passed,2 skipped; release gate, ruff и static CI-mode safety прошли. Новый независимый holdout не проводился; старый seen replay не переименовывался в OOS. Точные CI результаты нового SHA — в PR.|
 
 До этого checkpoint:120 страниц/52 рисунка/81 правило. Теперь:
 **295 физических first-pass receipts,85 qualitative figure entries,91 правило**.
@@ -88,14 +88,21 @@ receipt не разрешит торговлю/STOP/обучение. Код н�
 
 ## Завершённая локальная проверка
 
-- `pytest -q`:2336 passed,2 skipped,4 existing FastAPI deprecation warnings,
-  26.24s. Целевой adapter/evidence прогон103 passed.
+- `pytest -q`:2337 passed,2 skipped,4 existing FastAPI deprecation warnings,
+  27.62s. Целевой adapter/evidence прогон104 passed.
 - `ruff check --select F821,F822,F823,E9 .`:PASS.
 - `python ci_release_gate.py`:PASS.
 - `CI=true python full_safety_audit.py`:0 failures,11 warnings. Это static checkout
   без production database/credentials; CI-mode результат не является runtime E2E.
 - `python tools/audit_williams_master_research.py`:integrity PASS.
   `--require-complete` ожидаемо завершает2: общий план не закрыт.
+- Дополнительно45 контекстов:15 исторических активов, по3 среза180 H1.
+  ABSTAIN packets приняты; добавление будущей свечи отклонено во всех45 случаях.
+  Это прежние изученные2024 данные, не OOS, не model/expert экзамен.
+- Повторная инвентаризация настоящих6 PDF в отдельный каталог воспроизвела1091
+  non-Course строку полностью, включая page_kind. Исправлена потеря этой категории
+  в inventory exporter; audit теперь отвергает расхождение с ручным receipt.
+  Старые122 Course OCR-backed строки сохранены, прежних OCR bytes по-прежнему нет.
 - Сохранённый вручную составленный SYNTHETIC example воспроизведён адаптером.
   Никаких model calls, экспертных подписей и внешних торговых операций.
 

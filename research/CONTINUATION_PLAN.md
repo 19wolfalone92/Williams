@@ -73,4 +73,9 @@ source/observation/request pins и citation allowlist проверяются. Au
 Следующий source route: TC1_RU от первого ещё не REVIEWED листа, затем NTD_RU и
 Course. Доработать aggregate-margin contract/проверки двух runtimes. Пункты5,7,
 independent expert/holdout и merge gates остаются открыты. Новые локальные проверки:
-2336 passed/2 skipped; CI результаты точного нового SHA сохраняются в PR240.
+2337 passed/2 skipped; CI результаты точного нового SHA сохраняются в PR240.
+
+Повторная инвентаризация воспроизвела1091 non-Course rows; page_kind теперь
+сохраняется exporter и сверяется audit с manual receipt.122 исходных Course OCR
+rows сохранены. Контракт также проверен на45 seen historical H1 срезах;
+будущая свеча отвергнута во всех45 случаях, gold/model экзамен не заявляется.

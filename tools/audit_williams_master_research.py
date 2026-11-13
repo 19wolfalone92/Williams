@@ -44,6 +44,8 @@ def audit(root=ROOT):
                 errors.append('PAGE_REVIEW_RECEIPT_MISMATCH')
             if p['verification_status']=='REVIEWED_SINGLE_PASS' and p['visual_review'] is not True:
                 errors.append('REVIEWED_VISUAL_STAGE_WITHOUT_RENDER_REVIEW')
+            if note and 'page_kind' in note and p.get('page_kind')!=note['page_kind']:
+                errors.append('PAGE_KIND_REVIEW_RECEIPT_MISMATCH')
         if any(r not in ids for r in p['extracted_rules']):errors.append('PAGE_RULE_ID_UNRESOLVED')
     seen=set()
     for f in figures:
