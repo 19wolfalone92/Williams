@@ -14,14 +14,14 @@ def smma(series, period):
     # sample is not a shorter SMA seed (pandas.mean otherwise skips NaN).
     # Keep parity with Android: incomplete/nonfinite history remains unknown.
     seed = series.iloc[:period]
-    if not np.isfinite(seed).all():
+    if seed.isna().any() or not np.isfinite(seed).all():
         return out
     initial = seed.mean()
     if not np.isfinite(initial):
         return out
     out.iloc[period - 1] = initial
     for i in range(period, len(series)):
-        if not np.isfinite(out.iloc[i - 1]) or not np.isfinite(series.iloc[i]):
+        if not np.isfinite(out.iloc[i - 1]) or pd.isna(series.iloc[i]) or not np.isfinite(series.iloc[i]):
             continue
         out.iloc[i] = (
             (out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period

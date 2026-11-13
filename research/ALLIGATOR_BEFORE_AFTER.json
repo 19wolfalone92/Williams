@@ -17,5 +17,14 @@
   "old_false_seed_present": true,
   "new_entire_series_unknown": true,
   "healthy_history_identical_for_periods_5_8_13": true,
-  "can_place_orders": false
+  "can_place_orders": false,
+  "nullable_price_missingness": {
+    "dtypes": [
+      "Float64",
+      "Int64"
+    ],
+    "marker": "pd.NA",
+    "seed_and_recursive_gap_remain_unknown": true,
+    "tests": "tests/test_master_alligator_source.py::test_nullable_price_missingness_cannot_bypass_the_seed_or_recursive_guard"
+  }
 }

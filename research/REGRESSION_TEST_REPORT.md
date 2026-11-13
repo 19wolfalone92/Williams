@@ -29,6 +29,9 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
 - Повторён исходный SHA4ae2b2a0: **2111 passed,2 skipped,4 warnings,52.52s**.
 - После новых исправлений, lifecycle/symbol и evidence tests:
   **2237 passed,2 skipped,4 warnings,47.73s**. Это полный Python набор.
+- Окончательный прогон после явной проверки nullable `Float64`/`Int64` с
+  `pd.NA`: **2239 passed,2 skipped,4 warnings,61.37s**. Пропуск не может
+  обойти проверку ни в seed, ни в рекурсии независимо от dtype чисел.
 - `ruff --select F821,F822,F823,E9`: PASS; release contract: PASS.
 - Integrity CLI: PASS; `--require-complete`: ожидаемый **exit2**, не сертификация.
 - Fresh inventory:1213 строк,120 reviewed receipts;1091 строк совпали с

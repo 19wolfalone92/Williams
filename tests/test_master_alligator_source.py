@@ -6,6 +6,17 @@ import pytest
 from strategy import smma, calculate_indicators, config_from_env
 
 
+@pytest.mark.parametrize("dtype", ["Float64", "Int64"])
+def test_nullable_price_missingness_cannot_bypass_the_seed_or_recursive_guard(dtype):
+    seed_gap = pd.Series([100, 100, pd.NA, 100, 100, 110], dtype=dtype)
+    assert smma(seed_gap, 5).isna().all()
+    later_gap = pd.Series([100] * 5 + [110, pd.NA, 120], dtype=dtype)
+    result = smma(later_gap, 5)
+    assert result.iloc[4] == 100.0
+    assert result.iloc[5] == 102.0
+    assert result.iloc[6:].isna().all()
+
+
 @pytest.mark.parametrize("period", [5, 8, 13])
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -float("inf")])
 def test_incomplete_sma_seed_never_becomes_a_shorter_average(period, bad):

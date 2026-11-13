@@ -61,9 +61,9 @@ class NativeFuturesCoordinatorLifecycleTest {
             val restarted=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             val result=restarted.reconcile()
             assertTrue("$symbol $direction $mode: $result",result.getBoolean("ok"))
-            val protected=restarted.intentsSnapshot().getJSONObject(0)
-            assertEquals("OPEN_PROTECTED",campaignLifecycleStatus(protected))
-            assertEquals("PROTECTED",protected.getString("protection_status"))
+            val protectedOwner=restarted.intentsSnapshot().getJSONObject(0)
+            assertEquals("OPEN_PROTECTED",campaignLifecycleStatus(protectedOwner))
+            assertEquals("PROTECTED",protectedOwner.getString("protection_status"))
             val rejected=restarted.submitPendingEntry(plan(direction).copy(symbol=symbol))
             assertFalse(rejected.getBoolean("accepted"))
             assertTrue(rejected.getString("blocker").contains("FUTURES_SYMBOL_MANAGEMENT_ONLY"))

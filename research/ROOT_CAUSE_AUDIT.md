@@ -59,7 +59,7 @@ figures52, rules81. Независимых проверок0; общий про�
 
 Открытое расхождение10/15 разделено на NEW risk10 и management/scan15.
 Существующие заявки/резервы/позиции не удаляются; все старые liability states
-сверяются и после fill должны иметь owned STOP. Полный Python набор2237 passed,
+сверяются и после fill должны иметь owned STOP. Полный Python набор2239 passed,
 2 skipped; ruff/release contract PASS. Main не изменён.
 
 Ключевые незакрытые gates: новые exact-head Android CI, реальный Demo/телефон,
