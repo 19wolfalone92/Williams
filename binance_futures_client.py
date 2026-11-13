@@ -19,6 +19,7 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from binance_client import BinanceAPIError
+from williams_symbol_policy import new_risk_symbol_blocker
 
 
 class BinanceFuturesClient:
@@ -115,6 +116,15 @@ class BinanceFuturesClient:
         time_resync_attempted = False
 
         for attempt in range(max_attempts):
+            # Every signed order attempt, including an explicit -1021 retry,
+            # rechecks admission. GET/DELETE and protective reductions retain
+            # access to all management symbols.
+            if method == "POST" and path in {"/fapi/v1/order", "/fapi/v1/algoOrder"}:
+                values = params or {}
+                if str(values.get("reduceOnly", "")).lower() != "true" and str(values.get("closePosition", "")).lower() != "true":
+                    blocker = new_risk_symbol_blocker(values.get("symbol"))
+                    if blocker:
+                        raise ValueError(blocker)
             wait = max(0.0, self.rate_limit_pause_until - time.time())
             while wait > 0:
                 time.sleep(min(wait, 30.0))
@@ -580,6 +590,10 @@ class BinanceFuturesClient:
         close_position=False,
     ):
         type_name = str(type_).upper()
+        if not reduce_only and not close_position:
+            blocker = new_risk_symbol_blocker(symbol)
+            if blocker:
+                raise ValueError(blocker)
         if type_name == "STOP_LOSS":
             type_name = "STOP_MARKET"
         if quote_order_qty is not None:

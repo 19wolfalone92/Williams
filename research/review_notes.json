@@ -903,5 +903,856 @@
     "uncertainties": [
       "Independent second review pending; source code does not prove exchange/device execution."
     ]
+  },
+  "TC2_EN:124": {
+    "section": "CH8",
+    "content": "Chapter opening: Alligator as a market compass; incoming information narrative is not a measurable order filter.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 95,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:125": {
+    "section": "CH8",
+    "content": "Older editions remain distinct; most profit is attributed to trends. Descriptive trend-frequency claims are not calibrated crypto probabilities.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 96,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:126": {
+    "section": "CH8",
+    "content": "Jaw, Teeth and Lips are named in figure8.1; shown lines precede added prices, not three fetched timeframes.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.1"
+    ],
+    "visual_review": true,
+    "printed_page": 97,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:127": {
+    "section": "CH8",
+    "content": "Approximate lower-timeframe analogy is explicitly not clock time: all three lines use current-chart price sequences. Book confidence claim is not bot accuracy.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 98,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:128": {
+    "section": "CH8",
+    "content": "Intertwined balance lines describe thin/range trading; Green reacts before Red and Blue. No numerical ATR sleep threshold is prescribed.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 99,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:129": {
+    "section": "CH8",
+    "content": "Gold/Eurodollar narrative distinguishes sleep from hungry trend and price staying outside Lips; no future outcome validates a prior entry.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.2"
+    ],
+    "visual_review": true,
+    "printed_page": 100,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:130": {
+    "section": "CH8",
+    "content": "Eurodollar rising and AOL falling examples show separated mouths and price outside the relevant edge.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.3",
+      "8.4"
+    ],
+    "visual_review": true,
+    "printed_page": 101,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:131": {
+    "section": "CH8",
+    "content": "Apple downtrend contrasts with Nasdaq intertwined range; graphical qualitative labels are not digitized thresholds.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.5",
+      "8.6"
+    ],
+    "visual_review": true,
+    "printed_page": 102,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:132": {
+    "section": "CH8",
+    "content": "Cocoa weekly sleep illustrates duration narrative; the later outcome cannot be known during the sleeping interval.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.7"
+    ],
+    "visual_review": true,
+    "printed_page": 103,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:133": {
+    "section": "CH8",
+    "content": "Cocoa follow-through plus explicit SMMA period/displacement pairs13/8,8/5,5/3.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "8.8"
+    ],
+    "visual_review": true,
+    "printed_page": 104,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:134": {
+    "section": "CH8",
+    "content": "CQG smoothing warning and extending already-computed lines beyond final price; this is not reading future candles.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [
+      "8.9"
+    ],
+    "visual_review": true,
+    "printed_page": 105,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:135": {
+    "section": "CH8",
+    "content": "Same light-crude history with and without its known forward-displaced tail; unknown future Lips values must not be extrapolated.",
+    "rules": [
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [
+      "8.10",
+      "8.11"
+    ],
+    "visual_review": true,
+    "printed_page": 106,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:136": {
+    "section": "CH8",
+    "content": "Closing/intertwined mouth describes taking profits; outside/inside mouth gives impulse/reactive context without certifying Elliott degree.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 107,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:137": {
+    "section": "CH8",
+    "content": "Chapter summary and99.5-percent mainframe approximation claim; it is not a success rate or measured compliance of this bot.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 108,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:182": {
+    "section": "CH12",
+    "content": "S&P10-minute example has WM1 then WM3 then WM2; DollarTree uses repeated fractal additions. Circled setups and later break entries are separate.",
+    "rules": [],
+    "figures": [
+      "12.5",
+      "12.6"
+    ],
+    "visual_review": true,
+    "printed_page": 153,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:183": {
+    "section": "CH12",
+    "content": "Costco exercise asks signal versus entry; bullish divergent setup14September is not the15September fill.",
+    "rules": [],
+    "figures": [
+      "12.7"
+    ],
+    "visual_review": true,
+    "printed_page": 154,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:184": {
+    "section": "CH12",
+    "content": "Costco third AO bar23September precedes24September entry; fractal center requires right-side confirmation, breakout4October; exit13October uses preceding five lows. Allocation section starts.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 155,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:185": {
+    "section": "CH12",
+    "content": "Profitable initial position precedes larger second tranche; illustrated quantity ratios1,5,4,3,2 sum15. Three-to-five-bar trail often exits before an opposite signal.",
+    "rules": [
+      "TC2.PYRAMID.QUANTITIES",
+      "TC2.PYRAMID.PROFIT"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 156,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:186": {
+    "section": "CH12",
+    "content": "All-versus-part exit is explicitly discretionary, sometimes half then protected remainder; no universal50-percent auto-trim is specified.",
+    "rules": [
+      "TC2.EXIT.PARTIAL_DISCRETION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 157,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:187": {
+    "section": "INTERCHAPTER",
+    "content": "Blank physical page retained; no trading rule inferred.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 158,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:188": {
+    "section": "CH13",
+    "content": "Opening: recovery from a trading slump and outside support; anecdote is not an algorithm.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 159,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:189": {
+    "section": "CH13",
+    "content": "Self-support, gradual practice and negative beliefs; provocative anecdote is not endorsed or used as a bot instruction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 160,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:190": {
+    "section": "CH13",
+    "content": "Negative self-beliefs and writing an affirmation repeatedly; no predictive market or order authority follows.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 161,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:191": {
+    "section": "CH13",
+    "content": "Affirmations lead to Cameron-derived morning pages; six-week proposed practice is psychological guidance.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 162,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:192": {
+    "section": "CH13",
+    "content": "Three stream-of-consciousness pages after waking; time commitment and creativity narrative. Author explicitly cannot prove success from this practice.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 163,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:193": {
+    "section": "CH13",
+    "content": "Process expectations; private morning pages have no wrong content and should not be reread for eight weeks.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 164,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:194": {
+    "section": "CH13",
+    "content": "Private writing externalizes worries and internal criticism. Mood is not a new entry filter.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 165,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:195": {
+    "section": "CH13",
+    "content": "Weekly solitary trader date about two hours complements morning writing; reflective practice, not a trading signal.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES",
+      "TC2.PSYCHOLOGY.TRADER_DATE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 166,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:196": {
+    "section": "CH13",
+    "content": "Examining beliefs and opening to reflection; no machine-verifiable profitability guarantee.",
+    "rules": [
+      "TC2.PSYCHOLOGY.TRADER_DATE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 167,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:197": {
+    "section": "CH13",
+    "content": "Chapter summary preserves both morning pages and weekly solitary practice as psychology.",
+    "rules": [
+      "TC2.PSYCHOLOGY.MORNING_PAGES",
+      "TC2.PSYCHOLOGY.TRADER_DATE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 168,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:198": {
+    "section": "EPILOGUE",
+    "content": "Personal decision and quality of life; narrative claims are not deterministic rules.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 169,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:199": {
+    "section": "EPILOGUE",
+    "content": "Three stated aims and transition to checklists; increased volume is constrained separately by account risk.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 170,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:200": {
+    "section": "APPENDIX1",
+    "content": "Each market session is new; no assumption that yesterday behavior or a past loss predicts the next trade.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 171,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:201": {
+    "section": "APPENDIX1",
+    "content": "Reliable data, paper practice, broker alternatives during Internet failure and understanding order semantics.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 172,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:202": {
+    "section": "APPENDIX1",
+    "content": "Margin, tick/point values, expiration and suitable account exposure; commodity delivery example is not a crypto-perpetual expiry rule.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 173,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:203": {
+    "section": "APPENDIX1",
+    "content": "Chart checklist separates AO sign from direction and lists Extreme Squat as one stop category; both Russian editions split/mistranslate that wording.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST",
+      "TC2.APPENDIX1.EXTREME_SQUAT_TRANSLATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 174,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:204": {
+    "section": "APPENDIX1",
+    "content": "Head checklist includes readiness, morning pages, motives, revenge trading and lessons; operator reflection must not invent machine mental states.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST",
+      "TC2.PSYCHOLOGY.MORNING_PAGES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 175,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:245": {
+    "section": "APPENDIX7",
+    "content": "TradeStation code header and13/8,8/5,5/3 inputs; this is Appendix7, not Appendix3. ScreenshotA7.8 is qualitative configuration only.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [
+      "A7.8"
+    ],
+    "visual_review": true,
+    "printed_page": 216,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_EN:246": {
+    "section": "APPENDIX7",
+    "content": "Author code: SMA seed of median, recursive smoothing and past-value indexing for current/future plot slots; insufficient-history guard.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 217,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:115": {
+    "section": "CH8",
+    "content": "Cocoa sleep narrative and start of13/8 construction.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 100,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:116": {
+    "section": "CH8",
+    "content": "8/5 and5/3 construction plus CQG smoothing warning.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 101,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:117": {
+    "section": "CH8",
+    "content": "Known future plot-tail description and repeat13/8,8/5,5/3 anatomy.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 102,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:164": {
+    "section": "CH12",
+    "content": "Profit prerequisite and illustrated reverse-pyramid quantities1,5,4,3,2.",
+    "rules": [
+      "TC2.PYRAMID.QUANTITIES",
+      "TC2.PYRAMID.PROFIT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 149,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:165": {
+    "section": "CH12",
+    "content": "Three/five-bar usual exit and discretionary complete/partial reduction.",
+    "rules": [
+      "TC2.EXIT.PARTIAL_DISCRETION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 150,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:182": {
+    "section": "APPENDIX1",
+    "content": "Chart checklist mistranslates English Extreme Squat into separate extreme/sleeping labels.",
+    "rules": [
+      "TC2.APPENDIX1.EXTREME_SQUAT_TRANSLATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 167,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:183": {
+    "section": "APPENDIX1",
+    "content": "Continuation of chart checklist and psychological head checklist.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 168,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:223": {
+    "section": "APPENDIX7",
+    "content": "TradeStation Alligator inputs, SMA seed and recurrence; text-layer glyph corruption must not redefine the median formula.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 208,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_224:224": {
+    "section": "APPENDIX7",
+    "content": "Plot offsets and AO code; corrupted text layer is not executable source authority.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 209,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:154": {
+    "section": "CH8",
+    "content": "Alligator construction13/8,8/5,5/3.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 154,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:155": {
+    "section": "CH8",
+    "content": "CQG smoothing caveat, projected known tail and anatomy summary.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 155,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:214": {
+    "section": "CH12",
+    "content": "Costco known sequence and beginning of allocation discussion; right-hand confirmation cannot be backdated.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 214,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:215": {
+    "section": "CH12",
+    "content": "Profitable first entry and reverse-pyramid quantity example1,5,4,3,2.",
+    "rules": [
+      "TC2.PYRAMID.QUANTITIES",
+      "TC2.PYRAMID.PROFIT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 215,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:216": {
+    "section": "CH12",
+    "content": "Three/five-bar usual trail and optional partial exit discussed as discretionary.",
+    "rules": [
+      "TC2.EXIT.PARTIAL_DISCRETION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 216,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:217": {
+    "section": "CH12",
+    "content": "Discretionary psychological exit caveat and chapter summary.",
+    "rules": [
+      "TC2.EXIT.PARTIAL_DISCRETION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 217,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:242": {
+    "section": "APPENDIX1",
+    "content": "Chart checklist begins, including separate AO sign and direction.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 242,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:243": {
+    "section": "APPENDIX1",
+    "content": "Visual confirmation: extreme and sleeping are printed as separate stop labels; English has Extreme Squat.",
+    "rules": [
+      "TC2.APPENDIX1.EXTREME_SQUAT_TRANSLATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 243,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:244": {
+    "section": "APPENDIX1",
+    "content": "Head-checklist continuation about present focus, motives and reflection.",
+    "rules": [
+      "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 244,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:300": {
+    "section": "APPENDIX7",
+    "content": "Alligator code header and period/displacement inputs.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 300,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:301": {
+    "section": "APPENDIX7",
+    "content": "Median SMA seed, recurrence, missing-history check and plot indexing.",
+    "rules": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 301,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
+  },
+  "TC2_RU_314:302": {
+    "section": "APPENDIX7",
+    "content": "AO code uses median and SMA5-SMA34; colour follows change not zero-line sign.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 302,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "uncertainties": [
+      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+    ]
   }
 }

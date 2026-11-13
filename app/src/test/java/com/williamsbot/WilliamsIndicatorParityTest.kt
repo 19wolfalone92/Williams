@@ -6,6 +6,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WilliamsIndicatorParityTest {
+    @Test fun smmaMissingSamplesAndOverflowRemainUnknownWithoutRewritingHistory() {
+        for(period in listOf(5,8,13)) {
+            for(bad in listOf(Double.NaN,Double.POSITIVE_INFINITY,Double.NEGATIVE_INFINITY)) {
+                for(index in 0 until period) {
+                    val values=MutableList(period+5) { 100.0 };values[index]=bad
+                    assertTrue(smmaSeededValues(values,period).all { it==null })
+                }
+            }
+            val values=List(period) { 100.0 }+listOf(110.0,Double.NaN,130.0)
+            val result=smmaSeededValues(values,period)
+            assertEquals(100.0,result[period-1]!!,0.0)
+            assertEquals((100.0*(period-1)+110.0)/period,result[period]!!,1e-12)
+            assertEquals(smmaSeededValues(values.take(period+1),period),result.take(period+1))
+            assertTrue(result.takeLast(2).all { it==null })
+            assertTrue(smmaSeededValues(List(period+2) { Double.MAX_VALUE },period).all { it==null })
+        }
+    }
     @Test
     fun smmaUsesTheFirstPeriodSmaAsItsSeed() {
         val values = (1..15).map { it.toDouble() }

@@ -118,16 +118,18 @@ internal fun smmaSeededValues(values: List<Double>, period: Int): List<Double?> 
     if (values.size < period || values.take(period).any { !it.isFinite() }) return output
     var seed = 0.0
     for (i in 0 until period) seed += values[i]
+    if (!seed.isFinite()) return output
     output[period - 1] = seed / period
     for (i in period until values.size) {
         val previous = output[i - 1] ?: continue
         if (!values[i].isFinite()) continue
-        output[i] = (previous * (period - 1) + values[i]) / period
+        output[i] = ((previous * (period - 1) + values[i]) / period).takeIf { it.isFinite() }
     }
     return output
 }
 
-/** Display-only future chart displacement. Execution paths use current-time SMMA values instead. */
+/** Chart alignment: value drawn at t was computed at t-displacement.
+ * The known tail beyond the last price is display evidence, never future OHLC. */
 internal fun shiftAlligatorForDisplay(raw: List<Double?>, displacement: Int): List<Double?> {
     require(displacement >= 0) { "Alligator displacement must be non-negative" }
     return List(raw.size) { displayIndex ->

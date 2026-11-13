@@ -25,3 +25,19 @@
 Изменения обученных AI весов, пользовательских ключей, плеча,3% daily cap,
 UTC reset, production/Demo аккаунта не выполнялись. Не заявлена приёмка всей
 системы, полного первоисточника или новой торговой прибыльности.
+
+## Продолжение4.64.30
+
+- `strategy.smma`: полное конечное SMA seed вместо skip-NaN; пропуск в рекурсии
+  и переполнение остаются UNKNOWN. Kotlin отклоняет переполнение так же.
+- Отдельные `WilliamsSymbolPolicy.kt` / `williams_symbol_policy.py`:10 NEW-risk,
+  management15. Допуск проверяется до создания entry/add, в coordinator и перед
+  транспортом; reduce-only/closePosition/GET/DELETE сохраняют сопровождение.
+- Все пять исключённых из NEW-risk пар проходят offline сценарии обоих
+  направлений unfilled/partial/triggering/unknown→recovery→owned STOP.
+- Source register120, figure52, rule81;7 частичных translation anchors.
+  Психология/дискреционные выходы отделены от машинных правил. Найдено и
+  зафиксировано визуальное расхождение Extreme Squat в обоих переводах.
+- Audit проверяет matching semantic receipts и edition SHA в translation map.
+- VERSION/Android/API согласованы4.64.30; локальный minimum versionCode46430.
+  `main` и Williams-AI не менялись. Полная приёмка остаётся незавершённой.

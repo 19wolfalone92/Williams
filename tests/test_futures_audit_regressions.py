@@ -142,7 +142,7 @@ def test_html_success_for_order_is_ambiguous_and_redirects_are_disabled(client):
         return response(200, "<html>gateway error</html>")
     client.session = SimpleNamespace(request=send)
     with pytest.raises(BinanceAPIError) as caught:
-        client._request("POST", "/fapi/v1/order", {}, signed=True)
+        client._request("POST", "/fapi/v1/order", {"symbol": "BTCUSDT"}, signed=True)
     assert caught.value.unknown_execution
     assert len(calls) == 1 and calls[0]["allow_redirects"] is False
 

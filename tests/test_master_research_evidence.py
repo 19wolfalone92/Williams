@@ -45,3 +45,21 @@ def test_imported_knowledge_cannot_gain_order_or_training_authority(tmp_path):
     payload=json.loads(path.read_text());payload['rules'][0]['execution_authority']=True
     path.write_text(json.dumps(payload))
     assert 'RULE_HAS_UNAPPROVED_AUTHORITY' in audit(tmp_path)['errors']
+
+
+def test_reviewed_stage_requires_the_matching_semantic_receipt(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'PRIMARY_SOURCE_PAGE_REGISTER.jsonl'
+    rows=[json.loads(l) for l in path.read_text().splitlines()]
+    row=next(r for r in rows if r['verification_status']=='TEXT_ACQUIRED_UNVERIFIED')
+    row['verification_status']='REVIEWED_SINGLE_PASS';row['visual_review']=False
+    path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+    assert 'PAGE_REVIEW_RECEIPT_MISMATCH' in audit(tmp_path)['errors']
+    assert 'REVIEWED_VISUAL_STAGE_WITHOUT_RENDER_REVIEW' in audit(tmp_path)['errors']
+
+
+def test_translation_map_cannot_refer_to_a_different_pdf_edition(tmp_path):
+    folder=copy_receipts(tmp_path);path=folder/'TC2_TRANSLATION_PAGE_MAP.json'
+    payload=json.loads(path.read_text());payload['anchors'][0]['pages'][0]['source_sha256']='0'*64
+    path.write_text(json.dumps(payload))
+    assert 'CROSSWALK_SOURCE_SHA_MISMATCH' in audit(tmp_path)['errors']

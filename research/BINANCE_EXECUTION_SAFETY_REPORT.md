@@ -29,3 +29,13 @@ source-bound orders и signed exit attribution. Все2086 baseline offline test
 Открытый P0 базовой ветки: реальная длительность FILLED→owned STOP на устройстве
 не доказана. Уже существующие исправления urgent reconciliation / exact exit
 binding сохранены. Приёмку по этому пункту нельзя закрыть зелёным APK CI.
+
+Продолжение4.64.30 разделяет NEW risk10 и management15. Прямые REST order
+helpers и финальный transport блокируют новый order по SUI/NEAR/DOT/TRX/BCH,
+но не блокируют reduceOnly/closePosition или чтение/отмену. Runtime/coordinator
+проверяют такой допуск отдельно от источникаTC2 и до изменения entry ledger.
+Существующие pending/unknown остаются обязательствами; их резерв не снимается
+из-за смены допуска. Автоматической отмены по символу нет: старый pending
+может исполниться и требует подтверждённой защиты. Offline модель проверяет
+обе стороны и четыре liability states для всех пяти пар; signed Demo/device
+приёмка всё ещё NOT_RUN.

@@ -19,6 +19,8 @@ def audit(root=ROOT):
     pages=[json.loads(line) for line in (folder/'PRIMARY_SOURCE_PAGE_REGISTER.jsonl').read_text().splitlines()]
     figures=[json.loads(line) for line in (folder/'FIGURE_INTERPRETATION_REGISTER.jsonl').read_text().splitlines()]
     registry=json.loads((folder/'MASTER_RULE_REGISTRY.json').read_text())
+    reviews=json.loads((folder/'review_notes.json').read_text())
+    crosswalk=json.loads((folder/'TC2_TRANSLATION_PAGE_MAP.json').read_text())
     errors=[]
     keys=[(p['source_id'],p['pdf_page']) for p in pages]
     expected={(s['id'],n) for s in catalog for n in range(1,s['pdf_pages']+1)}
@@ -34,6 +36,14 @@ def audit(root=ROOT):
         if p['can_place_orders'] is not False:errors.append('PAGE_HAS_TRADE_AUTHORITY')
         if p['verification_status']=='VERIFIED' and not (p['visual_review'] and p['independent_second_review']):
             errors.append('UNSUPPORTED_VERIFIED_PAGE')
+        if p['verification_status'].startswith('REVIEWED'):
+            note=reviews.get(f"{p['source_id']}:{p['pdf_page']}")
+            if not note or any(p.get(a)!=note.get(b) for a,b in [
+                ('content','content'),('verification_status','verification_status'),
+                ('visual_review','visual_review'),('extracted_rules','rules'),('figures','figures')]):
+                errors.append('PAGE_REVIEW_RECEIPT_MISMATCH')
+            if p['verification_status']=='REVIEWED_SINGLE_PASS' and p['visual_review'] is not True:
+                errors.append('REVIEWED_VISUAL_STAGE_WITHOUT_RENDER_REVIEW')
         if any(r not in ids for r in p['extracted_rules']):errors.append('PAGE_RULE_ID_UNRESOLVED')
     seen=set()
     for f in figures:
@@ -51,6 +61,20 @@ def audit(root=ROOT):
             if not source or r['SOURCE_SHA256']!=source['sha256']:errors.append('RULE_SOURCE_MISMATCH')
             if any(type(n) is not int or n<1 or n>source['pdf_pages'] for n in r['PAGE']):
                 errors.append('RULE_PAGE_OUT_OF_RANGE')
+    if crosswalk.get('can_place_orders') is not False or crosswalk.get('independent_second_review') is not False:
+        errors.append('CROSSWALK_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION')
+    anchors=set()
+    for anchor in crosswalk['anchors']:
+        if anchor['anchor_id'] in anchors:errors.append('DUPLICATE_TRANSLATION_ANCHOR')
+        anchors.add(anchor['anchor_id'])
+        if {p['source_id'] for p in anchor['pages']}!={'TC2_EN','TC2_RU_224','TC2_RU_314'}:
+            errors.append('CROSSWALK_MISSING_EDITION')
+        for span in anchor['pages']:
+            source=sources.get(span['source_id'])
+            if not source or span['source_sha256']!=source['sha256']:
+                errors.append('CROSSWALK_SOURCE_SHA_MISMATCH')
+            if not span['pdf_pages'] or any((span['source_id'],p) not in expected for p in span['pdf_pages']):
+                errors.append('CROSSWALK_PAGE_OUT_OF_RANGE')
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
     counts=Counter(p['verification_status'] for p in pages)
@@ -65,7 +89,7 @@ def audit(root=ROOT):
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
         'total_rules_in_books':None,'percent':None},
       'rule_implementation_coverage':None,'rule_test_coverage_of_all_books':None,
-      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':3,'whole_book_certified':False},
+      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':4,'whole_book_certified':False},
       'execution_safety':{'signed_demo_e2e':False,'physical_android_e2e':False,'main_merge_allowed':False},
       'decision_explainability_coverage':None,'can_place_orders':False}
 

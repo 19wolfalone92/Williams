@@ -1,0 +1,58 @@
+{
+  "schema": "PRIMARY_SOURCE_REACQUISITION_V1",
+  "date": "2026-11-13",
+  "source_count": 6,
+  "all_original_pdf_sha256_match": true,
+  "all_pdf_page_counts_match": true,
+  "physical_pages": 1213,
+  "sources": [
+    {
+      "source_id": "TC1_RU",
+      "sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": 140,
+      "bytes_rechecked": true
+    },
+    {
+      "source_id": "NTD_RU",
+      "sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": 156,
+      "bytes_rechecked": true
+    },
+    {
+      "source_id": "TC2_EN",
+      "sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_pages": 257,
+      "bytes_rechecked": true
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_pages": 224,
+      "bytes_rechecked": true
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_pages": 314,
+      "bytes_rechecked": true
+    },
+    {
+      "source_id": "COURSE_EN",
+      "sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": 122,
+      "bytes_rechecked": true
+    }
+  ],
+  "old_private_ocr_bytes_recovered": false,
+  "old_ocr_hashes_preserved": true,
+  "new_reading_pages": 60,
+  "independent_review_claimed": false,
+  "can_place_orders": false,
+  "inventory_reproduction": {
+    "exact_rows_without_old_private_ocr": 1091,
+    "course_rows_with_ocr_provenance_difference": 122,
+    "prior_ocr_staged_rows": 119,
+    "prior_reviewed_course_rows_also_ocr_backed": 3,
+    "meaning": "Only Course acquisition text/stages differ without the old private OCR directory; original rows and hashes retained."
+  }
+}

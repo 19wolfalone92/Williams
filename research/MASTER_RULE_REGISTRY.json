@@ -5,16 +5,16 @@
     {
       "RULE_ID": "TC2.PYRAMID.QUANTITIES",
       "SOURCE": "TC2",
-      "SOURCE_ID": "TC2_RU_224",
-      "SOURCE_SHA256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
-      "EDITION": "Second edition, Russian title page IK Analitika Moscow 2005",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
       "CHAPTER": null,
       "PAGE": [
-        164,
-        165
+        184,
+        185
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "CANONICAL",
       "ORIGINAL_MEANING": "The illustrated reverse pyramid uses contract/share quantities 1,5,4,3,2, fixed to actual first execution, total15 units.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -39,7 +39,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "More book chart replays and physical exchange fills; this validates the illustrated policy, not all discretionary allocations.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -48,22 +48,23 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
     {
       "RULE_ID": "TC2.PYRAMID.PROFIT",
       "SOURCE": "TC2",
-      "SOURCE_ID": "TC2_RU_224",
-      "SOURCE_SHA256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
-      "EDITION": "Second edition, Russian title page IK Analitika Moscow 2005",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
       "CHAPTER": null,
       "PAGE": [
-        164
+        184,
+        185
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "CANONICAL",
       "ORIGINAL_MEANING": "An existing campaign must be profitable before adding on the next Wise Man; mirror price profit for shorts.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -88,7 +89,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Price profit is checked; transaction-cost risk is a separate engineering budget.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -97,7 +98,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3524,19 +3525,19 @@
     {
       "RULE_ID": "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST",
       "SOURCE": "TC2",
-      "SOURCE_ID": "TC2_RU_224",
-      "SOURCE_SHA256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
-      "EDITION": "Second edition, Russian title page IK Analitika Moscow 2005",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
       "CHAPTER": null,
       "PAGE": [
-        179,
-        180,
-        181,
-        182,
-        183
+        200,
+        201,
+        202,
+        203,
+        204
       ],
       "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "CLASSIFICATION": "PSYCHOLOGICAL",
       "ORIGINAL_MEANING": "TC2 appendix 1 calls for reliable data, familiarity with margin/tick/order semantics, paper practice and operational preparedness. It is a user-readiness guide, not an algorithmic market signal.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
@@ -3560,7 +3561,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -3569,7 +3570,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -4066,6 +4067,289 @@
         "app/src/test/java/com/williamsbot/WilliamsTc2AoSourceProofTest.kt"
       ],
       "TEST_RESULTS": "See regression report; not certification of a whole book.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        127,
+        133,
+        134,
+        245,
+        246
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "CANONICAL",
+      "ORIGINAL_MEANING": "All three balance lines use the same chart median (H+L)/2; seeded smoothed averages have period/plot displacement pairs13/8,8/5,5/3. At plotted time t use raw[t-offset].",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "Complete finite initial N samples and chronological closed prices; data-hole handling is separately an engineering fail-closed choice.",
+      "REQUIRED_DATA": [
+        "source-pinned closed chronological median prices"
+      ],
+      "SIGNAL_DEFINITION": {
+        "seed": "sum(first N medians)/N",
+        "recurrence": "(previous*(N-1)+median_t)/N",
+        "pairs": [
+          [
+            13,
+            8
+          ],
+          [
+            8,
+            5
+          ],
+          [
+            5,
+            3
+          ]
+        ],
+        "data_hole_policy": "ENGINEERING_UNKNOWN_NO_SKIP_OR_IMPUTATION"
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Missing seed sample or recursive input never becomes a shorter average; nonlinear graphical claims are not a measured bot success rate.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "Missing seed sample or recursive input never becomes a shorter average; nonlinear graphical claims are not a measured bot success rate.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
+      "TESTS": [
+        "tests/test_master_alligator_source.py",
+        "app/src/test/java/com/williamsbot/WilliamsIndicatorParityTest.kt"
+      ],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        134,
+        135,
+        246
+      ],
+      "FIGURE": [
+        "8.10",
+        "8.11"
+      ],
+      "CLASSIFICATION": "INTERPRETED",
+      "ORIGINAL_MEANING": "Known displaced Alligator tail may extend past last actual price. It contains already-calculated values, not future OHLC.",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "At last known raw index i, only values whose source index is <=i exist.",
+      "REQUIRED_DATA": [
+        "source-pinned context and operator/market observations"
+      ],
+      "SIGNAL_DEFINITION": {
+        "plot_value": "raw[i+step-offset] only if 0<=i+step-offset<=i",
+        "common_known_steps": 3,
+        "uses_future_prices": false
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "No extrapolation beyond each line offset; apparent continuation is contextual evidence, not an authorized new signal.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "No extrapolation beyond each line offset; apparent continuation is contextual evidence, not an authorized new signal.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
+      "TESTS": [],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.EXIT.PARTIAL_DISCRETION",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        186
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "DISCRETIONARY",
+      "ORIGINAL_MEANING": "The author sometimes reduces half and protects the remainder, explicitly declining a universal full-versus-part exit rule.",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "Experienced trader makes an explicit management decision.",
+      "REQUIRED_DATA": [
+        "source-pinned context and operator/market observations"
+      ],
+      "SIGNAL_DEFINITION": {
+        "automatic_half_exit_required": false,
+        "automatic_half_exit_implemented": false
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Do not introduce a universal50-percent profit trim from an example.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "Do not introduce a universal50-percent profit trim from an example.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
+      "TESTS": [],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.PSYCHOLOGY.MORNING_PAGES",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        204
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "PSYCHOLOGICAL",
+      "ORIGINAL_MEANING": "Morning stream-of-consciousness writing: three pages after waking, proposed six-week practice; keep private and do not reread for initial eight weeks.",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "Human/operator reflective exercise; no machine mental state is claimed.",
+      "REQUIRED_DATA": [
+        "source-pinned context and operator/market observations"
+      ],
+      "SIGNAL_DEFINITION": {
+        "pages": 3,
+        "practice_weeks": 6,
+        "initial_no_reread_weeks": 8,
+        "operator_only": true
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Author success claims are not verified here; this does not provide a prediction or override loss/STOP gates.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "Author success claims are not verified here; this does not provide a prediction or override loss/STOP gates.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
+      "TESTS": [],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.PSYCHOLOGY.TRADER_DATE",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        195,
+        196,
+        197
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "PSYCHOLOGICAL",
+      "ORIGINAL_MEANING": "A solitary weekly creative trader date, about two hours, complements morning pages.",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "Human/operator voluntary reflective practice.",
+      "REQUIRED_DATA": [
+        "source-pinned context and operator/market observations"
+      ],
+      "SIGNAL_DEFINITION": {
+        "frequency": "weekly",
+        "approx_hours": 2,
+        "operator_only": true
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "No autonomous order, change of model weights or guaranteed profit follows.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "No autonomous order, change of model weights or guaranteed profit follows.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
+      "TESTS": [],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "TC2.APPENDIX1.EXTREME_SQUAT_TRANSLATION",
+      "SOURCE": "TC2",
+      "SOURCE_ID": "TC2_EN",
+      "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "CHAPTER": "8/12/13/Appendix1/Appendix7",
+      "PAGE": [
+        203
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "CONTRADICTED",
+      "ORIGINAL_MEANING": "English checklist says Extreme Squat; both Russian renditions print extreme and sleeping as separate labels. Page renderings confirm a translation discrepancy, not an OCR-only artifact.",
+      "MARKET_CONTEXT": "Source interpretation only; exchange admission and risk are independent.",
+      "PRECONDITIONS": "Compare English PDF203 with RU224 PDF182 and RU314 PDF243.",
+      "REQUIRED_DATA": [
+        "source-pinned context and operator/market observations"
+      ],
+      "SIGNAL_DEFINITION": {
+        "crosswalk_id": "CHECKLIST_STOPS",
+        "english_meaning": "EXTREME_SQUAT",
+        "russian_rendering": "separate extreme/sleeping labels",
+        "creates_new_stop_rule": false
+      },
+      "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+      "TRIGGER": "No direct execution authority; apply source-specific entry trigger separately.",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Do not implement an invented sleeping STOP. Operational TC2 stop hierarchy stays pinned to its detailed source specification.",
+      "STOP_PLACEMENT": "No new automatic STOP rule derived from this record.",
+      "POSITION_MANAGEMENT": "Pinned source, exchange ownership and project risk budgets remain mandatory.",
+      "EXIT_CONDITIONS": "No universal exit inferred unless explicitly stated in the definition.",
+      "EXCEPTIONS": "Do not implement an invented sleeping STOP. Operational TC2 stop hierarchy stays pinned to its detailed source specification.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
+      "TESTS": [],
+      "TEST_RESULTS": "See continuation regression report; synthetic values are not exact book OHLC.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,

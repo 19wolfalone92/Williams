@@ -10,11 +10,24 @@ def smma(series, period):
         raise ValueError("SMMA period must be positive")
     if len(series) < period:
         return out
-    out.iloc[period - 1] = series.iloc[:period].mean()
+    # TC2 EN PDF245-246: SMA seed, then recursive smoothing. A missing
+    # sample is not a shorter SMA seed (pandas.mean otherwise skips NaN).
+    # Keep parity with Android: incomplete/nonfinite history remains unknown.
+    seed = series.iloc[:period]
+    if not np.isfinite(seed).all():
+        return out
+    initial = seed.mean()
+    if not np.isfinite(initial):
+        return out
+    out.iloc[period - 1] = initial
     for i in range(period, len(series)):
+        if not np.isfinite(out.iloc[i - 1]) or not np.isfinite(series.iloc[i]):
+            continue
         out.iloc[i] = (
             (out.iloc[i - 1] * (period - 1) + series.iloc[i]) / period
         )
+        if not np.isfinite(out.iloc[i]):
+            out.iloc[i] = np.nan
     return out
 
 

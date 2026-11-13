@@ -3289,6 +3289,9 @@ internal class NativeFuturesCampaignCoordinator(
             clock(),plan.signalId,result.optBoolean("accepted",false))
     }
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
+        williamsNewRiskSymbolBlocker(plan.symbol)?.let {
+            return@synchronized safePreflightRejection(it)
+        }
         val currentIntents = intents()
         val isReversal=plan.reversalOwnerId.isNotBlank()
         if(isReversal && (plan.kind!=EntryKind.MARKET || plan.strategyProfile!=williamsTc2Profile ||
@@ -5421,6 +5424,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     private fun validatePlan(plan: EntryPlan) {
+        require(williamsNewRiskSymbolBlocker(plan.symbol)==null) { "FUTURES_SYMBOL_MANAGEMENT_ONLY" }
         require(williamsNewExposureBlocker(plan.strategyProfile)==null) { "WILLIAMS_SOURCE_OBSERVATION_ONLY" }
         require(plan.symbol.uppercase(Locale.US) in allowedSymbols) {
             "Symbol is outside the approved Futures universe"

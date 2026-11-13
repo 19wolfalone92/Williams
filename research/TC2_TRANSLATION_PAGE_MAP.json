@@ -1,0 +1,233 @@
+{
+  "schema": "TC2_TRANSLATION_ANCHOR_MAP_V1",
+  "scope": "Selected semantic anchors only; no constant page offset or full-translation certification. Some neighbouring figure pages remain unreviewed.",
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "anchors": [
+    {
+      "anchor_id": "ALLIGATOR_CONSTRUCTION",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            133,
+            134
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            115,
+            116,
+            117
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            154,
+            155
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "KNOWN_FORWARD_TAIL",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            134,
+            135
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            117,
+            118
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            155,
+            156
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "REVERSE_PYRAMID",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            184,
+            185
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            164,
+            165
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            214,
+            215,
+            216
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "PARTIAL_EXIT_DISCRETION",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            185,
+            186
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            165
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            216,
+            217
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "CHART_AND_HEAD_CHECKLIST",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            203,
+            204
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            182,
+            183
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            242,
+            243,
+            244
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "CHECKLIST_STOPS",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            203
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            182
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            243
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_TRANSLATION_CONFLICT",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "INDICATOR_SOURCE_CODE",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            245,
+            246,
+            247
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            223,
+            224
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            300,
+            301,
+            302
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    }
+  ]
+}

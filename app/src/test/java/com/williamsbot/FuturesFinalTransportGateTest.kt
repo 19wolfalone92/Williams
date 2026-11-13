@@ -14,6 +14,42 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 class FuturesFinalTransportGateTest {
+    @Test fun managementOnlySymbolsRejectEveryExposureDoorAndKeepStopsExitsAndReads() {
+        val legacy=APPROVED_FUTURES_SYMBOLS.filter { it !in williamsNewRiskSymbols }
+        assertEquals(setOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"),legacy.toSet())
+        for(symbol in legacy) for(direction in listOf("LONG","SHORT")) {
+            val requests=mutableListOf<Request>()
+            val client=OkHttpClient.Builder().addInterceptor { chain ->
+                val r=chain.request();requests+=r
+                response(r,when(r.url.encodedPath) {
+                    "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                    "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
+                    "/fapi/v1/premiumIndex" -> """{"symbol":"$symbol","markPrice":"100"}"""
+                    "/fapi/v2/ticker/price" -> """{"symbol":"$symbol","price":"100"}"""
+                    "/fapi/v3/positionRisk" -> "[]"
+                    else -> "{}"
+                })
+            }.build()
+            val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
+            val side=if(direction=="LONG") "BUY" else "SELL"
+            val actions=listOf<()->Unit>(
+                { adapter.newOrder(symbol,side,"1",false,"W2E_DENIED") },
+                { adapter.placeLimitOrder(symbol,side,"1","100",false,false,"W2E_DENIED") },
+                { adapter.placeConditionalEntry(symbol,direction,"STOP","1",if(direction=="LONG") "101" else "99","W2E_DENIED") }
+            )
+            for(action in actions) {
+                try { action();fail("Management-only symbol admitted new risk") }
+                catch(expected:FuturesExposureNotSubmittedException) {
+                    assertTrue(expected.message.orEmpty().contains("FUTURES_SYMBOL_MANAGEMENT_ONLY"))
+                }
+            }
+            assertFalse(requests.any { it.method=="POST" })
+            adapter.positions()
+            adapter.placeProtectiveStop(symbol,direction,if(direction=="LONG") "95" else "105","W2P_LEGACY")
+            adapter.closeMarketPosition(symbol,direction,"1","W2X_LEGACY")
+            assertEquals(2,requests.count { it.method=="POST" })
+        }
+    }
     @Test fun exchangeCooldownRejectionBeforePostHasADefiniteNotSubmittedOutcome() {
         var posts = 0
         val guard = BinanceRateGuard()

@@ -859,6 +859,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             params["reduceOnly"] != "true" && params["closePosition"] != "true"
         if (increasesExposure) {
             try {
+                williamsNewRiskSymbolBlocker(params["symbol"].orEmpty())?.let { error(it) }
                 beforeExposureMutation()
             } catch (failure: Exception) {
                 throw FuturesExposureNotSubmittedException(failure)
@@ -903,6 +904,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         // It is deliberately absent from reduce-only exits and protective STOPs.
         if (increasesExposure) {
             try {
+                williamsNewRiskSymbolBlocker(params["symbol"].orEmpty())?.let { error(it) }
                 beforeExposureTransport()
             } catch (failure: Exception) {
                 throw FuturesExposureNotSubmittedException(failure)

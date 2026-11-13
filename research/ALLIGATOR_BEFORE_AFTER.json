@@ -1,0 +1,21 @@
+{
+  "schema": "SYNTHETIC_SMMA_BEFORE_AFTER_V1",
+  "baseline_sha": "4ae2b2a049df2285365f3cc03cec4e4671197ea4",
+  "source": "TC2_EN PDF245-246 Appendix7",
+  "synthetic_not_book_ohlc": true,
+  "period": 5,
+  "median_inputs": [
+    100,
+    100,
+    null,
+    100,
+    100,
+    110
+  ],
+  "old_seed": 100.0,
+  "new_seed": null,
+  "old_false_seed_present": true,
+  "new_entire_series_unknown": true,
+  "healthy_history_identical_for_periods_5_8_13": true,
+  "can_place_orders": false
+}

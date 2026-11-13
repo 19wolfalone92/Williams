@@ -23,3 +23,25 @@ funding/liquidation/order book/partial fills/reboot и reverse-pyramid additions
 
 До объявления успеха требуются exact-final-SHA CI, signed Demo LONG/SHORT
 fill→owned protective STOP→trail/restart/reconcile и физический Android.
+
+## Продолжение4.64.30
+
+- Повторён исходный SHA4ae2b2a0: **2111 passed,2 skipped,4 warnings,52.52s**.
+- После новых исправлений, lifecycle/symbol и evidence tests:
+  **2237 passed,2 skipped,4 warnings,47.73s**. Это полный Python набор.
+- `ruff --select F821,F822,F823,E9`: PASS; release contract: PASS.
+- Integrity CLI: PASS; `--require-complete`: ожидаемый **exit2**, не сертификация.
+- Fresh inventory:1213 строк,120 reviewed receipts;1091 строк совпали с
+  сохранённым реестром полностью.122 Course acquisition rows требуют прежнего
+  private OCR каталога (119 OCR-stage и3 reviewed с OCR). Старые bytes/hashes
+  не перезаписаны свежим пустым текстовым слоем.
+- `ALLIGATOR_BEFORE_AFTER.json`: прежний Python выдавал seed100 при одном NaN
+  в пяти входах; теперь UNKNOWN, как Android. Полные конечные серии совпадают.
+- Сценарии всех пяти management-only символов в обе стороны моделируют
+  unfilled/partial/triggering/unknown и восстановление того же owner/STOP,
+  без нового entry POST. Это локальная модель биржи, не signed Demo.
+- Прямой запуск static safety audit без production DB сообщает её отсутствие;
+  такая DB в checkout не поставляется. Режим clean-CI проверяется отдельно:
+  это статический аудит без инспекции пользовательской production DB.
+- Новые Kotlin unit/lint/APK/emulator результаты должны быть привязаны
+  к новому head SHA в Actions; старый зелёный4ae2b2a0 за них не принимается.

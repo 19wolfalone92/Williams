@@ -9,7 +9,8 @@ from binance_client import BinanceAPIError
 
 
 class DemoExchangeModel:
-    def __init__(self):
+    def __init__(self, symbol="BTCUSDT"):
+        self.symbol = symbol
         self.price = 100.0
         self.amount = 0.0
         self.entry_price = 0.0
@@ -31,17 +32,17 @@ class DemoExchangeModel:
         p = params or {}
         self.calls.append((method, path, dict(p)))
         if path.endswith("exchangeInfo"):
-            return {"symbols": [{"symbol": "BTCUSDT", "filters": [
+            return {"symbols": [{"symbol": self.symbol, "filters": [
                 {"filterType": "PRICE_FILTER", "tickSize": "0.1"},
                 {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
                 {"filterType": "MARKET_LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
             ]}]}
         if path.endswith("leverageBracket"):
-            return {} if self.bad_brackets else {"symbol": "BTCUSDT", "brackets": [
+            return {} if self.bad_brackets else {"symbol": self.symbol, "brackets": [
                 {"notionalFloor": 0, "notionalCap": 1000000, "initialLeverage": 125, "maintMarginRatio": 0.005}
             ]}
         if path.endswith("symbolConfig"):
-            return [{"symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": self.leverage,
+            return [{"symbol": self.symbol, "marginType": "ISOLATED", "leverage": self.leverage,
                      "maxNotionalValue": "1000000"}]
         if path.endswith("leverage"):
             self.leverage = p["leverage"]
@@ -51,15 +52,15 @@ class DemoExchangeModel:
         if path.endswith("marginType"):
             return {"code": 200}
         if path.endswith("premiumIndex"):
-            return {"symbol":"BTCUSDT","markPrice":str(self.price)}
+            return {"symbol":self.symbol,"markPrice":str(self.price)}
         if path.endswith("bookTicker"):
-            return {"symbol":"BTCUSDT","bidPrice":str(self.price),"askPrice":str(self.price)}
+            return {"symbol":self.symbol,"bidPrice":str(self.price),"askPrice":str(self.price)}
         if path.endswith("ticker/price"):
-            return {"symbol": "BTCUSDT", "price": str(self.price)}
+            return {"symbol": self.symbol, "price": str(self.price)}
         if path.endswith("/account"):
             return {"canTrade": True, "assets": [], "totalWalletBalance": "10000", "totalUnrealizedProfit": "0", "availableBalance": "10000"}
         if path.endswith("positionRisk"):
-            return [{"symbol": "BTCUSDT", "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
+            return [{"symbol": self.symbol, "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
                      "liquidationPrice": self.liquidation_price if self.liquidation_price != "MODEL" else ("50" if self.amount > 0 else "200"), "positionSide": "BOTH",
                      "leverage": str(self.leverage), "marginType": "isolated"}]
         if path.endswith("openOrders") or path.endswith("allOrders"):
@@ -129,7 +130,7 @@ class DemoExchangeModel:
         quantity = float(row["quantity"])
         self.amount = quantity * fraction * (1 if row["side"] == "BUY" else -1)
         row.update(algoStatus="FINISHED", actualOrderId=str(oid))
-        self.orders[oid] = {"orderId": oid, "symbol": "BTCUSDT", "side": row["side"],
+        self.orders[oid] = {"orderId": oid, "symbol": self.symbol, "side": row["side"],
                             "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
                             "status": "FILLED" if fraction == 1 else "PARTIALLY_FILLED",
                             "origQty": str(quantity), "executedQty": str(quantity * fraction), "avgPrice": str(self.entry_price)}
@@ -143,7 +144,7 @@ class DemoExchangeModel:
         self.price=price+(1 if self.amount>0 else -1)
         oid=max([42,*self.orders])+1
         row.update(algoStatus="FINISHED",actualOrderId=str(oid))
-        self.orders[oid]={"orderId":oid,"symbol":"BTCUSDT","side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
+        self.orders[oid]={"orderId":oid,"symbol":self.symbol,"side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
             "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
             "origQty":str(row["quantity"]),"executedQty":str(quantity),"avgPrice":str(price)}
 
@@ -159,14 +160,15 @@ def armed_runtime(monkeypatch, tmp_path, request):
     monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE",profile)
     bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
-    exchange = DemoExchangeModel()
+    symbol=option.get("legacy_symbol","BTCUSDT") if isinstance(option,dict) else "BTCUSDT"
+    exchange = DemoExchangeModel(symbol)
     monkeypatch.setattr(bot.client, "_request", exchange.request)
     now = int(time.time() * 1000)
-    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
+    signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
         setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
-    candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
+    candidate = FuturesCandidate(symbol, "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     # This old NTD transport suite models a LEGACY already-owned NTD
     # campaign. Production now permits NEW risk only for TC2. Narrowly
     # override the release *admission* gate in this offline exchange simulator
@@ -190,7 +192,15 @@ def armed_runtime(monkeypatch, tmp_path, request):
             admitted=float(Decimal(str(qty))//grid*grid)
             return admitted,risk*admitted/qty,notional*admitted/qty
         monkeypatch.setattr(bot,"_size_from_risk",size_in_course_units)
-    armed=bot._arm_entry(candidate)
+    # Model a durable intent admitted by the PRE-upgrade fifteen-symbol policy.
+    # Restore the CURRENT release admission before any test/recovery executes.
+    with monkeypatch.context() as old_admission:
+        if symbol != "BTCUSDT":
+            import futures_williams_runtime as runtime_module
+            import binance_futures_client as client_module
+            old_admission.setattr(runtime_module,"new_risk_symbol_blocker",lambda symbol:None)
+            old_admission.setattr(client_module,"new_risk_symbol_blocker",lambda symbol:None)
+        armed=bot._arm_entry(candidate)
     trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
     assert trace and '"stage": "_arm_entry"' in trace[0]
     assert "test-secret" not in trace[0]
@@ -253,6 +263,53 @@ def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_r
     exchange.liquidation_price = "MODEL"
     assert bot.recover()["ok"]
     assert bot.state("BTCUSDT") == "OPEN"
+
+
+@pytest.mark.parametrize("armed_runtime", [
+    {"side": side, "legacy_symbol": symbol}
+    for side in ("BUY", "SELL")
+    for symbol in ("SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT")
+], indirect=True)
+@pytest.mark.parametrize("mode", ["UNFILLED", "PARTIAL", "TRIGGERING", "UNKNOWN"])
+def test_ten_symbol_admission_retains_every_preupgrade_pending_liability_and_its_protection(armed_runtime, monkeypatch, mode):
+    bot, exchange, armed = armed_runtime
+    symbol = exchange.symbol
+    cid = armed["client_order_id"]
+    initial = bot.engine.load_campaign(armed["campaign_id"])
+    if mode == "PARTIAL":
+        exchange.fill_entry(fraction=.5)
+    elif mode == "TRIGGERING":
+        exchange.algos[1]["algoStatus"] = "TRIGGERING"
+    if mode == "UNKNOWN":
+        with monkeypatch.context() as lost_reply:
+            def unknown(*args, **kwargs):
+                raise BinanceAPIError("modeled unknown signed observation", unknown_execution=True)
+            lost_reply.setattr(bot.client, "get_order", unknown)
+            bot._reconcile_pending()
+        assert (symbol, cid) in bot._pending_entries()
+        assert bot.state(symbol) == "RECONCILE_REQUIRED"
+    else:
+        bot._reconcile_pending()
+    if mode in {"UNFILLED", "TRIGGERING"}:
+        assert (symbol, cid) in bot._pending_entries()
+        retained = bot.engine.load_campaign(initial.campaign_id)
+        assert retained.tags["pending_order_client_id"] == cid
+        assert retained.capital_reserved_quote == initial.capital_reserved_quote
+    # Recovered full/partial fills MUST obtain an owned protective STOP;
+    # an unfilled or unknown old intent is never rearmed under a new id.
+    if mode != "PARTIAL":
+        exchange.fill_entry()
+    assert bot.recover()["ok"]
+    owner = bot.engine.load_campaign(initial.campaign_id)
+    assert abs(owner.position_qty) == pytest.approx(abs(exchange.amount))
+    assert owner.state.value == "OPEN_INITIAL"
+    assert bot.state(symbol) == "OPEN"
+    assert any(r.get("symbol") == symbol and r.get("closePosition") == "true"
+               and r["algoStatus"] == "NEW" for r in exchange.algos.values())
+    assert sum(m == "POST" and p.endswith("algoOrder") and not data.get("closePosition")
+               for m, p, data in exchange.calls) == 1
+    with pytest.raises(RuntimeError, match="FUTURES_SYMBOL_MANAGEMENT_ONLY"):
+        bot._arm_add_on(owner, type("Signal", (), {"symbol": symbol})())
 
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":3},{"side":"SELL","course_units":3}],indirect=True)

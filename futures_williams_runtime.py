@@ -74,6 +74,7 @@ from data import fetch_klines
 from binance_client import BinanceAPIError
 from binance_futures_client import BinanceFuturesClient
 from trading_config import DEFAULT_FUTURES_SYMBOLS, TradingConfig
+from williams_symbol_policy import new_risk_symbol_blocker
 from wave_engine import MultiTimeframeWaveEngine
 from williams_directional_context import evaluate_direction
 from williams_wave_hierarchy import (
@@ -1314,6 +1315,10 @@ class FuturesWilliamsRuntime:
 
     def _futures_pre_submit_checks(self, intent):
         """Final exchange-state checks immediately before a Futures mutation."""
+        if intent.purpose.upper() in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}:
+            blocker = new_risk_symbol_blocker(intent.symbol)
+            if blocker:
+                raise RuntimeError(blocker)
         if not intent.campaign_id:
             return
 
@@ -1695,6 +1700,9 @@ class FuturesWilliamsRuntime:
 
     @serialized_campaign_operation
     def _arm_entry(self, candidate: FuturesCandidate):
+        blocker = new_risk_symbol_blocker(candidate.signal.symbol)
+        if blocker:
+            raise RuntimeError(blocker)
         self._require_new_risk_controls()
         self._require_entry_time()
         if self.dry_run:
@@ -1929,6 +1937,9 @@ class FuturesWilliamsRuntime:
 
     @serialized_campaign_operation
     def _arm_add_on(self, campaign, signal):
+        blocker = new_risk_symbol_blocker(signal.symbol)
+        if blocker:
+            raise RuntimeError(blocker)
         self._require_new_risk_controls()
         self._require_entry_time()
         if signal.symbol!=campaign.symbol or signal.timeframe!=campaign.execution_timeframe:
