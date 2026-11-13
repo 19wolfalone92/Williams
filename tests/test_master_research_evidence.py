@@ -17,6 +17,17 @@ def test_inventory_complete_does_not_claim_books_complete():
     assert not report['execution_safety']['main_merge_allowed']
 
 
+def test_english_first_pass_does_not_certify_other_books_or_independent_review():
+    coverage=audit()['source_coverage']
+    english=coverage['per_source']['TC2_EN']
+    assert english['all_physical_pages_have_first_pass_receipts']
+    assert english['first_pass_receipts']==257
+    assert english['independently_verified']==0
+    assert not english['full_content_certified']
+    assert english['classified_page_kinds']['VISUALLY_CONFIRMED_BLANK']==11
+    assert not coverage['per_source']['COURSE_EN']['all_physical_pages_have_first_pass_receipts']
+
+
 def copy_receipts(tmp_path):
     shutil.copytree(ROOT/'research',tmp_path/'research')
     return tmp_path/'research'

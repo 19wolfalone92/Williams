@@ -26,3 +26,15 @@ registry/research pipeline и модули knowledge/cognitive/source routing.
 retrieval, causal closed observation, citation allowlist, запрет field promotion
 к ордерам, independent expert cohort и новый опыт с неизменным holdout.
 Новый GPU job/LoRA не запускались. Williams-AI/main не изменён.
+
+## Последующее продолжение: bot-side adapter V1
+
+Выше зафиксирована предыдущая read-only инспекция Williams-AI, а не новая проверка
+его текущего HEAD. В этой сессии реализована только граница Williams Bot:
+`williams_ai_candidate_adapter.py`, CLI, версия request/proposal/observation/receipt,
+строгий retrieval одного издания и snapshot/citation/causality checks.
+Описание: `AI_CANDIDATE_ADAPTER_V1.md`. Поэтому прежнее «adapter не реализован»
+описывает состояние до этого продолжения. Actual AI model call/guard integration
+по-прежнему отсутствует, экспертный экзамен и обучение не проводились. Репозиторий
+Williams-AI и frozen splits не изменялись. Валидность нового пакета не является
+экспертной подписью или допуском LONG/SHORT по неполной спецификации.

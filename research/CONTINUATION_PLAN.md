@@ -53,3 +53,24 @@ NEW risk ограничен10 парами независимо от management/
 якорей, не полная карта. Сложные фигуры из п.5 всё ещё требуют независимого
 чтения. Не удалять старые119 OCR hashes, пока не получен тот же private OCR.
 Устройство/Demo, expert cohort/adapter, полноценный OOS и merge gates открыты.
+
+## Продолжение 13.11.2026 — первое чтение TC2 EN и adapter V1
+
+Отчёт: `TC2_TEXT_PASS_AND_AI_ADAPTER_20261113.md`. Все257 страниц TC2_EN теперь
+имеют first-pass receipt; всего295/1213 физических страниц,85 рисунков,91 правило.
+В числе страниц также front matter, blank и navigation; independent review0.
+Психологические упражнения/авторские performance claims не стали machine facts.
+Добавлен8-й смысловой translation anchor half-margin FAQ; полноценной карты нет.
+Aggregate50% margin — подтверждённый источник, но mapping/account ledger и
+операционное ограничение пока не реализованы. Старые risk/STOP gates сохранены.
+
+Пункт9 продвинут: `williams_ai_candidate_adapter.py` и offline CLI реализованы,
+source/observation/request pins и citation allowlist проверяются. Authority/training
+запрещены; направление отклоняется на неполной atomic spec. Qwen, expert cohort,
+новое обучение и изменения frozen train/test не выполнялись. Код к trading path
+не подключён. Детали: `AI_CANDIDATE_ADAPTER_V1.md`.
+
+Следующий source route: TC1_RU от первого ещё не REVIEWED листа, затем NTD_RU и
+Course. Доработать aggregate-margin contract/проверки двух runtimes. Пункты5,7,
+independent expert/holdout и merge gates остаются открыты. Новые локальные проверки:
+2336 passed/2 skipped; CI результаты точного нового SHA сохраняются в PR240.

@@ -228,6 +228,37 @@
       "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
       "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
       "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "FAQ_HALF_MARGIN_AND_STRUCTURAL_STOPS",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            212,
+            213
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            192
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            255
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false,
+      "uncertainty": "English says margin; Russian says use half account. This is not a Binance-specific margin definition or guaranteed half-equity loss bound."
     }
   ]
 }

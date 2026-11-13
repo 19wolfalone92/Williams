@@ -1754,5 +1754,2548 @@
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
+  },
+  "TC2_EN:1": {
+    "section": "FRONT_MATTER",
+    "content": "Title, Bill and Justine Gregory-Williams, Wiley second edition identity.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:2": {
+    "section": "FRONT_MATTER",
+    "content": "Testimonials and selected success anecdotes; Larry Williams named separately, not the book author or this bot methodology.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:3": {
+    "section": "FRONT_MATTER",
+    "content": "Testimonials continue; attributed endorsements cannot certify this implementation or its returns.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:4": {
+    "section": "FRONT_MATTER",
+    "content": "Reader experiences and reported gains are selected testimony, not controlled evidence.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:5": {
+    "section": "FRONT_MATTER",
+    "content": "Testimonial conclusion; performance figures have no measured bot counterpart.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:6": {
+    "section": "FRONT_MATTER",
+    "content": "Half title; no operational trading instruction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:7": {
+    "section": "FRONT_MATTER",
+    "content": "Historical Wiley series and publisher information; no current service verification.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:8": {
+    "section": "FRONT_MATTER",
+    "content": "Full title, authors and second-edition identity.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:9": {
+    "section": "FRONT_MATTER",
+    "content": "Copyright 2004, ISBN 0-471-46308-6, rights and simulated-versus-actual performance limitations.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:10": {
+    "section": "FRONT_MATTER",
+    "content": "Dedication; no signal or quantitative risk rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:11": {
+    "section": "FRONT_MATTER",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:12": {
+    "section": "FRONT_MATTER",
+    "content": "Contents for chapters1-10; physical PDF offsets differ from printed pagination.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:13": {
+    "section": "FRONT_MATTER",
+    "content": "Contents for later chapters, epilogue, seven appendices and index; source code belongs to Appendix7.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:14": {
+    "section": "FRONT_MATTER",
+    "content": "Preface: newsletter copying and losses motivate independent analysis; personal business history is attributed narrative.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:15": {
+    "section": "FRONT_MATTER",
+    "content": "Relationship to earlier TC1 and NTD and Justine background; continued profitability is an author claim, not automatic edition merging.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:16": {
+    "section": "FRONT_MATTER",
+    "content": "Preface conclusion and intended reader; no new executable formula.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:17": {
+    "section": "FRONT_MATTER",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:18": {
+    "section": "FRONT_MATTER",
+    "content": "Acknowledgments credit chart preparation, CQG data and Ellen input.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:19": {
+    "section": "FRONT_MATTER",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:20": {
+    "section": "FRONT_MATTER",
+    "content": "Money, wealth and subjective value opening; illustrative scientific-looking quantities are not signal calibration.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:21": {
+    "section": "FRONT_MATTER",
+    "content": "Money/value metaphor continues; human worth and exchange value remain distinct in the narrative.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:22": {
+    "section": "FRONT_MATTER",
+    "content": "Book objectives and income aspirations; no calibrated monthly return forecast.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:23": {
+    "section": "FRONT_MATTER",
+    "content": "All markets, bull/bear, trend/countertrend and trade/vesting objectives; not proof of universal efficacy.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:24": {
+    "section": "FRONT_MATTER",
+    "content": "Personal market example and butterfly-effect analogy; retrospective earnings are not independent holdout.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:25": {
+    "section": "FRONT_MATTER",
+    "content": "Critique of outside opinion and stress from dependence; no new oscillator.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:26": {
+    "section": "FRONT_MATTER",
+    "content": "Fear, planning and dance metaphor describe operator experience.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:27": {
+    "section": "FRONT_MATTER",
+    "content": "Self-trust and feedback skills; no guaranteed mechanical mapping from belief to profit.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:28": {
+    "section": "FRONT_MATTER",
+    "content": "Road map from psychological preparation to trading tools.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": null,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:29": {
+    "section": "FRONT_MATTER",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": null,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:30": {
+    "section": "CHAPTER1",
+    "content": "Chapter1 perception versus reality and guru story opening.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 1,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:31": {
+    "section": "CHAPTER1",
+    "content": "Guru story and simple mirror exercise illustrate simplicity; not an operating instruction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 2,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:32": {
+    "section": "CHAPTER1",
+    "content": "Simple versus easy; trade agreement on price need not mean agreement on value.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 3,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:33": {
+    "section": "CHAPTER1",
+    "content": "Market allocation metaphor and introduction to five sacred-cow terminators.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 4,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:34": {
+    "section": "CHAPTER1",
+    "content": "Expert opinions and bull/bear consensus criticized; quoted success rates remain author claims.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 5,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:35": {
+    "section": "CHAPTER1",
+    "content": "Overbought/oversold are not automatic reversal; wallet-fixed stops and buy-low assumptions criticized in context.",
+    "rules": [
+      "TC2.RISK.STRUCTURAL_STOP_BUDGET"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 6,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:36": {
+    "section": "CHAPTER1",
+    "content": "Trend versus countertrend depends context; failed trades provide feedback, not retrospective parameter fitting.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 7,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:37": {
+    "section": "CHAPTER1",
+    "content": "Classical versus chaos framing and facts versus opinions; not validated neuroscience.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 8,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:38": {
+    "section": "CHAPTER1",
+    "content": "Opinions as perceptual filters; no numerical uncertainty score or detector supplied.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 9,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:39": {
+    "section": "CHAPTER1",
+    "content": "Belief examples and personal interpretation; no price-trigger definition.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 10,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:40": {
+    "section": "CHAPTER1",
+    "content": "Different responses to identical trades; health-as-belief claims are unsupported here and not medical facts.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 11,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:41": {
+    "section": "CHAPTER1",
+    "content": "Belief examples and chapter summary; no automatic entry veto.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 12,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:42": {
+    "section": "CHAPTER2",
+    "content": "Chapter2 paradigm definition and perception framework.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 13,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:43": {
+    "section": "CHAPTER2",
+    "content": "Watch-industry paradigm story; analogy is not market outcome evidence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 14,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:44": {
+    "section": "CHAPTER2",
+    "content": "Mountain-road story and reinterpretation; chaos as higher-order metaphor.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 15,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:45": {
+    "section": "CHAPTER2",
+    "content": "Non-normality and self-similarity narrative; no verified empirical distribution for bot data.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 16,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:46": {
+    "section": "CHAPTER2",
+    "content": "Figure2.1 four river-flow sketches progress to turbulence; no calibrated numerical market threshold.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [
+      "2.1"
+    ],
+    "visual_review": true,
+    "printed_page": 17,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:47": {
+    "section": "CHAPTER2",
+    "content": "Stable versus nonlinear behavior and fractal geometry introduction.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 18,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:48": {
+    "section": "CHAPTER2",
+    "content": "Limits of Euclidean geometry and quoted context; no exact angulation formula.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 19,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:49": {
+    "section": "CHAPTER2",
+    "content": "Coastline ruler example shows scale dependence, not a fixed Elliott degree classifier.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 20,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:50": {
+    "section": "CHAPTER2",
+    "content": "Scaled-market analogy and attractor setup; self-similarity is not identical timestamped data.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 21,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:51": {
+    "section": "CHAPTER2",
+    "content": "Figure2.2 two-basin pendulum analogy and Fibonacci recurrence.",
+    "rules": [
+      "TC2.FIBONACCI.EXACT_RATIO_CLAIM",
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [
+      "2.2"
+    ],
+    "visual_review": true,
+    "printed_page": 22,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:52": {
+    "section": "CHAPTER2",
+    "content": "Printed exact-.618-for-every-pair claim is arithmetically false; Figure2.3 Mandelbrot illustration is qualitative.",
+    "rules": [
+      "TC2.FIBONACCI.EXACT_RATIO_CLAIM",
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [
+      "2.3"
+    ],
+    "visual_review": true,
+    "printed_page": 23,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:53": {
+    "section": "CHAPTER2",
+    "content": "Twine and scale analogy, unformalized fractal-number turnaround assertion, Figure2.4 tree iteration.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [
+      "2.4"
+    ],
+    "visual_review": true,
+    "printed_page": 24,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:54": {
+    "section": "CHAPTER2",
+    "content": "Tree comparison explains six versus thirteen iterations and scale-dependent shape; chapter summary.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 25,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:55": {
+    "section": "CHAPTER2",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 26,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:56": {
+    "section": "CHAPTER3",
+    "content": "Chapter3 underlying structure versus behavior.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 27,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:57": {
+    "section": "CHAPTER3",
+    "content": "Least resistance and riverbed/architecture analogies; context rather than an entry equation.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 28,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:58": {
+    "section": "CHAPTER3",
+    "content": "Changing structure versus bailing water; no automatic filter specified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 29,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:59": {
+    "section": "CHAPTER3",
+    "content": "Four components of structure: parts, plan, power and purpose.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 30,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:60": {
+    "section": "CHAPTER3",
+    "content": "Figure3.1 pendulum, oscillating behavior and tight/loose stop adjustment trap.",
+    "rules": [
+      "TC2.FRACTAL.SCALE_ANALOGY"
+    ],
+    "figures": [
+      "3.1"
+    ],
+    "visual_review": true,
+    "printed_page": 31,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:61": {
+    "section": "CHAPTER3",
+    "content": "Type1 oscillation versus Type2 creative structure; no deterministic regime classifier supplied.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 32,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:62": {
+    "section": "CHAPTER3",
+    "content": "Creation versus problem-solving analogy; metaphysical causality is not validated.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 33,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:63": {
+    "section": "CHAPTER3",
+    "content": "Type2 structure and operator freedom do not grant uncapped machine risk.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 34,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:64": {
+    "section": "CHAPTER3",
+    "content": "Three underlying-structure principles summarized.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 35,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:65": {
+    "section": "CHAPTER3",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 36,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:66": {
+    "section": "CHAPTER4",
+    "content": "Chapter4 Diogenes and Alexander story opens preparation discussion.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 37,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:67": {
+    "section": "CHAPTER4",
+    "content": "Being versus becoming and pragmatic three-mind philosophy; not permission for false evidence claims.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 38,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:68": {
+    "section": "CHAPTER4",
+    "content": "Hologram and crowd/mind analogy; no certified scientific model.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 39,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:69": {
+    "section": "CHAPTER4",
+    "content": "Conscious, core and paraconscious model and survival narrative.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 40,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:70": {
+    "section": "CHAPTER4",
+    "content": "Judgment, time, language and struggle; bit-rate claim is not calibrated measurement here.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 41,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:71": {
+    "section": "CHAPTER4",
+    "content": "Last-loss-driven STOP adjustment trap; operator process, not a new structural STOP.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 42,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:72": {
+    "section": "CHAPTER4",
+    "content": "Three-C rhetorical classification and current problems; no diagnosis or bot state.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 43,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:73": {
+    "section": "CHAPTER4",
+    "content": "Market mirror, dependence and wants are reflective concepts.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 44,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:74": {
+    "section": "CHAPTER4",
+    "content": "Wanting what the market wants is a human metaphor, not measurable machine intent.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 45,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:75": {
+    "section": "CHAPTER4",
+    "content": "Lemon visualization, memory and belief; no measured trading edge.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 46,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:76": {
+    "section": "CHAPTER4",
+    "content": "Now/how reflection; do not redefine STOP from the previous losing trade.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 47,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:77": {
+    "section": "CHAPTER4",
+    "content": "Sample preparation hints and uncertainty; not executable price levels.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 48,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:78": {
+    "section": "CHAPTER4",
+    "content": "Preparation chapter summary and philosophical framing.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 49,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:79": {
+    "section": "CHAPTER4",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 50,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:80": {
+    "section": "CHAPTER5",
+    "content": "Chapter5 Columbus analogy; historical narrative not independently checked here.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 51,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:81": {
+    "section": "CHAPTER5",
+    "content": "Captain/trader, crew/investor and saver typology; discretionary human categories.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 52,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:82": {
+    "section": "CHAPTER5",
+    "content": "Risk tolerance and expectations; no permission to infer personality automatically.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 53,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:83": {
+    "section": "CHAPTER5",
+    "content": "Retrospective versus prospective orientation and individually suitable timeframes.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 54,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:84": {
+    "section": "CHAPTER5",
+    "content": "Ryan aggressive-trader case; case-specific capital and schedule, not a universal rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 55,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:85": {
+    "section": "CHAPTER5",
+    "content": "Jack lawyer/investor case, sector allocation preference is case-specific.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 56,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:86": {
+    "section": "CHAPTER5",
+    "content": "Jack limited monitoring and Andrew paper-trading year; examples not mandatory universal durations.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 57,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:87": {
+    "section": "CHAPTER5",
+    "content": "Personal fit and summary; no quantitative personality-to-order map.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 58,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:88": {
+    "section": "CHAPTER6",
+    "content": "Chapter6 psychological manual framing; more indicators are not the stated solution.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 59,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:89": {
+    "section": "CHAPTER6",
+    "content": "Global and component skill practice with guided exercise opening.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 60,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:90": {
+    "section": "CHAPTER6",
+    "content": "Forest, path, key, well and bear visualization; subjective exercise only.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 61,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:91": {
+    "section": "CHAPTER6",
+    "content": "House, lake and wall imagery; interpretations are not market predictions.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 62,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:92": {
+    "section": "CHAPTER6",
+    "content": "Wall and mortality theme, time-price-psychology framing; no timing formula.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 63,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:93": {
+    "section": "CHAPTER6",
+    "content": "Subjective experience and behavioral market narrative; not deterministic code.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 64,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:94": {
+    "section": "CHAPTER6",
+    "content": "Be-do-have versus have-do-be and house analogy.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 65,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:95": {
+    "section": "CHAPTER6",
+    "content": "Conscious and memory/core house model is a metaphor.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 66,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:96": {
+    "section": "CHAPTER6",
+    "content": "CPU/modem brain analogy; not a model architecture or medical certification.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 67,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:97": {
+    "section": "CHAPTER6",
+    "content": "Insight, intuition, inspiration and reality/fantasy terminology.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 68,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:98": {
+    "section": "CHAPTER6",
+    "content": "Worldview transitions do not disclose future prices.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 69,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:99": {
+    "section": "CHAPTER6",
+    "content": "Mycelium and ocean-trend metaphors, not a verified causal market model.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 70,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:100": {
+    "section": "CHAPTER6",
+    "content": "Religious worldview and connected-cat story; no empirical trading evidence extracted.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 71,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:101": {
+    "section": "CHAPTER6",
+    "content": "Counting and labeling thoughts, watching process rather than content.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 72,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:102": {
+    "section": "CHAPTER6",
+    "content": "Observer/movie analogy and three-C human experiences.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 73,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:103": {
+    "section": "CHAPTER6",
+    "content": "Present attention, relaxation and nonjudgmental self-review.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 74,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:104": {
+    "section": "CHAPTER6",
+    "content": "Don't-know and uncertainty practice; do not force unknown market observations into confident labels.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 75,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:105": {
+    "section": "CHAPTER6",
+    "content": "Reflecting on mild disappointment, a human exercise rather than trauma treatment.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 76,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:106": {
+    "section": "CHAPTER6",
+    "content": "Memory reframing with music and imagery; no validated medical/trading effectiveness asserted.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 77,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:107": {
+    "section": "CHAPTER6",
+    "content": "Clouds or one-minute chart as attention observation exercise; not a one-minute entry recommendation.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY",
+      "TC2.CONTEXT.TIMEFRAME_PREFERENCES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 78,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:108": {
+    "section": "CHAPTER6",
+    "content": "One-minute thought counting with human categories.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 79,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:109": {
+    "section": "CHAPTER6",
+    "content": "Bodily feelings, present attention and not-knowing.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 80,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:110": {
+    "section": "CHAPTER6",
+    "content": "Accepting uncertainty and thought process discussion.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 81,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:111": {
+    "section": "CHAPTER6",
+    "content": "Mind and meditation metaphors; no operational signal.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 82,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:112": {
+    "section": "CHAPTER6",
+    "content": "Guitar resonance and mind/market analogy; not a price indicator.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 83,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:113": {
+    "section": "CHAPTER6",
+    "content": "Chapter summary on attention and thinking.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 84,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:114": {
+    "section": "CHAPTER6",
+    "content": "Psychological framework summary and transition to learning levels.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 85,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:115": {
+    "section": "CHAPTER6",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 86,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:116": {
+    "section": "CHAPTER7",
+    "content": "Chapter7 learning map introduction.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 87,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:117": {
+    "section": "CHAPTER7",
+    "content": "Five learning stages attributed to Dreyfuss, piano analogy and novice introduction.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 88,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:118": {
+    "section": "CHAPTER7",
+    "content": "Novice OHLC/volume and adjacent bars; critique of mechanics does not prove a deployed bot is correct.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 89,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:119": {
+    "section": "CHAPTER7",
+    "content": "Advanced beginner sees a 140-or-more bar panorama; contextual learning scale, not an automatic H1 veto.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 90,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:120": {
+    "section": "CHAPTER7",
+    "content": "Consistent one-unit trading before allocation; 90-percent wave ambiguity claim is author narrative, not measured accuracy.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE",
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 91,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:121": {
+    "section": "CHAPTER7",
+    "content": "Analysis wrong versus trader out of touch; discretionary exit/reverse discussion needs later explicit triggers.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 92,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:122": {
+    "section": "CHAPTER7",
+    "content": "Proficient and expert learning stages and human psychology.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 93,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:123": {
+    "section": "CHAPTER7",
+    "content": "Five-stage summary; no bot competence certificate follows.",
+    "rules": [
+      "TC2.LEARNING.FIVE_LEVELS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 94,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:205": {
+    "section": "APPENDIX2",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 176,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:206": {
+    "section": "APPENDIX2",
+    "content": "Appendix2 FAQs: course media and basic prerequisites are historical service descriptions.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 177,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:207": {
+    "section": "APPENDIX2",
+    "content": "Support, broker phone backup, historical capital/leverage examples; risk management tailored, no uniform per-trade percentage.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 178,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:208": {
+    "section": "APPENDIX2",
+    "content": "Part-time workload, daily STOP routine and historical computer requirements; timeframe depends trader/market.",
+    "rules": [
+      "TC2.CONTEXT.TIMEFRAME_PREFERENCES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 179,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:209": {
+    "section": "APPENDIX2",
+    "content": "Daily and intraday preferences, data quality and author-reported student success; paper then small-size practice.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE",
+      "TC2.CONTEXT.TIMEFRAME_PREFERENCES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 180,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:210": {
+    "section": "APPENDIX2",
+    "content": "Discourages sub-five-minute trading, diversification and aspirational monthly return; no guarantee or H1 change.",
+    "rules": [
+      "TC2.CLAIMS.NOT_MEASURED_PERFORMANCE",
+      "TC2.CONTEXT.TIMEFRAME_PREFERENCES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 181,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:211": {
+    "section": "APPENDIX2",
+    "content": "Tutorials combine chart and psychological feedback; discretionary nuance is not all mechanically specified in a book.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 182,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:212": {
+    "section": "APPENDIX2",
+    "content": "Keep independent trade/fill records; win frequency differs from profitability; no uniform risk-percent formula, aggregate half-account margin rule begins.",
+    "rules": [
+      "TC2.RISK.AGGREGATE_HALF_MARGIN",
+      "TC2.RISK.STRUCTURAL_STOP_BUDGET",
+      "TC2.RECONCILIATION.BROKER_FILL_AUDIT"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 183,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:213": {
+    "section": "APPENDIX2",
+    "content": "Half-account margin rule continues; market-based protection, hands-on wave instruction and balanced human practice.",
+    "rules": [
+      "TC2.RISK.AGGREGATE_HALF_MARGIN",
+      "TC2.RISK.STRUCTURAL_STOP_BUDGET"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 184,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:214": {
+    "section": "APPENDIX2",
+    "content": "Rebuilding after losses, ego and sacred-cow reminders; no new numeric signal.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 185,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:215": {
+    "section": "APPENDIX2",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 186,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:216": {
+    "section": "APPENDIX3",
+    "content": "Appendix3 Ellen Williams introduces Autogenic Training; human stress technique, not a neural algorithm.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 187,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:217": {
+    "section": "APPENDIX3",
+    "content": "Historical AT/health claims and suggested practice duration; effectiveness not independently validated here.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 188,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:218": {
+    "section": "APPENDIX3",
+    "content": "Sleep and public-speaking anecdotes; subjective accounts do not establish improved trading performance.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 189,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:219": {
+    "section": "APPENDIX3",
+    "content": "Autonomic description, morning/evening practice and preparation; human routine only.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 190,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:220": {
+    "section": "APPENDIX3",
+    "content": "Return before alert activities, heaviness and warmth exercises; no bot emotional state.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 191,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:221": {
+    "section": "APPENDIX3",
+    "content": "Staged weekly breathing/body exercises and distinct sleep variant; psychological instructions only.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 192,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:222": {
+    "section": "APPENDIX3",
+    "content": "Posture adaptations and six-week practice; anecdotal effects not trading metrics.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 193,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:223": {
+    "section": "APPENDIX3",
+    "content": "Advanced AT after extended practice, imagery and emotional state; no medical or trading efficacy certified.",
+    "rules": [
+      "TC2.PSYCHOLOGY.HUMAN_ONLY"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 194,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:224": {
+    "section": "APPENDIX4",
+    "content": "Appendix4 minimize non-AO subgraphs for three-wise-man display; fractal markers are convenience.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 195,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:225": {
+    "section": "APPENDIX4",
+    "content": "FiguresA4.1-2 default chart and minimize-inner-window menu; historical GUI configuration.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A4.1",
+      "A4.2"
+    ],
+    "visual_review": true,
+    "printed_page": 196,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:226": {
+    "section": "APPENDIX4",
+    "content": "FigureA4.3 price/Alligator plus AO display; arrows do not authorize orders.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A4.3"
+    ],
+    "visual_review": true,
+    "printed_page": 197,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:227": {
+    "section": "APPENDIX4",
+    "content": "Separator page viewed in a rendered contact sheet and confirmed blank; no trading content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 198,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:228": {
+    "section": "APPENDIX5",
+    "content": "Appendix5 add AO and Alligator in CQG; approximate panel proportions are display choices.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 199,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:229": {
+    "section": "APPENDIX5",
+    "content": "FiguresA5.1-2 plain chart and add-study menu.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A5.1",
+      "A5.2"
+    ],
+    "visual_review": true,
+    "printed_page": 200,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:230": {
+    "section": "APPENDIX5",
+    "content": "FiguresA5.3-4 select AO and show its lower histogram.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A5.3",
+      "A5.4"
+    ],
+    "visual_review": true,
+    "printed_page": 201,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:231": {
+    "section": "APPENDIX5",
+    "content": "FiguresA5.5-6 add Alligator on price and resulting two-panel display.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A5.5",
+      "A5.6"
+    ],
+    "visual_review": true,
+    "printed_page": 202,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:232": {
+    "section": "APPENDIX6",
+    "content": "Appendix6 MetaStock introduction and FigureA6.1 plain price chart without indicators or subgraphs; visually checked, historical display configuration only.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.1"
+    ],
+    "visual_review": true,
+    "printed_page": 203,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:233": {
+    "section": "APPENDIX6",
+    "content": "FigureA6.2 create lower inner window and separate red/green AO histograms.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.2"
+    ],
+    "visual_review": true,
+    "printed_page": 204,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:234": {
+    "section": "APPENDIX6",
+    "content": "FiguresA6.3-4 arrange windows and open properties; GUI operation, no signal threshold.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.3",
+      "A6.4"
+    ],
+    "visual_review": true,
+    "printed_page": 205,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:235": {
+    "section": "APPENDIX6",
+    "content": "FiguresA6.5-6 hide title and select indicator components.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.5",
+      "A6.6"
+    ],
+    "visual_review": true,
+    "printed_page": 206,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:236": {
+    "section": "APPENDIX6",
+    "content": "FigureA6.7 AO properties and instructions for colored histograms and Alligator price overlay.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.7"
+    ],
+    "visual_review": true,
+    "printed_page": 207,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:237": {
+    "section": "APPENDIX6",
+    "content": "FiguresA6.8-9 color/histogram dialog and configured AO; monochrome scan cannot certify exact color pixels.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.8",
+      "A6.9"
+    ],
+    "visual_review": true,
+    "printed_page": 208,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:238": {
+    "section": "APPENDIX6",
+    "content": "FiguresA6.10-11 add Alligator lines and configure first overlay.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.10",
+      "A6.11"
+    ],
+    "visual_review": true,
+    "printed_page": 209,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:239": {
+    "section": "APPENDIX6",
+    "content": "FigureA6.12 completed price/Alligator plus AO setup.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A6.12"
+    ],
+    "visual_review": true,
+    "printed_page": 210,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:240": {
+    "section": "APPENDIX7",
+    "content": "Appendix7 TradeStation Bars to Right=8 creates space for known displaced Alligator tail, not future candles.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 211,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:241": {
+    "section": "APPENDIX7",
+    "content": "FiguresA7.1-2 plain chart and format-window menu.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A7.1",
+      "A7.2"
+    ],
+    "visual_review": true,
+    "printed_page": 212,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:242": {
+    "section": "APPENDIX7",
+    "content": "FiguresA7.3-4 eight right bars dialog and insert-analysis menu.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A7.3",
+      "A7.4"
+    ],
+    "visual_review": true,
+    "printed_page": 213,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:243": {
+    "section": "APPENDIX7",
+    "content": "FigureA7.5 technique selection; subgraph placement instructions begin.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A7.5"
+    ],
+    "visual_review": true,
+    "printed_page": 214,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:244": {
+    "section": "APPENDIX7",
+    "content": "FiguresA7.6-7 AO in subgraph2 and Alligator in subgraph1; approximate display proportions only.",
+    "rules": [
+      "TC2.PLATFORM.DISPLAY_NOT_SIGNAL"
+    ],
+    "figures": [
+      "A7.6",
+      "A7.7"
+    ],
+    "visual_review": true,
+    "printed_page": 215,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:248": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography A-C: references are navigation, not read works or validated claims.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 219,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:249": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography C-F includes learning, nonlinear systems and psychological sources; cited works not independently reviewed.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 220,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:250": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography F-L includes wave, chaos, genetic programming and network titles; no new operational formula.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 221,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:251": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography L-P includes Mandelbrot, behavior and financial works; no implied validation by citation.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 222,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:252": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography P-S spans systems testing, chaos, information and market texts; navigation only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 223,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:253": {
+    "section": "BIBLIOGRAPHY",
+    "content": "Bibliography T-Z includes earlier Williams books and neural-network references; books remain separate editions.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 224,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:254": {
+    "section": "INDEX",
+    "content": "Index A-D maps indicators, angulation, countertrend and psychology using printed pages, not PDF offsets.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 225,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:255": {
+    "section": "INDEX",
+    "content": "Index D-O maps exits, Fibonacci, fractals, psychology and money management; no independent rule extraction from index alone.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 226,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:256": {
+    "section": "INDEX",
+    "content": "Index O-T maps reverse pyramiding, wise men, learning levels and platform appendices.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 227,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_EN:257": {
+    "section": "INDEX",
+    "content": "Index T-W conclusion; no additional operational rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 228,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "First semantic pass by the same reviewer; not independent expert review. Text-only pages do not certify unviewed figures. Narrative claims remain attributed, not empirically validated."
+    ]
+  },
+  "TC2_RU_224:192": {
+    "section": "APPENDIX2",
+    "content": "Russian FAQ confirms absence of a universal per-trade risk percentage and half-account limit. English explicitly refers to margin; Russian wording says use half the account. Broker reconciliation and hands-on learning remain contextual.",
+    "rules": [
+      "TC2.RISK.AGGREGATE_HALF_MARGIN",
+      "TC2.RISK.STRUCTURAL_STOP_BUDGET"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 177,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Selected translation anchor, not full translation certification or independent review. No Binance-specific margin definition given."
+    ]
+  },
+  "TC2_RU_314:255": {
+    "section": "APPENDIX2",
+    "content": "Russian FAQ confirms absence of a universal per-trade risk percentage and half-account limit. English explicitly refers to margin; Russian wording says use half the account. Broker reconciliation and hands-on learning remain contextual.",
+    "rules": [
+      "TC2.RISK.AGGREGATE_HALF_MARGIN",
+      "TC2.RISK.STRUCTURAL_STOP_BUDGET"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 255,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Selected translation anchor, not full translation certification or independent review. No Binance-specific margin definition given."
+    ]
   }
 }

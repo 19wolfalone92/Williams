@@ -10,27 +10,102 @@
     "inventory_rows": 1213
   },
   "source_coverage": {
-    "semantically_reviewed_single_pass": 120,
+    "semantically_reviewed_single_pass": 295,
     "independently_verified": 0,
     "total_physical_pages": 1213,
     "stage_counts": {
-      "TEXT_ACQUIRED_UNVERIFIED": 932,
-      "REVIEWED_SINGLE_PASS": 77,
-      "REVIEWED_TEXT_ONLY": 43,
-      "IMAGE_ONLY_PENDING_OCR": 42,
+      "TEXT_ACQUIRED_UNVERIFIED": 768,
+      "REVIEWED_SINGLE_PASS": 115,
+      "REVIEWED_TEXT_ONLY": 180,
+      "IMAGE_ONLY_PENDING_OCR": 31,
       "OCR_ACQUIRED_UNVERIFIED": 119
     },
-    "inventory_is_not_full_reading": true
+    "inventory_is_not_full_reading": true,
+    "physical_receipts_include_front_matter_blank_and_navigation_pages": true,
+    "per_source": {
+      "TC1_RU": {
+        "physical_pages": 140,
+        "first_pass_receipts": 7,
+        "visual_receipts": 7,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": false,
+        "classified_page_kinds": {
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 7
+        },
+        "full_content_certified": false
+      },
+      "NTD_RU": {
+        "physical_pages": 156,
+        "first_pass_receipts": 5,
+        "visual_receipts": 3,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": false,
+        "classified_page_kinds": {
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 5
+        },
+        "full_content_certified": false
+      },
+      "TC2_EN": {
+        "physical_pages": 257,
+        "first_pass_receipts": 257,
+        "visual_receipts": 98,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 14,
+          "VISUALLY_CONFIRMED_BLANK": 11,
+          "NAVIGATION": 12,
+          "SUBSTANTIVE_TEXT": 136,
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 84
+        },
+        "full_content_certified": false
+      },
+      "TC2_RU_224": {
+        "physical_pages": 224,
+        "first_pass_receipts": 10,
+        "visual_receipts": 2,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": false,
+        "classified_page_kinds": {
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 9,
+          "SUBSTANTIVE_TEXT": 1
+        },
+        "full_content_certified": false
+      },
+      "TC2_RU_314": {
+        "physical_pages": 314,
+        "first_pass_receipts": 13,
+        "visual_receipts": 2,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": false,
+        "classified_page_kinds": {
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 12,
+          "SUBSTANTIVE_TEXT": 1
+        },
+        "full_content_certified": false
+      },
+      "COURSE_EN": {
+        "physical_pages": 122,
+        "first_pass_receipts": 3,
+        "visual_receipts": 3,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": false,
+        "classified_page_kinds": {
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 3
+        },
+        "full_content_certified": false
+      }
+    }
   },
   "figure_coverage": {
-    "qualitative_single_review_entries": 52,
+    "qualitative_single_review_entries": 85,
     "independent_second_reviews": 0,
     "total_substantive_figures": null,
     "percent": null
   },
   "rule_extraction": {
-    "registered": 81,
-    "rechecked_against_sources_this_run": 32,
+    "registered": 91,
+    "rechecked_against_sources_this_run": 42,
     "total_rules_in_books": null,
     "percent": null
   },

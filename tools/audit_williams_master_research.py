@@ -78,12 +78,27 @@ def audit(root=ROOT):
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
     counts=Counter(p['verification_status'] for p in pages)
+    per_source={}
+    for sid,source in sources.items():
+        group=[p for p in pages if p['source_id']==sid]
+        first_pass=[p for p in group if p['verification_status'].startswith('REVIEWED')]
+        per_source[sid]={
+            'physical_pages':source['pdf_pages'],
+            'first_pass_receipts':len(first_pass),
+            'visual_receipts':sum(p['visual_review'] is True for p in first_pass),
+            'independently_verified':sum(p['verification_status']=='VERIFIED' for p in group),
+            'all_physical_pages_have_first_pass_receipts':len(first_pass)==source['pdf_pages'],
+            'classified_page_kinds':dict(Counter(p.get('page_kind','PREVIOUS_RECEIPT_UNCLASSIFIED') for p in first_pass)),
+            'full_content_certified':False,
+        }
     return {'schema':'WILLIAMS_MASTER_PROGRESS_V1','integrity_valid':not errors,'errors':sorted(set(errors)),
       'status':'IN_PROGRESS','sources':{'families':len({s['family'] for s in catalog}),
         'pdf_files':len(sources),'physical_pages':len(pages),'inventory_rows':len(pages)},
       'source_coverage':{'semantically_reviewed_single_pass':reviewed,'independently_verified':certified,
         'total_physical_pages':len(pages),'stage_counts':dict(counts),
-        'inventory_is_not_full_reading':True},
+        'inventory_is_not_full_reading':True,
+        'physical_receipts_include_front_matter_blank_and_navigation_pages':True,
+        'per_source':per_source},
       'figure_coverage':{'qualitative_single_review_entries':len(figures),
         'independent_second_reviews':0,'total_substantive_figures':None,'percent':None},
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
