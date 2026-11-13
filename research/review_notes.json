@@ -833,59 +833,77 @@
     ]
   },
   "NTD_RU:1": {
-    "section": "TITLE",
-    "content": "Russian New Trading Dimensions title; no publication year/ISBN on this page.",
+    "section": "FRONT_MATTER",
+    "content": "Rendered title page names New Trading Dimensions: profit from chaos in stock/bond/futures markets, Bill Williams, doctorate attribution. No publisher/year/ISBN visible; title identity is known, exact Russian publication remains unresolved.",
     "rules": [],
     "figures": [],
     "visual_review": true,
-    "printed_page": null,
+    "printed_page": 1,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "FRONT_MATTER",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   },
   "NTD_RU:34": {
     "section": "CH3",
-    "content": "Alligator as trend/range context; descriptive market percentages are not calibrated bot statistics.",
-    "rules": [],
+    "content": "Chapter3 Alligator compass, integrated momentum/trend/range filter;70-85% ranging and15-30% trending are author generalizations without sampling. Opening sentence appears to recommend marginal setups despite surrounding avoidance theme; wording needs source conflict review, not a hidden new entry rule. Figures3-1/3-2 conceptual.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 34,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   },
   "NTD_RU:35": {
     "section": "CH3",
-    "content": "Interacting balance lines, context and protective exit discussion; full figure still pending.",
-    "rules": [],
+    "content": "Alligator jaw/teeth/lips are balance-line analogies of successively shorter horizons on one chart. NTD first entry is an outside-mouth fractal; all five extrema outside Jaw are ideal, explicitly not always required. First exit stop inside Teeth is close-only, not automatic reverse; five same-color bars lead to zone trail chapter7.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
     "figures": [],
     "visual_review": false,
     "printed_page": 35,
     "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   },
   "NTD_RU:36": {
     "section": "CH3",
-    "content": "13/8,8/5,5/3 in main specification; inset fig3.4 prints Lips shift2, genuine source contradiction.",
-    "rules": [],
+    "content": "Alligator body explicitly gives smoothed13/8,8/5,5/3 on the same chart. Lower panel instead says Lips5 shifted2; visible source conflict requires rendering. Future displacement is drawing, not future OHLC. Lower-timeframe analogy is not an instruction to compute lines from manufactured hourly/daily candles.",
+    "rules": [
+      "NTD.ALLIGATOR.LIPS_SHIFT_CONFLICT",
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE",
+      "NTD.INDICATORS"
+    ],
     "figures": [
       "3.4"
     ],
     "visual_review": true,
     "printed_page": 36,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Same page prints Lips shifts2 and3. English NTD edition not supplied; not silently resolved by OCR."
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   },
   "NTD_RU:37": {
     "section": "CH3",
-    "content": "Coffee and Coca-Cola illustrate sleep, trend expansion and narrowing mouth; no numeric ATR threshold supplied.",
-    "rules": [],
+    "content": "Coffee/Coca-Cola historical illustrations of sleeping/open/closing mouth; author claims improved win-loss/trend capture without a reproduced sample. A qualitative sleep duration/hunger analogy does not supply numeric mouth/angle thresholds. Chapter trade-process description continues.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
     "figures": [
       "3.5",
       "3.6"
@@ -893,8 +911,10 @@
     "visual_review": true,
     "printed_page": 37,
     "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   },
   "COURSE_EN:1": {
@@ -6443,6 +6463,2452 @@
     "uncertainties": [
       "Single reviewer; not independent certification or exact OHLC digitization.",
       "Original Russian publisher/year unresolved; source claims and visible conflicts are retained, not silently resolved."
+    ]
+  },
+  "NTD_RU:2": {
+    "section": "FRONT_MATTER",
+    "content": "Front-matter testimonials attributed to Fontanills, Krutsinger and Tesser. Endorsements are not independently reproduced performance evidence, source completeness or algorithm certification.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 2,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:3": {
+    "section": "FRONT_MATTER",
+    "content": "Dedication to daughter Justine Gregory-Williams; credits her illustrations. Attribution and family dedication, not a trading rule.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 3,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:4": {
+    "section": "FRONT_MATTER",
+    "content": "Author acknowledgments credit Profitunity staff, CQG software support, publishers, teachers, family and students. Historical attribution and gratitude, not a tested signal or audited trading result.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 4,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:5": {
+    "section": "FRONT_MATTER",
+    "content": "Russian scientific-editor preface signed Mikhail Chekulaev. Promotional claims of absolute success, rejected suppression payment, dreams predicting markets and full algorithm certainty belong to editor, not verified performance or Bill's machine spec. Identifies an editorial voice but not exact Russian publisher/year.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED",
+      "NTD.PREFACE.EDITOR_ATTRIBUTION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 5,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "FRONT_MATTER",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:6": {
+    "section": "FRONT_MATTER",
+    "content": "Contents maps eleven chapters: start10, chaos21, Alligator34, fractals41, AO55, AC72, zones91, balance line99, profit taking115, synthesis123, mastery139. Navigation receipt; index presence is not chapter comprehension.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 6,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "NAVIGATION",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:7": {
+    "section": "FRONT_MATTER",
+    "content": "Introduction claims25,000 seminar attendees,700 successful private pupils and top10% reader intelligence; these are author assertions, not sampled proof. Want what the market wants is a guiding philosophy, not a numerical entry condition or guaranteed Holy Grail.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 7,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "INTRODUCTION",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:8": {
+    "section": "FRONT_MATTER",
+    "content": "Reading guidance prefers full book then slow reread; software promises error-free analysis/all opportunities are not certified by inventory. Behavioral belief-set model and communication90%-falsehood/polygraph analogy remain attributed, unverified claims.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 8,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "INTRODUCTION",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:9": {
+    "section": "FRONT_MATTER",
+    "content": "Chapter route separates Alligator, fractal, AO, AC, zones, balance line, exits, synthesis and psychology. AO/AC tomorrow/newspaper analogy is not future data access. Promised proprietary software/tutorial validation is not actually executed here.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 9,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "INTRODUCTION",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:10": {
+    "section": "CH1",
+    "content": "Chapter1 starts with content-versus-process chess and dancing metaphors. Process awareness does not invalidate balance/fill/PnL audit questions or eliminate the need for objective evidence; narrative is not a signal definition.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 10,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:11": {
+    "section": "CH1",
+    "content": "Edition distinguishes original80%-of-trend goal from new300-500% aggregate point target through later allocations; these are author goals, not percentage return or validated performance. Dance/comfort/responsibility analogies do not imply that losses prove a psychological defect.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 11,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:12": {
+    "section": "CH1",
+    "content": "Belief-awareness and process-versus-content exercises; seven-figure suppression offer and best-method claims unverified. Defines grounded assessment by checkable peer agreement; distinguishes observed shirt from subjective beauty. Scientific quantum-language claims remain attributed prose.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 12,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:13": {
+    "section": "CH1",
+    "content": "Lists ungrounded predictions/rigid wallet-percentage rules and argues for actual market observations. This does not authorize removing engineered daily3% or account safety limits. Value disagreement plus price agreement is a transaction model; equal matched volume does not establish participant counts or50.01%-bullish price mechanics.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 13,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:14": {
+    "section": "CH1",
+    "content": "Contrasts letting a prepared trade develop with digging up planted seeds; relax desired outcome while watching actual conditions. The author explicitly calls tomorrow unknowable/unpredictable, limiting newspaper metaphors.95%-knowledge/constant-success claims unmeasured; equal matched contracts is not equal trader counts.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 14,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:15": {
+    "section": "CH1",
+    "content": "Psychological-growth framing and critique of instant wealth without risk; coaching and health/therapy claims are not clinical evidence or guarantees. Financial profit still matters but is not claimed as the only purpose. Do not infer that uncontrolled losses are harmless learning.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 15,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:16": {
+    "section": "CH1",
+    "content": "Seminars versus behavior change, Vegas thought experiment and market reward narrative. Claims about the left brain creating/replaying reality and awareness are attributed philosophy. Agreed transaction price plus differing valuation is explanatory context, not a complete microstructure model.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 16,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:17": {
+    "section": "CH1",
+    "content": "Changing markets, chart-versus-reality analogy and Aristotle/Heraclitus contrast. Historical claims about flat Earth, Galileo, classical laws being disproven and broad scientific/philosophical causation are not independently verified. No relaxation of accounting, causality or reproducibility requirements.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 17,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:18": {
+    "section": "CH1",
+    "content": "Relativity, quantum/Bell/Bohm and higher-dimension discussion with editor's Moebius-strip analogy. Claims that quantum theory removes the speed-of-light bound or that geometric coverage alone determines dimension are not certified scientific facts or permission for future-information leakage.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 18,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:19": {
+    "section": "CH1",
+    "content": "Communication chain/source-encoder-message-decoder-receiver analogy motivates checking belief filters. Five dimensions named fractal, momentum, acceleration, zone and balance line. Cybernetics/Newton, DNA lifespan and holographic-information claims are unvalidated analogies; they do not define numerical signal equations.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 19,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:20": {
+    "section": "CH1",
+    "content": "Chapter1 concludes with self-directed learning, risk and belief framework, repeated profit guarantees and proprietary-software claims. They are authored assertions, not measured strategy effectiveness; no operational new-risk permission follows from psychological confidence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 20,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:21": {
+    "section": "CH2",
+    "content": "Chapter2 criticizes historical optimization/black boxes and contemporary neural nets; this is period-specific authored judgment, not a current comparative benchmark. Introduces Fritz's least-resistance/structure framework and Mandelbrot analogy, without numerical causal market equations.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 21,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:22": {
+    "section": "CH2",
+    "content": "Three principles: follow least resistance, underlying structure determines path, and structure can be identified/changed. Personal awareness framework, not evidence that emotions reveal market structure. Bell/Bohm/information-theory assertions do not establish that correlation equals causation or that reproducible experiments are unnecessary.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 22,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:23": {
+    "section": "CH2",
+    "content": "Chaos is rephrased as new information; contrast fitting observations into old categories versus letting new organization emerge. Societal-money ranking and atomic gravitational-decision narrative with99.99999% figures are unsupported illustrations, not scientific or trading measurements. Figure2-1 introduced.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 23,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:24": {
+    "section": "CH2",
+    "content": "Figure2-1 conceptual choice between distorting new information and self-organization. Water/atoms example and broad metaphysics/history claims remain author/editor prose. Definitions of deterministic nonlinear unpredictability do not justify contradictory Boolean states or an unfalsifiable signal classifier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 24,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:25": {
+    "section": "CH2",
+    "content": "Weather and butterfly-effect analogies emphasize horizon/precision limits; not a proof that all random financial observations contain a recoverable profitable pattern. Holistic analysis and current observations are philosophical framing, not a controlled comparison with technical analysis.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 25,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:26": {
+    "section": "CH2",
+    "content": "Continues chaos, entropy/negentropy, self-organization and free-will metaphysics with Gleick/Davies quotations. Treat as source philosophy, not proof that causality/accounting invariants fail, deterministic systems cannot be tested, or all market structure can be inferred.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 26,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:27": {
+    "section": "CH2",
+    "content": "Rendered repeated-squaring illustration prints1.21*1.21=1.461 (calculated1.4641) and0.81*0.81=0.06561 (calculated0.6561), then returns to0.6561 in the next expression. These are visible supplied-reflow arithmetic conflicts, not certified errata of an unseen English original. Attractor/Mandelbrot analogy is not a market predictor.",
+    "rules": [
+      "NTD.PRINTED_NUMBERS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 27,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:28": {
+    "section": "CH2",
+    "content": "Mandelbrot/Cantor/Sierpinski illustrations and rounded dimension comparisons to Fibonacci. Sierpinski printed1.58 versus1.618 claimed difference0.032 is arithmetically inconsistent; exact log-dimensions are distinct constants, not Fibonacci identities. Biological/Internet/clinical applications remain unverified contextual claims.",
+    "rules": [
+      "NTD.PRINTED_NUMBERS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 28,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:29": {
+    "section": "CH2",
+    "content": "Reiterates four attractor taxonomy and point/cyclic examples; childhood preferences, range markets and predator/prey/crop analogies do not prove exact dynamical-system identification from OHLC. Figures2-4/2-5 text references only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 29,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:30": {
+    "section": "CH2",
+    "content": "Cyclic and torus attractor analogies, feedback/ecological and bond-price examples. Dimensional labels and claimed neural/physical relations remain qualitative author framing; no tested market-state threshold or forecast probability is supplied.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 30,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:31": {
+    "section": "CH2",
+    "content": "Strange-attractor/butterfly discussion asserts fivefold profitability from initial conditions without an audit dataset. Enumerates momentum, acceleration, initiating fractal, zone and balance-line differentials. It describes simultaneous contextual observations, not a guaranteed500% account return or an empirical classifier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 31,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:32": {
+    "section": "CH2",
+    "content": "Contrasts hologram repetition with fractal self-similarity; comparing timeframes does not make them identical candles or authorize synthetic lower frames. Chapter2 summary limits individual trade outcomes to unknown and statistical/general schemes, despite surrounding success rhetoric. Claims of no actor controlling any market remain unverified generalization.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 32,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:33": {
+    "section": "CH2",
+    "content": "Completes chapter2 learning checklist about beliefs, openness and chaos-as-freedom. Human preparation/nav continuation; no additional deterministic trade instruction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 33,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:38": {
+    "section": "CH3",
+    "content": "NTD trade narrative uses the first outside-mouth fractal and then all eligible same-direction dimension signals, longs above mouth and shorts below. This page's isolated inside-Jaw wording and double-negative conflict with surrounding outside-mouth instruction; verify rendering. Fractal formation is not execution.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 38,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:39": {
+    "section": "CH3",
+    "content": "Exit purchases during downtrend are distinguished from new longs. Balance-line price location is offered as impulse/reaction context without exact Elliott count; not independent proof of unique wave degree. Combined five-dimension historical charts illustrate additions, not reconstructed actual fills.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 39,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:40": {
+    "section": "CH3",
+    "content": "Coffee example claims500,000USD from one contract per signal and300-500% of trend-price travel through additions; author explicitly calls charts especially good examples. No cost/funding/fill/portfolio series given, so no verified return or guaranteed profitability is inferred. Chapter3 summary.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 40,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:41": {
+    "section": "CH4",
+    "content": "Chapter4 first qualifying fractal after Alligator awakening, before other dimensions. Defines at least five consecutive bars with two lower highs on either side of highest high (mirror lows); entry one tick beyond the fractal, not at confirmation close. Repeated15-30% trend assertions unmeasured.",
+    "rules": [
+      "NTD.FRACTAL.CONFIRMATION_AND_EQUALITY",
+      "NTD.FRACTAL.UNKNOWN_PRICES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 41,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:42": {
+    "section": "CH4",
+    "content": "Equal central-height bars do not count toward two lower neighbors; outside central bar can form up/down fractals, shared surrounding bars permitted; D uses six bars for an equal high. Buy only above Teeth/sell below; critically re-evaluate at actual break, not only pivot time. A formed fractal retains identity while its trading role changes with Alligator context.",
+    "rules": [
+      "NTD.FIRST_FRACTAL",
+      "NTD.FRACTAL.CONFIRMATION_AND_EQUALITY",
+      "NTD.FRACTAL.CURRENT_TEETH",
+      "NTD.FRACTAL.UNKNOWN_PRICES"
+    ],
+    "figures": [
+      "4.2"
+    ],
+    "visual_review": true,
+    "printed_page": 42,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:43": {
+    "section": "CH4",
+    "content": "Valid signal persists until triggered or replaced by a newer signal. Pattern existence alone does not authorize a trade on wrong side of Teeth. Claimed every inter-fractal leg is an Elliott wave of some degree is not unique wave-count evidence. Figure4-5 summary follows illustrations.",
+    "rules": [
+      "NTD.FIRST_FRACTAL",
+      "NTD.FRACTAL.CONFIRMATION_AND_EQUALITY",
+      "NTD.FRACTAL.CURRENT_TEETH",
+      "NTD.FRACTAL.UNKNOWN_PRICES"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 43,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:44": {
+    "section": "CH4",
+    "content": "Figure4-5 overview and breakout interpretation continue. Descriptive fractal role changes are distinct from a wave-degree algorithm or an instruction to enter unprotected at any local high/low. No exact numeric candles are supplied.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 44,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:45": {
+    "section": "CH4",
+    "content": "Fractal practice4-6/4-7 includes questions and supplied visual answers for A-D. Exercise is source learning, not unseen/expert gold; text alone does not certify all marked extrema or numeric OHLC.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 45,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:46": {
+    "section": "CH4",
+    "content": "Exercise answers explicitly ignore Alligator while teaching pattern recognition. This omission is local to the exercise, not an operational admission rule. Coffee4-8/4-9 and claimed500k motivate additions; exact printed table must be read separately before arithmetic or historical-performance claims.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 46,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:47": {
+    "section": "CH4",
+    "content": "Figures4-8/4-9 are coffee fractal exercise and supplied marked answers. Exact printed table/numeric annotations are not extracted by this text layer and require rendering; price-series or historical fill validation is not implied.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 47,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:48": {
+    "section": "CH4",
+    "content": "Combines Alligator and fractals: first qualifying outside-mouth breakout must actually be triggered before using other dimensions. Untriggered opposite a/b fractals are not filled positions. Text says other four fractals but context is other four dimensions; preserve distinction, no new pattern class.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 48,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:49": {
+    "section": "CH4",
+    "content": "Coffee4-10 and Dell4-11 graphic continuation with first outside-mouth signal and subsequent fractals. Text-only page receipt until diagrams are viewed; not an independently scored chart or exact OHLC data.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 49,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:50": {
+    "section": "CH4",
+    "content": "Critical explicit rule: validity depends on breakout relative to Teeth at trigger time, regardless of where the fractal formed; arrows mark pivot, not entry time. Harley exercise last sentence calls nine unused buy signals above Teeth despite preceding valid-buy explanation; likely direction-word conflict, needs render.",
+    "rules": [
+      "NTD.FIRST_FRACTAL",
+      "NTD.FRACTAL.CURRENT_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 50,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:51": {
+    "section": "CH4",
+    "content": "Inside-mouth exercise: A invalid buy below Teeth, B valid sell below Teeth; changing Teeth may make a previously invalid fractal valid. This is time-dependent admission, not hindsight relocation of the pivot or immediate reverse permission.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 51,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:52": {
+    "section": "CH4",
+    "content": "Examples4-14/15 and4-18 show a formed below-Teeth fractal becoming valid when later breakout would lie above current Teeth. Untouched bars1-5 are conditional opportunities, not five completed trades; later setup can supersede old only with causal identity/state tracking.",
+    "rules": [
+      "NTD.FIRST_FRACTAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 52,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:53": {
+    "section": "CH4",
+    "content": "Fractal chapter summary and promised software demo; figure4-16/17 placements illustrate context-dependent validity. Author instruction to practice is not independent verification. Software link promises are not evidence that it ran in this project.",
+    "rules": [
+      "NTD.FIRST_FRACTAL",
+      "NTD.FRACTAL.CURRENT_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 53,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:54": {
+    "section": "CH4",
+    "content": "Completes first-fractal gate: only after first outside-mouth signal is triggered may same-direction dimension signals be used. Figure4-18 qualitative eligibility over time, not actual fills. Newspaper/momentum-before-price analogy leads into AO without allowing future observations.",
+    "rules": [
+      "NTD.FIRST_FRACTAL",
+      "NTD.FRACTAL.CURRENT_TEETH"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 54,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:55": {
+    "section": "CH5",
+    "content": "AO defined as SMA5 minus SMA34 of bar midpoints, a close MFI approximation rather than volume MFI. Printed midpoint formula uses(H-L)/2 in body and box, conflicting with midpoint meaning/canonical(H+L)/2; verify rendering and editor footnote4 before resolving. Author expressly does not recommend blindly market-reversing on every oscillator slope turn.",
+    "rules": [
+      "NTD.INDICATORS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 55,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:56": {
+    "section": "CH5",
+    "content": "AO color is strict adjacent histogram increase green/decrease red; equal color unspecified. Use AO only after qualifying first fractal context. Buy saucer above zero uses at least three bars a>b and c>b, entry1tick above price bar c. Merely rising slope is not automatic market order.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 56,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:57": {
+    "section": "CH5",
+    "content": "Saucer summary: all constituent bars positive, signal c green, at least3 bars, no bound on saucer length; require a subsequent color/direction change before another same-pattern signal. No need to invent two preceding red bars or force a tie color from this text.",
+    "rules": [
+      "NTD.AO.SAUCER",
+      "NTD.AO.SAUCER_FIRST_COLOR",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 57,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:58": {
+    "section": "CH5",
+    "content": "Only latest saucer signal used. Zero-cross buy moves from strict negative to strict positive; signal bar must be green, entry1tick above corresponding price high. Source crossing is not just touching zero and does not by itself waive first-fractal/ownership/risk gates.",
+    "rules": [
+      "NTD.AO.SAUCER",
+      "NTD.AO.SAUCER_FIRST_COLOR"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 58,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:59": {
+    "section": "CH5",
+    "content": "Zero-cross figures5-8/9/10/11 and strict negative-to-positive two-bar summary; header for twin peaks follows. No simultaneous buy/sell from the same crossing. Chart arrows/exercises are source examples, not model-independent market gold.",
+    "rules": [
+      "NTD.AO.SAUCER",
+      "NTD.AO.SAUCER_FIRST_COLOR"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 59,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:60": {
+    "section": "CH5",
+    "content": "Bullish twin troughs below zero: second trough closer to zero than first, no intervening zero crossing; confirm with green rising bar, repeat only at another qualifying higher trough. An untriggered AO signal is invalidated when histogram changes to opposite color; pattern formation and price stop-entry are separate.",
+    "rules": [
+      "NTD.AO.SAUCER",
+      "NTD.AO.SAUCER_FIRST_COLOR",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 60,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:61": {
+    "section": "CH5",
+    "content": "Summarizes three AO buy families and starts mirrored below-zero sell saucer requiring at least three bars and entry1tick below signal-price low. Twin-peaks box uses ambiguous smaller wording for negative values; green/rising and explicit absolute-value explanation must not be inverted into lower signed value.",
+    "rules": [
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 61,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:62": {
+    "section": "CH5",
+    "content": "Sell saucer below zero mirrors buy: a more negative than b, b rising green, c falling red; at least3 bars, all negative, new pattern after a color change. Example wording about rising is relative histogram direction, not a new zero-side condition.",
+    "rules": [
+      "NTD.AO.ZERO_CROSS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 62,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:63": {
+    "section": "CH5",
+    "content": "Sell zero cross strictly positive-to-negative, entry1tick below crossing price bar low. Figure5-19 labels the prior positive bar red, while two-bar crossing definition itself needs only strict signs; signal bar is necessarily red. Do not add an unsupported prior-color veto.",
+    "rules": [
+      "NTD.AO.ZERO_CROSS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 63,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:64": {
+    "section": "CH5",
+    "content": "Special blue-light example: after untriggered sell signal, later higher price low with continuing red AO can improve pending entry. This is a subsequent price opportunity under the same formation, not an extra independent signal/fill or permission to replace an unknown exchange order.",
+    "rules": [
+      "NTD.AO.ZERO_CROSS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 64,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:65": {
+    "section": "CH5",
+    "content": "Bearish twin crests above zero mirror bullish troughs: second lower, no intervening zero crossing, red confirming bar C, sell1tick below corresponding low. Peaks require later turn confirmation, not future labels at B. Explicit signed/magnitude definitions override ambiguous shorthand.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 65,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:66": {
+    "section": "CH5",
+    "content": "Blue-light continuation can last several higher lows while AO stays red; sell on later price break, invalidate on green AO. Always same numerical-color direction at intended entry: no sell on green/no buy on red. Pending improvement is not a fresh authorization or guaranteed fill.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 66,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:67": {
+    "section": "CH5",
+    "content": "Figure5-27 grain bearish twin peaks and5-28 six-family AO overview. Graphic-only continuation in text extraction; source-labelled practice/summary, not exact OHLC or unseen human-scored market cases.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 67,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:68": {
+    "section": "CH5",
+    "content": "AO practice5-29/30 supplies A-J answer families: sell cross, three sell saucers, buy twin, buy cross/saucer, sell twin, buy saucer, sell cross. These disclosed author answers are seen educational content, not holdout/expert gold or digitized values.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 68,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:69": {
+    "section": "CH5",
+    "content": "Seven positive-AO buy examples are saucers, still directed away from mouth. S&P Apr17-Jul31 daily example is explicitly exceptional; claim weekly availability not independently measured. No intraday monitoring asserted by author is not proof of fill sequence within OHLC.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 69,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:70": {
+    "section": "CH5",
+    "content": "AO-only historical example excludes sells because price above mouth. Figure5-34/table5-1 mix signal formation/use and profit numbers; exact numeric table unavailable from raw text and requires visual read before arithmetic audit. No independent performance certification.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 70,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:71": {
+    "section": "CH5",
+    "content": "AO summary preserves distinct zero sides/families and same-direction colors. Momentum-leading-price/newspaper language is analogy, not causal future access or a verified lead-time guarantee. Six signal families are not independent duplicate orders on the same candle.",
+    "rules": [
+      "NTD.AO.TWIN_PEAKS",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 71,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:72": {
+    "section": "CH6",
+    "content": "AC third dimension measures acceleration/deceleration; explicitly zero crossing is NOT a standalone signal, it only affects required color-bar count. Need color/direction change, never buy on red or sell on green. Bowled-ball analogy does not validate a guaranteed forecast of price turns.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 72,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:73": {
+    "section": "CH6",
+    "content": "AC buy with directional zero-side needs a red base followed by two consecutive strict green rises; new signal requires a new red interruption. Against side uses three. Entry1tick above price high of required confirming bar. Formula prose appears to describe extra5-bar smoothing of a difference; retain ambiguity pending footnotes/cross-edition code, do not silently alter standard AC.",
+    "rules": [
+      "NTD.INDICATORS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 73,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:74": {
+    "section": "CH6",
+    "content": "AC above-zero two-green example6-3 explicitly fills on next-day opening gap; stop trigger is not guaranteed fill price. Entry/price interval synchronized with second histogram rise. Figure6-4 Philip Morris same pattern, no exact OHLC certified.",
+    "rules": [
+      "NTD.AC.COUNTS",
+      "NTD.AC.GAP_FILL",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 74,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:75": {
+    "section": "CH6",
+    "content": "Below-zero AC buy needs red trough base and three consecutive strict green rises, entry1tick above third price high. Opposing acceleration-side needs extra confirmation; histogram values and price highs are different series and cannot be interchanged.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 75,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:76": {
+    "section": "CH6",
+    "content": "Below-zero three-green cases and no standalone AC zero-cross. If histogram crosses on second or third rise after the trough, required confirming count changes; preserve the original color-reversal base rather than minting an entry from any zero crossing.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 76,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:77": {
+    "section": "CH6",
+    "content": "Special-case AC crossing on second rising bar: red base, green1, green2 positive confirming. Repeats zero cross alone is not a signal. Counts are strict adjacent histogram changes, not candlestick body colors or a new AO crossing.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 77,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:78": {
+    "section": "CH6",
+    "content": "Only current confirming AC zero side controls two-versus-three count; earlier formation components may lie across zero. Sell below zero mirrors green base then two red bars, entry1tick below second price low. Printed two rules followed by three items is editorial numbering, not a new family.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 78,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:79": {
+    "section": "CH6",
+    "content": "Sell above zero needs three sequential falling red histogram bars after latest high; below-zero example needs two. a/b/c label uses maximum/minimum inconsistently, but numerical descending/color definitions are explicit. Source charts are qualitative until visual review.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 79,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:80": {
+    "section": "CH6",
+    "content": "Above-zero sell completes green base plus three red falls; second and third confirming bars cannot be collapsed. A figure6-13 caption belongs to the preceding below-zero example, not a contradictory new below-zero requirement for6-14.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 80,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:81": {
+    "section": "CH6",
+    "content": "FedEx examples distinguish signal A from later blue-light opportunities B/C and eventual execution D, then new formation E/execution F. Special sell crossing on second/third fall changes count, zero crossing still not standalone. Exact chart timestamps/values unverified.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 81,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:82": {
+    "section": "CH6",
+    "content": "Crossing sell example explicitly uses current second falling bar below zero, irrespective of first bar's positive side. Immediate action means source conditional stop placement, not assumed market fill at historical pivot. Pending blue-light opportunities remain original formation identity.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 82,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:83": {
+    "section": "CH6",
+    "content": "Oil AC special-case examples distinguish formation A/C and execution B/D; review/practice introduces four charts with disclosed author answers. These are source exercises already seen, not independent classifier evaluation.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 83,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:84": {
+    "section": "CH6",
+    "content": "Figure6-20 expands AC zero-crossing histogram,6-21 overlays price/conditional signals. Text extraction contains captions only; no numeric oscillator sequence or author-arrow timestamps certified without visual review.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 84,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:85": {
+    "section": "CH6",
+    "content": "Figure6-22 signal overview and6-23 S&P AC exercise, captions/graphic-dominant page. First text receipt does not mean every graphical answer has been verified.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 85,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:86": {
+    "section": "CH6",
+    "content": "Nine AC exercise answers explicitly include untriggered signals canceled on next opposite histogram color and blue-light entry shifted from original formation. Alligator intentionally ignored in one exercise only; not a blanket operational waiver. Author answers are already disclosed/seen.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 86,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:87": {
+    "section": "CH6",
+    "content": "Dell exercise and Sears combined case reintroduce Alligator and first-fractal gate. Two versus three AC confirming bars determined by second/current bar zero-side; graphical boxed signals are not exact numeric candle data.",
+    "rules": [
+      "NTD.AC.COUNTS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 87,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:88": {
+    "section": "CH6",
+    "content": "Sears example separates initial signal from lower-high improved buy stop while AC remains green. Not all AC patterns are executable; first outside-mouth fractal still required, and illustration of a signal not filling next bar is not a completed trade.",
+    "rules": [
+      "NTD.AC.COUNTS",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 88,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:89": {
+    "section": "CH6",
+    "content": "AC untriggered signal invalidates on opposite AC color; first-fractal gating remains. Printed table6-1 has five fills780.40/815.40/876.15/916.35/949.15 and common exit957.95: gross points177.55+142.55+81.80+41.60+8.80=452.30, at implied500USD/point gives226150; internally consistent before unknown costs. Signal prices differ from actual reported fills.",
+    "rules": [
+      "NTD.AC.COUNTS",
+      "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION",
+      "NTD.PRINTED_NUMBERS",
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [
+      "6.29"
+    ],
+    "visual_review": true,
+    "printed_page": 89,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:90": {
+    "section": "CH6",
+    "content": "Chapter6 conclusion reviews Alligator/fractal/AO/AC and introduces zone additions; doubling profits is author aspiration, not demonstrated prospective return. Instruction to practice means learning, not a completed independent exam or order authorization.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 90,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:91": {
+    "section": "CH7",
+    "content": "Zone is based on adjacent numerical AO/AC color changes: both rising green, both falling red, disagreeing gray. Price must also close in trade direction for an addition; zero-side is not zone color. Aggressive additions apply within an existing properly admitted campaign and real capacity, not an unconstrained new-risk permit.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 91,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:92": {
+    "section": "CH7",
+    "content": "Zone addition begins on second consecutive green-zone bar only if its price close exceeds preceding close; continue qualified bar closes while AO/AC/price agree. Daily stop-close-only versus intraday market-at-interval-end is edition-specific and not one-tick stop-entry. Candle body color is not zone color.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [
+      "7.2",
+      "7.3"
+    ],
+    "visual_review": true,
+    "printed_page": 92,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:93": {
+    "section": "CH7",
+    "content": "Stop zone-based additions after fifth consecutive same zone; other already-eligible dimensions may continue. Six-to-eight frequency is unvalidated author experience, not a certain maximum or reset condition. Fifth-color count is not count of actual successful adds.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [
+      "7.4"
+    ],
+    "visual_review": true,
+    "printed_page": 93,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:94": {
+    "section": "CH7",
+    "content": "After five same-color zone bars, long stop one tick below fifth green low; short one tick above fifth red high. Subsequent trail only tightens as price advances. No retroactive stop effectiveness on the forming fifth bar or removal when bar changes zone.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [
+      "7.5",
+      "7.6"
+    ],
+    "visual_review": true,
+    "printed_page": 94,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:95": {
+    "section": "CH7",
+    "content": "Red-zone additions mirror green: prior red zone/current red zone plus lower close, stop zone additions after fifth consecutive color. Price candle body need not be red. Bullet phrasing about more than five preceding bars is less clear than repeated stop-after-fifth prose; preserve boundary interpretation evidence.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 95,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:96": {
+    "section": "CH7",
+    "content": "Fifth red high+1tick starts protective STOP, not immediate market exit or automatic reverse. Thereafter tighten above each lower high regardless of current zone color until executed. Gray can mean a pause or possible ending; gray alone proves neither reversal nor mandatory liquidation.",
+    "rules": [
+      "NTD.ZONE.ADDITIONS",
+      "NTD.ZONE.FIFTH_TRAIL"
+    ],
+    "figures": [
+      "7.8",
+      "7.9"
+    ],
+    "visual_review": true,
+    "printed_page": 96,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:97": {
+    "section": "CH7",
+    "content": "Gray-zone schematic7-10 and combined trading illustration7-11 continue prior discussion. Color disagreement is qualitative transitional context, not a separate entry direction, market-state certainty or exact chart digitization.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 97,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:98": {
+    "section": "CH7",
+    "content": "Visually inspected table7-1 lists ten fills and common exit957.95. Its sixth point cell is printed7.55, whereas957.95-879.40=78.55 and its39275USD/cumulative372875USD use78.55 at implied500USD per displayed price unit; printed total904.20/452100 agrees with fills, not the typo cell. Narrative5USD per point then halved may use a different quote subunit; historical unit convention unresolved. Gray-zone adds prohibited; fifth-bar trail survives later color.",
+    "rules": [
+      "NTD.PRINTED_NUMBERS",
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 98,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:99": {
+    "section": "CH8",
+    "content": "Balance-line fifth dimension evolved from TC1 thumb to enter before a standard fractal. Price-distance/least-resistance metaphors explain away versus toward line, not a direct execution formula.5million iterations and physical-law claims unverified; chapter-specific rules follow.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 99,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:100": {
+    "section": "CH8",
+    "content": "Away-from-line versus toward-line analogy and13-bar56-versus161-point example illustrate contextual asymmetry, not empirical effect size or universal target. Uphill/downhill refer to relationship with balance, not necessarily rising/falling price. Figures8-2/3 qualitative.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 100,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:101": {
+    "section": "CH8",
+    "content": "Balance-line new information example uses current lower high after prior higher high; a later break above relevant known high is behavioral change. Need signal location versus balance and number of new highs/lows; this is not arbitrary global-window min/max or guaranteed knowledge of buyers' identities.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 101,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:102": {
+    "section": "CH8",
+    "content": "Figures8-5 two views and8-6 new-information identification; graphic-dominant page. The bar geometry has no exact numeric OHLC available and not yet a visual/independent receipt.",
+    "rules": [
+      "NTD.BALANCE.LOCAL_BASE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 102,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:103": {
+    "section": "CH8",
+    "content": "Balance scan right-to-left; buy uses highs, sell lows. Base is current or most recent lowest-high/highest-low local bar. Away requires one new higher high/lower low; toward requires two, then zone modifies. Subsequent continuation high alone is not new formation; lower-high base can improve same pending entry.",
+    "rules": [
+      "NTD.BALANCE.ADVERSE_ZONE",
+      "NTD.BALANCE.LOCAL_BASE",
+      "NTD.BALANCE.REFERENCE_JAW"
+    ],
+    "figures": [
+      "8.7",
+      "8.8"
+    ],
+    "visual_review": true,
+    "printed_page": 103,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:104": {
+    "section": "CH8",
+    "content": "Signal bar above balance treated as away even if earlier formation below; pending stop remains fixed through continuation higher highs. Sentence claiming a new higher-high BUY base conflicts with lower-high base elsewhere; verify rendering. New monotone highs do not form new patterns, but can trigger an existing pending pattern.",
+    "rules": [
+      "NTD.BALANCE.LOCAL_BASE",
+      "NTD.BALANCE.REFERENCE_JAW",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT"
+    ],
+    "figures": [
+      "8.10",
+      "8.9"
+    ],
+    "visual_review": true,
+    "printed_page": 104,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:105": {
+    "section": "CH8",
+    "content": "Figures8-10/11 local base/signal examples and8-12 trick question; captions only in extraction. The plotted history is not converted into exact prices or independent wave/fractal labels.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 105,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:106": {
+    "section": "CH8",
+    "content": "Buy below balance toward line requires two higher-high steps; existing stop not moved by a continuation higher high, new lower-high base can improve it. Sell above balance mirrors toward-line two lower-low steps; new sell base only after higher-low pullback, not another falling low.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 106,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:107": {
+    "section": "CH8",
+    "content": "Balance-line buy-below exercises8-14/15; captions/graphics only in extracted text. They are author practice material, not exact OHLC or a test of current model understanding.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 107,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:108": {
+    "section": "CH8",
+    "content": "Sell blue-light lifts pending price after a higher-low base; sell below balance away from line requires one lower-low step, determined by signal bar location regardless of base side. One continuation low does not create a new base/signal.",
+    "rules": [
+      "NTD.BALANCE.ADVERSE_ZONE",
+      "NTD.BALANCE.LOCAL_BASE",
+      "NTD.BALANCE.REFERENCE_JAW",
+      "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT"
+    ],
+    "figures": [
+      "8.16",
+      "8.17"
+    ],
+    "visual_review": true,
+    "printed_page": 108,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:109": {
+    "section": "CH8",
+    "content": "Figures8-18 practice and8-19 trick question, graphic-dominant captions only. Causal base, count and balance-side conclusions require visual geometry review; not completed by page inventory.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 109,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:110": {
+    "section": "CH8",
+    "content": "Figures8-20 sell below balance and8-21 practice page; descriptive/graphic only. Below balance is away for short and needs one step before opposing-zone doubling; not equivalent to a buy-below pattern.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 110,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:111": {
+    "section": "CH8",
+    "content": "Balance filter: away/toward requires1/2 record steps, doubled only for LONG in red or SHORT in green, yielding2/4. Final explicit rule disambiguates inconsistent neighboring wording about zones and sell-base lows; no silent extra veto. Alligator/first-fractal gate remains.",
+    "rules": [
+      "NTD.BALANCE.ADVERSE_ZONE",
+      "NTD.BALANCE.REFERENCE_JAW"
+    ],
+    "figures": [
+      "8.22"
+    ],
+    "visual_review": true,
+    "printed_page": 111,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:112": {
+    "section": "CH8",
+    "content": "Balance-line S&P example8-23/table8-1 uses Apr17-Jul31 same seen illustrative market, not new independent data. Many signals in strong trend is author observation; table prices/profit need visual extraction before arithmetic audit.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 112,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:113": {
+    "section": "CH8",
+    "content": "Rendered page is blank apart from printed page number113. Deliberate physical-page receipt, not missing OCR, a table, or substantive book-rule content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "printed_page": 113,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:114": {
+    "section": "CH8",
+    "content": "Balance summary resolves base as current/recent lowest high for buy/highest low for sell; one away/two toward, adverse-zone doubling, outside-mouth filter. Exits explicitly described as discretionary executive decisions guided by four principles, not a universal fully specified signal.",
+    "rules": [
+      "NTD.BALANCE.ADVERSE_ZONE",
+      "NTD.BALANCE.REFERENCE_JAW"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 114,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:115": {
+    "section": "CH9",
+    "content": "Chapter9 combines five dimensions and lists four exits: Teeth, five same-zone bars, Lips, opposite signal. Alligator and zone filtering remain. Chapter promises profit/maximization and mastery levels are not a validated outcome or completed educational certification.",
+    "rules": [
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.TEETH_LIPS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 115,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:116": {
+    "section": "CH9",
+    "content": "Teeth red-line exit is close-only for the operative interval; intrabar penetration without closing below (long) is not an exit. Market-at-close analogy does not remove exchange hard protective STOP overlay, which is separate engineered safety rather than literal book equality.",
+    "rules": [
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.TEETH_LIPS"
+    ],
+    "figures": [
+      "9.2",
+      "9.3"
+    ],
+    "visual_review": true,
+    "printed_page": 116,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:117": {
+    "section": "CH9",
+    "content": "Teeth can retain a broad trend where Lips would stop several times;2million from50k claim is illustrative/unverified. Fifth-color protective trail starts1tick beyond fifth bar and continues on latest completed bars regardless of later color, not forced flat at fifth close.",
+    "rules": [
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.TEETH_LIPS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 117,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:118": {
+    "section": "CH9",
+    "content": "Fast market uses price-path angle steeper than Lips, otherwise Lips can exit too early. Decide at current close and place line-based close exit for NEXT period; no hindsight use of new mode in same completed bar. The visual angle lacks a scale-invariant numeric threshold; any code proxy must stay labelled. Seventh-bar color prose internally inconsistent but does not alter color-independent trail.",
+    "rules": [
+      "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE",
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.TEETH_LIPS",
+      "NTD.REENTRY.CONTINUING_TREND_EPISODE"
+    ],
+    "figures": [
+      "9.5"
+    ],
+    "visual_review": true,
+    "printed_page": 118,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:119": {
+    "section": "CH9",
+    "content": "Opposite-direction exit is least-preferred/discretionary, may sacrifice profit, and normally closes rather than reverses because reverse would feed Alligator. Preferred sequence describes fifth-zone trail, Teeth trend exit and fast-market Lips; cannot replace campaign risk gates with every opposite marker.",
+    "rules": [
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.OPPOSITE_NOT_AUTOMATIC_REVERSE",
+      "NTD.EXIT.TEETH_LIPS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 119,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:120": {
+    "section": "CH9",
+    "content": "When more than one exit applies, author usually prefers fifth-color trail; opposite signal last. Teeth/Lips are close-only while fifth-bar is price STOP; they are not interchangeable. Divergence uses confirmed price/oscillator extrema; repeated all-trends/squat and rare-frequency assertions are not independently validated.",
+    "rules": [
+      "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "NTD.EXIT.OPPOSITE_NOT_AUTOMATIC_REVERSE",
+      "NTD.EXIT.TEETH_LIPS",
+      "NTD.WAVE.FIVE_BULLETS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 120,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:121": {
+    "section": "CH9",
+    "content": "Double divergence means three successive price peaks with decreasing AO; triple/fourth use further confirmed peaks, not current-bar dips. Five bullets start with W5 target0.62-1.0 of p0-to-p3 projected from W4, AO divergence and terminal fractal.90% target/frequency claims unverified, degree/pivots must be causal.",
+    "rules": [
+      "NTD.EXIT.OPPOSITE_NOT_AUTOMATIC_REVERSE",
+      "NTD.EXIT.TEETH_LIPS",
+      "NTD.WAVE.FIVE_BULLETS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 121,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:122": {
+    "section": "CH9",
+    "content": "Completes bullets: squat among three extreme bars and momentum change. All-five/always-end rhetoric is an attributed conjunction, not a verified reversal oracle; histogram momentum differs from volume MFI. Psychology postponed to final chapter, synthesis follows.",
+    "rules": [
+      "NTD.EXIT.OPPOSITE_NOT_AUTOMATIC_REVERSE",
+      "NTD.EXIT.TEETH_LIPS",
+      "NTD.WAVE.FIVE_BULLETS"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 122,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:123": {
+    "section": "CH10",
+    "content": "Chapter10 calls average10% monthly a personal attainable goal, explicitly not every month. Compound example needs distinguish ending balance from return:1.1^12 gives3.1384x balance or213.84% profit, not300% profit;10k exceeds1m at49 constant+10% months. Hypothetical arithmetic is not validated realized/forecast return or proof that failure means psychological fault.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED",
+      "NTD.PRINTED_NUMBERS",
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [
+      "10.1"
+    ],
+    "visual_review": true,
+    "printed_page": 123,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:124": {
+    "section": "CH10",
+    "content": "Attitude/no-fixed-expectations coaching,98%-of-traders-at-war claim unsupported. Introduces six-step combined-tool process beginning tradable-market search; author beliefs and teaching philosophy are not machine state observations, risk permission or proof that all losses indicate a bad method/user.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 124,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:125": {
+    "section": "CH10",
+    "content": "Combined process seeks a sleeping Alligator, with AO/AC near zero as favorable qualitative context, and prepares conditional boundaries on both sides because future direction is unknown. Waiting/preparing while asleep is not a filled entry or simultaneous long/short authority. No numerical sleep/near-zero threshold is specified.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 125,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:126": {
+    "section": "CH10",
+    "content": "Step1 sleep then step2 first qualifying fractal breakout, ignore other dimensions until actual first trigger. Summary compares center extreme to Teeth; chapter4 clarifies eligibility at later break, not permanently at pivot. Alligator asleep is preparation state, not an instruction to wait until every filter permanently agrees.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 126,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:127": {
+    "section": "CH10",
+    "content": "Intel/oil examples distinguish formed, unfilled, superseded and triggered fractals, including small-loss stop/reverse only in correct external context. Last valid signal supersedes old, but cancel/readback and already-filled exchange liabilities are separate engineering obligations. Qualitative letters are not exact timestamps or actual portfolio proof.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 127,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:128": {
+    "section": "CH10",
+    "content": "After first fractal, same-direction additions may qualify despite other dimensions disagreeing; this is not a universal AO/AC unanimity gate for every fractal.18Dell/23oil additions and3-5x trend travel are author illustrative aggregate-unit claims, not account returns or independently verified portfolio outcomes.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 128,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:129": {
+    "section": "CH10",
+    "content": "Synthesis first protection normally close across Teeth; discretionary outside-Teeth opposite-fractal stop/reverse if mouth fails to open/Teeth too close. This optional operator choice has no quantified trigger and cannot waive pre-entry protective STOP/risk gates. Keep normal exit versus reverse distinct.",
+    "rules": [
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 129,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:130": {
+    "section": "CH10",
+    "content": "Four discretionary exit alternatives, not all compulsory simultaneous orders. Fifth-zone trail may be followed by re-entry on qualifying same-direction external signal without a new sleep episode; episode ownership/spec pending. Lips/Green listed as alternatives though they are same line, a wording conflict not two separate indicators.",
+    "rules": [
+      "NTD.REENTRY.CONTINUING_TREND_EPISODE",
+      "NTD.SIZING.EDITION_SEPARATION"
+    ],
+    "figures": [
+      "10.9"
+    ],
+    "visual_review": true,
+    "printed_page": 130,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:131": {
+    "section": "CH10",
+    "content": "Fast-market price angle steeper than Lips, red/green exits strictly close-only, not wick-touch. Opposite signal remains least-preferred emotional/discretionary exit. No fixed visual-angle metric or coded fear state is provided.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 131,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:132": {
+    "section": "CH10",
+    "content": "Adds seventh enjoyment/reward step despite earlier six-step outline. Top1%/unlimited-income language is promotional, not a completed exam. April-gold example10-13 starts a new disclosed historical illustration, not independent OOS or audited profit.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 132,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:133": {
+    "section": "CH10",
+    "content": "April/June gold continuation and tables10-1/10-2 distinguish signalled campaign trades but full numeric rows are images in this PDF extraction. Claimed rewards unverified; must not fabricate prices, costs or contract specifications from prose/captions.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 133,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:134": {
+    "section": "CH10",
+    "content": "Illustrated June gold14wins/4losses,14-day Dell100shares/signal and7x/11x trend-point gains are author examples with added exposure, not compounded account returns or proof of a representative win rate. Capacity/margin/fees and independent fill histories are missing.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 134,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:135": {
+    "section": "CH10",
+    "content": "Figures10-15/16 Dell campaigns, graphic/caption-only extraction; all marked signals are disclosed source illustrations, not independent chart labels or exact numeric price-time series.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 135,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:136": {
+    "section": "CH10",
+    "content": "Investor's Dream software/demo promotion and flexible strategy selection; product existence/claimed bar-by-bar signals do not prove our implementation parity or a current downloadable/free license. Historical website reference not used as current verified software availability.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 136,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:137": {
+    "section": "CH10",
+    "content": "Investor's Dream screenshot/broker-instruction example gives explicit historical Dell quotes, conditional units and optional close-based line exits. Coincident F+BL described as two units; this historical allocation example is not TC2 pyramid quantities or authority to double a real account order. Decimal/label anomalies require rendering before reuse.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 137,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:138": {
+    "section": "CH10",
+    "content": "EO proprietary one-line wave overlay and Alligator eight-bar future drawing are product descriptions, not access to future prices or a certified wave-count implementation. Software summary includes immediate protection and six steps plus enjoyment. Reference194 is an original-edition page, not physical page in this156-page reflow.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 138,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:139": {
+    "section": "CH11",
+    "content": "Chapter11 flow/mastery coaching cites Csikszentmihalyi and Perry/Jamison, confidence/enjoyment/focused relaxation.90%-mental and hemispheric/education claims are authored, not validated anatomical facts, guarantees or software architecture. A human psychological zone is distinct from AO/AC trading-zone color.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 139,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:140": {
+    "section": "CH11",
+    "content": "Flow/Gremlin coaching, work-versus-play and sports anecdotes;>90%-losers and social/economic rankings are unsupported author generalizations. Mental/hemispheric assignments not certified physiology or evidence that a software agent can remove losses by enjoying trading.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 140,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:141": {
+    "section": "CH11",
+    "content": "Sports-flow narrative and repeated organization/survival/new-information contrast. Four societal institutions and universal-survival claims are not empirical market features. No fixed numerical signal or operational permission is introduced.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 141,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:142": {
+    "section": "CH11",
+    "content": "Figures11-1/11-2 repeat alternative responses to new information: force into old categories versus self-organization. Atomic/hemispheric explanation remains analogy; source openness does not mean accepting malformed data, relaxing deterministic contracts or online training without held-out evidence.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 142,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:143": {
+    "section": "CH11",
+    "content": "Repeats atomic/gravitational-choice narrative and claims improved organization creates freedom. Quote about enjoyment supports coaching metaphor, not a literal physical model, predictive probability, personal diagnosis or guarantee. Market five dimensions are author analytical constructs, not established spacetime dimensions.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 143,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:144": {
+    "section": "CH11",
+    "content": "Perry/Jamison four subjective flow qualities: enjoyment, focus, relaxation, confidence. Work/play and win/lose dichotomy critiques are human self-report guidance, not reasons to discard binary financial/accounting outcomes, drawdown controls or model evaluation. Clinical lifespan/stress claims are not validated here.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 144,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:145": {
+    "section": "CH11",
+    "content": "Gremlin/internal-critic metaphor and three exercises: notice, choose/play with alternatives, stay in process; breathing-awareness demonstration begins. Illustrative prejudicial/generalized labels are examples of criticized rigid thinking, not traits to endorse or training truth. Risk-limit checking is not something software may suppress as an imaginary critic.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 145,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:146": {
+    "section": "CH11",
+    "content": "Breathing, yawning, swallowing and sensory now-awareness exercises distinguish noticing from forcing action. Claims that Gremlins cause asthma/heart attacks/other illness are not clinical evidence and are not adopted. No bodily exercise or stress inference is required of user/model.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 146,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:147": {
+    "section": "CH11",
+    "content": "Opportunity-is-nowhere/now-here word split and tape-reel present/past/future analogy;95/5% audience figures unvalidated. Human reframing does not replace event timestamps, immutable observations, error accounting or independent model exams.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 147,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:148": {
+    "section": "CH11",
+    "content": "Cannot-to-choose/not-yet language reframing, present-moment focus and selective-attention/new-car example. Authored motivational claims do not prove financial success follows belief or justify suppressing real uncertainty/safety constraints. Driving metaphor is not a driving recommendation.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 148,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:149": {
+    "section": "CH11",
+    "content": "Spider-web analogy: prepare conditional stops around market, wait without chasing missed moves, take opportunities within a maintained plan. Seven-figure offer, lifelong provision and psychological leverage claims unverified. Example2000margin controls50x is not proof of permitted leverage/risk on Binance or a half-account cap.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 149,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:150": {
+    "section": "CH11",
+    "content": "Inclusion/exclusion language coaching and chain words-images-emotions-perception-performance. Explicitly nobody wins all the time. Present/process focus is not a causal claim that repeating positive language creates profit or that verification of PnL/risks should stop.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 150,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:151": {
+    "section": "CH11",
+    "content": "NLP anchor/routine and visualization; three morning handwritten pages credited to Julia Cameron, repeated daily before other work. These voluntary human habits are not automatic online model training or empirically proven neural/alpha-state mechanisms; claimed improvement is anecdotal without a held-out study.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 151,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:152": {
+    "section": "CH11",
+    "content": "Visualization steps: process over prize, concrete multisensory details, imagine good execution, repeat routine. Uncited sports experiments and alpha7-13Hz/trading performance causal assertions are not independently validated studies or evidence that a text model has brain-wave states.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 152,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:153": {
+    "section": "CH11",
+    "content": "Five trader competence levels plus anchor/visualization/radio-volume metaphor; quick chart review<=10s is an author teaching target, not measured bot latency or proved mastery. Repeated routine/hypnotic-state claims remain human pedagogy; process reward is not a trading signal.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 153,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:154": {
+    "section": "CH11",
+    "content": "Return-to-flow questions: what exactly happens, what alternatives restore agency, what the options provide. E+R=W is an experience/reflection metaphor, not an empirically calibrated model-learning equation. Alpha-state and life-change claims unverified; stop/risk and independent validation obligations persist.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 154,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:155": {
+    "section": "CH11",
+    "content": "Final flow-recovery question asks what to do differently, then implement and review notes after about a month. Lifestyle anecdotes, scalability from1to100contracts and limitless-income rhetoric omit capacity/risk constraints; not an execution sizing rule or independently verified outcome.",
+    "rules": [
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 155,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BODY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
+    ]
+  },
+  "NTD_RU:156": {
+    "section": "CH11",
+    "content": "Completes tools-plus-attitude summary and author biography/contact/software promotion.3-6%-elite,1959start,25k/700students and technical-origin claims attributed to source, not independently established. Historical contact details are not used as current identities/services. No publisher/year/ISBN resolves Russian edition; no appendix clarifies the AO/AC wording ambiguities.",
+    "rules": [
+      "NTD.CLAIMS.NOT_VALIDATED",
+      "NTD.MASTERY_IS_NOT_MARKET_SIGNAL"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "printed_page": 156,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "BIOGRAPHY",
+    "uncertainties": [
+      "Single reviewer; text/caption receipt is not full diagram comprehension or independent certification.",
+      "Original Russian publication identity and listed source conflicts remain unresolved; no exact OHLC inferred."
     ]
   }
 }

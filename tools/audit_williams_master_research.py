@@ -21,7 +21,9 @@ def audit(root=ROOT):
     registry=json.loads((folder/'MASTER_RULE_REGISTRY.json').read_text())
     reviews=json.loads((folder/'review_notes.json').read_text())
     crosswalk=json.loads((folder/'TC2_TRANSLATION_PAGE_MAP.json').read_text())
-    conflicts=json.loads((folder/'TC1_SOURCE_CONFLICT_REGISTER.json').read_text())
+    conflict_registers=[(sid,json.loads((folder/name).read_text())) for sid,name in [
+        ('TC1_RU','TC1_SOURCE_CONFLICT_REGISTER.json'),
+        ('NTD_RU','NTD_SOURCE_CONFLICT_REGISTER.json')]]
     errors=[]
     keys=[(p['source_id'],p['pdf_page']) for p in pages]
     expected={(s['id'],n) for s in catalog for n in range(1,s['pdf_pages']+1)}
@@ -81,28 +83,31 @@ def audit(root=ROOT):
                 errors.append('CROSSWALK_SOURCE_SHA_MISMATCH')
             if not span['pdf_pages'] or any((span['source_id'],p) not in expected for p in span['pdf_pages']):
                 errors.append('CROSSWALK_PAGE_OUT_OF_RANGE')
-    if (conflicts.get('source_id')!='TC1_RU'
-            or conflicts.get('source_sha256')!=sources['TC1_RU']['sha256']):
-        errors.append('SOURCE_CONFLICT_REGISTER_PIN_MISMATCH')
-    if (conflicts.get('can_place_orders') is not False or conflicts.get('training_allowed') is not False
-            or conflicts.get('independent_second_review') is not False):
-        errors.append('SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION')
     conflict_ids=set()
-    for conflict in conflicts['conflicts']:
-        if conflict['conflict_id'] in conflict_ids:errors.append('DUPLICATE_SOURCE_CONFLICT')
-        conflict_ids.add(conflict['conflict_id'])
-        if (conflict.get('source_id')!='TC1_RU'
-                or conflict.get('source_sha256')!=sources['TC1_RU']['sha256']):
-            errors.append('SOURCE_CONFLICT_PIN_MISMATCH')
-        if (conflict.get('execution_authority') is not False or conflict.get('training_allowed') is not False
-                or conflict.get('independent_second_review') is not False):
+    conflicts_per_source={}
+    for sid,conflicts in conflict_registers:
+        if (conflicts.get('source_id')!=sid
+                or conflicts.get('source_sha256')!=sources[sid]['sha256']):
+            errors.append('SOURCE_CONFLICT_REGISTER_PIN_MISMATCH')
+        if (conflicts.get('can_place_orders') is not False or conflicts.get('training_allowed') is not False
+                or conflicts.get('independent_second_review') is not False):
             errors.append('SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION')
-        if not conflict['pdf_pages'] or any(('TC1_RU',p) not in expected for p in conflict['pdf_pages']):
-            errors.append('SOURCE_CONFLICT_PAGE_OUT_OF_RANGE')
-        for p in conflict['visual_evidence_pages']:
-            receipt=reviews.get(f'TC1_RU:{p}',{})
-            if p not in conflict['pdf_pages'] or receipt.get('visual_review') is not True:
-                errors.append('SOURCE_CONFLICT_WITHOUT_VISUAL_RECEIPT')
+        conflicts_per_source[sid]=len(conflicts['conflicts'])
+        for conflict in conflicts['conflicts']:
+            if conflict['conflict_id'] in conflict_ids:errors.append('DUPLICATE_SOURCE_CONFLICT')
+            conflict_ids.add(conflict['conflict_id'])
+            if (conflict.get('source_id')!=sid
+                    or conflict.get('source_sha256')!=sources[sid]['sha256']):
+                errors.append('SOURCE_CONFLICT_PIN_MISMATCH')
+            if (conflict.get('execution_authority') is not False or conflict.get('training_allowed') is not False
+                    or conflict.get('independent_second_review') is not False):
+                errors.append('SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION')
+            if not conflict['pdf_pages'] or any((sid,p) not in expected for p in conflict['pdf_pages']):
+                errors.append('SOURCE_CONFLICT_PAGE_OUT_OF_RANGE')
+            for p in conflict['visual_evidence_pages']:
+                receipt=reviews.get(f'{sid}:{p}',{})
+                if p not in conflict['pdf_pages'] or receipt.get('visual_review') is not True:
+                    errors.append('SOURCE_CONFLICT_WITHOUT_VISUAL_RECEIPT')
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
     counts=Counter(p['verification_status'] for p in pages)
@@ -130,11 +135,12 @@ def audit(root=ROOT):
       'figure_coverage':{'qualitative_single_review_entries':len(figures),
         'independent_second_reviews':0,'total_substantive_figures':None,'percent':None},
       'source_conflicts':{'visible_single_review_entries':len(conflict_ids),
+        'per_source':conflicts_per_source,
         'independent_second_reviews':0,'unseen_original_english_errata_certified':False},
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
         'total_rules_in_books':None,'percent':None},
       'rule_implementation_coverage':None,'rule_test_coverage_of_all_books':None,
-      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':4,'whole_book_certified':False},
+      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':5,'whole_book_certified':False},
       'execution_safety':{'signed_demo_e2e':False,'physical_android_e2e':False,'main_merge_allowed':False},
       'decision_explainability_coverage':None,'can_place_orders':False}
 

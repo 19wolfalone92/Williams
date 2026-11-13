@@ -41,6 +41,20 @@ def test_tc1_complete_text_pass_keeps_original_identity_and_execution_gaps():
     assert not source['full_content_review_complete']
 
 
+def test_ntd_complete_text_pass_is_not_full_visual_or_independent_certification():
+    report=audit()
+    ntd=report['source_coverage']['per_source']['NTD_RU']
+    assert ntd['first_pass_receipts']==156
+    assert ntd['all_physical_pages_have_first_pass_receipts']
+    assert ntd['visual_receipts']<156
+    assert ntd['classified_page_kinds']['VISUALLY_CONFIRMED_BLANK']==1
+    assert not ntd['full_content_certified']
+    assert ntd['independently_verified']==0
+    assert report['source_conflicts']['per_source']['NTD_RU']==15
+    rules=json.loads((ROOT/'research/MASTER_RULE_REGISTRY.json').read_text())['rules']
+    assert all(not r['FULL_ATOMIC_SPEC_COMPLETE'] for r in rules if r['SOURCE_ID']=='NTD_RU')
+
+
 def copy_receipts(tmp_path):
     shutil.copytree(ROOT/'research',tmp_path/'research')
     return tmp_path/'research'
@@ -119,3 +133,27 @@ def test_source_disagreement_receipt_is_not_independent_certification(tmp_path):
     errors=audit(tmp_path)['errors']
     assert 'SOURCE_CONFLICT_PIN_MISMATCH' in errors
     assert 'SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION' in errors
+
+
+def test_ntd_conflict_cannot_be_relabelled_as_another_book_or_unseen_page(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'NTD_SOURCE_CONFLICT_REGISTER.json'
+    payload=json.loads(path.read_text())
+    conflict=payload['conflicts'][0]
+    conflict['source_id']='TC2_EN'
+    conflict['source_sha256']='0'*64
+    conflict['visual_evidence_pages']=[90]
+    path.write_text(json.dumps(payload))
+    errors=audit(tmp_path)['errors']
+    assert 'SOURCE_CONFLICT_PIN_MISMATCH' in errors
+    assert 'SOURCE_CONFLICT_WITHOUT_VISUAL_RECEIPT' in errors
+
+
+def test_ntd_source_conflict_cannot_acquire_trade_or_training_authority(tmp_path):
+    folder=copy_receipts(tmp_path)
+    path=folder/'NTD_SOURCE_CONFLICT_REGISTER.json'
+    payload=json.loads(path.read_text())
+    payload['conflicts'][0]['execution_authority']=True
+    payload['training_allowed']=True
+    path.write_text(json.dumps(payload))
+    assert 'SOURCE_CONFLICT_UNSUPPORTED_AUTHORITY_OR_CERTIFICATION' in audit(tmp_path)['errors']

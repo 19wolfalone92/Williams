@@ -201,8 +201,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "This rule concerns base/trigger geometry. Diagnostic protective_reference is not an authorized exchange SL.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.NEW_BUY_BASE",
+        "NTD.CONFLICT.SELL_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -211,7 +214,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -787,14 +790,13 @@
       "PAGE": [
         36,
         55,
-        72,
         73
       ],
       "FIGURE": [
         "3.4"
       ],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "Alligator displaced SMMA13/8,8/5,5/3; AO SMA5-SMA34 median; AC AO-SMA5(AO).",
+      "ORIGINAL_MEANING": "Detailed Alligator body13/8,8/5,5/3; supplied Lips inset5/2 and AO midpoint(H-L)/2 conflict with the definitions. AC extra-smoothing wording is unresolved; existing canonical median AO/AC is corroborated by separately read TC2 code, not silently inferred from the typo.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -819,8 +821,12 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "SMA5/34 median AO, SMMA displaced alligator line/seed and lookahead-free source windows have bounded Python/Kotlin regression coverage; Binance kline/trade-count MFI is explicitly a proxy, not Profitunity tick MFI. Independent digitized historical book indicator figures and live Demo are not certified.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.AC_EXTRA_SMOOTHING",
+        "NTD.CONFLICT.AO_MEDIAN_SIGN",
+        "NTD.CONFLICT.LIPS_SHIFT"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -833,7 +839,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -887,8 +893,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "NTD original PDF43: first external confirmed fractal with two closed right H1 bars, stable untriggered price, exact original one PRICE_FILTER tick for entry AND STOP. Python raw, wrapped profile (no double stop tick) and native Android mirror are bounded-tested; post-confirmation breakout and malformed grid fail closed. All actual source figures, sleeping Alligator discretionary interpretation and signed Binance Demo STOP lifecycle remain unverified.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY",
+        "NTD.CONFLICT.UNUSED_BUY_LABEL"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -908,7 +917,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -927,7 +936,7 @@
       ],
       "FIGURE": [],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "AO saucer uses same-side three-bar momentum-colour sequence and its signal price bar.",
+      "ORIGINAL_MEANING": "LONG positive a>b<c, b red/c green, first a color unspecified; SHORT mirrors. Signal belongs to its corresponding completed price bar, with a separate conditional trigger.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -954,7 +963,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Original NTD pp.57-62 source conditions (minimum three AO bars, source-derived colour and zero-line side), Python/Kotlin 32-case shared boundary contract and native observer are bounded tested. Not all book figure price series were digitized; no actual NTD exchange fills (NTD is observe-only).",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -966,7 +975,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1011,7 +1020,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Original NTD pp.58-64 exact closed AO negative-to-positive or inverse crossing and strict zero-touch exclusions bounded-tested in Python/Kotlin against common fixture. Full figure digitization and signed exchange fill proof not present; NTD remains observe-only.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1023,7 +1032,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1041,13 +1050,11 @@
         68,
         69,
         70,
-        71,
-        72,
-        73
+        71
       ],
       "FIGURE": [],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "Same-side peaks, second nearer zero, no intervening zero crossing.",
+      "ORIGINAL_MEANING": "Same-side extrema with second nearer zero and confirmation by favorable color; no intervening reach/cross of zero. Diagram pivots become known causally, not on the drawn extreme.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -1074,7 +1081,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Original NTD pp.60-66: mirrored two confirmed same-side troughs/crests, second nearer zero, zero-touch and intervening peak counterexamples bounded-tested in Python/Kotlin; unreadable historical price charts and active NTD order execution deliberately not certified.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1086,7 +1093,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1098,6 +1105,7 @@
       "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
       "CHAPTER": null,
       "PAGE": [
+        74,
         75,
         76,
         77,
@@ -1110,11 +1118,13 @@
         84,
         85,
         86,
-        87
+        87,
+        88,
+        89
       ],
       "FIGURE": [],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "Two colour confirmations with acceleration, three against; zero crossing alone is not AC entry.",
+      "ORIGINAL_MEANING": "Opposite-color base followed by two favorable bars on confirming AC side, three on opposing side; current confirming bar decides count, earlier bars may straddle zero. AC zero crossing alone is not entry.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -1140,8 +1150,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Original NTD pp.74-82: both directions, 2-with/3-against AC bars and second/third crossing-zero exceptions source tested in Python, native Kotlin and hypothetical observer. Complete source-figure chart annotations and real fills not demonstrated.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.SP_QUOTE_UNITS"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1151,7 +1163,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1199,7 +1211,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Source-owned native/Python execution, bounded quote checks and transport restart/idempotency cases are implemented. Exhaustive independent chart fixtures and physical Demo acceptance remain open. 90s/0.15% are project limits.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -1212,7 +1224,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1259,7 +1271,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "NTD original PDF91–96 zone colour/5th bar and monotone one-closed-bar trail verified with mirrored source-candle Python/Kotlin boundary tests; off-grid bars, historical stop-touch uncertainty and rolling history checkpoint fail closed. NTD is observation-only; signed Binance Demo STOP exchange replacement and every author figure are not independently certified.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1273,7 +1285,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1285,12 +1297,15 @@
       "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
       "CHAPTER": null,
       "PAGE": [
+        103,
         104,
-        108
+        108,
+        111,
+        114
       ],
       "FIGURE": [],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "First qualifying reference bar relative to Jaw decides one/two extremes; adverse zone doubles to two/four.",
+      "ORIGINAL_MEANING": "Current signal bar relative to Jaw decides one/two qualifying extremes; it is not the base/reference bar side. LONG red and SHORT green double to two/four. Preserve111 wording conflicts.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -1315,8 +1330,11 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "NTD source PDF103–108 figures 8-7–8-20 (read right-to-left; base plus one/two highs or lows depending on reference Jaw; two/four adverse-zone count) has mirrored Python/Kotlin source-price tests. Both trigger and protective extreme must be exactly on Binance PRICE_FILTER tick; stale/malformed source is rejected. Full digitization of all author diagrams and live exchange execution not certified.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.NEW_BUY_BASE",
+        "NTD.CONFLICT.SELL_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1328,7 +1346,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -1345,11 +1363,13 @@
         117,
         118,
         119,
-        120
+        120,
+        121,
+        122
       ],
       "FIGURE": [],
       "CLASSIFICATION": "UNRESOLVED",
-      "ORIGINAL_MEANING": "Edition-specific Teeth/Lips exits and five-zone priority.",
+      "ORIGINAL_MEANING": "Four NTD exit methods retain close-only Teeth/Lips, fifth-zone price trail and optional opposite signal. Current-close decision uses next-period line; fast angle and discretionary priority are not complete numeric specifications.",
       "MARKET_CONTEXT": "Edition-specific; TC2 alone eligible for new exposure, other sources observation only.",
       "PRECONDITIONS": "See linked deterministic implementation and applicable source receipt; no implied complete source review.",
       "REQUIRED_DATA": [
@@ -1374,8 +1394,10 @@
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "NTD PDF115–120, fig 9-2–9-6: Teeth close-only, Lips only for a numerically defined fast-market regime beginning NEXT completed H1, mirrored LONG/SHORT, no wick exits or inherited previous-campaign mode and no UTC-misaligned candles. Python/Kotlin source-geometry boundary evidence is bounded, but numerical price-vs-Lips angle is an engineering proxy for visual book judgement, historical figure verdicts and authenticated exchange exit/STOP acceptance remain unproven.",
-      "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFLICTS": [
+        "NTD.CONFLICT.SEVENTH_ZONE_COLOR"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
@@ -1393,7 +1415,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3687,7 +3709,7 @@
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
       "EXCEPTIONS": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
       "CONFLICTS": [],
-      "CONFIDENCE": "IMPORTED_NOT_REVERIFIED_THIS_RUN",
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "IMPLEMENTED_PARTIAL",
       "PRIOR_REGISTRY_STATUS": "IMPLEMENTED_PARTIAL",
       "TESTS": [
@@ -3696,7 +3718,7 @@
       ],
       "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
-      "source_reviewed_this_run": false,
+      "source_reviewed_this_run": true,
       "execution_authority": false,
       "training_allowed": false
     },
@@ -3905,8 +3927,10 @@
       "POSITION_MANAGEMENT": "No authority",
       "EXIT_CONDITIONS": "No authority",
       "EXCEPTIONS": [],
-      "CONFLICTS": [],
-      "CONFIDENCE": "SINGLE_REVIEW",
+      "CONFLICTS": [
+        "NTD.CONFLICT.LIPS_SHIFT"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
       "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
       "TESTS": [],
       "TEST_RESULTS": "See regression report; not certification of a whole book.",
@@ -6043,6 +6067,869 @@
       "PRIOR_REGISTRY_STATUS": null,
       "TESTS": [],
       "TEST_RESULTS": "Evidence integrity only; no new market/exchange validation claimed.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.FRACTAL.CONFIRMATION_AND_EQUALITY",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        41,
+        42,
+        43
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "At least five bars; two strictly lower highs/higher lows on each side. Equal extrema do not count; outside bars can support both directions and neighboring formations may share bars. Figure4-2D uses six bars. Right-hand confirmation is known later than the drawn pivot.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.FRACTAL.CURRENT_TEETH",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        42,
+        43,
+        50,
+        53,
+        54
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "SOURCE_PARAPHRASE_RESEARCH_ONLY",
+      "ORIGINAL_MEANING": "Entry one verified tick beyond a confirmed fractal must be eligible relative to current Teeth at the actual break. A fractal formed below Teeth may become eligible later; arrows mark formation, not guaranteed execution. Do not expire a still-valid pending signal after an invented number of bars.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY",
+        "NTD.CONFLICT.UNUSED_BUY_LABEL"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "SOURCE_PARAPHRASE_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.FRACTAL.UNKNOWN_PRICES",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        41,
+        42,
+        43
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "An untriggered fractal cannot be proven unconsumed across an unknown later high/low. Engineering data guard rejects nonfinite/nonpositive/impossible OHLC and invalid/future confirmation mappings instead of treating skipped NaN as no break.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [
+        "tests/test_ntd_fractal_unknown_prices.py",
+        "app/src/test/java/com/williamsbot/WilliamsNtdFirstFractalExactSourceTest.kt"
+      ],
+      "TEST_RESULTS": "30 new Python cases plus existing targeted NTD cases passed; native mirror requires exact-head Android CI.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.AO.SAUCER_FIRST_COLOR",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        57,
+        58,
+        59,
+        60
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "LONG saucer has positive a>b<c, with b red and c green; first a color is not prescribed. SHORT mirrors below zero. Requiring two prior red bars would add a source-unsupported veto.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.OSCILLATOR.PENDING_COLOR_INVALIDATION",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        57,
+        60,
+        70,
+        71,
+        74,
+        88,
+        89
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Untriggered AO/AC signal persists while favorable histogram direction continues and is invalidated by the opposite color. Ties are not strict rises/falls. A later favorable bar is not necessarily a separate new signal.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.SP_QUOTE_UNITS"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.BLUE_LIGHT.PENDING_IMPROVEMENT",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        60,
+        61,
+        70,
+        71,
+        88,
+        104,
+        108
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "A favorable oscillator with a price pullback may improve an existing pending conditional level. This is not automatically a new signal, a duplicate POST or proof that an old exchange order was cancelled.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.NEW_BUY_BASE",
+        "NTD.CONFLICT.SELL_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.AC.GAP_FILL",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        74
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "The illustrated next-session opening gaps past the AC trigger. Signal/conditional price differs from the reported executable opening price; an OHLC replay must model adverse gap opens instead of promising fills at the trigger.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.BALANCE.ADVERSE_ZONE",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        103,
+        108,
+        111,
+        114
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Use the current signal bar relative to the blue Jaw, not the oldest reference bar: one qualifying extreme away from the line, two toward it. LONG in red or SHORT in green doubles the count to two/four. A continuation extreme alone is not a new pullback base.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.NEW_BUY_BASE",
+        "NTD.CONFLICT.SELL_WORDING"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.EXIT.NEXT_PERIOD_CLOSE_ONLY",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        115,
+        116,
+        117,
+        118,
+        119,
+        120
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Teeth/Lips exits described here are close-only, with the line selected at the current completed period for the following period. A wick is not a close. Fast-market price-versus-Lips angle is qualitative; no ATR threshold or retrospective switch is specified.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.SEVENTH_ZONE_COLOR"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.EXIT.OPPOSITE_NOT_AUTOMATIC_REVERSE",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        119,
+        120,
+        121,
+        122
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Opposite-dimension signal is the least preferred of four exit methods and generally closes existing exposure, not an automatic reverse entry. Close-only edition exits do not remove mandatory exchange STOP engineering protection.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.REENTRY.CONTINUING_TREND_EPISODE",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        118,
+        130
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "After a profitable exit, the book permits re-entry on a qualifying same-direction signal outside the mouth while the trend continues. Initial first-fractal gating and continuing-episode re-entry are different states; episode ownership and invalidation need a complete deterministic spec before enabling a bypass.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.LIPS_OR_GREEN",
+        "NTD.CONFLICT.SEVENTH_ZONE_COLOR"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.WAVE.FIVE_BULLETS",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        120,
+        121,
+        122
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Terminal checklist combines W5 target0.62-to1 times p0-to-p3 distance projected from p4, AO divergence, terminal fractal, a squat among the three extreme bars and momentum change. Causal degree/pivots and alternative counts remain unresolved; frequency claims are not gold labels.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.SIZING.EDITION_SEPARATION",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        89,
+        98,
+        123,
+        124,
+        125,
+        126,
+        127,
+        128,
+        129,
+        130
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "NTD worked examples use a unit per eligible signal; TC1 ten-unit schedules and TC2 one-five-four-three-two pyramids are separate edition descriptions. Three-to-five times trend points from additions is not three-to-five times account return or proof of acceptable margin.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.ANNUAL_RETURN_LABEL",
+        "NTD.CONFLICT.LIPS_OR_GREEN",
+        "NTD.CONFLICT.SP_QUOTE_UNITS",
+        "NTD.CONFLICT.ZONE_TABLE_ROW6"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "BOUNDED_NTD_DETECTOR_GUARD",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.PRINTED_NUMBERS",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        27,
+        28,
+        89,
+        98,
+        123
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Audit explicitly printed arithmetic and15 reported fills in two tables. Keep signal prices, fill prices, gross points/dollars, unknown fees/net/margin and unresolved quote-unit convention distinct. No digitized candles, historical fill certification or independent backtest is obtained.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.ANNUAL_RETURN_LABEL",
+        "NTD.CONFLICT.ROUNDED_DIMENSION",
+        "NTD.CONFLICT.SP_QUOTE_UNITS",
+        "NTD.CONFLICT.SQUARING",
+        "NTD.CONFLICT.ZONE_TABLE_ROW6"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_EXPLICIT_NUMBER_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [
+        "tests/test_ntd_printed_number_audit.py"
+      ],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.PSYCHOLOGY.EXERCISES_NOT_SIGNAL",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Flow, Gremlin reflection, language reframing, morning pages attributed to Julia Cameron, sensory attention, anchors and competence stages are human exercises. Flow-zone is not AO/AC color-zone. No inferred emotion, clinical/brain fact or execution permission follows from this chapter.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_EXPLICIT_NUMBER_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.CLAIMS.NOT_VALIDATED",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        5,
+        7,
+        8,
+        10,
+        11,
+        12,
+        13,
+        14,
+        123,
+        156
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Student counts, elite/loser percentages, profit promises and anecdotes are source-attributed claims without a reproduced sample here. Constant monthly compounding illustrates arithmetic, not observed returns, future profitability or a model understanding score.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.ANNUAL_RETURN_LABEL"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_EXPLICIT_NUMBER_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.PREFACE.EDITOR_ATTRIBUTION",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        5
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Russian scientific-editor preface is signed Mikhail Chekulaev. Its dream-prediction, suppression-offer and absolute-success claims must not be attributed as verified Bill Williams rules; exact Russian publisher/year remains unresolved.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_EXPLICIT_NUMBER_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
+      "FULL_ATOMIC_SPEC_COMPLETE": false,
+      "source_reviewed_this_run": true,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "RULE_ID": "NTD.ALLIGATOR.QUALITATIVE_NOT_NUMERIC_ANGLE",
+      "SOURCE": "NTD",
+      "SOURCE_ID": "NTD_RU",
+      "SOURCE_SHA256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "EDITION": "New Trading Dimensions; Russian reflow, exact publication unresolved",
+      "CHAPTER": null,
+      "PAGE": [
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40,
+        118
+      ],
+      "FIGURE": [],
+      "CLASSIFICATION": "ENGINEERING_DATA_VALIDITY_CONSTRAINT",
+      "ORIGINAL_MEANING": "Alligator displacement is chart alignment of causal moving averages, not access to future prices. Sleep/opening/fast-market angles remain qualitative, and lower-timeframe analogies do not manufacture actual lower-timeframe candles.",
+      "MARKET_CONTEXT": "NTD research/observer; operational TC2 remains a separate edition.",
+      "PRECONDITIONS": "Source and manual first-pass receipt; independent review and complete deterministic applicability specification pending.",
+      "REQUIRED_DATA": [
+        "source-pinned pages",
+        "explicit causal event/data definitions before implementation"
+      ],
+      "SIGNAL_DEFINITION": {
+        "kind": "SOURCE_PARAPHRASE_PENDING_COMPLETE_ATOMIC_SPEC"
+      },
+      "CONFIRMATION": "No historical pivot backfill or diagram-derived exact timestamps; source roles must be confirmed causally.",
+      "TRIGGER": "UNSPECIFIED_FOR_EXECUTION",
+      "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
+      "INVALIDATION": "Unresolved source conflict, absent required evidence, unsupported equality/boundary or degree choice.",
+      "STOP_PLACEMENT": "Source-specific description only; authenticated exchange protection and applicability are separate.",
+      "POSITION_MANAGEMENT": "No operational TC2 change from a research receipt.",
+      "EXIT_CONDITIONS": "Not executable from this registry.",
+      "EXCEPTIONS": "First reading is not independent figure/algorithm certification; human claims are not machine facts.",
+      "CONFLICTS": [
+        "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY",
+        "NTD.CONFLICT.LIPS_SHIFT",
+        "NTD.CONFLICT.MARGINAL_SETUPS",
+        "NTD.CONFLICT.SEVENTH_ZONE_COLOR"
+      ],
+      "CONFIDENCE": "SOURCE_CHECKED_SINGLE_REVIEW_NOT_INDEPENDENT",
+      "IMPLEMENTATION_STATUS": "OFFLINE_EXPLICIT_NUMBER_AUDIT_ONLY",
+      "PRIOR_REGISTRY_STATUS": null,
+      "TESTS": [],
+      "TEST_RESULTS": "Source/evidence integrity only; not independent market or exchange validation.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,

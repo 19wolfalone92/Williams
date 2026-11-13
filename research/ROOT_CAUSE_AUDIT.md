@@ -1,5 +1,11 @@
 # Williams Master Research: контрольная точка 13.11.2026
 
+Актуальное продолжение: `NTD_FIRST_PASS_AND_DATA_GUARD_20261113.md`.
+579 first-pass receipts,132 figure entries,135 rules; independent0.
+Найден и исправлен Python NTD skip-NaN false-unconsumed дефект,2444 Python
+tests passed/2 skipped. Main не изменён; исходные контрольные точки ниже
+сохранены как история, а не как текущие счётчики или открытые дефекты.
+
 Рабочая база c71e1541ab76488dabcaae291f8dfcee3404b9f3 (PR239, 4.64.28).
 838 файлов восстановлены через GitHub API; все Git blob SHA совпали.
 Это исследовательская ветка, не полная приёмка всех книг и Binance/Android.

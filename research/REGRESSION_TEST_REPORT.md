@@ -71,3 +71,18 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
   Campaign43454243151/43454228110, APK+API35/36 smoke43454243156,
   research43454242985/43454228116. Это доказательства именно44ffcef4.
   Результаты конечного source/audit commit будут указаны в PR240 по егоSHA.
+
+## NTD first pass и unknown-price regression
+
+- Полный Python: **2444 passed,2 skipped,4 прежних FastAPI warnings,27.32s**.
+  Новые30 NTD price/index cases,24 printed-number/provenance и3 master evidence
+  cases. Nullable/nonfinite данные не являются доказательством непробитого уровня.
+- Ruff/release contract:PASS; clean-CI static safety0failures/11existing warnings.
+- Две NTD таблицы и явная арифметика воспроизводятся отдельным Decimal CLI.
+  AC table6-1 служит положительным контролем; Zone table7-1 содержит typo
+  point cell7.55 против78.55. Signal price не подставляется вместо reported fill.
+- Reinventory1091 non-Course rows совпал;122 original Course OCR rows и
+  все1213 acquisition hashes сохранены. IntegrityPASS, complete/numeric
+  reconciled gates ожидаемоexit2. Никакого нового backtest/OOS/PnL доказательства.
+- Добавлен Kotlin зеркальный regression; native production не менялся.
+  Exact-head CI нового commit проверяется отдельно и фиксируется вPR240.

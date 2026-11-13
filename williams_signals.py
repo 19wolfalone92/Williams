@@ -598,7 +598,7 @@ def extract_ntd_ao_signal_specs(
     ]
     matches: list[tuple[SignalType, str]] = []
 
-    # AO Saucer: three consecutive bars form green-red-green above zero
+    # AO Saucer: three bars above zero with a>b<c; b red and c green.
     # for LONG, mirrored red-green-red below zero for SHORT.
     last3 = ao[-3:]
     if is_long:
@@ -932,6 +932,22 @@ def extract_ntd_fractal_signal_specs(
     if not required.issubset(ind.columns) or not ({"teeth_current", "teeth_shifted"} & set(ind.columns)):
         return []
 
+    # NTD ch4: a pending fractal must be proven unconsumed. pandas any()/min()
+    # skip missing prices, which used to turn an unobserved later high/low into
+    # "the level was not hit". Match native validWilliamsEditionBars: missing,
+    # nonfinite or impossible OHLC is UNKNOWN, never fresh fractal evidence.
+    price_columns = ["high", "low", "close"] + (["open"] if "open" in ind.columns else [])
+    try:
+        for values in ind[price_columns].itertuples(index=False, name=None):
+            prices = [float(value) for value in values]
+            high, low, close = prices[:3]
+            opening = prices[3] if len(prices) > 3 else close
+            if (not all(math.isfinite(value) and value > 0 for value in prices)
+                    or high < max(low, close, opening) or low > min(close, opening)):
+                return []
+    except (TypeError, ValueError, OverflowError):
+        return []
+
     tick = _verified_exchange_tick(tick_size)
     if tick is None:
         return []
@@ -945,6 +961,16 @@ def extract_ntd_fractal_signal_specs(
     center_col = "confirmed_up_center_index" if is_long else "confirmed_down_center_index"
     group_start_col = "confirmed_up_group_start_index" if is_long else "confirmed_down_group_start_index"
 
+    def known_index(value: object) -> int | None:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (isinstance(value, bool) or not math.isfinite(numeric)
+                or numeric != math.trunc(numeric) or not 0 <= numeric < len(ind)):
+            return None
+        return int(numeric)
+
     # New indicator frames enumerate confirmed events on the actual bar close;
     # legacy synthetic frames may only have centre markers, so retain a
     # strictly bounded compatibility path for those test/serialized frames.
@@ -956,9 +982,13 @@ def extract_ntd_fractal_signal_specs(
             center_value = ind.iloc[confirmation_i].get(center_col)
             if center_value is None or pd.isna(center_value):
                 continue
-            center_i = int(center_value)
+            center_i = known_index(center_value)
+            if center_i is None:
+                continue
             group_value = ind.iloc[confirmation_i].get(group_start_col)
-            group_start_i = int(group_value) if group_value is not None and not pd.isna(group_value) else center_i
+            group_start_i = known_index(group_value) if group_value is not None and not pd.isna(group_value) else center_i
+            if group_start_i is None:
+                continue
             confirmations.append((confirmation_i, center_i, group_start_i))
     else:
         confirmations = [
@@ -971,7 +1001,8 @@ def extract_ntd_fractal_signal_specs(
     # A level that was already crossed after confirmation is deliberately not
     # re-armed: it may have triggered while the process was offline.
     for confirmation_i, center_i, group_start_i in confirmations:
-        if confirmation_i >= len(ind) or center_i < 0 or group_start_i < 0 or group_start_i > center_i:
+        if (confirmation_i >= len(ind) or not 0 <= group_start_i <= center_i < len(ind)
+                or confirmation_i < center_i + 2):
             continue
         center = ind.iloc[center_i]
         confirmation = ind.iloc[confirmation_i]

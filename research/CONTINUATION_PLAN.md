@@ -8,13 +8,14 @@
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
 2. `python tools/williams_master_inventory.py --source-dir <PDF_DIR>` с
    локальным OCR directory воспроизводит реестр; `review_notes.json` сохраняет
-   именно60 ручных receipts и не выдаёт их за независимую сертификацию.
+   ручные receipts (сейчас579) и не выдаёт их за независимую сертификацию.
 3. `python tools/audit_williams_master_research.py --require-complete` должен
    завершаться2, пока source/figure/implementation/Device gates не завершены.
    Успех integrity CLI без этого флага означает только валидный реестр.
-4. Статус13.11: TC2_EN257/257 и TC1_RU140/140 имеют первое текстовое чтение.
+4. Статус13.11: TC2_EN257/257, TC1_RU140/140 и NTD_RU156/156 имеют
+   первое текстовое чтение.
    Полные визуальные/независимые проверки и межпереводные page maps не завершены.
-   Следующий source route — NTD_RU, затем Course, выбирая ещё не REVIEWED страницы
+   Следующий source route — Course, выбирая ещё не REVIEWED страницы
    строго по очереди, без пропуска психологии/сносок.
 5. Независимое повторное чтение сложных9.10/10.7/11.2/11.7/12.1-4. Не
    реконструировать точные OHLC из нечисленных рисунков; отдельные synthetic cases.
@@ -113,3 +114,28 @@ rows сохранены. Контракт также проверен на45 see
 затем независимые source/figure/expert и заранее зафиксированный holdout.
 Signed Demo/physical Android из пункта7 не выполнены. Main merge закрыт;
 exact-head CI этой контрольной точки сохраняется в PR240, не приписывается старомуSHA.
+
+## Продолжение13.11.2026 — NTD и проверка неизвестных цен
+
+Отчёт: `NTD_FIRST_PASS_AND_DATA_GUARD_20261113.md`. NTD156/156 теперь имеют
+текстовые first-pass receipts, включая психологию и редакторское предисловие;
+35 visual,22 новых качественных figure entries. Глобально579/1213 receipts,
+168 visual,132 figures,135 rules,111 source-rechecked, independent0.
+Полных atomic specs осталось4; спорные формулы/тексты не стали gold.
+
+Исправлен воспроизведённый Python NTD дефект: поздний NaN экстремума больше
+не доказывает, что старый фрактал не был пробит. Неконечные/невозможные OHLC
+и неверные индексы не создают кандидата; обе стороны покрыты регрессиями.
+Добавлены15 NTD source conflicts, аудит двух напечатанных таблиц и явной
+арифметики. AC таблица сходится; Zone строка6 содержит7.55 против78.55.
+Фактические fills, fees/net/margin path из этих таблиц неизвестны.
+
+Полный локальный набор2444 passed/2 skipped/4 warnings,27.32s; ruff/releasePASS,
+static safety0failures/11existing warnings.1091 non-Course inventory rows
+воспроизведены;122 старых Course OCR rows и все acquisition hashes сохранены.
+Complete и printed-number reconciled gates ожидаемоexit2. Новое exact-headCI
+сохраняется вPR240 после завершения; версияAndroid остаётся4.64.31.
+
+Продолжать Course по настоящим изображениям/OCR, не считать пустой raw text
+прочитанным содержимым. Затем полная translation map, независимые фигуры,
+margin ledger/final-submit, expert/holdout и actual Demo/device. Main не изменён.

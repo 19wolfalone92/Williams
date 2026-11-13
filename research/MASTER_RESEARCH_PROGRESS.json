@@ -10,13 +10,13 @@
     "inventory_rows": 1213
   },
   "source_coverage": {
-    "semantically_reviewed_single_pass": 428,
+    "semantically_reviewed_single_pass": 579,
     "independently_verified": 0,
     "total_physical_pages": 1213,
     "stage_counts": {
-      "REVIEWED_TEXT_ONLY": 292,
-      "REVIEWED_SINGLE_PASS": 136,
-      "TEXT_ACQUIRED_UNVERIFIED": 635,
+      "REVIEWED_TEXT_ONLY": 411,
+      "REVIEWED_SINGLE_PASS": 168,
+      "TEXT_ACQUIRED_UNVERIFIED": 484,
       "IMAGE_ONLY_PENDING_OCR": 31,
       "OCR_ACQUIRED_UNVERIFIED": 119
     },
@@ -39,12 +39,17 @@
       },
       "NTD_RU": {
         "physical_pages": 156,
-        "first_pass_receipts": 5,
-        "visual_receipts": 3,
+        "first_pass_receipts": 156,
+        "visual_receipts": 35,
         "independently_verified": 0,
-        "all_physical_pages_have_first_pass_receipts": false,
+        "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
-          "PREVIOUS_RECEIPT_UNCLASSIFIED": 5
+          "FRONT_MATTER": 5,
+          "NAVIGATION": 1,
+          "INTRODUCTION": 3,
+          "BODY": 145,
+          "VISUALLY_CONFIRMED_BLANK": 1,
+          "BIOGRAPHY": 1
         },
         "full_content_certified": false
       },
@@ -101,26 +106,30 @@
     }
   },
   "figure_coverage": {
-    "qualitative_single_review_entries": 110,
+    "qualitative_single_review_entries": 132,
     "independent_second_reviews": 0,
     "total_substantive_figures": null,
     "percent": null
   },
   "source_conflicts": {
-    "visible_single_review_entries": 10,
+    "visible_single_review_entries": 25,
+    "per_source": {
+      "TC1_RU": 10,
+      "NTD_RU": 15
+    },
     "independent_second_reviews": 0,
     "unseen_original_english_errata_certified": false
   },
   "rule_extraction": {
-    "registered": 117,
-    "rechecked_against_sources_this_run": 81,
+    "registered": 135,
+    "rechecked_against_sources_this_run": 111,
     "total_rules_in_books": null,
     "percent": null
   },
   "rule_implementation_coverage": null,
   "rule_test_coverage_of_all_books": null,
   "canonical_consistency": {
-    "confirmed_numeric_defect_classes_fixed": 4,
+    "confirmed_numeric_defect_classes_fixed": 5,
     "whole_book_certified": false
   },
   "execution_safety": {

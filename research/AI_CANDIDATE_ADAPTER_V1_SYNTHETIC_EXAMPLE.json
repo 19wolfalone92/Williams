@@ -458,7 +458,7 @@
       "symbol": "BTCUSDT"
     },
     "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
-    "request_sha256": "bf2ff99e166f225fca1d633f8aaa4bb982a81c2168520a6cde7552cab349bdf3",
+    "request_sha256": "f30e0e1ed31593ba0b5c5d7d10c1aca886e5d23cce41ff825667b75a642d4352",
     "rules": [
       {
         "CHAPTER": "8/12/13/Appendix1/Appendix7",
@@ -510,10 +510,10 @@
     ],
     "schema": "WILLIAMS_AI_RESEARCH_REQUEST_V1",
     "snapshot": {
-      "MASTER_RULE_REGISTRY.json": "be7450aef4f01c11d5f0906f81cd257f107d6075af54c46202cf2e48c5ba57bd",
-      "PRIMARY_SOURCE_PAGE_REGISTER.jsonl": "ae0dbcd999ef1f9f73742279b7c23b66b7eb00e6a78852fa8e6ba40bd4f4d1d2",
+      "MASTER_RULE_REGISTRY.json": "1f5332f2e9b98075f82c7241168f65eb3659bb561dc8613a60487b8e53a8ddc4",
+      "PRIMARY_SOURCE_PAGE_REGISTER.jsonl": "db2a10579bba4cd52565918d62bcd1c3b3adcac021f2672b0c63870035a0e239",
       "SOURCE_CATALOG.json": "83302c9c21b27c57260b7a2ea03c203baa2561adbaf40c9986e28d565146c283",
-      "review_notes.json": "994aa866db8192fca9525ae0bf93f898ba356c1fb8764a4790e421a8faa43eb1"
+      "review_notes.json": "8306095ffae170a6cebd139ff0ee2649782688471598cd1c5c375564b1a4d30f"
     },
     "source": {
       "edition": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
@@ -525,7 +525,7 @@
   },
   "proposal": {
     "schema": "WILLIAMS_AI_RESEARCH_PROPOSAL_V1",
-    "request_sha256": "bf2ff99e166f225fca1d633f8aaa4bb982a81c2168520a6cde7552cab349bdf3",
+    "request_sha256": "f30e0e1ed31593ba0b5c5d7d10c1aca886e5d23cce41ff825667b75a642d4352",
     "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
     "decision": "ABSTAIN",
     "rationale": "Hand-authored synthetic contract example. Median SMMA construction alone does not establish a source-complete market entry. No expert or model examination was run.",
@@ -548,9 +548,9 @@
   },
   "receipt": {
     "schema": "WILLIAMS_AI_RESEARCH_RECEIPT_V1",
-    "request_sha256": "bf2ff99e166f225fca1d633f8aaa4bb982a81c2168520a6cde7552cab349bdf3",
+    "request_sha256": "f30e0e1ed31593ba0b5c5d7d10c1aca886e5d23cce41ff825667b75a642d4352",
     "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
-    "proposal_sha256": "e59d9d018bbca404adc1b98e3bd320c182ca565b21698b4541fc21d1f546880f",
+    "proposal_sha256": "a1f7f3800b0c6433c7e1c84836610bcd26725d0f5746661ea3bbc848c4d61c0a",
     "decision": "ABSTAIN",
     "disposition": "RESEARCH_ONLY_UNVERIFIED",
     "model_rationale_untrusted": "Hand-authored synthetic contract example. Median SMMA construction alone does not establish a source-complete market entry. No expert or model examination was run.",
