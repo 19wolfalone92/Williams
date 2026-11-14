@@ -27,6 +27,7 @@ class DemoExchangeModel:
         self.close_status = "FILLED"
         self.market_add_timeout_after_fill = False
         self.market_close_timeout_after_fill=False
+        self.account_transform = lambda account:account
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
@@ -58,15 +59,28 @@ class DemoExchangeModel:
         if path.endswith("ticker/price"):
             return {"symbol": self.symbol, "price": str(self.price)}
         if path.endswith("/account"):
-            return {"canTrade": True, "assets": [], "totalWalletBalance": "10000", "totalUnrealizedProfit": "0", "availableBalance": "10000"}
+            margin = str(abs(self.amount) * self.price / self.leverage)
+            positions = [] if not self.amount else [{"symbol":self.symbol, "positionSide":"BOTH",
+                "positionAmt":str(self.amount), "initialMargin":margin, "isolatedWallet":margin,
+                "isolatedMargin":margin, "updateTime":100}]
+            return self.account_transform({"canTrade": True, "totalWalletBalance": "10000", "totalMarginBalance":"10000",
+                "totalUnrealizedProfit": "0", "availableBalance": "10000", "totalInitialMargin":margin,
+                "totalPositionInitialMargin":margin, "totalOpenOrderInitialMargin":"0", "positions":positions,
+                "assets":[{"asset":"USDT", "walletBalance":"10000", "initialMargin":margin,
+                           "positionInitialMargin":margin, "openOrderInitialMargin":"0"}]})
+        if path.endswith("accountConfig"):
+            return {"canTrade":True, "dualSidePosition":False, "multiAssetsMargin":False}
         if path.endswith("positionRisk"):
             return [{"symbol": self.symbol, "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
                      "liquidationPrice": self.liquidation_price if self.liquidation_price != "MODEL" else ("50" if self.amount > 0 else "200"), "positionSide": "BOTH",
                      "leverage": str(self.leverage), "marginType": "isolated"}]
         if path.endswith("openOrders") or path.endswith("allOrders"):
-            return list(self.orders.values()) if path.endswith("allOrders") else []
+            return list(self.orders.values()) if path.endswith("allOrders") else [dict(row,price=row.get("price","0"))
+                for row in self.orders.values() if row["status"] in {"NEW","PARTIALLY_FILLED"}]
         if path.endswith("openAlgoOrders") or path.endswith("allAlgoOrders"):
-            return [dict(row) for row in self.algos.values() if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
+            return [dict(row,positionSide=row.get("positionSide","BOTH"),reduceOnly=row.get("reduceOnly",False),
+                         closePosition=row.get("closePosition",False)) for row in self.algos.values()
+                    if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
         if path.endswith("algoOrder"):
             if method == "POST":
                 if p.get("closePosition") and self.protection_failure:
@@ -1014,3 +1028,81 @@ def test_tc2_addition_revalidates_after_sizing_before_exchange_post(armed_runtim
     expected="PROFITABLE_POSITION|invalidated_before_trigger" if change=="profit_lost" else "already_crossed"
     with pytest.raises(RuntimeError,match=expected):bot._arm_add_on(campaign,signal)
     assert before==sum(m=="POST" and p.endswith("algoOrder") for m,p,_ in exchange.calls)
+
+
+@pytest.fixture
+def half_margin_entry(monkeypatch, tmp_path):
+    monkeypatch.setenv('WILLIAMS_DB_PATH', str(tmp_path / 'margin.sqlite3'))
+    monkeypatch.setenv('DRY_RUN', 'false')
+    monkeypatch.setenv('FUTURES_LEVERAGE', '2')
+    monkeypatch.setenv('FUTURES_SYMBOL_LEVERAGES', '')
+    monkeypatch.setenv('WILLIAMS_SIGNAL_PROFILE', 'TC2_THREE_WISE_MEN')
+    bot = FuturesWilliamsRuntime('test-key', 'test-secret', testnet=True)
+    exchange = DemoExchangeModel()
+    monkeypatch.setattr(bot.client, '_request', exchange.request)
+    def candidate(side):
+        now = int(time.time()*1000)
+        signal = SignalSpec.new(symbol='BTCUSDT', side=side, signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY, timeframe='1h', signal_bar_time_ms=now-1000,
+            trigger_price=101 if side=='BUY' else 99, protective_reference=95 if side=='BUY' else 105,
+            expires_at_ms=now+3600000)
+        return FuturesCandidate('BTCUSDT', 'LONG' if side=='BUY' else 'SHORT', signal, (signal,), .01, .001, True, 90)
+    try:
+        yield bot, exchange, candidate
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+@pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN'])
+def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, side, fault):
+    bot, exchange, candidate = half_margin_entry
+    def corrupt(account):
+        if fault=='OVER_HALF': account['totalInitialMargin']='5500'
+        elif fault=='MISSING_MARGIN': account.pop('totalInitialMargin')
+        else: account['multiAssetsMargin']='false'
+        return account
+    exchange.account_transform=corrupt
+    with pytest.raises(RuntimeError, match='FUTURES_HALF_MARGIN'):
+        bot._arm_entry(candidate(side))
+    assert not any(method=='POST' and path in {'/fapi/v1/order','/fapi/v1/algoOrder'}
+                   for method,path,_ in exchange.calls)
+    assert bot._pending_entries()==[]
+    assert bot.db.open_campaigns()==[]
+    row=bot.db.conn.execute("SELECT status FROM execution_intents WHERE purpose='CAMPAIGN_ENTRY'").fetchone()
+    assert row['status']=='BLOCKED'
+    closed=bot.db.conn.execute('SELECT pending_risk_quote,capital_reserved_quote,tags_json FROM campaigns').fetchone()
+    assert closed['pending_risk_quote']==closed['capital_reserved_quote']==0
+    assert 'entry_not_submitted' in closed['tags_json']
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+def test_lost_initial_post_keeps_exact_id_and_reserve_and_reconciles_without_repost(half_margin_entry, monkeypatch, side):
+    bot, exchange, candidate = half_margin_entry
+    actual=exchange.request
+    sent=[False]
+    def lose_response(method,path,params=None,signed=False):
+        if sent[0] and method=='GET' and path.endswith('algoOrder'):
+            raise BinanceAPIError('modeled unknown readback', unknown_execution=True)
+        result=actual(method,path,params,signed)
+        if method=='POST' and path.endswith('algoOrder') and not (params or {}).get('closePosition'):
+            sent[0]=True
+            raise BinanceAPIError('modeled lost reply after acceptance', unknown_execution=True)
+        return result
+    monkeypatch.setattr(bot.client,'_request',lose_response)
+    with pytest.raises(BinanceAPIError, match='execution UNKNOWN'):
+        bot._arm_entry(candidate(side))
+    [(symbol,cid)]=bot._pending_entries()
+    owner=bot._active_campaign(symbol)
+    assert owner.pending_risk_quote>0 and owner.capital_reserved_quote>0
+    assert 'entry_not_submitted' not in owner.tags
+    assert bot.db.conn.execute("SELECT status FROM execution_intents WHERE purpose='CAMPAIGN_ENTRY'").fetchone()['status']=='AMBIGUOUS'
+    monkeypatch.setattr(bot.client,'_request',actual)
+    bot._reconcile_pending()
+    assert bot._pending_entries()==[(symbol,cid)]
+    assert len(exchange.algos)==1 and next(iter(exchange.algos.values()))['clientAlgoId']==cid
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    assert bot._active_campaign(symbol).tags.get('protective_order_id')
+    assert len([p for m,path,p in exchange.calls if m=='POST' and path.endswith('algoOrder') and not p.get('closePosition')])==1

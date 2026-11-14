@@ -18,6 +18,59 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun halfMarginBlocksAtTheFinalDoorAndNeverReservesAPhantomEntry() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries)
+        for (fault in listOf("OVER_HALF", "MISSING_MARGIN", "MODE_CONFLICT", "CHANGED_READS")) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            var reads = 0
+            exchange.afterLeverage = {
+                exchange.accountTransform = { account ->
+                    when (fault) {
+                        "OVER_HALF" -> account.put("totalInitialMargin", "5500")
+                        "MISSING_MARGIN" -> account.apply { remove("totalInitialMargin") }
+                        "MODE_CONFLICT" -> account.put("multiAssetsMargin", "false")
+                        else -> account.apply {
+                            if (++reads > 1) {
+                                put("totalWalletBalance", "9900").put("totalMarginBalance", "9900")
+                                getJSONArray("assets").getJSONObject(0).put("walletBalance", "9900")
+                            }
+                        }
+                    }
+                }
+            }
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.toString(), result.getBoolean("safe_rejection"))
+            assertFalse(result.getBoolean("order_mutation_attempted"))
+            assertTrue(result.toString(), result.optString("error").contains("FUTURES_HALF_MARGIN"))
+            assertEquals(0, exchange.posts("/fapi/v1/order") + exchange.posts("/fapi/v1/algoOrder"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("REJECTED", owner.getString("order_status"))
+            assertFalse(owner.getBoolean("entry_submission_attempted"))
+            assertFalse(isEntryCampaignReserved(owner))
+            exchange.accountTransform = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
+        val journal = Journal()
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        exchange.beforeRequest = { request, _ ->
+            if (request.method == "POST" && request.url.encodedPath == "/fapi/v1/algoOrder") {
+                val row = JSONArray(journal.readState("futures_campaign_intents_v2")).getJSONObject(0)
+                assertTrue(row.getJSONObject("half_margin_proof").getBoolean("allowed"))
+            }
+        }
+        assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+    }
     @Test fun preupgradeManagementOnlyIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
         for(symbol in listOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"))
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
@@ -283,6 +336,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var closeStatus = "FILLED"
         var positionSide = "BOTH"
         var positionSnapshotTransform: ((JSONArray) -> JSONArray)? = null
+        var accountTransform: ((JSONObject) -> JSONObject)? = null
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             requests += request
@@ -294,7 +348,21 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/positionSide/dual" -> JSONObject().put("dualSidePosition", false)
                 "/fapi/v3/account" -> JSONObject().put("canTrade", true).put("totalWalletBalance", "10000")
                     .put("totalMarginBalance", "10000").put("totalUnrealizedProfit", "0")
-                    .put("availableBalance", "10000").put("assets", JSONArray())
+                    .put("availableBalance", "10000").apply {
+                        val margin = kotlin.math.abs(quantity) * mark / leverage
+                        put("totalInitialMargin", margin.toString()).put("totalPositionInitialMargin", margin.toString())
+                            .put("totalOpenOrderInitialMargin", "0")
+                            .put("assets", JSONArray().put(JSONObject().put("asset", "USDT").put("walletBalance", "10000")
+                                .put("initialMargin", margin.toString()).put("positionInitialMargin", margin.toString())
+                                .put("openOrderInitialMargin", "0")))
+                            .put("positions", JSONArray().apply {
+                                if (quantity != 0.0) put(JSONObject().put("symbol", symbol).put("positionSide", "BOTH")
+                                    .put("positionAmt", quantity.toString()).put("initialMargin", margin.toString())
+                                    .put("isolatedWallet", margin.toString()).put("isolatedMargin", margin.toString()).put("updateTime", 100))
+                            })
+                    }.let { accountTransform?.invoke(it) ?: it }
+                "/fapi/v1/accountConfig" -> JSONObject().put("canTrade", true)
+                    .put("dualSidePosition", false).put("multiAssetsMargin", false)
                 "/fapi/v3/positionRisk" -> positions()
                 "/fapi/v1/premiumIndex" -> { beforeMarkRead?.invoke()
                     JSONObject().put("symbol", symbol).put("markPrice", mark.toString()) }
@@ -321,12 +389,16 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/openOrders" -> JSONArray(orders.values.filter {
                     it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") &&
                         (p["symbol"] == null || it.optString("symbol") == p["symbol"])
-                })
+                }.map { JSONObject(it.toString()).apply { if (!has("price")) put("price", "0") } })
                 "/fapi/v1/userTrades" -> JSONArray((0 until tradeFills.length()).map { tradeFills.getJSONObject(it) }
                     .filter { p["orderId"]==null || it.optString("orderId")==p["orderId"] })
                 "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter {
                     it.optString("algoStatus") == "NEW" && (p["symbol"] == null || it.optString("symbol") == p["symbol"])
-                })
+                }.map { JSONObject(it.toString()).apply {
+                    if (!has("positionSide")) put("positionSide", "BOTH")
+                    if (!has("reduceOnly")) put("reduceOnly", false)
+                    if (!has("closePosition")) put("closePosition", false)
+                } })
                 "/fapi/v1/algoOrder" -> when (request.method) {
                     "POST" -> {
                         val protective=p["closePosition"]=="true" || p["reduceOnly"]=="true"

@@ -118,6 +118,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .followSslRedirects(false)
         .build()
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
+    /** Set by the serialized coordinator for the exact durable NEW-risk intent.
+     * Local/nonblocking, after rate/clock waits, including explicit -1021 retry. */
+    internal var halfMarginTransportFence: ((Map<String, String>) -> Unit)? = null
     private val base = "https://demo-fapi.binance.com"
     private val clockLock = Any()
     @Volatile private var timeSynced: Boolean = false
@@ -913,6 +916,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             try {
                 williamsNewRiskSymbolBlocker(params["symbol"].orEmpty())?.let { error(it) }
                 beforeExposureTransport()
+                halfMarginTransportFence?.invoke(params)
             } catch (failure: Exception) {
                 throw FuturesExposureNotSubmittedException(failure)
             }

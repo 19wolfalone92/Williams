@@ -75,6 +75,8 @@ from binance_client import BinanceAPIError
 from binance_futures_client import BinanceFuturesClient
 from trading_config import DEFAULT_FUTURES_SYMBOLS, TradingConfig
 from williams_symbol_policy import new_risk_symbol_blocker
+from futures_half_margin import (margin_observation, assess_half_margin,
+    ExposureNotSubmittedError, HalfMarginUnknown)
 from wave_engine import MultiTimeframeWaveEngine
 from williams_directional_context import evaluate_direction
 from williams_wave_hierarchy import (
@@ -1457,6 +1459,72 @@ class FuturesWilliamsRuntime:
             if str(campaign.tags.get("pending_exit_reason", "")).startswith("LIQUIDATION_GUARD") and self._liquidation_status(campaign, position) != "UNSAFE":
                 raise RuntimeError("Liquidation breach is no longer confirmed before exit submission")
 
+    def _half_margin_observation(self, symbol):
+        # Raw ordinary/algo identities are kept distinct. The normalized order
+        # API is for campaign recovery, not an account-wide liability ledger.
+        configuration = self.client.account_configuration()
+        account = self.client.account()
+        ordinary = self.client._require_array(self.client._request(
+            "GET", "/fapi/v1/openOrders", signed=True))
+        algos = self.client._require_array(self.client._request(
+            "GET", "/fapi/v1/openAlgoOrders", signed=True))
+        symbols = {symbol}
+        for order in ordinary + algos:
+            if str(order.get("reduceOnly", "")).lower() != "true" and str(order.get("closePosition", "")).lower() != "true":
+                symbols.add(order.get("symbol"))
+        configurations = {}
+        for key in sorted(symbols):
+            configurations[key] = {**self.client.symbol_configuration(key),
+                "mark_price": self.client.mark_price(key).get("markPrice")}
+        return margin_observation(account, configuration, ordinary + algos, configurations)
+
+    def _half_margin_liabilities(self, intent):
+        liabilities = []
+        for row in self.db.open_campaigns():
+            tags = json.loads(row["tags_json"] or "{}")
+            if row["state"] == "RECONCILE_REQUIRED":
+                raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:CAMPAIGN_RECONCILE_REQUIRED")
+            cid = self.db.state_get("entry_client_order_id:" + row["symbol"], "")
+            if not cid:
+                if float(row.get("pending_risk_quote") or 0) > 0:
+                    raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:RESERVATION_IDENTITY")
+                continue
+            if cid != tags.get("pending_order_client_id"):
+                raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:RESERVATION_IDENTITY")
+            if cid == intent.client_order_id:
+                liabilities.append({"client_id": cid, "current_proposal": True})
+                continue
+            # The exact signed lookup resolves a known partial child, not an
+            # inferred fill from price/time or a locally decremented reserve.
+            actual = self.client.get_order(row["symbol"], orig_client_order_id=cid,
+                conditional=tags.get("pending_order_type", "STOP_MARKET") != "MARKET")
+            liabilities.append({"client_id": cid, "symbol": row["symbol"], "side": row["side"],
+                "quantity": tags.get("pending_order_quantity"), "executed": actual.get("executedQty"),
+                "actual_order_id": actual.get("actualOrderId"), "status": actual.get("status"),
+                # Filled/terminal intents must be consumed by reconciliation
+                # before a new campaign can release their durable reservation.
+                "fill_confirmed": False, "terminal_confirmed": False})
+        return liabilities
+
+    def _assess_half_margin(self, intent):
+        campaign = self.engine.load_campaign(intent.campaign_id)
+        if campaign is None:
+            raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:CAMPAIGN_MISSING")
+        started = time.monotonic()
+        first = self._half_margin_observation(intent.symbol)
+        liabilities = self._half_margin_liabilities(intent)
+        second = self._half_margin_observation(intent.symbol)
+        proof = assess_half_margin(first, second, {"symbol": intent.symbol,
+            "side": intent.side, "quantity": intent.quantity, "client_id": intent.client_order_id,
+            "price": campaign.tags.get("pending_order_trigger"),
+            "leverage": self.config.leverage_for(intent.symbol)}, liabilities,
+            elapsed_ms=int((time.monotonic() - started) * 1000))
+        # Mandatory durable evidence is part of write-before-network admission.
+        self.db.save_execution_event(intent.intent_id, "HALF_MARGIN_ASSESSED", proof)
+        if not proof["allowed"]:
+            raise RuntimeError(proof["blocker"])
+        return started
+
     def _submit(self, intent, fn, checks=None):
         if self.dry_run:
             raise RuntimeError(
@@ -1465,22 +1533,82 @@ class FuturesWilliamsRuntime:
         if not self.client.testnet and not self.config.allow_live:
             raise RuntimeError("LIVE Futures order mutation requires ALLOW_LIVE=true")
 
+        new_exposure = intent.purpose.upper() in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
+        margin_started = None
+
         def combined_checks(snapshot):
+            nonlocal margin_started
             self._futures_pre_submit_checks(intent)
             if checks is not None:
                 checks(snapshot)
+            if new_exposure:
+                try:
+                    margin_started = self._assess_half_margin(intent)
+                except Exception as failure:
+                    # Any failed/malformed signed read here precedes the POST.
+                    # Preserve that definite outcome even for unexpected parser
+                    # or arithmetic exceptions; never create a phantom UNKNOWN.
+                    raise HalfMarginUnknown("FUTURES_HALF_MARGIN_UNKNOWN:ASSESSMENT_FAILED:" +
+                        str(failure)) from failure
+
+        def fenced_submit():
+            if not new_exposure:
+                return fn()
+            previous = getattr(self.client, "before_exposure_transport", None)
+            def fence(params):
+                age = (time.monotonic() - margin_started) * 1000 if margin_started is not None else -1
+                if not 0 <= age <= 15_000:
+                    raise ExposureNotSubmittedError("FUTURES_HALF_MARGIN_UNKNOWN:STALE")
+                if params.get("symbol") != intent.symbol or params.get("side") != intent.side or Decimal(str(params.get("quantity"))) != Decimal(intent.quantity):
+                    raise ExposureNotSubmittedError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
+                for flag in ("kill_switch_latched", "entry_admission_paused"):
+                    if str(self.db.state_get(flag, "false")).strip().lower() not in {"false", "0", ""}:
+                        raise ExposureNotSubmittedError(flag)
+                if previous is not None:
+                    previous(params)
+            self.client.before_exposure_transport = fence
+            try:
+                return fn()
+            finally:
+                self.client.before_exposure_transport = previous
 
         result = self.execution_barrier.execute(
             intent,
-            fn,
+            fenced_submit,
             pre_submit_checks=combined_checks,
         )
         if not result.accepted:
+            if new_exposure and ("FUTURES_HALF_MARGIN" in result.reason or "exposure_not_submitted:" in result.reason):
+                self._retire_unsubmitted_exposure(intent, result.reason)
+                raise ExposureNotSubmittedError(f"Futures execution blocked: {result.reason}")
             raise RuntimeError(f"Futures execution blocked: {result.reason}")
         if result.reason:
             self._set_state(intent.symbol, "RECONCILE_REQUIRED")
             raise RuntimeError(result.reason)
         return result.response
+
+    def _retire_unsubmitted_exposure(self, intent, reason):
+        """Release ONLY a locally proven never-submitted current reservation.
+
+        AMBIGUOUS/accepted POSTs never reach this path. Older pending orders,
+        position risk and protective STOP identities remain unchanged.
+        """
+        campaign = self.engine.load_campaign(intent.campaign_id)
+        if campaign is None or campaign.tags.get("pending_order_client_id") != intent.client_order_id:
+            raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:REJECTED_INTENT_OWNERSHIP")
+        with self.db.transaction():
+            campaign.pending_risk_quote = 0.0
+            campaign.capital_reserved_quote = 0.0
+            campaign.tags["entry_not_submitted"] = {"client_id": intent.client_order_id, "reason": reason}
+            self._set_pending_signal_state(campaign, SignalState.CANCELLED)
+            self.db.set_campaign_signal_state(intent.signal_id, SignalState.CANCELLED.value)
+            if self.db.state_get("entry_client_order_id:" + intent.symbol, "") == intent.client_order_id:
+                self.db.state_delete("entry_client_order_id:" + intent.symbol)
+            campaign.tags.pop("pending_order_client_id", None)
+            campaign.state = CampaignState.CLOSED if intent.purpose == "CAMPAIGN_ENTRY" else CampaignState.TREND_ACTIVE
+            campaign.next_action = "WAIT"
+            self.db.save_campaign(campaign)
+            self._set_state(intent.symbol, "FLAT" if intent.purpose == "CAMPAIGN_ENTRY" else "TREND_ACTIVE")
 
     def _client_id(self, prefix):
         return f"WILLF_{prefix}_{uuid.uuid4().hex[:20]}"
@@ -1935,6 +2063,8 @@ class FuturesWilliamsRuntime:
             self.db.save_campaign(campaign)
             if market_close:self._reconcile_pending()
             return {"campaign_id": campaign.campaign_id, "order_id": result.get("orderId"), "client_order_id": cid, "trigger_price": trigger, "stop_price": stop, "quantity": qty}
+        except ExposureNotSubmittedError:
+            raise
         except Exception:
             if market_close:self._reconcile_pending()
             self._set_state(symbol, "RECONCILE_REQUIRED")
@@ -2097,6 +2227,8 @@ class FuturesWilliamsRuntime:
                 ),
                 lambda _snapshot: None,
             )
+        except ExposureNotSubmittedError:
+            raise
         except Exception:
             if market_close:self._reconcile_pending()
             raise

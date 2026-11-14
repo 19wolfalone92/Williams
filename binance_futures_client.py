@@ -131,6 +131,15 @@ class BinanceFuturesClient:
                 time.sleep(min(wait, 30.0))
                 wait = max(0.0, self.rate_limit_pause_until - time.time())
 
+            if (method == "POST" and path in {"/fapi/v1/order", "/fapi/v1/algoOrder"}
+                    and str((params or {}).get("reduceOnly", "")).lower() != "true"
+                    and str((params or {}).get("closePosition", "")).lower() != "true"):
+                # Also runs on the only allowed explicit -1021 retry. No GETs
+                # here: this fence must remain local after any rate wait.
+                fence = getattr(self, "before_exposure_transport", None)
+                if fence is not None:
+                    fence(dict(params or {}))
+
             payload = dict(params or {})
             if signed:
                 payload.setdefault("recvWindow", self.recv_window)

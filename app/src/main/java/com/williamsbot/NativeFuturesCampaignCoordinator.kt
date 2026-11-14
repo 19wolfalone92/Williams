@@ -1262,6 +1262,9 @@ internal class NativeFuturesCampaignCoordinator(
                     }
                     owner.put("actual_entry_order_id", actualId)
                         .put("actual_entry_executed_qty",executed.toPlainString())
+                    if (symbol !in reversedCampaignSymbols) owner
+                        .put("actual_entry_order_status", execution.optString("status"))
+                        .put("actual_entry_observed_at_ms", clock())
                     entryExecutions[cid] = execution
                 }
             }
@@ -3288,6 +3291,65 @@ internal class NativeFuturesCampaignCoordinator(
             result.optString("blocker").ifBlank { result.optString("state","EXCHANGE_RESULT_RECORDED") }+" "+result.optString("error"),
             clock(),plan.signalId,result.optBoolean("accepted",false))
     }
+    private fun halfMarginObservation(adapter: BinanceUsdMFuturesTestnetAdapter, symbol: String): HalfMarginObservation {
+        val configuration = adapter.accountConfiguration()
+        val account = adapter.account()
+        val orders = adapter.allOpenOrders()
+        val algos = adapter.allOpenAlgoOrders()
+        for (i in 0 until algos.length()) orders.put(algos.getJSONObject(i))
+        val symbols = mutableSetOf(symbol)
+        for (i in 0 until orders.length()) {
+            val row = orders.getJSONObject(i)
+            if (row.optString("reduceOnly") != "true" && row.optString("closePosition") != "true")
+                symbols.add(row.getString("symbol"))
+        }
+        val configurations = symbols.associateWith {
+            adapter.symbolConfiguration(it).put("mark_price", adapter.markPrice(it).toString())
+        }
+        return futuresMarginObservation(account, configuration, orders, configurations)
+    }
+
+    private fun halfMarginLiabilities(ledger: JSONArray, currentClientId: String): JSONArray {
+        val result = JSONArray()
+        val rows = (0 until ledger.length()).map { ledger.getJSONObject(it) }
+        for (row in rows) {
+            val role = row.optString("intent_role", "ENTRY")
+            if (role == "EXIT") {
+                check(row.optString("exchange_status") == "EXIT_CONFIRMED") {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:EXIT_UNRESOLVED"
+                }
+                continue
+            }
+            if (role == "ENTRY" && campaignLifecycleStatus(row) in TERMINAL_CAMPAIGN_STATUSES) continue
+            if (role == "ADD_ON" && rows.any { it.optString("client_id") == row.optString("entry_client_id") &&
+                    campaignLifecycleStatus(it) in TERMINAL_CAMPAIGN_STATUSES }) continue
+            val cid = row.getString("client_id")
+            if (cid == currentClientId) {
+                result.put(JSONObject().put("client_id", cid).put("current_proposal", true))
+                continue
+            }
+            val executed = row.optString("actual_entry_executed_qty", row.optString("executed_qty"))
+            val fillProven = row.optString("actual_entry_order_id").isNotBlank() &&
+                row.optLong("actual_entry_observed_at_ms") > 0L &&
+                row.optString("actual_entry_order_status") == "FILLED" &&
+                executed.toBigDecimalOrNull()?.compareTo(row.getString("quantity").toBigDecimal()) == 0
+            // A conditional parent can remain NEW/FINISHED in its historical
+            // journal after its signed matching-engine child fully executed.
+            // Normalize ONLY this liability; never rewrite the parent status.
+            val status = if (fillProven) "FILLED" else exchangeOrderStatus(row)
+            val liability = JSONObject().put("client_id", cid).put("symbol", row.getString("symbol"))
+                .put("side", if (row.getString("direction") == "LONG") "BUY" else "SELL")
+                .put("quantity", row.getString("quantity")).put("status", status)
+                .put("actual_order_id", row.optString("actual_entry_order_id"))
+                .put("fill_confirmed", fillProven)
+                .put("terminal_confirmed", status in ENTRY_ORDER_TERMINAL_STATUSES &&
+                    row.optString("conditional_parent_status") !in setOf("TRIGGERING", "TRIGGERED"))
+            if (executed.isNotBlank()) liability.put("executed", executed)
+            result.put(liability)
+        }
+        return result
+    }
+
     private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
         williamsNewRiskSymbolBlocker(plan.symbol)?.let {
             return@synchronized safePreflightRejection(it)
@@ -3639,6 +3701,32 @@ internal class NativeFuturesCampaignCoordinator(
             }
             if(plan.kind==EntryKind.MARKET && !isReversal)
                 ntdCloseEntryDoor(plan,adapter)?.let { error(it) }
+            // Account-wide final NEW-risk gate, after all network strategy and
+            // leverage verification and inside the same durable execution lock.
+            val marginStartedNs = System.nanoTime()
+            val marginFirst = halfMarginObservation(adapter, plan.symbol)
+            val marginLiabilities = halfMarginLiabilities(currentIntents, plan.clientId)
+            val marginSecond = halfMarginObservation(adapter, plan.symbol)
+            val marginProof = assessFuturesHalfMargin(marginFirst, marginSecond,
+                JSONObject().put("symbol", plan.symbol).put("client_id", plan.clientId)
+                    .put("side", if (plan.direction == Direction.LONG) "BUY" else "SELL")
+                    .put("quantity", plan.quantity).put("price", plan.entryPrice).put("leverage", plan.leverage),
+                marginLiabilities, (System.nanoTime() - marginStartedNs) / 1_000_000L)
+            intent.put("half_margin_proof", marginProof)
+            saveIntents(currentIntents)
+            check(marginProof.getBoolean("allowed")) { marginProof.getString("blocker") }
+            adapter.halfMarginTransportFence = { params ->
+                check(futuresHalfMarginLeaseFresh(marginStartedNs, System.nanoTime())) {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:STALE"
+                }
+                check(params["symbol"] == plan.symbol &&
+                    params["side"] == if (plan.direction == Direction.LONG) "BUY" else "SELL") {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
+                }
+                check(params["quantity"]?.toBigDecimalOrNull()?.compareTo(plan.quantity.toBigDecimal()) == 0) {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
+                }
+            }
             orderSubmissionAttempted = true
             val result = when (plan.kind) {
                 EntryKind.MARKET -> {

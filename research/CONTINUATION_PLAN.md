@@ -4,6 +4,12 @@
 Перед записью сверить main и ветку; не перезаписывать новые чужие SHA.
 Не объединять15 старых PR пачкой. Два новых main commits проверить отдельно.
 
+Актуальное продолжение14.11,4.64.32: aggregate half-margin gate обоих
+runtimes реализован, shared fixtures и финальные transport fences добавлены.
+Подробности/границы: `ACCOUNT_HALF_MARGIN_IMPLEMENTATION_20261114.md`.
+Исторические «ещё не подключён» ниже относятся к прошлым checkpoints.
+Signed Demo/device acceptance по-прежнему открыта; main не объединён.
+
 1. Повторно получить те же6 пользовательских PDF; сверить `SOURCE_CATALOG`.
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
 2. `python tools/williams_master_inventory.py --source-dir <PDF_DIR>` с
