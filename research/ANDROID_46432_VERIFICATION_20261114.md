@@ -39,6 +39,30 @@ verified=true, v2=true, errors=[]; signer SHA256 совпадает с pinned CI
 `c177bba354724c24e9668864720e9bfdb2cb545964702903a1fa306060912de9`.
 Unsigned release artifact не предлагается как устанавливаемый debug APK.
 
+## Последний проверенный source checkpoint e8bafc6e
+
+Все7 workflow runs на `e8bafc6e2ddf0302189bd494684c802288710cb8` также
+завершились success. Android run4886:
+https://github.com/19wolfalone92/Williams/actions/runs/43587719790
+
+Build job132425707825, API35 job132428410839 и API36 job132428410779 —
+success. Скачанные actual JUnit XML:163 suites,1224 tests,0failures/errors,
+5skipped. Бизнес-код относительно4361a160 не изменялся.
+
+Последний signed debug APK этого checkpoint:
+https://github.com/19wolfalone92/Williams/actions/runs/43587719790/artifacts/14111186241
+
+ZIP SHA256:
+`ab52daef7873c9b345150c9e981fcc1c7231279a73bbf74aad5810df20da72cc`
+
+APK SHA256:
+`c35398976a30cfde8445d67578dc3254d767b91a08eb7d03c47aa7422a3f9089`
+
+22,855,716 bytes; package/versionCode/versionName/minSDK/targetSDK совпадают
+с run4885. Скачанный actual APK отдельно проверен apksig:verified=true,
+v2=true,errors=[], тот же pinned signer. Позднейшие registry/matrix notes
+не превращают этот APK в сборку другого commit.
+
 ## Что это подтверждает
 
 Общий half-account margin gate, accounting liabilities, final source/time/

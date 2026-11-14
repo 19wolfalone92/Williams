@@ -23,6 +23,11 @@ anchors16. Отчёт: `TC2_TRANSLATION_FIRST_TEXT_PASS_20261114.md`.
 проверяется транспортом после margin reads, без продления сигнала.
 Проверенный APK4.64.32 и все7 успешных code CI закреплены отдельно:
 `ANDROID_46432_VERIFICATION_20261114.md`.
+На source checkpoint `e8bafc6e` все7 CI, включаяAPI35/36, также успешны;
+signed debug APK4886 скачан, hash и certificate проверены. Реестр half-margin
+и матрица книга→код актуализированы: старый implementation gap закрыт
+ограниченным протестированным профилем, а signed Demo/device acceptance
+и полный независимый atomic spec не объявлены завершёнными.
 
 1. Повторно получить те же6 пользовательских PDF; сверить `SOURCE_CATALOG`.
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
