@@ -54,7 +54,8 @@ def test_valid_packet_is_detached_reproducible_and_cannot_certify_or_trade(adapt
     assert not receipt['algorithm_guard_executed']
     assert not receipt['expert_gold']
     assert all(value is False for value in receipt['authority'].values())
-    assert RULE in receipt['incomplete_rule_specifications']
+    assert RULE not in receipt['incomplete_rule_specifications']
+    assert request['rules'][0]['SIGNAL_DEFINITION']['scope']=='NUMERIC_TRANSFORM_ONLY'
 
 
 @pytest.mark.parametrize('decision', ['ABSTAIN', 'CONFLICT', 'NEEDS_EXPERT_REVIEW'])
@@ -66,9 +67,34 @@ def test_all_research_outcomes_keep_authority_disabled(adapter, observation, dec
 
 @pytest.mark.parametrize('decision', ['LONG_CANDIDATE', 'SHORT_CANDIDATE'])
 def test_incomplete_atomic_rules_cannot_support_direction_even_with_real_citations(adapter, observation, decision):
-    request = request_for(adapter, observation)
+    request = request_for(adapter, observation, 'TC2.WM2.THREE_AO_BARS')
     with pytest.raises(CandidateValidationError, match='DIRECTION_REQUIRES_COMPLETE_RULE_SPEC'):
         adapter.validate_proposal(request=request, proposal=proposal_for(request, decision))
+
+
+@pytest.mark.parametrize('rule',['TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY','TC2.AO.NUMERIC_AND_COLOUR'])
+@pytest.mark.parametrize('decision',['LONG_CANDIDATE','SHORT_CANDIDATE'])
+def test_complete_numeric_specs_cannot_authorize_directional_proposals(adapter,observation,rule,decision):
+    request=request_for(adapter,observation,rule)
+    assert request['rules'][0]['FULL_ATOMIC_SPEC_COMPLETE'] is True
+    assert request['rules'][0]['SIGNAL_DEFINITION']['directional_candidate_support'] is False
+    assert adapter.validate_proposal(request=request,proposal=proposal_for(request))['authority']==AUTHORITY
+    with pytest.raises(CandidateValidationError,match='DIRECTION_REQUIRES_DIRECTIONAL_RULE_SPEC'):
+        adapter.validate_proposal(request=request,proposal=proposal_for(request,decision))
+
+
+@pytest.mark.parametrize('decision',['LONG_CANDIDATE','SHORT_CANDIDATE'])
+def test_generic_complete_flag_without_directional_definition_is_insufficient(observation,tmp_path,decision):
+    shutil.copytree(ROOT/'research',tmp_path/'research')
+    path=tmp_path/'research/MASTER_RULE_REGISTRY.json';registry=json.loads(path.read_text())
+    rule=next(r for r in registry['rules'] if r['RULE_ID']=='TC2.WM2.THREE_AO_BARS')
+    rule['FULL_ATOMIC_SPEC_COMPLETE']=True
+    assert 'directional_candidate_support' not in rule['SIGNAL_DEFINITION']
+    path.write_text(json.dumps(registry))
+    adapter=CandidateAdapter(tmp_path)
+    request=request_for(adapter,observation,rule['RULE_ID'])
+    with pytest.raises(CandidateValidationError,match='DIRECTION_REQUIRES_DIRECTIONAL_RULE_SPEC'):
+        adapter.validate_proposal(request=request,proposal=proposal_for(request,decision))
 
 
 @pytest.mark.parametrize('window', ['GREEN', 'FADE', 'FAKE', 'SQUAT'])

@@ -9,8 +9,10 @@ import re
 
 if __package__:
     from .audit_tc2_translation import audit as audit_tc2_translation
+    from .audit_tc2_indicator_spec import audit as audit_tc2_numeric
 else:
     from audit_tc2_translation import audit as audit_tc2_translation
+    from audit_tc2_indicator_spec import audit as audit_tc2_numeric
 
 ROOT=Path(__file__).resolve().parents[1]
 STAGES={'IMAGE_ONLY_PENDING_OCR','OCR_ACQUIRED_UNVERIFIED','TEXT_ACQUIRED_UNVERIFIED',
@@ -152,6 +154,8 @@ def audit(root=ROOT):
                 or (entry['derived_ocr_characters']==0 and receipt.get('visual_review') is not True)):
             errors.append('COURSE_REVIEW_OCR_UNSUPPORTED_REVIEW_METHOD')
     tc2=audit_tc2_translation(root)
+    numeric=audit_tc2_numeric(root,check_fixture=False)
+    errors.extend(numeric['errors'])
     errors.extend(tc2['errors'])
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
@@ -183,6 +187,7 @@ def audit(root=ROOT):
         'selected_semantic_anchors':len(crosswalk['anchors']),
         'chapter12_comparison_records':tc2['chapter12_comparison_records'],
         'technical_translation_pages_mapped':tc2['technical_translation_pages_mapped'],
+        'appendix7_content_comparison_pages':numeric['appendix7_page_comparisons'],
         'full_translation_certified':False},
       'source_conflicts':{'visible_single_review_entries':len(conflict_ids)+tc2['source_comparison_records'],
         'per_source':conflicts_per_source,
@@ -190,8 +195,12 @@ def audit(root=ROOT):
         'independent_second_reviews':0,'unseen_original_english_errata_certified':False},
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
         'total_rules_in_books':None,'percent':None},
+      'atomic_specifications':{'complete_bounded_definitions':sum(r['FULL_ATOMIC_SPEC_COMPLETE'] for r in registry['rules']),
+        'tc2_numeric_transforms':numeric['bounded_numeric_definitions'],
+        'numeric_fixture_cases':numeric['numeric_fixture_cases'],'ordinal_fixture_cases':numeric['ordinal_fixture_cases'],
+        'runtime_contract_executed_by_this_audit':False,'entire_book_certified':False},
       'rule_implementation_coverage':None,'rule_test_coverage_of_all_books':None,
-      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':6,'whole_book_certified':False},
+      'canonical_consistency':{'confirmed_numeric_defect_classes_fixed':7,'whole_book_certified':False},
       'execution_safety':{'signed_demo_e2e':False,'physical_android_e2e':False,'main_merge_allowed':False},
       'decision_explainability_coverage':None,'can_place_orders':False}
 

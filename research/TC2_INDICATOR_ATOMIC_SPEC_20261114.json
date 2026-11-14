@@ -1,0 +1,110 @@
+{
+  "schema": "TC2_NUMERIC_ATOMIC_SPEC_V1",
+  "scope": "TWO_NUMERIC_TRANSFORMS_NOT_ENTIRE_BOOK_OR_WM2_LIFECYCLE",
+  "fixture": "app/src/test/resources/tc2_indicator_atomic_contract.json",
+  "fixture_sha256": "b806b8a59c10cd9d49ca87fe49e454085b59d3083f10721341f3b5b8b134982f",
+  "numeric_cases": 15,
+  "ordinal_cases": 14,
+  "source_pages": [
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 155,
+      "acquired_text_sha256": "ee6946b2b78b4035aedb1f5b1ad94de688a67cc8a087ca6aad72e5b543af0ac6"
+    },
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 156,
+      "acquired_text_sha256": "4aff2de88e7795662932f42113a355a78d7fe2bb231ff0114486161db706c97e"
+    },
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 157,
+      "acquired_text_sha256": "abbc4bacbad96117c25bcb8028ce3f84979f2c4cf1dfa1b190b0c34ae339d077"
+    },
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 245,
+      "acquired_text_sha256": "7b1f45d7012cd3acf0f794a71bf0a9850f88f529940d75bf6cd0d7c046966f2b"
+    },
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 246,
+      "acquired_text_sha256": "26f5c3fa72e2d69d7ee9d71853a3d97507c15d7ce770d1c6fd486ac97979610e"
+    },
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_page": 247,
+      "acquired_text_sha256": "7e3a44b6d709f661c17e668d8a403bdc0cb78c18b8aa1cc75d3296982e51a502"
+    }
+  ],
+  "specs": [
+    {
+      "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+      "median": "(H+L)/2",
+      "period_shift_pairs": {
+        "jaw": [
+          13,
+          8
+        ],
+        "teeth": [
+          8,
+          5
+        ],
+        "lips": [
+          5,
+          3
+        ]
+      },
+      "seed": "Exactly N finite first-window medians; seed at index N-1 is their arithmetic mean.",
+      "recurrence": "raw[t]=(raw[t-1]*(N-1)+median[t])/N",
+      "display": "display[t]=raw[t-shift] when t>=shift and the referenced raw value is known; otherwise UNKNOWN.",
+      "first_raw_indexes": {
+        "jaw": 12,
+        "teeth": 7,
+        "lips": 4
+      },
+      "first_display_indexes": {
+        "jaw": 20,
+        "teeth": 12,
+        "lips": 7
+      },
+      "unknown_policy": "No skipping, fill, shorter seed or recursive restart within the same supplied window; nonfinite/overflow output is UNKNOWN.",
+      "bootstrap_scope": "First N supplied samples, not a certificate of hidden historical preload or TradeStation execution."
+    },
+    {
+      "rule_id": "TC2.AO.NUMERIC_AND_COLOUR",
+      "median": "(H+L)/2",
+      "fast": 5,
+      "slow": 34,
+      "formula": "SMA5(median)-SMA34(median)",
+      "first_value_index": 33,
+      "first_colour_index": 34,
+      "first_possible_third_change_index": 36,
+      "colours": {
+        "GREEN": "AO[t]>AO[t-1]",
+        "RED": "AO[t]<AO[t-1]",
+        "FLAT": "AO[t]==AO[t-1]",
+        "UNKNOWN": "Either compared value is unavailable or nonfinite."
+      },
+      "zero_sign_defines_colour": false,
+      "price_candle_body_defines_colour": false,
+      "unknown_policy": "Every sample of the trailing34-price window must be finite. A gap invalidates every window containing it, and colour needs two valid AO values. Full finite windows can recover without filling the gap.",
+      "wm2_ordinal_boundary": "The third actual directional comparison must follow the true start of its run; cached counts cannot re-label a later run member as a new third bar.",
+      "wm2_lifecycle_complete": false
+    }
+  ],
+  "decimal_reference_is_constructed": true,
+  "source_chart_ohlc_recovered": false,
+  "printed_easylanguage_compiler_verified": false,
+  "independent_second_review": false,
+  "expert_gold": false,
+  "entire_book_certified": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

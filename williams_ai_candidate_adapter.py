@@ -255,11 +255,17 @@ class CandidateAdapter:
                      request['source']['source_role'] == 'PRIMARY_OPERATIONAL',
                      'DIRECTION_REQUIRES_OPERATIONAL_TC2_SOURCE')
             by_id = {r['RULE_ID']: r for r in request['rules']}
+            # A complete numeric indicator transform is not an entry/exit rule.
+            # Completing its arithmetic specification cannot grant direction.
+            _require(all(by_id[r]['SIGNAL_DEFINITION'].get('scope') != 'NUMERIC_TRANSFORM_ONLY'
+                         for r in cited), 'DIRECTION_REQUIRES_DIRECTIONAL_RULE_SPEC')
             _require(all(by_id[r]['CLASSIFICATION'] in ('CANONICAL', 'INTERPRETED') and
                          not by_id[r]['CONFLICTS'] for r in cited),
                      'DIRECTION_FROM_QUARANTINED_OR_NONMARKET_KNOWLEDGE')
             _require(all(by_id[r]['FULL_ATOMIC_SPEC_COMPLETE'] is True for r in cited),
                      'DIRECTION_REQUIRES_COMPLETE_RULE_SPEC')
+            _require(all(by_id[r]['SIGNAL_DEFINITION'].get('directional_candidate_support') is True
+                         for r in cited), 'DIRECTION_REQUIRES_DIRECTIONAL_RULE_SPEC')
         return {
             'schema': RECEIPT_SCHEMA, 'request_sha256': request['request_sha256'],
             'observation_sha256': request['observation_sha256'], 'proposal_sha256': digest(proposal),

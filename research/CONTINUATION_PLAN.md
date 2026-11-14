@@ -4,7 +4,16 @@
 Перед записью сверить main и ветку; не перезаписывать новые чужие SHA.
 Не объединять15 старых PR пачкой. Два новых main commits проверить отдельно.
 
-Актуальное продолжение14.11,4.64.32: aggregate half-margin gate обоих
+Актуальное продолжение14.11,4.64.33: исправлена Python WM2 ordinal boundary:
+неверный cached count больше не заменяет исходную третью свечу позднейшей,
+не меняет её trigger/STOP/ID/expiry и не прерывает сканер приInfinity.
+Сверено17 страниц приложения7; добавлены Alligator/AO numeric atomic specs,
+15 общих numeric cases +14 AO traces. Теперь148 rules,143 source-context
+checked,6 bounded atomic definitions; visual295,independent0. Отчёт:
+`TC2_NUMERIC_ATOMIC_CONTINUATION_20261114.md`.
+Numeric-only specs не дают directional candidate/entry/STOP authority.
+
+Завершённое продолжение4.64.32: aggregate half-margin gate обоих
 runtimes реализован, shared fixtures и финальные transport fences добавлены.
 Подробности/границы: `ACCOUNT_HALF_MARGIN_IMPLEMENTATION_20261114.md`.
 Исторические «ещё не подключён» ниже относятся к прошлым checkpoints.
@@ -15,8 +24,9 @@ Signed Demo/device acceptance по-прежнему открыта; main не о
 в17 общих разделах явно отмечено повторное использование совпавших токенов
 из прочитанного первого и ручное чтение всех изменённых фрагментов; это
 не независимое повторное чтение и не полная двусторонняя semantic map.
-Visual290,figures208,independent0; технических page mappings104, selected
-anchors16. Отчёт: `TC2_TRANSLATION_FIRST_TEXT_PASS_20261114.md`.
+Visual295,figures208,independent0; технических page mappings104 глав8–11,
+отдельных Appendix7 content comparisons17, selected anchors16. Исходный отчёт
+первого прохода: `TC2_TRANSLATION_FIRST_TEXT_PASS_20261114.md`.
 Предыдущие823/1213 и «390 осталось» ниже — исторические checkpoints.
 Следующий source route — полная двусторонняя карта с учётом пропусков,
 независимая проверка рисунков и atomic specs. Source/time admission повторно
@@ -45,7 +55,9 @@ signed debug APK4886 скачан, hash и certificate проверены. Ре�
    TC2 готова, но не заменяет чтение/смысловую карту;68 heading crops отдельно.
    Главы8–11 обоих переводов прочитаны и сопоставлены; остальные разделы
    завершили первый текстовый проход с указанным token-reuse методом.
-   Следующий source route — полная смысловая двусторонняя page map.
+   Приложение7 теперь имеет17 content comparison receipts с явным различением
+   printed code/captions/title/blank. Следующий source route — двусторонняя
+   смысловая карта остальных приложений/разделов и пропусков.
    Course external tutorial/Computorial отсутствуют вPDF;
    первое чтение122 физических листов не закрывает этот пробел.
 5. Независимое повторное чтение сложных9.10/10.7/11.2/11.7/12.1-4. Не

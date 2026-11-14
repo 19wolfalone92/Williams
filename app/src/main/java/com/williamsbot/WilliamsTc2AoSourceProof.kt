@@ -1,6 +1,6 @@
 package com.williamsbot
 
-/** TC2 second Wise Man (chapter 10, PDF 137-139): the third ACTUAL
+/** TC2_EN second Wise Man (chapter10, physical PDF156-158): the third ACTUAL
  * consecutive AO increase is a signal, not the third positive AO value.
  * A crossing of AO zero is irrelevant to its colour; flat/NaN breaks a streak.
  * SHORT reuses mirrored market geometry; directional AO is inverted there.

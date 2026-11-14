@@ -1,0 +1,382 @@
+{
+  "schema": "TC2_APPENDIX7_ALIGNMENT_V1",
+  "scope": "FULL_TEXT_CONTENT_SPANS_WITH_EXPLICIT_CODE_VERSUS_CAPTION_LIMITS",
+  "pages": [
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 218,
+      "acquired_text_sha256": "8c6a8e961abf90be6e578698ee99a88be9102cc77c3c2b212dd694bdd2f6c533",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 240,
+          "acquired_text_sha256": "11743a11485729f44687c7a0dfe2c4e7dfc3db59c47b3a3c335b3e4c639f401f"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 243,
+          "acquired_text_sha256": "3ecba52bd9035eb4faadefc166ed47cd54cacc4ec1e1658165ad7636c4150247"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "Historical installation prerequisites, right8 display space and indicator selection.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 219,
+      "acquired_text_sha256": "02bbf9d77af4fc5f44782d6cf590567968cf53daddf052ea98fdfb2fc0921cd5",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 241,
+          "acquired_text_sha256": "769fd931473fb15895bd2e59faf44f684cf7987444ec624732c621a5797077fe"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.1/2 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 220,
+      "acquired_text_sha256": "033055727ad8dd8c1798f87199bd7dbef10f26cb30725772a0637a2f145423e5",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 242,
+          "acquired_text_sha256": "23180bce412bbf37e2823c49a9ae27958580a292cdd7534ffb9155e0acbc3e08"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.3/4 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 221,
+      "acquired_text_sha256": "c2c6681837d67c6f62e672562abdd0ecdca9cfe6c7d980d12afc9511eba2b2e3",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 243,
+          "acquired_text_sha256": "3ecba52bd9035eb4faadefc166ed47cd54cacc4ec1e1658165ad7636c4150247"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 245,
+          "acquired_text_sha256": "7b1f45d7012cd3acf0f794a71bf0a9850f88f529940d75bf6cd0d7c046966f2b"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "AO panel2,Alligator panel1,3:1layout; beginning of Alligator code heading.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 222,
+      "acquired_text_sha256": "a95e79f32a15c1643f13f6a272e56b977cac214c63f5e42f67b22f8935ebae4c",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 244,
+          "acquired_text_sha256": "b158f8a30c360b56b48d3a87c9682931fdc5d95361a0f8510c64ac69f1f41241"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.6/7 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 223,
+      "acquired_text_sha256": "c877997fc1b9bbdce309767ddcd9fc9e7c7d17c30a8a87bf3ed698d91eeb9701",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 245,
+          "acquired_text_sha256": "7b1f45d7012cd3acf0f794a71bf0a9850f88f529940d75bf6cd0d7c046966f2b"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 246,
+          "acquired_text_sha256": "26f5c3fa72e2d69d7ee9d71853a3d97507c15d7ce770d1c6fd486ac97979610e"
+        }
+      ],
+      "page_kind": "TEXT_AND_CODE",
+      "semantic_scope": "Alligator13/8,8/5,5/3 and mean/recursive terms; printed identifiers/syntax corrupted.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_page": 224,
+      "acquired_text_sha256": "d8dc1132f49befb6fc0db92038278891db64c64622445938a64a7f3ac82c4787",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 246,
+          "acquired_text_sha256": "26f5c3fa72e2d69d7ee9d71853a3d97507c15d7ce770d1c6fd486ac97979610e"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 247,
+          "acquired_text_sha256": "7e3a44b6d709f661c17e668d8a403bdc0cb78c18b8aa1cc75d3296982e51a502"
+        }
+      ],
+      "page_kind": "TEXT_AND_CODE",
+      "semantic_scope": "Displaced plot terms and AO5-34/strict colour comparison; visibly damaged printed median/source syntax.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 293,
+      "acquired_text_sha256": "6fcbf17c18071a0dafb1f6681ca82039422aa0bdb9a2e120a2c55f4ade073f40",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 240,
+          "acquired_text_sha256": "11743a11485729f44687c7a0dfe2c4e7dfc3db59c47b3a3c335b3e4c639f401f"
+        }
+      ],
+      "page_kind": "TITLE_ONLY",
+      "semantic_scope": "Appendix title only, not a complete body-page match.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 294,
+      "acquired_text_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "english_pages": [],
+      "page_kind": "VISUALLY_CONFIRMED_BLANK",
+      "semantic_scope": "Full rendered blank verso, not missing OCR or an English-content match.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 295,
+      "acquired_text_sha256": "6974a7ab35f96a3391910fd8c307909c27ba62533008ab751573b41a0078593f",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 240,
+          "acquired_text_sha256": "11743a11485729f44687c7a0dfe2c4e7dfc3db59c47b3a3c335b3e4c639f401f"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 243,
+          "acquired_text_sha256": "3ecba52bd9035eb4faadefc166ed47cd54cacc4ec1e1658165ad7636c4150247"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "Historical prerequisites,right8 display space and AO study selection.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 296,
+      "acquired_text_sha256": "c14c870998fa139c4bf5cc87818474c09c7d6cfd893d3209651553688e6125ed",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 241,
+          "acquired_text_sha256": "769fd931473fb15895bd2e59faf44f684cf7987444ec624732c621a5797077fe"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.1/2 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 297,
+      "acquired_text_sha256": "6a6aba9b08d023c52e7bf8d8922e04631d2c9550f3548a7790925ae016e1813a",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 242,
+          "acquired_text_sha256": "23180bce412bbf37e2823c49a9ae27958580a292cdd7534ffb9155e0acbc3e08"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.3/4 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 298,
+      "acquired_text_sha256": "1b121fde730ca5666ca77ee8653b1235f2f5232777409c8c65c235f80988f9be",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 243,
+          "acquired_text_sha256": "3ecba52bd9035eb4faadefc166ed47cd54cacc4ec1e1658165ad7636c4150247"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "Panel2/panel1,3:1layout,A7.5 caption and code introduction.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 299,
+      "acquired_text_sha256": "7c657180afcabf473996e2c745e549b1c3efa1ced12a25e884790134893674d1",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 244,
+          "acquired_text_sha256": "b158f8a30c360b56b48d3a87c9682931fdc5d95361a0f8510c64ac69f1f41241"
+        }
+      ],
+      "page_kind": "TEXT_OR_CAPTIONS_ONLY",
+      "semantic_scope": "A7.6/7 captions only; screenshot semantics not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 300,
+      "acquired_text_sha256": "dfb4b3d737f63ea079bea5ec4b2ceb4558909fd8f8590027ddc1b450de2eddda",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 245,
+          "acquired_text_sha256": "7b1f45d7012cd3acf0f794a71bf0a9850f88f529940d75bf6cd0d7c046966f2b"
+        },
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 246,
+          "acquired_text_sha256": "26f5c3fa72e2d69d7ee9d71853a3d97507c15d7ce770d1c6fd486ac97979610e"
+        }
+      ],
+      "page_kind": "TEXT_AND_CODE",
+      "semantic_scope": "A7.8 caption,Alligator parameters and initial conditional header.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 301,
+      "acquired_text_sha256": "071e75df610b703c1f147c3b169b4e08e4f31fe518dddc6fc4cdb2ca273916ab",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 246,
+          "acquired_text_sha256": "26f5c3fa72e2d69d7ee9d71853a3d97507c15d7ce770d1c6fd486ac97979610e"
+        }
+      ],
+      "page_kind": "TEXT_AND_CODE",
+      "semantic_scope": "Same median,seed/recursive equations and13/8,8/5,5/3 displacement plots.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_page": 302,
+      "acquired_text_sha256": "8e73c3fc1ed48fd2b674d614d7f15d616649c307577e68fe59a782bf63eedd90",
+      "english_pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_page": 247,
+          "acquired_text_sha256": "7e3a44b6d709f661c17e668d8a403bdc0cb78c18b8aa1cc75d3296982e51a502"
+        }
+      ],
+      "page_kind": "TEXT_AND_CODE",
+      "semantic_scope": "Same H+L median,5-34 averages and strict AO comparisons; compiler syntax is not certified.",
+      "status": "SINGLE_REVIEW_CONTENT_COMPARISON",
+      "independent_second_review": false,
+      "can_place_orders": false,
+      "training_allowed": false
+    }
+  ],
+  "entire_translations_certified": false,
+  "all_screenshot_semantics_verified": false,
+  "printed_easylanguage_compiler_verified": false,
+  "independent_second_review": false,
+  "expert_gold": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

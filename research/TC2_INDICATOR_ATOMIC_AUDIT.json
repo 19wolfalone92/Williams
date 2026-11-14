@@ -1,0 +1,15 @@
+{
+  "schema": "TC2_NUMERIC_ATOMIC_AUDIT_V1",
+  "integrity_valid": true,
+  "errors": [],
+  "bounded_numeric_definitions": 2,
+  "appendix7_page_comparisons": 17,
+  "numeric_fixture_cases": 15,
+  "ordinal_fixture_cases": 14,
+  "fixture_bytes_verified": true,
+  "runtime_contract_executed_by_this_audit": false,
+  "independent_second_review": false,
+  "entire_book_certified": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

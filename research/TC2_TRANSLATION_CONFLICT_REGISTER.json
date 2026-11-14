@@ -547,6 +547,50 @@
       "independent_second_review": false,
       "execution_authority": false,
       "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP7.RU224_PRINTED_CODE_CORRUPTION",
+      "kind": "VISIBLE_PRINTED_CODE_CORRUPTION_NOT_ONLY_TEXT_EXTRACTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            245,
+            246,
+            247
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            223,
+            224
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            300,
+            301,
+            302
+          ]
+        }
+      ],
+      "observation": "RU224 rendered pages themselves show damaged identifiers,median token and punctuation, including PRICE((H+D/2),not merely a pypdf/OCR artefact. English and RU314 visibly retain (H+L)/2,13/8,8/5,5/3 and AO5-34 with strict prior-value comparisons.",
+      "bounded_interpretation": "Extract reviewed numerical semantics rather than executing copied printed or extracted code. No supplied EasyLanguage listing was compiler-tested; retain the separate Figure10.1 midpoint contradiction instead of voting across copies.",
+      "related_rules": [
+        "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "TC2.AO.NUMERIC_AND_COLOUR",
+        "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
     }
   ],
   "independent_second_review": false,

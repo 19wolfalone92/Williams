@@ -3,7 +3,7 @@ package com.williamsbot
 import org.junit.Assert.*
 import org.junit.Test
 
-/** TC2 PDF137–139 third changing AO bar (LONG and mirrored SHORT). */
+/** TC2_EN PDF156-158 third changing AO bar (LONG and mirrored SHORT). */
 class WilliamsTc2AoSourceProofTest {
     @Test fun firstObservableAoChangeIsIndex34AndThirdIs36() {
         val ao=MutableList(46) { Double.NaN }

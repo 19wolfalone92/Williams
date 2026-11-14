@@ -267,7 +267,8 @@
     "section": "CH10",
     "content": "AO SMA5 minus SMA34; printed midpoint expression uses minus and conflicts with median-price definition.",
     "rules": [
-      "TC2.WM2.THREE_AO_BARS"
+      "TC2.WM2.THREE_AO_BARS",
+      "TC2.AO.NUMERIC_AND_COLOUR"
     ],
     "figures": [
       "10.1"
@@ -283,7 +284,8 @@
     "section": "CH10",
     "content": "Colour is change versus previous AO bar; first-colour market-order illustration explicitly not recommended.",
     "rules": [
-      "TC2.WM2.THREE_AO_BARS"
+      "TC2.WM2.THREE_AO_BARS",
+      "TC2.AO.NUMERIC_AND_COLOUR"
     ],
     "figures": [
       "10.2"
@@ -978,7 +980,8 @@
     "content": "Author EasyLanguage AO code explicitly uses PRICE((H+L)/2), SMA5-SMA34 and strict AO colour differences; adjudicates midpoint typo in fig10.1.",
     "rules": [
       "TC2.WM2.THREE_AO_BARS",
-      "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
+      "TC2.AO.PRINTED_MIDPOINT_CONFLICT",
+      "TC2.AO.NUMERIC_AND_COLOUR"
     ],
     "figures": [],
     "visual_review": true,
@@ -1660,9 +1663,9 @@
       "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
     ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 208,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
@@ -1675,9 +1678,9 @@
       "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
     ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 209,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
@@ -1828,9 +1831,9 @@
       "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
     ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 300,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
@@ -1843,9 +1846,9 @@
       "TC2.ALLIGATOR.KNOWN_FORWARD_TAIL"
     ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 301,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
@@ -1855,9 +1858,9 @@
     "content": "AO code uses median and SMA5-SMA34; colour follows change not zero-line sign.",
     "rules": [],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 302,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]

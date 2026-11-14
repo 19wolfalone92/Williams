@@ -144,7 +144,7 @@ internal fun awesomeOscillatorAt(medianPrices: List<Double>, index: Int): Double
     val fastValues = medianPrices.subList(index - 4, index + 1)
     val slowValues = medianPrices.subList(index - 33, index + 1)
     if (fastValues.any { !it.isFinite() } || slowValues.any { !it.isFinite() }) return Double.NaN
-    return fastValues.average() - slowValues.average()
+    return (fastValues.average() - slowValues.average()).takeIf { it.isFinite() } ?: Double.NaN
 }
 
 /** Accelerator Oscillator: AO minus the five-bar simple average of AO. */
