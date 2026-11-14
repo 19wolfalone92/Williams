@@ -1514,6 +1514,10 @@ class FuturesWilliamsRuntime:
         first = self._half_margin_observation(intent.symbol)
         liabilities = self._half_margin_liabilities(intent)
         second = self._half_margin_observation(intent.symbol)
+        expected = (Decimal(str(campaign.position_qty)) * (1 if campaign.side == "BUY" else -1)
+                    if intent.purpose == "CAMPAIGN_ADD_ON" else Decimal(0))
+        if second["live"].get(intent.symbol, Decimal(0)) != expected:
+            raise HalfMarginUnknown("FUTURES_HALF_MARGIN_UNKNOWN:TARGET_POSITION_CHANGED")
         proof = assess_half_margin(first, second, {"symbol": intent.symbol,
             "side": intent.side, "quantity": intent.quantity, "client_id": intent.client_order_id,
             "price": campaign.tags.get("pending_order_trigger"),
@@ -1559,11 +1563,32 @@ class FuturesWilliamsRuntime:
                 age = (time.monotonic() - margin_started) * 1000 if margin_started is not None else -1
                 if not 0 <= age <= 15_000:
                     raise ExposureNotSubmittedError("FUTURES_HALF_MARGIN_UNKNOWN:STALE")
-                if params.get("symbol") != intent.symbol or params.get("side") != intent.side or Decimal(str(params.get("quantity"))) != Decimal(intent.quantity):
+                if (params.get("symbol") != intent.symbol or params.get("side") != intent.side
+                        or Decimal(str(params.get("quantity"))) != Decimal(intent.quantity)
+                        or params.get("clientAlgoId", params.get("newClientOrderId")) != intent.client_order_id):
                     raise ExposureNotSubmittedError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
                 for flag in ("kill_switch_latched", "entry_admission_paused"):
                     if str(self.db.state_get(flag, "false")).strip().lower() not in {"false", "0", ""}:
                         raise ExposureNotSubmittedError(flag)
+                try:
+                    self._require_entry_time()
+                    latest = self.engine.load_campaign(intent.campaign_id)
+                    pending = (latest.tags.get("pending_signal") or {}).get("signal") if latest else None
+                    if not pending or pending.get("signal_id") != intent.signal_id:
+                        raise ValueError("SIGNAL_CHANGED_BEFORE_TRANSPORT")
+                    transport_trigger = params.get("triggerPrice", params.get("stopPrice"))
+                    if intent.order_type != "MARKET" and Decimal(str(transport_trigger)) != Decimal(str(latest.tags.get("pending_order_trigger"))):
+                        raise ValueError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
+                    now = int(time.time()*1000) + int(getattr(self.client, "time_offset_ms", 0))
+                    expires = int(pending.get("expires_at_ms", 0))
+                    if expires > 0 and now >= expires:
+                        raise ValueError("SIGNAL_EXPIRED_BEFORE_TRANSPORT")
+                    if expires == 0 and structural_fractal(pending.get("signal_type"), pending.get("strategy_profile", TC2)):
+                        closed = int((pending.get("setup_context") or {}).get("h1_closed_at_ms", 0))
+                        if closed <= 0 or not 0 <= now-closed < 3_600_000:
+                            raise ValueError("H1_SNAPSHOT_EXPIRED_BEFORE_TRANSPORT")
+                except Exception as failure:
+                    raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:
                     previous(params)
             self.client.before_exposure_transport = fence

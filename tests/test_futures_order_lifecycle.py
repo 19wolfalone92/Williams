@@ -1055,12 +1055,14 @@ def half_margin_entry(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('side', ['BUY','SELL'])
-@pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN'])
+@pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN','POSITION_CHANGED'])
 def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, side, fault):
     bot, exchange, candidate = half_margin_entry
     def corrupt(account):
         if fault=='OVER_HALF': account['totalInitialMargin']='5500'
         elif fault=='MISSING_MARGIN': account.pop('totalInitialMargin')
+        elif fault=='POSITION_CHANGED':account['positions']=[{'symbol':'BTCUSDT','positionSide':'BOTH',
+            'positionAmt':'1','initialMargin':'50','isolatedWallet':'50','isolatedMargin':'50','updateTime':100}]
         else: account['multiAssetsMargin']='false'
         return account
     exchange.account_transform=corrupt
@@ -1106,3 +1108,30 @@ def test_lost_initial_post_keeps_exact_id_and_reserve_and_reconciles_without_rep
     bot._reconcile_pending()
     assert bot._active_campaign(symbol).tags.get('protective_order_id')
     assert len([p for m,path,p in exchange.calls if m=='POST' and path.endswith('algoOrder') and not p.get('closePosition')])==1
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+@pytest.mark.parametrize('fault', ['EXPIRY','CLIENT_ID','TRIGGER'])
+def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(half_margin_entry, monkeypatch, side, fault):
+    from binance_futures_client import BinanceFuturesClient
+    bot, exchange, candidate=half_margin_entry
+    assess=bot._assess_half_margin
+    def expire_after_margin(intent):
+        started=assess(intent)
+        owner=bot.engine.load_campaign(intent.campaign_id)
+        if fault=='EXPIRY':owner.tags['pending_signal']['signal']['expires_at_ms']=int(time.time()*1000)-1
+        bot.db.save_campaign(owner)
+        return started
+    monkeypatch.setattr(bot,'_assess_half_margin',expire_after_margin)
+    def request(method,path,params=None,signed=False):
+        if method=='POST' and path=='/fapi/v1/algoOrder':
+            params=dict(params)
+            if fault=='CLIENT_ID':params['clientAlgoId']='UNBOUND_OTHER_INTENT'
+            if fault=='TRIGGER':params['triggerPrice']='999'
+            return BinanceFuturesClient._request(bot.client,method,path,params,signed)
+        return exchange.request(method,path,params,signed)
+    monkeypatch.setattr(bot.client,'_request',request)
+    monkeypatch.setattr(bot.client.session,'request',lambda *a,**k:pytest.fail('Expired signal reached HTTP POST'))
+    with pytest.raises(RuntimeError,match='SIGNAL_EXPIRED_BEFORE_TRANSPORT' if fault=='EXPIRY' else 'TRANSPORT_PLAN_CHANGED'):
+        bot._arm_entry(candidate(side))
+    assert bot._pending_entries()==[] and bot.db.open_campaigns()==[]

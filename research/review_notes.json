@@ -1555,7 +1555,8 @@
     "verification_status": "REVIEWED_TEXT_ONLY",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "GRAPHIC_AND_TEXT"
   },
   "TC2_RU_224:116": {
     "section": "CH8",
@@ -1563,13 +1564,16 @@
     "rules": [
       "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
     ],
-    "figures": [],
-    "visual_review": false,
+    "figures": [
+      "8.8"
+    ],
+    "visual_review": true,
     "printed_page": 101,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "GRAPHIC_AND_TEXT"
   },
   "TC2_RU_224:117": {
     "section": "CH8",
@@ -1584,7 +1588,8 @@
     "verification_status": "REVIEWED_TEXT_ONLY",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "GRAPHIC_AND_TEXT"
   },
   "TC2_RU_224:164": {
     "section": "CH12",
@@ -1683,13 +1688,16 @@
     "rules": [
       "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
     ],
-    "figures": [],
-    "visual_review": false,
+    "figures": [
+      "8.8"
+    ],
+    "visual_review": true,
     "printed_page": 154,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "GRAPHIC_AND_TEXT"
   },
   "TC2_RU_314:155": {
     "section": "CH8",
@@ -1704,7 +1712,8 @@
     "verification_status": "REVIEWED_TEXT_ONLY",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "SUBSTANTIVE_TEXT"
   },
   "TC2_RU_314:214": {
     "section": "CH12",
@@ -11547,6 +11556,1473 @@
     "uncertainties": [
       "Single-review comparison; not independent corroboration or exact chart digitization.",
       "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:107": {
+    "section": "CH8",
+    "printed_page": 92,
+    "content": "Chapter goal and incoming-information narrative; not a quantified trading filter.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:108": {
+    "section": "CH8",
+    "printed_page": 93,
+    "content": "Human-nature rationale, earlier editions and trend-time claims; author claims are not measured market frequencies.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:109": {
+    "section": "CH8",
+    "printed_page": 94,
+    "content": "Alligator roles and approximate smaller-scale simulations; 99.5% is the author comparison claim, not bot accuracy.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:110": {
+    "section": "CH8",
+    "printed_page": 95,
+    "content": "Figure8.1 lips/teeth/jaw; approximate time scales are not three actual clock-time charts.",
+    "rules": [],
+    "figures": [
+      "8.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:111": {
+    "section": "CH8",
+    "printed_page": 96,
+    "content": "Order of line response and sleeping/hungry market narrative; no measurable numeric sleep threshold.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:112": {
+    "section": "CH8",
+    "printed_page": 97,
+    "content": "Figures8.2/8.3 show gold/eurodollar sleep then separation; qualitative only.",
+    "rules": [],
+    "figures": [
+      "8.2",
+      "8.3"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:113": {
+    "section": "CH8",
+    "printed_page": 98,
+    "content": "AOL bearish separation and remaining hungry/sleep examples; printed figure label is examined separately from OCR.",
+    "rules": [],
+    "figures": [
+      "8.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:114": {
+    "section": "CH8",
+    "printed_page": 99,
+    "content": "Figures8.5/8.6 compare Apple downtrend with Nasdaq sleeping mouth.",
+    "rules": [],
+    "figures": [
+      "8.5",
+      "8.6"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:118": {
+    "section": "CH8",
+    "printed_page": 103,
+    "content": "Figures8.10/8.11 compare same crude chart with displayed forward tail; future prices are not available.",
+    "rules": [],
+    "figures": [
+      "8.10",
+      "8.11"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:119": {
+    "section": "CH8",
+    "printed_page": 104,
+    "content": "Mouth closing, chapter9 early entry and impulse/correction heuristic; accuracy/performance assertions remain unverified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:120": {
+    "section": "CH9",
+    "printed_page": 105,
+    "content": "Chapter opening: earlier external-fractal entries versus early countertrend WM1; willingness to trade both directions.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:121": {
+    "section": "CH9",
+    "printed_page": 106,
+    "content": "Bullish/bearish divergent schematics9.1/9.2; definitions continue next page.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:122": {
+    "section": "CH9",
+    "printed_page": 107,
+    "content": "Lower low/upper-half close versus higher high/lower-half close, opening angle and first two geometric rules.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:123": {
+    "section": "CH9",
+    "printed_page": 108,
+    "content": "Bond9.3 and APPX9.4: Russian bond annotation calls a sell setup bullish; retain bearish geometry.",
+    "rules": [],
+    "figures": [
+      "9.3",
+      "9.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:124": {
+    "section": "CH9",
+    "printed_page": 109,
+    "content": "Price edge selection, expanding angle, parallel invalid UOPX and setup-before-stop-entry.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:125": {
+    "section": "CH9",
+    "printed_page": 110,
+    "content": "Buy above bullish high/sell below bearish low; old-direction AO colour; yen one-tick buy.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:126": {
+    "section": "CH9",
+    "printed_page": 111,
+    "content": "DIA, bonds, Forex and Nasdaq examples distinguish no-angle and mouth-contact rejections from valid setups.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:127": {
+    "section": "CH9",
+    "printed_page": 112,
+    "content": "Figures9.7/9.8 show conditional signals and hits; no OHLC digitization.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:128": {
+    "section": "CH9",
+    "printed_page": 113,
+    "content": "QLGC invalid despite later rally; eurodollar narrative and HomeDepot absence of reversal-bar setup.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:129": {
+    "section": "CH9",
+    "printed_page": 114,
+    "content": "Nasdaq9.10 and invalid QLGC9.11; qualitative context cannot certify Elliott degree.",
+    "rules": [],
+    "figures": [
+      "9.10",
+      "9.11"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:130": {
+    "section": "CH9",
+    "printed_page": 115,
+    "content": "Eurodollar9.12 caption conflicts with narrative about second bar; HomeDepot no qualifying top bar.",
+    "rules": [],
+    "figures": [
+      "9.12",
+      "9.13"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:131": {
+    "section": "CH9",
+    "printed_page": 116,
+    "content": "Initial opposite-edge STOP and net-short reversal; Russian phrase mistakenly references bullish instead of bearish low.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:132": {
+    "section": "CH9",
+    "printed_page": 117,
+    "content": "One-contract/gross illustrated arithmetic, protective stop and confirmed opposite fractal reversal; no actual fill/cost proof.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:133": {
+    "section": "CH9",
+    "printed_page": 118,
+    "content": "DIA illustrative return and schematics9.14/9.15; caption9.14 omits English sell word, diagram retains S.",
+    "rules": [],
+    "figures": [
+      "9.14",
+      "9.15"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:134": {
+    "section": "CH9",
+    "printed_page": 119,
+    "content": "Summary reiterates outside-mouth/angle; universal profitability and timing claims are not executable facts.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:135": {
+    "section": "CH10",
+    "printed_page": 120,
+    "content": "WM2 confirmation/addition and AO5 minus34; aggressive addition is still constrained by risk.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:136": {
+    "section": "CH10",
+    "printed_page": 121,
+    "content": "Figure10.1 repeats printed midpoint(H-L)/2 caveat; market-on-colour illustration is explicitly not recommended.",
+    "rules": [],
+    "figures": [
+      "10.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:137": {
+    "section": "CH10",
+    "printed_page": 122,
+    "content": "AO strict higher/lower colours; third consecutive green corresponds to price-bar high, not a histogram price.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:138": {
+    "section": "CH10",
+    "printed_page": 123,
+    "content": "Yen third-AO and BSTE add-on figures; gaps can fill beyond stop level.",
+    "rules": [],
+    "figures": [
+      "10.3",
+      "10.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:139": {
+    "section": "CH10",
+    "printed_page": 124,
+    "content": "BSTE gap, Canadian six-bar delay and CMTL four-day price/momentum difference;2–4 is usual, not a fixed deadline.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:140": {
+    "section": "CH10",
+    "printed_page": 125,
+    "content": "CMTL and sugar10.7: large signal bar can create its own angle, not an invented ATR threshold.",
+    "rules": [],
+    "figures": [
+      "10.6",
+      "10.7"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:141": {
+    "section": "CH10",
+    "printed_page": 126,
+    "content": "CMTL/sugar continuation and dollar trade sequence; stop or stop-and-reverse discussed separately.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:142": {
+    "section": "CH10",
+    "printed_page": 127,
+    "content": "Dollar and derivative/momentum narrative; no independent AC formula is specified here.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:143": {
+    "section": "CH10",
+    "printed_page": 128,
+    "content": "Protecting initial/add-on positions and possible opposite fractal; summary does not make illustration a guaranteed fill.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:144": {
+    "section": "CH11",
+    "printed_page": 129,
+    "content": "Fractal can be first when appropriate; the ideal WM1→WM2→WM3 order is not mandatory.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:145": {
+    "section": "CH11",
+    "printed_page": 130,
+    "content": "Ideal follow-through, break above previous extreme and four schematic patterns including shared bars.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:146": {
+    "section": "CH11",
+    "printed_page": 131,
+    "content": "Minimum-five definition, dual/shared fractals, equal-high six-bar case and nine-bar illustration; exact synthetic geometry remains separate.",
+    "rules": [],
+    "figures": [
+      "11.2"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:147": {
+    "section": "CH11",
+    "printed_page": 132,
+    "content": "Australian fractals and figure11.4: eligibility at HIT relative to current Teeth, not only at formation.",
+    "rules": [],
+    "figures": [
+      "11.3",
+      "11.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:148": {
+    "section": "CH11",
+    "printed_page": 133,
+    "content": "Formation versus trade signal, positive buy/negative sell tick and Teeth filter.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:149": {
+    "section": "CH11",
+    "printed_page": 134,
+    "content": "Signal persists until hit or newer fractal; soybean example and invalid-at-hit restriction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:150": {
+    "section": "CH11",
+    "printed_page": 135,
+    "content": "Figure11.7 correction/bracketed-context exclusions and Boeing continuation examples.",
+    "rules": [],
+    "figures": [
+      "11.7",
+      "11.8"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:151": {
+    "section": "CH11",
+    "printed_page": 136,
+    "content": "McDonalds current-Teeth examples, labels a/c/d/e/f versus b/g/h/j, structural wave heuristic and mixed-Wise-Men sequence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_224:152": {
+    "section": "CH11",
+    "printed_page": 137,
+    "content": "Five-minute11.10 and summary: ideal order versus continued same-direction fractals; no chart fill/performance certification.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:143": {
+    "section": "CH8",
+    "printed_page": null,
+    "content": "Chapter8 title, goal and compass analogy only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "CHAPTER_TITLE",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:144": {
+    "section": "CH8",
+    "printed_page": null,
+    "content": "Visually confirmed blank verso, separate from substantive content.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:145": {
+    "section": "CH8",
+    "printed_page": 145,
+    "content": "Incoming information and older-edition narrative; author performance assertions are not validation.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:146": {
+    "section": "CH8",
+    "printed_page": 146,
+    "content": "Human nature, responsibility and15–30% trend-time assertion; no hard market classifier.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:147": {
+    "section": "CH8",
+    "printed_page": 147,
+    "content": "Alligator roles and approximate one-fifth scales;99.5% claim is not a bot win rate.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:148": {
+    "section": "CH8",
+    "printed_page": 148,
+    "content": "Lips/teeth/jaw diagram and approximate non-clock-time simulations from the same price sequence.",
+    "rules": [],
+    "figures": [
+      "8.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:149": {
+    "section": "CH8",
+    "printed_page": 149,
+    "content": "Information response ordering and thin-market narrative; no numeric sleep threshold.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:150": {
+    "section": "CH8",
+    "printed_page": 150,
+    "content": "Gold sleep/hunger8.2 and separation narrative; qualitative chart reading only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:151": {
+    "section": "CH8",
+    "printed_page": 151,
+    "content": "Eurodollar8.3 and AOL8.4 show opposite trend separations.",
+    "rules": [],
+    "figures": [
+      "8.3",
+      "8.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:152": {
+    "section": "CH8",
+    "printed_page": 152,
+    "content": "Apple downtrend, Nasdaq sleep and cocoa long-sleep narrative; no future-price proof.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:153": {
+    "section": "CH8",
+    "printed_page": 153,
+    "content": "Nasdaq8.6 and cocoa8.7 sleeping charts; no precise OHLC inferred.",
+    "rules": [],
+    "figures": [
+      "8.6",
+      "8.7"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:156": {
+    "section": "CH8",
+    "printed_page": 156,
+    "content": "Construction table8.9 and crude8.10 with clipped tail.",
+    "rules": [],
+    "figures": [
+      "8.10",
+      "8.9"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:157": {
+    "section": "CH8",
+    "printed_page": 157,
+    "content": "Extended crude8.11 and mouth-closing/impulse-correction heuristic; no independent trend-end proof.",
+    "rules": [],
+    "figures": [
+      "8.11"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:158": {
+    "section": "CH8",
+    "printed_page": 158,
+    "content": "Chapter summary and stated confidence assertion; source statement, not model certification.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:159": {
+    "section": "CH9",
+    "printed_page": null,
+    "content": "Chapter9 title and countertrend goal only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "CHAPTER_TITLE",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:160": {
+    "section": "CH9",
+    "printed_page": null,
+    "content": "Visually confirmed blank verso.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:161": {
+    "section": "CH9",
+    "printed_page": 161,
+    "content": "Agile early reversal versus historical external-fractal first entry; both trading directions.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:162": {
+    "section": "CH9",
+    "printed_page": 162,
+    "content": "Bullish/bearish geometry and away-from-mouth prerequisite; body definitions are mirrored correctly.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:163": {
+    "section": "CH9",
+    "printed_page": 163,
+    "content": "Schematics9.1/9.2, angle introduction and four-rule lead-in.",
+    "rules": [],
+    "figures": [
+      "9.1",
+      "9.2"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:164": {
+    "section": "CH9",
+    "printed_page": 164,
+    "content": "Four angulation rules; bond9.3 Russian label incorrectly calls a SELL-under-low bar bullish.",
+    "rules": [],
+    "figures": [
+      "9.3"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:165": {
+    "section": "CH9",
+    "printed_page": 165,
+    "content": "APPX9.4 bullish and UOPX9.5 invalid parallel-angle examples.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:166": {
+    "section": "CH9",
+    "printed_page": 166,
+    "content": "Positive buy tick/negative sell tick and AO old-direction colour; yen entry one tick above.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:167": {
+    "section": "CH9",
+    "printed_page": 167,
+    "content": "DIA/bonds/Forex narrative and yen9.6; no-angle and mouth-contact reject setups.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:168": {
+    "section": "CH9",
+    "printed_page": 168,
+    "content": "DIA9.7 and bonds9.8 charts; labelled arrows are qualitative setup/entry evidence.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:169": {
+    "section": "CH9",
+    "printed_page": 169,
+    "content": "Forex9.9 and Nasdaq lead-in distinguish no-angle from opening-angle candidates.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:170": {
+    "section": "CH9",
+    "printed_page": 170,
+    "content": "Nasdaq9.10 and QLGC invalid despite subsequent rally; no hindsight label repair.",
+    "rules": [],
+    "figures": [
+      "9.10"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:171": {
+    "section": "CH9",
+    "printed_page": 171,
+    "content": "QLGC9.11 and eurodollar9.12: diagram calls two valid bars but narrative rejects later bar.",
+    "rules": [],
+    "figures": [
+      "9.11",
+      "9.12"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:172": {
+    "section": "CH9",
+    "printed_page": 172,
+    "content": "Eurodollar narrative, November invalid bar and HomeDepot no qualifying top setup.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:173": {
+    "section": "CH9",
+    "printed_page": 173,
+    "content": "Opposite-edge initial stop and long-to-short reversal: same wrong bullish-low phrase asRU224.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:174": {
+    "section": "CH9",
+    "printed_page": 174,
+    "content": "Illustrated gross totals9531.25/17031.25 exclude costs; close risk does not prove trade acceptance.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:175": {
+    "section": "CH9",
+    "printed_page": 175,
+    "content": "Initial stop and opposite confirmed fractal schematics9.14/9.15; no instantaneous same-bar reversal.",
+    "rules": [],
+    "figures": [
+      "9.14",
+      "9.15"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:176": {
+    "section": "CH9",
+    "printed_page": 176,
+    "content": "Completion of stop-reversal example, DIA illustration and summary; claims not independently verified.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:177": {
+    "section": "CH10",
+    "printed_page": null,
+    "content": "Chapter10 title and addition goal only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "CHAPTER_TITLE",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:178": {
+    "section": "CH10",
+    "printed_page": null,
+    "content": "Visually confirmed blank verso.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:179": {
+    "section": "CH10",
+    "printed_page": 179,
+    "content": "AO5 minus34 context and printed midpoint formula conflict in figure10.1; Appendix7 code uses(H+L)/2.",
+    "rules": [],
+    "figures": [
+      "10.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:180": {
+    "section": "CH10",
+    "printed_page": 180,
+    "content": "Price/momentum/volume narrative and colour-turn illustration; no causal proof or guaranteed profit.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:181": {
+    "section": "CH10",
+    "printed_page": 181,
+    "content": "Explicit rejection of market-on-every-colour approach; third consecutive AO colour and price-bar trigger.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:182": {
+    "section": "CH10",
+    "printed_page": 182,
+    "content": "Yen10.3 and BSTE/Canadian narrative; AO change need not be immediate.",
+    "rules": [],
+    "figures": [
+      "10.3"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:183": {
+    "section": "CH10",
+    "printed_page": 183,
+    "content": "BSTE10.4 bullish and Canadian10.5 bearish additions; opposite price edges.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:184": {
+    "section": "CH10",
+    "printed_page": 184,
+    "content": "Canadian six-bar delay, CMTL10.6 and large divergent-bar angulation discussion.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:185": {
+    "section": "CH10",
+    "printed_page": 185,
+    "content": "Sugar10.7 self-created angle and dollar sequence; exact angle/ATR threshold not supplied.",
+    "rules": [],
+    "figures": [
+      "10.7",
+      "10.8"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:186": {
+    "section": "CH10",
+    "printed_page": 186,
+    "content": "Dollar10.8, mixed WM1/WM2 directions and derivative section introduction.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:187": {
+    "section": "CH10",
+    "printed_page": 187,
+    "content": "Momentum analogy and protecting two entries with stop or confirmed opposite-fractal reversal.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:188": {
+    "section": "CH10",
+    "printed_page": 188,
+    "content": "Summary: WM2 confirms momentum; ideal next fractal is not a promise of profitable follow-through.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:189": {
+    "section": "CH11",
+    "printed_page": null,
+    "content": "Chapter11 title and recognition goal only.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "CHAPTER_TITLE",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:190": {
+    "section": "CH11",
+    "printed_page": null,
+    "content": "Visually confirmed blank verso.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:191": {
+    "section": "CH11",
+    "printed_page": 191,
+    "content": "Appropriate fractal may initiate beforeWM1/WM2; ideal third entry and open-equity context.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:192": {
+    "section": "CH11",
+    "printed_page": 192,
+    "content": "Minimum-five fractal, shared/dual extremes and six-bar pattern11.1.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:193": {
+    "section": "CH11",
+    "printed_page": 193,
+    "content": "Equal-high extension and nine-bar11.2 figure; numerical synthetic exemplars are separate from raster OHLC.",
+    "rules": [],
+    "figures": [
+      "11.2"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:194": {
+    "section": "CH11",
+    "printed_page": 194,
+    "content": "Australian11.3 and current-Teeth-at-hit, not formation, eligibility.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:195": {
+    "section": "CH11",
+    "printed_page": 195,
+    "content": "Figures11.4/11.5: positive buy/negative sell tick, current Teeth and invalid soybean candidate.",
+    "rules": [],
+    "figures": [
+      "11.4",
+      "11.5"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:196": {
+    "section": "CH11",
+    "printed_page": 196,
+    "content": "Fractal lifetime and soybean/McDonalds examples; diagram distinguishes valid versus invalid at hit.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:197": {
+    "section": "CH11",
+    "printed_page": 197,
+    "content": "Correction/bracketed exclusions in11.7, Boeing continuation and wave heuristic.",
+    "rules": [],
+    "figures": [
+      "11.7"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:198": {
+    "section": "CH11",
+    "printed_page": 198,
+    "content": "Boeing11.8 and strategy11.9; structural behavioural interpretation is not certified wave degree.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:199": {
+    "section": "CH11",
+    "printed_page": 199,
+    "content": "Mixed-Wise-Men11.10 five-minute example and summary start; not a full OHLC replay.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
+    ]
+  },
+  "TC2_RU_314:200": {
+    "section": "CH11",
+    "printed_page": 200,
+    "content": "Summary completes same-direction continuation and ideal entry ordering.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
+      "Source/translation conflicts remain explicit; no training or exchange authority."
     ]
   }
 }

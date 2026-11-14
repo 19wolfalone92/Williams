@@ -209,6 +209,81 @@ def audit(root: Path = ROOT) -> dict:
             or any(conflicts.get(k) is not False for k in ['independent_second_review',
                     'can_place_orders', 'training_allowed', 'entire_translations_certified'])):
         errors.append('TC2_CONFLICT_FALSE_CERTIFICATION')
+    technical_path = folder / 'TC2_TECHNICAL_TRANSLATION_REVIEW_20261114.json'
+    technical = json.loads(technical_path.read_text()) if technical_path.is_file() else {}
+    if (technical.get('schema') != 'TC2_TECHNICAL_TRANSLATION_REVIEW_V1'
+            or technical.get('chapters') != [8, 9, 10, 11]
+            or any(technical.get(k) is not False for k in ['whole_translation_alignment_complete',
+                'independent_second_review', 'can_place_orders', 'training_allowed'])):
+        errors.append('TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY')
+    technical_keys = []
+    technical_expected = set()
+    technical_section = {}
+    english_by_chapter = {}
+    for edition in structure['editions']:
+        for segment in edition['segments']:
+            if segment['unit_id'] not in {'CH08', 'CH09', 'CH10', 'CH11'}:
+                continue
+            chapter = int(segment['unit_id'][2:])
+            span = segment.get('pdf_span')
+            if (not isinstance(span, list) or len(span) != 2 or any(type(p) is not int for p in span)
+                    or not 1 <= span[0] <= span[1] <= sources.get(edition['source_id'], {}).get('pdf_pages', 0)):
+                continue
+            start, end = span
+            if edition['source_id'] == 'TC2_EN':
+                english_by_chapter[chapter] = set(range(start, end + 1))
+            else:
+                technical_expected.update((edition['source_id'], p) for p in range(start, end + 1))
+                technical_section.update({(edition['source_id'], p): chapter for p in range(start, end + 1)})
+    for comparison in technical.get('pages', []):
+        if not isinstance(comparison, dict):
+            errors.append('TC2_TECHNICAL_SOURCE_PIN_MISMATCH')
+            continue
+        sid, p = comparison.get('source_id'), comparison.get('pdf_page')
+        if not isinstance(sid, str) or type(p) is not int:
+            errors.append('TC2_TECHNICAL_SOURCE_PIN_MISMATCH')
+            continue
+        technical_keys.append((sid, p))
+        source = sources.get(sid, {})
+        receipt = pages.get((sid, p), {})
+        note = notes.get(f'{sid}:{p}', {})
+        if (type(p) is not int or comparison.get('source_sha256') != source.get('sha256')
+                or comparison.get('acquired_text_sha256') != receipt.get('acquired_text_sha256')
+                or comparison.get('english_source_sha256') != sources['TC2_EN']['sha256']):
+            errors.append('TC2_TECHNICAL_SOURCE_PIN_MISMATCH')
+        if (not receipt.get('verification_status', '').startswith('REVIEWED')
+                or note.get('verification_status') != receipt.get('verification_status')
+                or comparison.get('page_kind') != note.get('page_kind')
+                or not comparison.get('semantic_scope')):
+            errors.append('TC2_TECHNICAL_WITHOUT_CONTENT_RECEIPT')
+        if any(comparison.get(k) is not False for k in ['independent_second_review', 'can_place_orders', 'training_allowed']):
+            errors.append('TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY')
+        if comparison.get('status') != 'SINGLE_REVIEW_CONTENT_COMPARISON':
+            errors.append('TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY')
+        try:
+            chapter = int(comparison.get('section', '')[2:])
+        except (ValueError, TypeError):
+            chapter = 0
+        if chapter != technical_section.get((sid, p)):
+            errors.append('TC2_TECHNICAL_CHAPTER_MISMATCH')
+        english = comparison.get('english_pdf_pages')
+        if (not isinstance(english, list)
+                or any(type(n) is not int or n not in english_by_chapter.get(chapter, set()) for n in english)
+                or len(english) != len(set(english))):
+            errors.append('TC2_TECHNICAL_ENGLISH_MAPPING_INVALID')
+        elif english:
+            for en_page in english:
+                en_receipt = pages.get(('TC2_EN', en_page), {})
+                en_note = notes.get(f'TC2_EN:{en_page}', {})
+                if (not en_receipt.get('verification_status', '').startswith('REVIEWED')
+                        or en_note.get('verification_status') != en_receipt.get('verification_status')
+                        or en_note.get('content') != en_receipt.get('content')):
+                    errors.append('TC2_EVIDENCE_WITHOUT_READING_RECEIPT')
+        elif (comparison.get('page_kind') != 'VISUALLY_CONFIRMED_BLANK'
+                or note.get('visual_review') is not True or receipt.get('text_layer_characters') != 0):
+            errors.append('TC2_TECHNICAL_BLANK_WITHOUT_RENDER')
+    if len(technical_keys) != len(set(technical_keys)) or set(technical_keys) != technical_expected:
+        errors.append('TC2_TECHNICAL_PAGE_SET_INVALID')
     conflict_ids = []
     for conflict in conflicts['conflicts']:
         conflict_ids.append(conflict.get('conflict_id'))
@@ -239,7 +314,9 @@ def audit(root: Path = ROOT) -> dict:
                 'heading_crop_receipts': heading_count,
                 'heading_crops_count_as_full_page_reading': False,
                 'semantic_alignment_complete': False, 'constant_offset_used': False},
-            'chapter12_comparison_records': len(conflict_ids),
+            'chapter12_comparison_records': sum(cid.startswith('TC2.C12.') for cid in conflict_ids if isinstance(cid, str)),
+            'source_comparison_records': len(conflict_ids),
+            'technical_translation_pages_mapped': len(set(technical_keys)),
             'numeric_input_sha256': hashlib.sha256(raw_numbers).hexdigest(),
             'printed_arithmetic': arithmetic,
             'independent_second_review': False, 'expert_gold': False,

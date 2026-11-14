@@ -54,7 +54,8 @@ internal data class HalfMarginOrder(
 internal data class HalfMarginObservation(
     val base: BigDecimal, val available: BigDecimal, val confirmed: BigDecimal,
     val used: BigDecimal, val costNotional: BigDecimal, val identity: String,
-    val orders: Map<String, HalfMarginOrder>, val symbols: Map<String, JSONObject>
+    val orders: Map<String, HalfMarginOrder>, val symbols: Map<String, JSONObject>,
+    val positions: Map<String, BigDecimal>
 )
 
 internal fun futuresMarginObservation(account: JSONObject, configuration: JSONObject,
@@ -90,10 +91,12 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     var isolatedExtra = marginZero
     val positionIdentity = mutableListOf<String>()
     val seenPositions = mutableSetOf<String>()
+    val positionAmounts = linkedMapOf<String, BigDecimal>()
     for (row in marginRows(account.optJSONArray("positions"))) {
         val symbol = marginSymbol(row.optString("symbol"))
         marginRequire(seenPositions.add(symbol) && row.optString("positionSide") == "BOTH", "POSITION_IDENTITY")
         val amount = marginNumber(row.opt("positionAmt"), true)
+        positionAmounts[symbol] = amount
         val initial = marginNumber(row.opt("initialMargin"))
         val isolatedWallet = marginNumber(row.opt("isolatedWallet"))
         val isolatedMargin = marginNumber(row.opt("isolatedMargin"))
@@ -151,7 +154,8 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     val used = maxOf(rootInitial, assetInitial, positionMargin + maxOf(confirmedOrders, pending))
     val identity = JSONArray().put(canonicalMargin(wallet)).put(JSONArray(positionIdentity.sorted()))
         .put(JSONArray(orderIdentity.sorted())).toString()
-    return HalfMarginObservation(minOf(wallet, equity), available, confirmed, used, costNotional, identity, byClient, symbols)
+    return HalfMarginObservation(minOf(wallet, equity), available, confirmed, used, costNotional, identity,
+        byClient, symbols, positionAmounts)
 }
 
 internal fun assessFuturesHalfMargin(first: HalfMarginObservation, second: HalfMarginObservation,

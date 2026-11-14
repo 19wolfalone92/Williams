@@ -1,6 +1,6 @@
 {
   "schema": "TC2_TRANSLATION_CONFLICT_REGISTER_V1",
-  "scope": "SELECTED_CHAPTER12_COMPARISON",
+  "scope": "CHAPTERS8_TO12_SELECTED_CONFLICTS_NOT_FULL_TRANSLATION_CERTIFICATION",
   "conflicts": [
     {
       "conflict_id": "TC2.C12.RU_SHORT_LABEL",
@@ -243,6 +243,163 @@
       "related_rules": [
         "TC2.PYRAMID.QUANTITIES",
         "TC2.PYRAMID.PROFIT"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.RU_BOND_BEARISH_LABEL",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            140,
+            141
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            122,
+            123
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            163,
+            164
+          ]
+        }
+      ],
+      "observation": "English9.3 labels the upper divergent setup bearish and SELL below low. Both Russian diagram annotations call it bullish while retaining the sell-below-low instruction; Russian body itself says bearish. Rendered pages confirm the labels.",
+      "bounded_interpretation": "Use higher-high/lower-half-close bearish geometry and conditional sell below its low. Agreement of the two Russian copies is not independent confirmation.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR",
+        "TC2.WM1.ANGULATION"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.RU_REVERSAL_WRONG_BAR_EDGE",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            149,
+            150
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            131
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            173
+          ]
+        }
+      ],
+      "observation": "English long-to-short example places stop-and-reverse below the bearish signal bar. Both Russian body paragraphs instead name the bullish bar low even though surrounding text describes the bearish bar and closing long1/opening net short1.",
+      "bounded_interpretation": "Retain bearish signal edge; order quantity2 comprises close1 plus open1, not a net short2. This is a book illustration, not authority for an exchange reversal.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR",
+        "TC2.EXIT.STOP_AND_REVERSE"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.EURODOLLAR_BODY_VERSUS_FIGURE",
+      "kind": "SOURCE_BODY_FIGURE_CONTRADICTION_PRESERVED_IN_TRANSLATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            148
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            128,
+            130
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            171,
+            172
+          ]
+        }
+      ],
+      "observation": "The9.12 diagram calls two bullish divergent bars valid; the adjacent narrative identifies the first as valid but rejects the later bar for lack of angle. Both translations preserve the discrepancy.",
+      "bounded_interpretation": "Do not label both as expert-gold signals or override missing angle with the later rally. Requires independent diagram/context adjudication; no exact OHLC recovered.",
+      "related_rules": [
+        "TC2.WM1.ANGULATION"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C10.PRINTED_MIDPOINT_REPEATED",
+      "kind": "SOURCE_FORMULA_CONTRADICTION_PRESERVED_IN_TRANSLATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            155,
+            247
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            136
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            179
+          ]
+        }
+      ],
+      "observation": "Figure10.1 prints midpoint(H-L)/2 in English and Russian copies. The supplied English Appendix7 AO code at247 explicitly uses PRICE((H+L)/2), AVERAGE5 minus AVERAGE34. This is not a translation-only defect.",
+      "bounded_interpretation": "Keep the already implemented median(H+L)/2 formula, explicit warmup and strict AO colour comparison. Never train from majority repetition of the printed minus sign.",
+      "related_rules": [
+        "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
       ],
       "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
       "all_cited_pages_read": true,

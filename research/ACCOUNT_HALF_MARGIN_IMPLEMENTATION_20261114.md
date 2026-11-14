@@ -57,7 +57,8 @@ Python `futures_half_margin.py` и Kotlin `FuturesHalfMargin.kt` использ�
 
 Проверка и durable reservation находятся внутри существующего account execution
 lock. Расчёт записывается до POST. После rate/clock waits транспорт ещё раз
-проверяет срок и точный symbol/side/quantity; только явный -1021 может вызвать
+проверяет срок и точный symbol/side/quantity/client ID/limit-or-trigger price;
+только явный -1021 может вызвать
 единственный повтор и обязан повторить fence. Потерянный ответ не повторяет POST.
 
 Отказ до отправки получает BLOCKED/REJECTED и освобождает только текущий,
@@ -73,7 +74,8 @@ source/ownership/risk gates сохранены.
 
 ## Реальная локальная проверка
 
-- Полный Python: **2562 passed,2 skipped**,23.38s;10 предупреждений среды/
+- Полный Python после финальной доработки: **2582 passed,2 skipped**,
+  27.93s;10 предупреждений среды/
   существующего FastAPI/pandas кода. Baseline имел те же10 предупреждений.
 -287 focused Python risk/transport/lifecycle случаев прошли, включая lost
   initial POST с недоступным readback, затем восстановление того же ID без
@@ -90,7 +92,7 @@ source/ownership/risk gates сохранены.
   не Android lint и не physical-device acceptance. Итог CI точного коммита
   фиксируется в PR после завершения.
 - Локальный настоящий coordinator/adapter lifecycle + transport/shared/Source
-  JUnit: **138 tests PASS**,5 существующих ignored. Сохранились проверки
+  JUnit: **139 tests PASS**,5 существующих ignored. Сохранились проверки
   неизменности архивной кампании после внешнего разворота, все четыре
   TC2 добавления, STOP replacement и восстановление после lost reply.
 - Ruff undefined names/syntax и `ci_release_gate.py`: PASS. Версия4.64.32,
@@ -104,7 +106,11 @@ disconnect/restart на физическом телефоне не выполн�
 эти результаты. Повторные observations ограничивают, но не исключают изменение
 биржи после последнего GET; поведение гэпов/funding не сертифицировано.
 
-489 непрочитанных листов переводов, независимые сложные фигуры/atomic specs,
+После следующего прохода глав8–11 достигнуто823/1213 first-pass receipts,
+256 visual и208 qualitative figures;104 страницы двух переводов сопоставлены
+с английскими главами. Подробности и четыре дополнительных source conflicts —
+в `TC2_TECHNICAL_TRANSLATION_CONTINUATION_20261114.md`.
+390 непрочитанных листов переводов, независимые сложные фигуры/atomic specs,
 expert cohort и заранее зафиксированный независимый holdout остаются отдельными
 этапами. Старые исторические выборки не объявляются новым OOS. Полное чтение
 Course PDF не заменяет отсутствующее внешнее tutorial/Computorial.

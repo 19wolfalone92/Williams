@@ -18,9 +18,31 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val now = System.currentTimeMillis()
+            var permitted = true
+            val time = java.time.Instant.ofEpochMilli(now).atOffset(java.time.ZoneOffset.UTC)
+            val start = (time.hour * 60 + time.minute + 60) % 1440
+            fun hhmm(minute: Int) = "%02d:%02d".format(minute / 60, minute % 60)
+            val blockedPolicy = WilliamsEntryTimePolicy("UTC_WINDOW", hhmm(start), hhmm((start + 1) % 1440))
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(Journal(), clock = { now }) {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", exchange.client,
+                    beforeExposureTransport = { permitted = false })
+            }
+            coordinator.setEntryTimePolicyProvider { if (permitted) WilliamsEntryTimePolicy() else blockedPolicy }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.toString(), result.optString("error").contains("ENTRY_TIME_POLICY_BLOCKED_BEFORE_TRANSPORT"))
+            assertEquals(0, exchange.posts("/fapi/v1/algoOrder") + exchange.posts("/fapi/v1/order"))
+            assertFalse(isEntryCampaignReserved(coordinator.intentsSnapshot().getJSONObject(0)))
+        }
+    }
     @Test fun halfMarginBlocksAtTheFinalDoorAndNeverReservesAPhantomEntry() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries)
-        for (fault in listOf("OVER_HALF", "MISSING_MARGIN", "MODE_CONFLICT", "CHANGED_READS")) {
+        for (fault in listOf("OVER_HALF", "MISSING_MARGIN", "MODE_CONFLICT", "CHANGED_READS", "POSITION_CHANGED")) {
             val journal = Journal()
             val exchange = Exchange(direction)
             val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
@@ -32,6 +54,9 @@ class NativeFuturesCoordinatorLifecycleTest {
                         "OVER_HALF" -> account.put("totalInitialMargin", "5500")
                         "MISSING_MARGIN" -> account.apply { remove("totalInitialMargin") }
                         "MODE_CONFLICT" -> account.put("multiAssetsMargin", "false")
+                        "POSITION_CHANGED" -> account.put("positions", JSONArray().put(JSONObject()
+                            .put("symbol", "BTCUSDT").put("positionSide", "BOTH").put("positionAmt", "1")
+                            .put("initialMargin", "50").put("isolatedWallet", "50").put("isolatedMargin", "50").put("updateTime", 100)))
                         else -> account.apply {
                             if (++reads > 1) {
                                 put("totalWalletBalance", "9900").put("totalMarginBalance", "9900")

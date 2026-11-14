@@ -3707,6 +3707,10 @@ internal class NativeFuturesCampaignCoordinator(
             val marginFirst = halfMarginObservation(adapter, plan.symbol)
             val marginLiabilities = halfMarginLiabilities(currentIntents, plan.clientId)
             val marginSecond = halfMarginObservation(adapter, plan.symbol)
+            val currentAmounts = marginSecond.positions.filterValues { it.signum() != 0 }
+            check(currentAmounts.keys == openPositionRows.keys && currentAmounts.all { (symbol, amount) ->
+                openPositionRows[symbol]?.optString("positionAmt")?.toBigDecimalOrNull()?.compareTo(amount) == 0
+            }) { "FUTURES_HALF_MARGIN_UNKNOWN:OWNED_POSITIONS_CHANGED" }
             val marginProof = assessFuturesHalfMargin(marginFirst, marginSecond,
                 JSONObject().put("symbol", plan.symbol).put("client_id", plan.clientId)
                     .put("side", if (plan.direction == Direction.LONG) "BUY" else "SELL")
@@ -3726,6 +3730,30 @@ internal class NativeFuturesCampaignCoordinator(
                 check(params["quantity"]?.toBigDecimalOrNull()?.compareTo(plan.quantity.toBigDecimal()) == 0) {
                     "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
                 }
+                check((params["clientAlgoId"] ?: params["newClientOrderId"]) == plan.clientId) {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
+                }
+                val transportPrice = if (plan.kind == EntryKind.LIMIT) params["price"] else params["triggerPrice"]
+                if (plan.kind != EntryKind.MARKET) check(transportPrice?.toBigDecimalOrNull()?.compareTo(plan.entryPrice.toBigDecimal()) == 0) {
+                    "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
+                }
+                // The margin GETs (and a rate/clock wait) must not extend the
+                // lifetime of the earlier source/time admission.
+                check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_TRANSPORT" }
+                val expires = if (plan.signalBarTimeMs > 0L)
+                    williamsH1SignalExpiry(plan.signalBarTimeMs, plan.signalType, plan.strategyProfile) else 0L
+                check(expires <= 0L || clock() < expires) { "H1_SIGNAL_EXPIRED_BEFORE_TRANSPORT" }
+                if (requireM15FractalForAutomatedEntries && !isReversal && !isAddition && plan.signalType != "OPERATOR_FORCED_DIRECTION")
+                    check(williamsMtfProofBlocker(plan.setupContext, plan.direction.name, plan.signalId,
+                        plan.entryPrice.toDouble(), plan.protectiveStop.toDouble(), clock()) == null) {
+                        "M15_FRACTAL_PROOF_EXPIRED_BEFORE_TRANSPORT"
+                    }
+                if (requireBookH1ProofForAutomatedEntries && !isReversal && plan.signalType != "OPERATOR_FORCED_DIRECTION")
+                    check(williamsBookH1ProofBlocker(plan.setupContext, plan.direction.name, plan.signalId,
+                        plan.signalType, plan.strategyProfile, plan.entryPrice.toDouble(), plan.protectiveStop.toDouble(),
+                        clock(), plan.entryClientId, plan.reentryOwnerId, plan.executionSemantics, plan.referenceClose) == null) {
+                        "H1_BOOK_PROOF_EXPIRED_BEFORE_TRANSPORT"
+                    }
             }
             orderSubmissionAttempted = true
             val result = when (plan.kind) {

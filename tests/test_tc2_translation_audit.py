@@ -36,14 +36,64 @@ def test_complete_physical_navigation_cannot_certify_unread_translation_pages():
     assert not alignment['semantic_alignment_complete']
     assert not alignment['heading_crops_count_as_full_page_reading']
     coverage = report['source_coverage']['per_source']
-    assert coverage['TC2_RU_224']['first_pass_receipts'] == 22
-    assert coverage['TC2_RU_314']['first_pass_receipts'] == 27
+    assert coverage['TC2_RU_224']['first_pass_receipts'] == 65
+    assert coverage['TC2_RU_314']['first_pass_receipts'] == 83
     notes = _read('review_notes.json')
     # This rendered heading crop has no full-page reading receipt. A complete
     # section partition cannot invent one or advance the completion gate.
     assert 'TC2_RU_314:23' not in notes
-    assert report['source_coverage']['semantically_reviewed_single_pass'] == 724
+    assert report['source_coverage']['semantically_reviewed_single_pass'] == 823
+    assert alignment['technical_translation_pages_mapped'] == 104
     assert not report['execution_safety']['main_merge_allowed']
+
+
+@pytest.mark.parametrize('fault,expected', [
+    ('DROP', 'TC2_TECHNICAL_PAGE_SET_INVALID'),
+    ('DUPLICATE', 'TC2_TECHNICAL_PAGE_SET_INVALID'),
+    ('HASH', 'TC2_TECHNICAL_SOURCE_PIN_MISMATCH'),
+    ('CHAPTER', 'TC2_TECHNICAL_CHAPTER_MISMATCH'),
+    ('ENGLISH', 'TC2_TECHNICAL_ENGLISH_MAPPING_INVALID'),
+    ('BOOLEAN_PAGE', 'TC2_TECHNICAL_SOURCE_PIN_MISMATCH'),
+    ('ENGLISH_OBJECT', 'TC2_TECHNICAL_ENGLISH_MAPPING_INVALID'),
+    ('AUTHORITY', 'TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY'),
+    ('FULL_TRANSLATION', 'TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY'),
+    ('EXPERT', 'TC2_TECHNICAL_FALSE_COMPLETION_OR_AUTHORITY'),
+])
+def test_technical_page_map_cannot_invent_reading_alignment_or_authority(tmp_path, fault, expected):
+    folder = _copy(tmp_path)
+    name = 'TC2_TECHNICAL_TRANSLATION_REVIEW_20261114.json'
+    data = _read(name)
+    if fault == 'DROP': data['pages'].pop()
+    elif fault == 'DUPLICATE': data['pages'].append(copy.deepcopy(data['pages'][0]))
+    elif fault == 'HASH': data['pages'][0]['acquired_text_sha256'] = '0'*64
+    elif fault == 'CHAPTER': data['pages'][0]['section'] = 'CH9'
+    elif fault == 'ENGLISH': data['pages'][0]['english_pdf_pages'] = [247]
+    elif fault == 'BOOLEAN_PAGE': data['pages'][0]['pdf_page'] = True
+    elif fault == 'ENGLISH_OBJECT': data['pages'][0]['english_pdf_pages'] = [{}]
+    elif fault == 'AUTHORITY': data['pages'][0]['training_allowed'] = True
+    elif fault == 'FULL_TRANSLATION': data['whole_translation_alignment_complete'] = True
+    elif fault == 'EXPERT': data['pages'][0]['status'] = 'VERIFIED'
+    (folder/name).write_text(json.dumps(data))
+    assert expected in audit(tmp_path)['errors']
+
+
+def test_blank_verso_requires_visual_evidence_and_cannot_be_an_english_content_match(tmp_path):
+    folder = _copy(tmp_path)
+    notes = _read('review_notes.json')
+    notes['TC2_RU_314:160']['visual_review'] = False
+    (folder/'review_notes.json').write_text(json.dumps(notes))
+    assert 'TC2_TECHNICAL_BLANK_WITHOUT_RENDER' in audit(tmp_path)['errors']
+
+
+def test_chapter9_wrong_direction_and_source_body_figure_conflicts_remain_non_authoritative():
+    conflicts = {x['conflict_id']:x for x in _read('TC2_TRANSLATION_CONFLICT_REGISTER.json')['conflicts']}
+    for key in ['TC2.C9.RU_BOND_BEARISH_LABEL', 'TC2.C9.RU_REVERSAL_WRONG_BAR_EDGE',
+                'TC2.C9.EURODOLLAR_BODY_VERSUS_FIGURE', 'TC2.C10.PRINTED_MIDPOINT_REPEATED']:
+        item = conflicts[key]
+        assert item['all_cited_pages_read']
+        assert not item['execution_authority'] and not item['training_allowed']
+        assert not item['independent_second_review']
+    assert 'SOURCE_BODY_FIGURE' in conflicts['TC2.C9.EURODOLLAR_BODY_VERSUS_FIGURE']['kind']
 
 
 @pytest.mark.parametrize('flag', [

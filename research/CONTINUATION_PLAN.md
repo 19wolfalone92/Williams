@@ -10,6 +10,15 @@ runtimes реализован, shared fixtures и финальные transport f
 Исторические «ещё не подключён» ниже относятся к прошлым checkpoints.
 Signed Demo/device acceptance по-прежнему открыта; main не объединён.
 
+В этой же сессии завершена смысловая текстовая сверка технических глав8–11
+обоих переводов:104 физических page mappings,99 новых receipts, всего823/1213;
+visual256,figures208,independent0. Отчёт:
+`TC2_TECHNICAL_TRANSLATION_CONTINUATION_20261114.md`.
+Следующий source route — остальные390 листов (главы1–7,13/эпилог/приложения/
+паратекст), затем независимая проверка рисунков и atomic specs. Старые
+«489 осталось» ниже — историческая контрольная точка. Source/time admission
+повторно проверяется транспортом после margin reads, без продления сигнала.
+
 1. Повторно получить те же6 пользовательских PDF; сверить `SOURCE_CATALOG`.
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
 2. `python tools/williams_master_inventory.py --source-dir <PDF_DIR>` с
