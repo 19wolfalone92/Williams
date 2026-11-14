@@ -1472,10 +1472,7 @@ class FuturesWilliamsRuntime:
         for order in ordinary + algos:
             if str(order.get("reduceOnly", "")).lower() != "true" and str(order.get("closePosition", "")).lower() != "true":
                 symbols.add(order.get("symbol"))
-        configurations = {}
-        for key in sorted(symbols):
-            configurations[key] = {**self.client.symbol_configuration(key),
-                "mark_price": self.client.mark_price(key).get("markPrice")}
+        configurations = self.client.half_margin_symbol_configurations(symbols)
         return margin_observation(account, configuration, ordinary + algos, configurations)
 
     def _half_margin_liabilities(self, intent):

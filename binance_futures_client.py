@@ -468,6 +468,28 @@ class BinanceFuturesClient:
             raise BinanceAPIError("Missing or ambiguous Futures symbol configuration", payload=payload)
         return matches[0]
 
+    def half_margin_symbol_configurations(self, symbols):
+        """Fresh account-wide settings/marks in bounded requests, never a cache.
+
+        The single-symbol path retains the lower public request weight. With
+        multiple pending symbols, two bulk reads replace 2*N serial requests.
+        Required identities must be unique in both independent responses.
+        """
+        if len(symbols) == 1:
+            symbol = next(iter(symbols))
+            return {symbol: {**self.symbol_configuration(symbol),
+                             "mark_price": self.mark_price(symbol).get("markPrice")}}
+        settings = self._require_array(self._request("GET", "/fapi/v1/symbolConfig", signed=True))
+        marks = self._require_array(self._request("GET", "/fapi/v1/premiumIndex"))
+        result = {}
+        for symbol in symbols:
+            configurations = [row for row in settings if row.get("symbol") == symbol]
+            prices = [row for row in marks if row.get("symbol") == symbol]
+            if len(configurations) != 1 or len(prices) != 1:
+                raise BinanceAPIError("Missing or ambiguous half-margin symbol identity")
+            result[symbol] = {**configurations[0], "mark_price": prices[0].get("markPrice")}
+        return result
+
     def api_restrictions(self):
         # Testnet credentials must never be sent to the live Wallet API host.
         # The Wallet SAPI permission endpoint is not part of the Futures Demo API.

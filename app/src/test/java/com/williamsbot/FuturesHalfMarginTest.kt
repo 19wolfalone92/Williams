@@ -5,8 +5,59 @@ import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 import java.math.BigDecimal
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 
 class FuturesHalfMarginTest {
+    @Test fun bulkReadsBoundRequestsAndKeepExternalOrderMarginWithoutNewSymbolAuthority() {
+        val required = setOf("BTCUSDT", "SUIUSDT", "SANTOSUSDT")
+        for (fault in listOf("", "missing_config", "duplicate_config", "missing_mark", "duplicate_mark",
+            "object_config", "object_mark", "malformed_mark")) {
+            val settings = JSONArray(required.map { JSONObject().put("symbol", it)
+                .put("leverage", "2").put("marginType", "ISOLATED") })
+            val marks = JSONArray(required.map { JSONObject().put("symbol", it).put("markPrice", "100") })
+            when (fault) {
+                "missing_config" -> settings.remove(0)
+                "duplicate_config" -> settings.put(JSONObject(settings.getJSONObject(0).toString()))
+                "missing_mark" -> marks.remove(0)
+                "duplicate_mark" -> marks.put(JSONObject(marks.getJSONObject(0).toString()))
+                "malformed_mark" -> marks.put(JSONObject.NULL)
+            }
+            val requests = mutableListOf<Request>()
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request(); requests += request
+                val body = when (request.url.encodedPath) {
+                    "/fapi/v1/time" -> JSONObject().put("serverTime", System.currentTimeMillis()).toString()
+                    "/fapi/v1/symbolConfig" -> if (fault == "object_config") "{}" else settings.toString()
+                    "/fapi/v1/premiumIndex" -> if (fault == "object_mark") "{}" else marks.toString()
+                    else -> error("Unexpected network request: $request")
+                }
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body(body.toResponseBody()).build()
+            }.build()
+            val adapter = BinanceUsdMFuturesTestnetAdapter("test-key", "test-secret", client)
+            val result = runCatching { adapter.halfMarginSymbolConfigurations(required) }
+            if (fault.isNotEmpty()) assertTrue(fault, result.isFailure)
+            else {
+                val case = cases().first()
+                val order = JSONObject().put("symbol", "SANTOSUSDT").put("positionSide", "BOTH")
+                    .put("side", "BUY").put("orderId", 123).put("clientOrderId", "external")
+                    .put("reduceOnly", false).put("status", "NEW").put("origQty", "120")
+                    .put("executedQty", "0").put("price", "100")
+                val observed = futuresMarginObservation(case.getJSONObject("account"), case.getJSONObject("configuration"),
+                    JSONArray().put(order), result.getOrThrow())
+                assertTrue(observed.used >= BigDecimal("6009"))
+                assertEquals("SANTOSUSDT", observed.orders.getValue("external").symbol)
+                assertNotNull(williamsNewRiskSymbolBlocker("SANTOSUSDT"))
+            }
+            val reads = requests.filter { it.url.encodedPath != "/fapi/v1/time" }
+            assertEquals(if (fault == "object_config") 1 else 2, reads.size)
+            assertTrue(reads.all { it.method == "GET" && it.url.queryParameter("symbol") == null })
+        }
+    }
     @Test fun leaseRejectsFutureMissingAndExpiredProofs() {
         assertTrue(futuresHalfMarginLeaseFresh(1L, 15_000_000_001L))
         assertFalse(futuresHalfMarginLeaseFresh(1L, 15_000_000_002L))

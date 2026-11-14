@@ -350,6 +350,29 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return matches.single()
     }
 
+    /** Fresh settings/marks: bounded round trips even with many pending pairs. */
+    fun halfMarginSymbolConfigurations(symbols: Set<String>): Map<String, JSONObject> {
+        // Account liabilities may be outside the bot's NEW/management universe.
+        // These two read-only bulk calls grant no symbol mutation authority.
+        require(symbols.isNotEmpty() && symbols.all { it.matches(Regex("[A-Z0-9]+USDT")) })
+        if (symbols.size == 1) {
+            val symbol = symbols.single()
+            return mapOf(symbol to symbolConfiguration(symbol).put("mark_price", markPrice(symbol).toString()))
+        }
+        val settings = JSONArray(requestRaw("GET", "/fapi/v1/symbolConfig", emptyMap(), signed = true))
+        val marks = JSONArray(requestRaw("GET", "/fapi/v1/premiumIndex", emptyMap(), signed = false))
+        return symbols.associateWith { symbol ->
+            val configurations = (0 until settings.length()).map { settings.getJSONObject(it) }
+                .filter { it.optString("symbol") == symbol }
+            val prices = (0 until marks.length()).map { marks.getJSONObject(it) }
+                .filter { it.optString("symbol") == symbol }
+            check(configurations.size == 1 && prices.size == 1) {
+                "Missing or ambiguous half-margin symbol identity"
+            }
+            JSONObject(configurations.single().toString()).put("mark_price", prices.single().opt("markPrice"))
+        }
+    }
+
     /** Idempotently enforce this bot's account policy before entry. */
     fun ensureIsolatedLeverage(symbol: String, leverage: Int): JSONObject {
         try {

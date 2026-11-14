@@ -67,6 +67,19 @@ lock. Расчёт записывается до POST. После rate/clock wai
 исполнения; статус parent не подменяется FILLED. Новые receipts не меняют
 архивную кампанию, когда текущая позиция уже противоположного направления.
 
+При нескольких pending symbols настройки и mark prices собираются двумя
+пакетными чтениями вместо2*N последовательных запросов на observation.
+Одиночный символ сохраняет более дешёвый individual mark request. Каждый из
+двух snapshots читает их заново; cache/продление15-секундного lease отсутствуют.
+Отсутствующий/дублированный required symbol или malformed array блокируют вход.
+Внешние USDT liabilities вне NEW10/management15 читаются этим read-only путём
+и учитываются в cap; права на размещение по таким symbols не добавляются.
+Число HTTP calls проверено моделью транспорта; реальная latency Demo не измерена.
+Документация: [symbolConfig](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/account)
+и [premiumIndex](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data).
+У bulk marks IP weight10, у individual1; меньше HTTP round trips не означает
+меньшую суммарную request weight для любого количества symbols.
+
 STOP, trail, reduce-only exit, cancel и reconciliation не требуют этого
 NEW-risk разрешения. Превышение50% само по себе не вызывает закрытие позиции
 или снятие STOP. Daily3%, десять кампаний, NEW10/management15 и прежние
@@ -74,8 +87,8 @@ source/ownership/risk gates сохранены.
 
 ## Реальная локальная проверка
 
-- Полный Python после финальной доработки: **2582 passed,2 skipped**,
-  27.93s;10 предупреждений среды/
+- Полный Python после финальной доработки: **2590 passed,2 skipped**,
+  28.50s;10 предупреждений среды/
   существующего FastAPI/pandas кода. Baseline имел те же10 предупреждений.
 -287 focused Python risk/transport/lifecycle случаев прошли, включая lost
   initial POST с недоступным readback, затем восстановление того же ID без
@@ -92,11 +105,13 @@ source/ownership/risk gates сохранены.
   не Android lint и не physical-device acceptance. Итог CI точного коммита
   фиксируется в PR после завершения.
 - Локальный настоящий coordinator/adapter lifecycle + transport/shared/Source
-  JUnit: **139 tests PASS**,5 существующих ignored. Сохранились проверки
+  JUnit: **140 tests PASS**,5 существующих ignored. Сохранились проверки
   неизменности архивной кампании после внешнего разворота, все четыре
   TC2 добавления, STOP replacement и восстановление после lost reply.
 - Ruff undefined names/syntax и `ci_release_gate.py`: PASS. Версия4.64.32,
   code46432 синхронизирована в VERSION/server/Gradle.
+- Root static safety audit в clean-CI режиме:0 failures,11 прежних warnings
+  (duplicate-name/subprocess/AST-test patterns); production DB отсутствует.
 
 ## Что не закрыто этой реализацией
 

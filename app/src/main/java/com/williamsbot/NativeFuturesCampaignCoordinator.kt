@@ -3303,9 +3303,7 @@ internal class NativeFuturesCampaignCoordinator(
             if (row.optString("reduceOnly") != "true" && row.optString("closePosition") != "true")
                 symbols.add(row.getString("symbol"))
         }
-        val configurations = symbols.associateWith {
-            adapter.symbolConfiguration(it).put("mark_price", adapter.markPrice(it).toString())
-        }
+        val configurations = adapter.halfMarginSymbolConfigurations(symbols)
         return futuresMarginObservation(account, configuration, orders, configurations)
     }
 

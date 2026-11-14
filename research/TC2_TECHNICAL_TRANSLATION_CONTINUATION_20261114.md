@@ -80,8 +80,8 @@ training/execution authority. Аудит различает общие и chapte
 Integrity и require-complete различены: первый проходит; второй остаётся
 exit2, пока критические этапы не выполнены.
 
-После финальных правок полный Python:2582 passed,2 skipped,10 существующих
-предупреждений. Kotlin business/lifecycle/shared/transport:139 tests PASS,
+После финальных правок полный Python:2590 passed,2 skipped,10 существующих
+предупреждений. Kotlin business/lifecycle/shared/transport:140 tests PASS,
 5 existing ignored; это JVM-проверка, не телефон. Ruff undefined/syntax и
 release contract PASS. Результаты CI точного нового head фиксируются в PR.
 
