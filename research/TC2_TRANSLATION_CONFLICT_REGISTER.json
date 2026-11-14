@@ -1,6 +1,6 @@
 {
   "schema": "TC2_TRANSLATION_CONFLICT_REGISTER_V1",
-  "scope": "CHAPTERS8_TO12_SELECTED_CONFLICTS_NOT_FULL_TRANSLATION_CERTIFICATION",
+  "scope": "SELECTED_SOURCE_CONFLICTS_NOT_FULL_TRANSLATION_CERTIFICATION",
   "conflicts": [
     {
       "conflict_id": "TC2.C12.RU_SHORT_LABEL",
@@ -401,6 +401,147 @@
       "related_rules": [
         "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
       ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.INTRO.RU314_SOROS_IDENTITY",
+      "kind": "EDITION_IDENTITY_OVERATTRIBUTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            26
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            13
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            20
+          ]
+        }
+      ],
+      "observation": "English describes an unnamed trader in the same category as George Soros and then uses a pronoun. RU224 preserves this distinction; RU314 names Soros in the following sentence.",
+      "bounded_interpretation": "Do not assert the unnamed offer came from Soros. An index entry is not corroborating evidence or a trading rule.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP2.RU314_WINNER_COUNT",
+      "kind": "TRANSLATION_CHANGES_GROWING_WINNERS_TO_GROWING_NUMBER",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            212
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            192
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            255
+          ]
+        }
+      ],
+      "observation": "English says to let winning trades run; RU224 retains growth of winning trades. RU314 instead says to let the number of winning trades grow.",
+      "bounded_interpretation": "No mandate to increase trade frequency, duplicate orders or add positions follows. Existing source-confirmed entry/exit, exposure and pending-order gates remain authoritative.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP3.RU314_HEART_FORMULA",
+      "kind": "EDITION_ADDITION_VERSUS_INCOMPLETE_ORIGINAL_ENUMERATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            221
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            200,
+            201
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            267
+          ]
+        }
+      ],
+      "observation": "English calls the next group four formulas but explicitly quotes only breathing, solar-plexus and forehead phrases. RU224 retains that omission. RU314 adds an explicit heart formula.",
+      "bounded_interpretation": "Record an edition difference; the added sentence is not a quotation from the supplied English passage. No clinical efficacy, training authority or market-entry rule is established.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP2.ROI_MONTH_YEAR_AMBIGUITY",
+      "kind": "SOURCE_ARITHMETIC_AND_PERIOD_AMBIGUITY_INHERITED_BY_TRANSLATIONS",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            210
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            189
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            252
+          ]
+        }
+      ],
+      "observation": "All three state a10percent monthly ROI goal, more than300percent yearly, then10percent a year. This monthly/yearly switch already occurs in English. Compounding10percent monthly for12months gives213.8428376721percent net gain and313.8428376721percent final equity relative to initial equity.",
+      "bounded_interpretation": "The text does not distinguish final-equity percentage from net return. Neither interpretation establishes achieved returns. Do not train a guaranteed-return target, alter risk to meet it, or label this solely a Russian translation error.",
+      "related_rules": [],
       "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
       "all_cited_pages_read": true,
       "independent_second_review": false,

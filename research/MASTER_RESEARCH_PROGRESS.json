@@ -10,14 +10,12 @@
     "inventory_rows": 1213
   },
   "source_coverage": {
-    "semantically_reviewed_single_pass": 823,
+    "semantically_reviewed_single_pass": 1213,
     "independently_verified": 0,
     "total_physical_pages": 1213,
     "stage_counts": {
-      "REVIEWED_TEXT_ONLY": 567,
-      "REVIEWED_SINGLE_PASS": 256,
-      "TEXT_ACQUIRED_UNVERIFIED": 365,
-      "IMAGE_ONLY_PENDING_OCR": 25
+      "REVIEWED_TEXT_ONLY": 923,
+      "REVIEWED_SINGLE_PASS": 290
     },
     "inventory_is_not_full_reading": true,
     "physical_receipts_include_front_matter_blank_and_navigation_pages": true,
@@ -55,7 +53,7 @@
       "TC2_EN": {
         "physical_pages": 257,
         "first_pass_receipts": 257,
-        "visual_receipts": 100,
+        "visual_receipts": 103,
         "independently_verified": 0,
         "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
@@ -69,12 +67,13 @@
       },
       "TC2_RU_224": {
         "physical_pages": 224,
-        "first_pass_receipts": 65,
-        "visual_receipts": 31,
+        "first_pass_receipts": 224,
+        "visual_receipts": 34,
         "independently_verified": 0,
-        "all_physical_pages_have_first_pass_receipts": false,
+        "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
-          "SUBSTANTIVE_TEXT": 27,
+          "FRONT_MATTER": 15,
+          "SUBSTANTIVE_TEXT": 171,
           "GRAPHIC_AND_TEXT": 34,
           "PREVIOUS_RECEIPT_UNCLASSIFIED": 4
         },
@@ -82,16 +81,20 @@
       },
       "TC2_RU_314": {
         "physical_pages": 314,
-        "first_pass_receipts": 83,
-        "visual_receipts": 37,
+        "first_pass_receipts": 314,
+        "visual_receipts": 65,
         "independently_verified": 0,
-        "all_physical_pages_have_first_pass_receipts": false,
+        "all_physical_pages_have_first_pass_receipts": true,
         "classified_page_kinds": {
+          "COVER": 2,
+          "FRONT_MATTER": 20,
+          "VISUALLY_CONFIRMED_BLANK": 29,
+          "SUBSTANTIVE_TEXT": 205,
           "CHAPTER_TITLE": 5,
-          "VISUALLY_CONFIRMED_BLANK": 6,
-          "SUBSTANTIVE_TEXT": 28,
           "GRAPHIC_AND_TEXT": 38,
-          "PREVIOUS_RECEIPT_UNCLASSIFIED": 6
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 6,
+          "NAVIGATION": 7,
+          "PUBLISHER_PARATEXT": 2
         },
         "full_content_certified": false
       },
@@ -136,13 +139,13 @@
     "full_translation_certified": false
   },
   "source_conflicts": {
-    "visible_single_review_entries": 42,
+    "visible_single_review_entries": 46,
     "per_source": {
       "TC1_RU": 10,
       "NTD_RU": 15,
       "COURSE_EN": 7
     },
-    "cross_edition_TC2": 10,
+    "cross_edition_TC2": 14,
     "independent_second_reviews": 0,
     "unseen_original_english_errata_certified": false
   },

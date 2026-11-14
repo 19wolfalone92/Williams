@@ -17,7 +17,7 @@ def test_inventory_complete_does_not_claim_books_complete():
     assert not report['execution_safety']['main_merge_allowed']
 
 
-def test_english_first_pass_does_not_certify_other_books_or_independent_review():
+def test_all_first_pass_receipts_do_not_certify_independent_or_full_content_review():
     coverage=audit()['source_coverage']
     english=coverage['per_source']['TC2_EN']
     assert english['all_physical_pages_have_first_pass_receipts']
@@ -25,7 +25,9 @@ def test_english_first_pass_does_not_certify_other_books_or_independent_review()
     assert english['independently_verified']==0
     assert not english['full_content_certified']
     assert english['classified_page_kinds']['VISUALLY_CONFIRMED_BLANK']==12
-    assert not coverage['per_source']['TC2_RU_224']['all_physical_pages_have_first_pass_receipts']
+    assert all(s['all_physical_pages_have_first_pass_receipts'] for s in coverage['per_source'].values())
+    assert all(not s['full_content_certified'] and s['independently_verified']==0
+               for s in coverage['per_source'].values())
 
 
 def test_tc1_complete_text_pass_keeps_original_identity_and_execution_gaps():
@@ -157,7 +159,9 @@ def test_reviewed_stage_requires_the_matching_semantic_receipt(tmp_path):
     folder=copy_receipts(tmp_path)
     path=folder/'PRIMARY_SOURCE_PAGE_REGISTER.jsonl'
     rows=[json.loads(l) for l in path.read_text().splitlines()]
-    row=next(r for r in rows if r['verification_status']=='TEXT_ACQUIRED_UNVERIFIED')
+    # Promote a real text-only receipt to a visual stage without corresponding
+    # manual review. This remains invalid after no unread text pages remain.
+    row=next(r for r in rows if r['verification_status']=='REVIEWED_TEXT_ONLY')
     row['verification_status']='REVIEWED_SINGLE_PASS';row['visual_review']=False
     path.write_text(''.join(json.dumps(r)+'\n' for r in rows))
     assert 'PAGE_REVIEW_RECEIPT_MISMATCH' in audit(tmp_path)['errors']

@@ -26,7 +26,7 @@ def _mutate_structure(tmp_path, change):
     return audit(tmp_path)
 
 
-def test_complete_physical_navigation_cannot_certify_unread_translation_pages():
+def test_complete_first_text_pass_cannot_certify_full_translation_or_trading():
     report = master_audit()
     assert report['integrity_valid'], report['errors']
     alignment = report['translation_alignment']
@@ -36,13 +36,17 @@ def test_complete_physical_navigation_cannot_certify_unread_translation_pages():
     assert not alignment['semantic_alignment_complete']
     assert not alignment['heading_crops_count_as_full_page_reading']
     coverage = report['source_coverage']['per_source']
-    assert coverage['TC2_RU_224']['first_pass_receipts'] == 65
-    assert coverage['TC2_RU_314']['first_pass_receipts'] == 83
+    assert coverage['TC2_RU_224']['first_pass_receipts'] == 224
+    assert coverage['TC2_RU_314']['first_pass_receipts'] == 314
     notes = _read('review_notes.json')
-    # This rendered heading crop has no full-page reading receipt. A complete
-    # section partition cannot invent one or advance the completion gate.
-    assert 'TC2_RU_314:23' not in notes
-    assert report['source_coverage']['semantically_reviewed_single_pass'] == 823
+    assert notes['TC2_RU_314:23']['review_text_provenance']['review_method'].startswith('READ_BASE_')
+    proof = _read('TC2_REMAINING_TEXT_FIRST_PASS_20261114.json')
+    assert proof['new_receipts'] == 390
+    assert not proof['bidirectional_omission_audit_complete']
+    assert not proof['entire_translations_certified']
+    assert not proof['all_figures_reviewed']
+    assert not proof['training_allowed']
+    assert report['source_coverage']['semantically_reviewed_single_pass'] == 1213
     assert alignment['technical_translation_pages_mapped'] == 104
     assert not report['execution_safety']['main_merge_allowed']
 
@@ -157,7 +161,9 @@ def test_zero_text_does_not_turn_a_rendered_cover_into_a_blank():
     assert paratext['pdf_span'] == [311, 314]
     assert paratext['relation'] == 'EDITION_SPECIFIC_PARATEXT_NOT_SEMANTICALLY_ALIGNED'
     assert 'image-only back cover314' in paratext['note']
-    assert 'TC2_RU_314:314' not in notes
+    assert notes['TC2_RU_314:314']['page_kind'] == 'COVER'
+    assert notes['TC2_RU_314:314']['visual_review']
+    assert notes['TC2_RU_314:1']['page_kind'] == 'COVER'
 
 
 def test_ao_source_reference_is_appendix7_without_rewriting_acquisition():
@@ -180,6 +186,11 @@ def test_translation_agreement_is_not_independent_corroboration():
 
 def test_conflict_cannot_cite_an_unread_page_with_only_a_heading_crop(tmp_path):
     folder = _copy(tmp_path)
+    # Simulate loss of the later text reading; the original heading crop alone
+    # must still be insufficient evidence for a source-conflict comparison.
+    notes = _read('review_notes.json')
+    del notes['TC2_RU_314:23']
+    (folder/'review_notes.json').write_text(json.dumps(notes))
     data = _read('TC2_TRANSLATION_CONFLICT_REGISTER.json')
     next(p for p in data['conflicts'][0]['evidence'] if p['source_id'] == 'TC2_RU_314')['pdf_pages'] = [23]
     (folder / 'TC2_TRANSLATION_CONFLICT_REGISTER.json').write_text(json.dumps(data))
