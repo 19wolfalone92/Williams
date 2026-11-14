@@ -1,0 +1,113 @@
+package com.williamsbot
+
+import org.json.JSONObject
+import org.json.JSONArray
+import org.junit.Assert.*
+import org.junit.Test
+import java.math.BigDecimal
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+
+class FuturesHalfMarginTest {
+    @Test fun bulkReadsBoundRequestsAndKeepExternalOrderMarginWithoutNewSymbolAuthority() {
+        val required = setOf("BTCUSDT", "SUIUSDT", "SANTOSUSDT")
+        for (fault in listOf("", "missing_config", "duplicate_config", "missing_mark", "duplicate_mark",
+            "object_config", "object_mark", "malformed_mark")) {
+            val settings = JSONArray(required.map { JSONObject().put("symbol", it)
+                .put("leverage", "2").put("marginType", "ISOLATED") })
+            val marks = JSONArray(required.map { JSONObject().put("symbol", it).put("markPrice", "100") })
+            when (fault) {
+                "missing_config" -> settings.remove(0)
+                "duplicate_config" -> settings.put(JSONObject(settings.getJSONObject(0).toString()))
+                "missing_mark" -> marks.remove(0)
+                "duplicate_mark" -> marks.put(JSONObject(marks.getJSONObject(0).toString()))
+                "malformed_mark" -> marks.put(JSONObject.NULL)
+            }
+            val requests = mutableListOf<Request>()
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request(); requests += request
+                val body = when (request.url.encodedPath) {
+                    "/fapi/v1/time" -> JSONObject().put("serverTime", System.currentTimeMillis()).toString()
+                    "/fapi/v1/symbolConfig" -> if (fault == "object_config") "{}" else settings.toString()
+                    "/fapi/v1/premiumIndex" -> if (fault == "object_mark") "{}" else marks.toString()
+                    else -> error("Unexpected network request: $request")
+                }
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body(body.toResponseBody()).build()
+            }.build()
+            val adapter = BinanceUsdMFuturesTestnetAdapter("test-key", "test-secret", client)
+            val result = runCatching { adapter.halfMarginSymbolConfigurations(required) }
+            if (fault.isNotEmpty()) assertTrue(fault, result.isFailure)
+            else {
+                val case = cases().first()
+                val order = JSONObject().put("symbol", "SANTOSUSDT").put("positionSide", "BOTH")
+                    .put("side", "BUY").put("orderId", 123).put("clientOrderId", "external")
+                    .put("reduceOnly", false).put("status", "NEW").put("origQty", "120")
+                    .put("executedQty", "0").put("price", "100")
+                val observed = futuresMarginObservation(case.getJSONObject("account"), case.getJSONObject("configuration"),
+                    JSONArray().put(order), result.getOrThrow())
+                assertTrue(observed.used >= BigDecimal("6009"))
+                assertEquals("SANTOSUSDT", observed.orders.getValue("external").symbol)
+                assertNotNull(williamsNewRiskSymbolBlocker("SANTOSUSDT"))
+            }
+            val reads = requests.filter { it.url.encodedPath != "/fapi/v1/time" }
+            assertEquals(if (fault == "object_config") 1 else 2, reads.size)
+            assertTrue(reads.all { it.method == "GET" && it.url.queryParameter("symbol") == null })
+        }
+    }
+    @Test fun leaseRejectsFutureMissingAndExpiredProofs() {
+        assertTrue(futuresHalfMarginLeaseFresh(1L, 15_000_000_001L))
+        assertFalse(futuresHalfMarginLeaseFresh(1L, 15_000_000_002L))
+        assertFalse(futuresHalfMarginLeaseFresh(0L, 1L))
+        assertFalse(futuresHalfMarginLeaseFresh(2L, 1L))
+        assertFalse(futuresHalfMarginLeaseFresh(1L, Long.MAX_VALUE))
+    }
+    private fun cases(): List<JSONObject> {
+        val raw = javaClass.classLoader!!.getResourceAsStream("williams_half_margin_contract.json")!!
+            .bufferedReader().use { it.readText() }
+        val cases = JSONObject(raw).getJSONArray("cases")
+        return (0 until cases.length()).map { cases.getJSONObject(it) }
+    }
+    private fun observe(case: JSONObject): HalfMarginObservation {
+        val symbols = case.getJSONObject("symbols")
+        return futuresMarginObservation(case.getJSONObject("account"), case.getJSONObject("configuration"),
+            case.getJSONArray("orders"), symbols.keys().asSequence().associateWith { symbols.getJSONObject(it) })
+    }
+    private fun evaluate(case: JSONObject): JSONObject = assessFuturesHalfMargin(observe(case),
+        observe(case.optJSONObject("second") ?: case), case.getJSONObject("proposal"), case.getJSONArray("liabilities"),
+        case.optLong("elapsed_ms", 0L))
+
+    @Test fun sharedPythonAndroidAcceptanceContract() {
+        for (case in cases()) {
+            val expected = case.getString("expected")
+            val result = runCatching { evaluate(case) }
+            if (expected.startsWith("UNKNOWN:")) {
+                assertTrue(case.getString("id") + ": " + result, result.isFailure)
+                assertTrue(result.exceptionOrNull().toString(), result.exceptionOrNull().toString()
+                    .contains("FUTURES_HALF_MARGIN_$expected"))
+            } else {
+                assertTrue(case.getString("id") + ": " + result.exceptionOrNull(), result.isSuccess)
+                assertEquals(case.getString("id"), expected == "PASS", result.getOrThrow().getBoolean("allowed"))
+            }
+        }
+    }
+    @Test fun explicitAmountsPartialAndBoundary() {
+        val cases = cases().associateBy { it.getString("id") }
+        assertEquals(0, evaluate(cases.getValue("440_plus_40_pending_plus_30_rejected"))
+            .getString("projected_usdt").toBigDecimal().compareTo(BigDecimal("510.595735")))
+        assertEquals(0, evaluate(cases.getValue("partial_parent_bound_to_child_once"))
+            .getString("projected_usdt").toBigDecimal().compareTo(BigDecimal("490.425525")))
+        assertEquals(0, evaluate(cases.getValue("exact_50_percent_including_costs"))
+            .getString("projected_usdt").toBigDecimal().compareTo(BigDecimal("500")))
+    }
+    @Test fun aChildCannotBeClaimedByTwoParents() {
+        val case = cases().single { it.getString("id") == "partial_parent_bound_to_child_once" }
+        val liabilities = case.getJSONArray("liabilities")
+        liabilities.put(JSONObject(liabilities.getJSONObject(0).toString()).put("client_id", "another-parent"))
+        val result = runCatching { evaluate(case) }
+        assertTrue(result.exceptionOrNull().toString(), result.exceptionOrNull().toString().contains("LIABILITY_DUPLICATE_CLAIM"))
+    }
+}

@@ -8,6 +8,9 @@ on:
       - "tests/**"
       - "docs/williams_book_rule_registry.json"
       - "tools/audit_book_rule_registry.py"
+      - "tools/audit_williams_master_research.py"
+      - "research/*.json"
+      - "research/*.jsonl"
       - "app/src/test/resources/williams_book_rules_contract.json"
       - "requirements.txt"
       - ".github/workflows/**"
@@ -17,6 +20,9 @@ on:
       - "tests/**"
       - "docs/williams_book_rule_registry.json"
       - "tools/audit_book_rule_registry.py"
+      - "tools/audit_williams_master_research.py"
+      - "research/*.json"
+      - "research/*.jsonl"
       - "app/src/test/resources/williams_book_rules_contract.json"
       - "requirements.txt"
       - ".github/workflows/**"
@@ -55,6 +61,18 @@ jobs:
 
       - name: Validate book source and regression links (not whole-book approval)
         run: python3 tools/audit_book_rule_registry.py
+
+      - name: Validate master page and figure evidence without certifying incomplete books
+        run: python3 tools/audit_williams_master_research.py --output build/book-audit/master_research_progress.json
+
+      - name: Archive master source research progress
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: williams-master-source-research-progress
+          path: build/book-audit/master_research_progress.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Report four-book selected-rule coverage against 95 percent target
         run: |

@@ -1,0 +1,72 @@
+{
+  "schema": "TC2_TRANSLATION_AUDIT_V1",
+  "integrity_valid": true,
+  "errors": [],
+  "structure": {
+    "physical_pages_partitioned": 795,
+    "per_source": {
+      "TC2_EN": 257,
+      "TC2_RU_224": 224,
+      "TC2_RU_314": 314
+    },
+    "heading_crop_receipts": 68,
+    "heading_crops_count_as_full_page_reading": false,
+    "semantic_alignment_complete": false,
+    "constant_offset_used": false
+  },
+  "chapter12_comparison_records": 6,
+  "source_comparison_records": 14,
+  "technical_translation_pages_mapped": 104,
+  "numeric_input_sha256": "ffe97eb05924ececa98faf8ec78dfeb13e3625e7783e051b4c85227d4151c47d",
+  "printed_arithmetic": {
+    "gold": {
+      "equal_one_per_entry_total_usd": "14660.00",
+      "weighted_rows_usd": [
+        "4180.00",
+        "19550.00",
+        "14640.00",
+        "8730.00"
+      ],
+      "weighted_total_usd": "47100.00",
+      "printed_rows_reconcile": true,
+      "printed_totals_reconcile": true,
+      "equal_position_contracts": 4,
+      "weighted_position_contracts": 13,
+      "planned_capacity_contracts": 15,
+      "fifth_tranche_included_in_result": false,
+      "actual_fifth_entry_execution_known": false,
+      "gross_dollar_ratio_different_exposures": "3.21282401",
+      "equal_risk_improvement_certified": false,
+      "percentage_return": null,
+      "net_profit_usd": null,
+      "matched_capital_and_margin_path_known": false
+    },
+    "costco": {
+      "assumption": "ONE_SHARE_PER_ENTRY_FOR_ARITHMETIC_ONLY_NOT_KNOWN_ALLOCATION",
+      "individual_price_differences_usd": [
+        "4.58",
+        "2.99",
+        "1.73"
+      ],
+      "conditional_three_share_combined_gross_usd": "9.30",
+      "conditional_gross_per_final_share_usd": "3.10",
+      "printed_combined_profit_usd": "9.29",
+      "printed_minus_conditional_sum_usd": "-0.01",
+      "literal_displayed_sum_matches_printed": false,
+      "discrepancy_status": "APPROXIMATE_PRICES_AND_UNKNOWN_ALLOCATION_NOT_CERTIFIED_ERRATUM",
+      "net_profit_usd": null,
+      "inferred_fee_to_force_reconciliation_usd": null,
+      "actual_entry_quantities": null
+    },
+    "historical_fills_verified": false,
+    "costs_verified": false,
+    "is_backtest": false,
+    "expert_gold": false,
+    "execution_authority": false,
+    "training_allowed": false
+  },
+  "independent_second_review": false,
+  "expert_gold": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

@@ -9,7 +9,8 @@ from binance_client import BinanceAPIError
 
 
 class DemoExchangeModel:
-    def __init__(self):
+    def __init__(self, symbol="BTCUSDT"):
+        self.symbol = symbol
         self.price = 100.0
         self.amount = 0.0
         self.entry_price = 0.0
@@ -26,22 +27,23 @@ class DemoExchangeModel:
         self.close_status = "FILLED"
         self.market_add_timeout_after_fill = False
         self.market_close_timeout_after_fill=False
+        self.account_transform = lambda account:account
 
     def request(self, method, path, params=None, signed=False):
         p = params or {}
         self.calls.append((method, path, dict(p)))
         if path.endswith("exchangeInfo"):
-            return {"symbols": [{"symbol": "BTCUSDT", "filters": [
+            return {"symbols": [{"symbol": self.symbol, "filters": [
                 {"filterType": "PRICE_FILTER", "tickSize": "0.1"},
                 {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
                 {"filterType": "MARKET_LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "1000"},
             ]}]}
         if path.endswith("leverageBracket"):
-            return {} if self.bad_brackets else {"symbol": "BTCUSDT", "brackets": [
+            return {} if self.bad_brackets else {"symbol": self.symbol, "brackets": [
                 {"notionalFloor": 0, "notionalCap": 1000000, "initialLeverage": 125, "maintMarginRatio": 0.005}
             ]}
         if path.endswith("symbolConfig"):
-            return [{"symbol": "BTCUSDT", "marginType": "ISOLATED", "leverage": self.leverage,
+            return [{"symbol": self.symbol, "marginType": "ISOLATED", "leverage": self.leverage,
                      "maxNotionalValue": "1000000"}]
         if path.endswith("leverage"):
             self.leverage = p["leverage"]
@@ -51,21 +53,34 @@ class DemoExchangeModel:
         if path.endswith("marginType"):
             return {"code": 200}
         if path.endswith("premiumIndex"):
-            return {"symbol":"BTCUSDT","markPrice":str(self.price)}
+            return {"symbol":self.symbol,"markPrice":str(self.price)}
         if path.endswith("bookTicker"):
-            return {"symbol":"BTCUSDT","bidPrice":str(self.price),"askPrice":str(self.price)}
+            return {"symbol":self.symbol,"bidPrice":str(self.price),"askPrice":str(self.price)}
         if path.endswith("ticker/price"):
-            return {"symbol": "BTCUSDT", "price": str(self.price)}
+            return {"symbol": self.symbol, "price": str(self.price)}
         if path.endswith("/account"):
-            return {"canTrade": True, "assets": [], "totalWalletBalance": "10000", "totalUnrealizedProfit": "0", "availableBalance": "10000"}
+            margin = str(abs(self.amount) * self.price / self.leverage)
+            positions = [] if not self.amount else [{"symbol":self.symbol, "positionSide":"BOTH",
+                "positionAmt":str(self.amount), "initialMargin":margin, "isolatedWallet":margin,
+                "isolatedMargin":margin, "updateTime":100}]
+            return self.account_transform({"canTrade": True, "totalWalletBalance": "10000", "totalMarginBalance":"10000",
+                "totalUnrealizedProfit": "0", "availableBalance": "10000", "totalInitialMargin":margin,
+                "totalPositionInitialMargin":margin, "totalOpenOrderInitialMargin":"0", "positions":positions,
+                "assets":[{"asset":"USDT", "walletBalance":"10000", "initialMargin":margin,
+                           "positionInitialMargin":margin, "openOrderInitialMargin":"0"}]})
+        if path.endswith("accountConfig"):
+            return {"canTrade":True, "dualSidePosition":False, "multiAssetsMargin":False}
         if path.endswith("positionRisk"):
-            return [{"symbol": "BTCUSDT", "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
+            return [{"symbol": self.symbol, "positionAmt": str(self.amount), "entryPrice": str(self.entry_price),
                      "liquidationPrice": self.liquidation_price if self.liquidation_price != "MODEL" else ("50" if self.amount > 0 else "200"), "positionSide": "BOTH",
                      "leverage": str(self.leverage), "marginType": "isolated"}]
         if path.endswith("openOrders") or path.endswith("allOrders"):
-            return list(self.orders.values()) if path.endswith("allOrders") else []
+            return list(self.orders.values()) if path.endswith("allOrders") else [dict(row,price=row.get("price","0"))
+                for row in self.orders.values() if row["status"] in {"NEW","PARTIALLY_FILLED"}]
         if path.endswith("openAlgoOrders") or path.endswith("allAlgoOrders"):
-            return [dict(row) for row in self.algos.values() if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
+            return [dict(row,positionSide=row.get("positionSide","BOTH"),reduceOnly=row.get("reduceOnly",False),
+                         closePosition=row.get("closePosition",False)) for row in self.algos.values()
+                    if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
         if path.endswith("algoOrder"):
             if method == "POST":
                 if p.get("closePosition") and self.protection_failure:
@@ -129,7 +144,7 @@ class DemoExchangeModel:
         quantity = float(row["quantity"])
         self.amount = quantity * fraction * (1 if row["side"] == "BUY" else -1)
         row.update(algoStatus="FINISHED", actualOrderId=str(oid))
-        self.orders[oid] = {"orderId": oid, "symbol": "BTCUSDT", "side": row["side"],
+        self.orders[oid] = {"orderId": oid, "symbol": self.symbol, "side": row["side"],
                             "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
                             "status": "FILLED" if fraction == 1 else "PARTIALLY_FILLED",
                             "origQty": str(quantity), "executedQty": str(quantity * fraction), "avgPrice": str(self.entry_price)}
@@ -143,7 +158,7 @@ class DemoExchangeModel:
         self.price=price+(1 if self.amount>0 else -1)
         oid=max([42,*self.orders])+1
         row.update(algoStatus="FINISHED",actualOrderId=str(oid))
-        self.orders[oid]={"orderId":oid,"symbol":"BTCUSDT","side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
+        self.orders[oid]={"orderId":oid,"symbol":self.symbol,"side":row["side"],"status":"FILLED" if fraction==1 else "CANCELED",
             "clientOrderId":"actual-child-"+str(oid),"reduceOnly":False,"positionSide":"BOTH",
             "origQty":str(row["quantity"]),"executedQty":str(quantity),"avgPrice":str(price)}
 
@@ -159,14 +174,15 @@ def armed_runtime(monkeypatch, tmp_path, request):
     monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES", "")
     monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE",profile)
     bot = FuturesWilliamsRuntime("test-key", "test-secret", testnet=True)
-    exchange = DemoExchangeModel()
+    symbol=option.get("legacy_symbol","BTCUSDT") if isinstance(option,dict) else "BTCUSDT"
+    exchange = DemoExchangeModel(symbol)
     monkeypatch.setattr(bot.client, "_request", exchange.request)
     now = int(time.time() * 1000)
-    signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
+    signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
         setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
-    candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
+    candidate = FuturesCandidate(symbol, "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     # This old NTD transport suite models a LEGACY already-owned NTD
     # campaign. Production now permits NEW risk only for TC2. Narrowly
     # override the release *admission* gate in this offline exchange simulator
@@ -190,7 +206,15 @@ def armed_runtime(monkeypatch, tmp_path, request):
             admitted=float(Decimal(str(qty))//grid*grid)
             return admitted,risk*admitted/qty,notional*admitted/qty
         monkeypatch.setattr(bot,"_size_from_risk",size_in_course_units)
-    armed=bot._arm_entry(candidate)
+    # Model a durable intent admitted by the PRE-upgrade fifteen-symbol policy.
+    # Restore the CURRENT release admission before any test/recovery executes.
+    with monkeypatch.context() as old_admission:
+        if symbol != "BTCUSDT":
+            import futures_williams_runtime as runtime_module
+            import binance_futures_client as client_module
+            old_admission.setattr(runtime_module,"new_risk_symbol_blocker",lambda symbol:None)
+            old_admission.setattr(client_module,"new_risk_symbol_blocker",lambda symbol:None)
+        armed=bot._arm_entry(candidate)
     trace=bot.db.conn.execute("SELECT raw_json FROM events WHERE event='decision_trace_execution' ORDER BY id DESC LIMIT 1").fetchone()
     assert trace and '"stage": "_arm_entry"' in trace[0]
     assert "test-secret" not in trace[0]
@@ -253,6 +277,53 @@ def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_r
     exchange.liquidation_price = "MODEL"
     assert bot.recover()["ok"]
     assert bot.state("BTCUSDT") == "OPEN"
+
+
+@pytest.mark.parametrize("armed_runtime", [
+    {"side": side, "legacy_symbol": symbol}
+    for side in ("BUY", "SELL")
+    for symbol in ("SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT")
+], indirect=True)
+@pytest.mark.parametrize("mode", ["UNFILLED", "PARTIAL", "TRIGGERING", "UNKNOWN"])
+def test_ten_symbol_admission_retains_every_preupgrade_pending_liability_and_its_protection(armed_runtime, monkeypatch, mode):
+    bot, exchange, armed = armed_runtime
+    symbol = exchange.symbol
+    cid = armed["client_order_id"]
+    initial = bot.engine.load_campaign(armed["campaign_id"])
+    if mode == "PARTIAL":
+        exchange.fill_entry(fraction=.5)
+    elif mode == "TRIGGERING":
+        exchange.algos[1]["algoStatus"] = "TRIGGERING"
+    if mode == "UNKNOWN":
+        with monkeypatch.context() as lost_reply:
+            def unknown(*args, **kwargs):
+                raise BinanceAPIError("modeled unknown signed observation", unknown_execution=True)
+            lost_reply.setattr(bot.client, "get_order", unknown)
+            bot._reconcile_pending()
+        assert (symbol, cid) in bot._pending_entries()
+        assert bot.state(symbol) == "RECONCILE_REQUIRED"
+    else:
+        bot._reconcile_pending()
+    if mode in {"UNFILLED", "TRIGGERING"}:
+        assert (symbol, cid) in bot._pending_entries()
+        retained = bot.engine.load_campaign(initial.campaign_id)
+        assert retained.tags["pending_order_client_id"] == cid
+        assert retained.capital_reserved_quote == initial.capital_reserved_quote
+    # Recovered full/partial fills MUST obtain an owned protective STOP;
+    # an unfilled or unknown old intent is never rearmed under a new id.
+    if mode != "PARTIAL":
+        exchange.fill_entry()
+    assert bot.recover()["ok"]
+    owner = bot.engine.load_campaign(initial.campaign_id)
+    assert abs(owner.position_qty) == pytest.approx(abs(exchange.amount))
+    assert owner.state.value == "OPEN_INITIAL"
+    assert bot.state(symbol) == "OPEN"
+    assert any(r.get("symbol") == symbol and r.get("closePosition") == "true"
+               and r["algoStatus"] == "NEW" for r in exchange.algos.values())
+    assert sum(m == "POST" and p.endswith("algoOrder") and not data.get("closePosition")
+               for m, p, data in exchange.calls) == 1
+    with pytest.raises(RuntimeError, match="FUTURES_SYMBOL_MANAGEMENT_ONLY"):
+        bot._arm_add_on(owner, type("Signal", (), {"symbol": symbol})())
 
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":3},{"side":"SELL","course_units":3}],indirect=True)
@@ -957,3 +1028,110 @@ def test_tc2_addition_revalidates_after_sizing_before_exchange_post(armed_runtim
     expected="PROFITABLE_POSITION|invalidated_before_trigger" if change=="profit_lost" else "already_crossed"
     with pytest.raises(RuntimeError,match=expected):bot._arm_add_on(campaign,signal)
     assert before==sum(m=="POST" and p.endswith("algoOrder") for m,p,_ in exchange.calls)
+
+
+@pytest.fixture
+def half_margin_entry(monkeypatch, tmp_path):
+    monkeypatch.setenv('WILLIAMS_DB_PATH', str(tmp_path / 'margin.sqlite3'))
+    monkeypatch.setenv('DRY_RUN', 'false')
+    monkeypatch.setenv('FUTURES_LEVERAGE', '2')
+    monkeypatch.setenv('FUTURES_SYMBOL_LEVERAGES', '')
+    monkeypatch.setenv('WILLIAMS_SIGNAL_PROFILE', 'TC2_THREE_WISE_MEN')
+    bot = FuturesWilliamsRuntime('test-key', 'test-secret', testnet=True)
+    exchange = DemoExchangeModel()
+    monkeypatch.setattr(bot.client, '_request', exchange.request)
+    def candidate(side):
+        now = int(time.time()*1000)
+        signal = SignalSpec.new(symbol='BTCUSDT', side=side, signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY, timeframe='1h', signal_bar_time_ms=now-1000,
+            trigger_price=101 if side=='BUY' else 99, protective_reference=95 if side=='BUY' else 105,
+            expires_at_ms=now+3600000)
+        return FuturesCandidate('BTCUSDT', 'LONG' if side=='BUY' else 'SHORT', signal, (signal,), .01, .001, True, 90)
+    try:
+        yield bot, exchange, candidate
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+@pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN','POSITION_CHANGED'])
+def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, side, fault):
+    bot, exchange, candidate = half_margin_entry
+    def corrupt(account):
+        if fault=='OVER_HALF': account['totalInitialMargin']='5500'
+        elif fault=='MISSING_MARGIN': account.pop('totalInitialMargin')
+        elif fault=='POSITION_CHANGED':account['positions']=[{'symbol':'BTCUSDT','positionSide':'BOTH',
+            'positionAmt':'1','initialMargin':'50','isolatedWallet':'50','isolatedMargin':'50','updateTime':100}]
+        else: account['multiAssetsMargin']='false'
+        return account
+    exchange.account_transform=corrupt
+    with pytest.raises(RuntimeError, match='FUTURES_HALF_MARGIN'):
+        bot._arm_entry(candidate(side))
+    assert not any(method=='POST' and path in {'/fapi/v1/order','/fapi/v1/algoOrder'}
+                   for method,path,_ in exchange.calls)
+    assert bot._pending_entries()==[]
+    assert bot.db.open_campaigns()==[]
+    row=bot.db.conn.execute("SELECT status FROM execution_intents WHERE purpose='CAMPAIGN_ENTRY'").fetchone()
+    assert row['status']=='BLOCKED'
+    closed=bot.db.conn.execute('SELECT pending_risk_quote,capital_reserved_quote,tags_json FROM campaigns').fetchone()
+    assert closed['pending_risk_quote']==closed['capital_reserved_quote']==0
+    assert 'entry_not_submitted' in closed['tags_json']
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+def test_lost_initial_post_keeps_exact_id_and_reserve_and_reconciles_without_repost(half_margin_entry, monkeypatch, side):
+    bot, exchange, candidate = half_margin_entry
+    actual=exchange.request
+    sent=[False]
+    def lose_response(method,path,params=None,signed=False):
+        if sent[0] and method=='GET' and path.endswith('algoOrder'):
+            raise BinanceAPIError('modeled unknown readback', unknown_execution=True)
+        result=actual(method,path,params,signed)
+        if method=='POST' and path.endswith('algoOrder') and not (params or {}).get('closePosition'):
+            sent[0]=True
+            raise BinanceAPIError('modeled lost reply after acceptance', unknown_execution=True)
+        return result
+    monkeypatch.setattr(bot.client,'_request',lose_response)
+    with pytest.raises(BinanceAPIError, match='execution UNKNOWN'):
+        bot._arm_entry(candidate(side))
+    [(symbol,cid)]=bot._pending_entries()
+    owner=bot._active_campaign(symbol)
+    assert owner.pending_risk_quote>0 and owner.capital_reserved_quote>0
+    assert 'entry_not_submitted' not in owner.tags
+    assert bot.db.conn.execute("SELECT status FROM execution_intents WHERE purpose='CAMPAIGN_ENTRY'").fetchone()['status']=='AMBIGUOUS'
+    monkeypatch.setattr(bot.client,'_request',actual)
+    bot._reconcile_pending()
+    assert bot._pending_entries()==[(symbol,cid)]
+    assert len(exchange.algos)==1 and next(iter(exchange.algos.values()))['clientAlgoId']==cid
+    exchange.fill_entry()
+    bot._reconcile_pending()
+    assert bot._active_campaign(symbol).tags.get('protective_order_id')
+    assert len([p for m,path,p in exchange.calls if m=='POST' and path.endswith('algoOrder') and not p.get('closePosition')])==1
+
+
+@pytest.mark.parametrize('side', ['BUY','SELL'])
+@pytest.mark.parametrize('fault', ['EXPIRY','CLIENT_ID','TRIGGER'])
+def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(half_margin_entry, monkeypatch, side, fault):
+    from binance_futures_client import BinanceFuturesClient
+    bot, exchange, candidate=half_margin_entry
+    assess=bot._assess_half_margin
+    def expire_after_margin(intent):
+        started=assess(intent)
+        owner=bot.engine.load_campaign(intent.campaign_id)
+        if fault=='EXPIRY':owner.tags['pending_signal']['signal']['expires_at_ms']=int(time.time()*1000)-1
+        bot.db.save_campaign(owner)
+        return started
+    monkeypatch.setattr(bot,'_assess_half_margin',expire_after_margin)
+    def request(method,path,params=None,signed=False):
+        if method=='POST' and path=='/fapi/v1/algoOrder':
+            params=dict(params)
+            if fault=='CLIENT_ID':params['clientAlgoId']='UNBOUND_OTHER_INTENT'
+            if fault=='TRIGGER':params['triggerPrice']='999'
+            return BinanceFuturesClient._request(bot.client,method,path,params,signed)
+        return exchange.request(method,path,params,signed)
+    monkeypatch.setattr(bot.client,'_request',request)
+    monkeypatch.setattr(bot.client.session,'request',lambda *a,**k:pytest.fail('Expired signal reached HTTP POST'))
+    with pytest.raises(RuntimeError,match='SIGNAL_EXPIRED_BEFORE_TRANSPORT' if fault=='EXPIRY' else 'TRANSPORT_PLAN_CHANGED'):
+        bot._arm_entry(candidate(side))
+    assert bot._pending_entries()==[] and bot.db.open_campaigns()==[]

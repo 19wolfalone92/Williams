@@ -71,4 +71,14 @@ class WilliamsNtdFirstFractalExactSourceTest {
             assertTrue(side,get(side,data).isEmpty())
         }
     }
+
+    @Test fun unknownLaterExtremeCannotProveAnUntouchedFractal() {
+        for(side in listOf("LONG","SHORT")) {
+            for(bad in listOf(Double.NaN,Double.POSITIVE_INFINITY,Double.NEGATIVE_INFINITY,-1.0)) {
+                val data=bars(side).toMutableList()
+                data[48]=if(side=="LONG") data[48].copy(h=bad) else data[48].copy(l=bad)
+                assertTrue(side+" unknown later price "+bad,get(side,data).isEmpty())
+            }
+        }
+    }
 }

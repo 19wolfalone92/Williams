@@ -1,0 +1,171 @@
+{
+  "schema": "WILLIAMS_MASTER_PROGRESS_V1",
+  "integrity_valid": true,
+  "errors": [],
+  "status": "IN_PROGRESS",
+  "sources": {
+    "families": 4,
+    "pdf_files": 6,
+    "physical_pages": 1213,
+    "inventory_rows": 1213
+  },
+  "source_coverage": {
+    "semantically_reviewed_single_pass": 1213,
+    "independently_verified": 0,
+    "total_physical_pages": 1213,
+    "stage_counts": {
+      "REVIEWED_TEXT_ONLY": 923,
+      "REVIEWED_SINGLE_PASS": 290
+    },
+    "inventory_is_not_full_reading": true,
+    "physical_receipts_include_front_matter_blank_and_navigation_pages": true,
+    "per_source": {
+      "TC1_RU": {
+        "physical_pages": 140,
+        "first_pass_receipts": 140,
+        "visual_receipts": 28,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 4,
+          "NAVIGATION": 1,
+          "BODY": 129,
+          "EXERCISES": 6
+        },
+        "full_content_certified": false
+      },
+      "NTD_RU": {
+        "physical_pages": 156,
+        "first_pass_receipts": 156,
+        "visual_receipts": 35,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 5,
+          "NAVIGATION": 1,
+          "INTRODUCTION": 3,
+          "BODY": 145,
+          "VISUALLY_CONFIRMED_BLANK": 1,
+          "BIOGRAPHY": 1
+        },
+        "full_content_certified": false
+      },
+      "TC2_EN": {
+        "physical_pages": 257,
+        "first_pass_receipts": 257,
+        "visual_receipts": 103,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 14,
+          "VISUALLY_CONFIRMED_BLANK": 12,
+          "NAVIGATION": 12,
+          "SUBSTANTIVE_TEXT": 136,
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 83
+        },
+        "full_content_certified": false
+      },
+      "TC2_RU_224": {
+        "physical_pages": 224,
+        "first_pass_receipts": 224,
+        "visual_receipts": 34,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 15,
+          "SUBSTANTIVE_TEXT": 171,
+          "GRAPHIC_AND_TEXT": 34,
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 4
+        },
+        "full_content_certified": false
+      },
+      "TC2_RU_314": {
+        "physical_pages": 314,
+        "first_pass_receipts": 314,
+        "visual_receipts": 65,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "COVER": 2,
+          "FRONT_MATTER": 20,
+          "VISUALLY_CONFIRMED_BLANK": 29,
+          "SUBSTANTIVE_TEXT": 205,
+          "CHAPTER_TITLE": 5,
+          "GRAPHIC_AND_TEXT": 38,
+          "PREVIOUS_RECEIPT_UNCLASSIFIED": 6,
+          "NAVIGATION": 7,
+          "PUBLISHER_PARATEXT": 2
+        },
+        "full_content_certified": false
+      },
+      "COURSE_EN": {
+        "physical_pages": 122,
+        "first_pass_receipts": 122,
+        "visual_receipts": 25,
+        "independently_verified": 0,
+        "all_physical_pages_have_first_pass_receipts": true,
+        "classified_page_kinds": {
+          "FRONT_MATTER": 2,
+          "NAVIGATION": 5,
+          "BODY": 78,
+          "WORKSHEET": 10,
+          "GRAPHIC_DOMINANT": 26,
+          "EXTERNAL_MATERIAL_NOTICE": 1
+        },
+        "full_content_certified": false
+      }
+    }
+  },
+  "figure_coverage": {
+    "qualitative_single_review_entries": 208,
+    "independent_second_reviews": 0,
+    "total_substantive_figures": null,
+    "percent": null
+  },
+  "translation_alignment": {
+    "physical_pages_partitioned": 795,
+    "per_source": {
+      "TC2_EN": 257,
+      "TC2_RU_224": 224,
+      "TC2_RU_314": 314
+    },
+    "heading_crop_receipts": 68,
+    "heading_crops_count_as_full_page_reading": false,
+    "semantic_alignment_complete": false,
+    "constant_offset_used": false,
+    "selected_semantic_anchors": 16,
+    "chapter12_comparison_records": 6,
+    "technical_translation_pages_mapped": 104,
+    "full_translation_certified": false
+  },
+  "source_conflicts": {
+    "visible_single_review_entries": 46,
+    "per_source": {
+      "TC1_RU": 10,
+      "NTD_RU": 15,
+      "COURSE_EN": 7
+    },
+    "cross_edition_TC2": 14,
+    "independent_second_reviews": 0,
+    "unseen_original_english_errata_certified": false
+  },
+  "rule_extraction": {
+    "registered": 147,
+    "rechecked_against_sources_this_run": 142,
+    "total_rules_in_books": null,
+    "percent": null
+  },
+  "rule_implementation_coverage": null,
+  "rule_test_coverage_of_all_books": null,
+  "canonical_consistency": {
+    "confirmed_numeric_defect_classes_fixed": 6,
+    "whole_book_certified": false
+  },
+  "execution_safety": {
+    "signed_demo_e2e": false,
+    "physical_android_e2e": false,
+    "main_merge_allowed": false
+  },
+  "decision_explainability_coverage": null,
+  "can_place_orders": false
+}

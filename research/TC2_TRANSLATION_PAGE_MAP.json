@@ -1,0 +1,530 @@
+{
+  "schema": "TC2_TRANSLATION_ANCHOR_MAP_V1",
+  "scope": "Selected semantic anchors only; no constant page offset or full-translation certification. Some neighbouring figure pages remain unreviewed.",
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "anchors": [
+    {
+      "anchor_id": "ALLIGATOR_CONSTRUCTION",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            133,
+            134
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            115,
+            116,
+            117
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            154,
+            155
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "KNOWN_FORWARD_TAIL",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            134,
+            135
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            117,
+            118
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            155,
+            156
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "REVERSE_PYRAMID",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            184,
+            185
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            164,
+            165
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            214,
+            215,
+            216
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "PARTIAL_EXIT_DISCRETION",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            185,
+            186
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            165
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            216,
+            217
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "CHART_AND_HEAD_CHECKLIST",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            203,
+            204
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            182,
+            183
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            242,
+            243,
+            244
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "CHECKLIST_STOPS",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            203
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            182
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            243
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_TRANSLATION_CONFLICT",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "INDICATOR_SOURCE_CODE",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            245,
+            246,
+            247
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            223,
+            224
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            300,
+            301,
+            302
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "FAQ_HALF_MARGIN_AND_STRUCTURAL_STOPS",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            212,
+            213
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            192
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            255
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false,
+      "uncertainty": "English says margin; Russian says use half account. This is not a Binance-specific margin definition or guaranteed half-equity loss bound."
+    },
+    {
+      "anchor_id": "WM1_BUY_POSITIVE_TICK_OFFSET",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            176
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            155
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            205
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "WM1_SHORT_DIRECTION_LABEL",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            178
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            157
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            207,
+            208
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "GOLD_NOTATION10_DIRECTION",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            174,
+            175
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            153,
+            154
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            203,
+            204
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "FIRST_PRESENTING_INITIAL_VERSUS_TRAILING_STOP",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            177,
+            178,
+            180
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            156,
+            157,
+            161,
+            162
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            206,
+            207,
+            209,
+            210
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "AO_HISTOGRAM_COLOUR_AND_PRICE_TRIGGER",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            174,
+            176,
+            178,
+            179
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            153,
+            155,
+            157,
+            158
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            203,
+            205,
+            207,
+            208,
+            209
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "APPLE_TRAILING_EXIT_AND_SEPARATE_REENTRY",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            179,
+            180
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            158,
+            161
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            208,
+            209,
+            210
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "PRACTICE_FIGURES_12_3_TO_12_6",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            181,
+            182
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            159,
+            160
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            211,
+            212
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    },
+    {
+      "anchor_id": "COSTCO_SIGNAL_CONFIRMATION_ENTRY_EXIT_AND_ARITHMETIC",
+      "pages": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            183,
+            184
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            162,
+            163
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            213,
+            214
+          ]
+        }
+      ],
+      "relationship": "SEMANTIC_SPAN_NOT_PAGE_BIJECTION",
+      "status": "SINGLE_REVIEW_SELECTED_ANCHOR",
+      "full_page_review_claimed": false
+    }
+  ],
+  "structure_map": "TC2_EDITION_STRUCTURE_MAP.json",
+  "semantic_alignment_complete": false
+}

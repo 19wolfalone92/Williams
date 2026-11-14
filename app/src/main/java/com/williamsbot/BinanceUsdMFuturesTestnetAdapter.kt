@@ -118,6 +118,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         .followSslRedirects(false)
         .build()
     private val secret = apiSecret.toByteArray(Charsets.UTF_8)
+    /** Set by the serialized coordinator for the exact durable NEW-risk intent.
+     * Local/nonblocking, after rate/clock waits, including explicit -1021 retry. */
+    internal var halfMarginTransportFence: ((Map<String, String>) -> Unit)? = null
     private val base = "https://demo-fapi.binance.com"
     private val clockLock = Any()
     @Volatile private var timeSynced: Boolean = false
@@ -274,7 +277,14 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return JSONArray(body)
     }
 
-    fun account(): JSONObject = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
+    fun account(): JSONObject {
+        val raw = request("GET", "/fapi/v3/account", emptyMap(), signed = true)
+        val configuration = if (!raw.has("canTrade")) accountConfiguration() else null
+        return futuresAccountWithConfiguration(raw, configuration)
+    }
+
+    fun accountConfiguration(): JSONObject =
+        request("GET", "/fapi/v1/accountConfig", emptyMap(), signed = true)
 
     /** Must be checked before trading; the adapter assumes one-way mode (BOTH). */
     fun positionMode(): JSONObject =
@@ -338,6 +348,29 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             .filter { it.optString("symbol") == symbol }
         check(matches.size == 1) { "Missing or ambiguous Futures symbol configuration" }
         return matches.single()
+    }
+
+    /** Fresh settings/marks: bounded round trips even with many pending pairs. */
+    fun halfMarginSymbolConfigurations(symbols: Set<String>): Map<String, JSONObject> {
+        // Account liabilities may be outside the bot's NEW/management universe.
+        // These two read-only bulk calls grant no symbol mutation authority.
+        require(symbols.isNotEmpty() && symbols.all { it.matches(Regex("[A-Z0-9]+USDT")) })
+        if (symbols.size == 1) {
+            val symbol = symbols.single()
+            return mapOf(symbol to symbolConfiguration(symbol).put("mark_price", markPrice(symbol).toString()))
+        }
+        val settings = JSONArray(requestRaw("GET", "/fapi/v1/symbolConfig", emptyMap(), signed = true))
+        val marks = JSONArray(requestRaw("GET", "/fapi/v1/premiumIndex", emptyMap(), signed = false))
+        return symbols.associateWith { symbol ->
+            val configurations = (0 until settings.length()).map { settings.getJSONObject(it) }
+                .filter { it.optString("symbol") == symbol }
+            val prices = (0 until marks.length()).map { marks.getJSONObject(it) }
+                .filter { it.optString("symbol") == symbol }
+            check(configurations.size == 1 && prices.size == 1) {
+                "Missing or ambiguous half-margin symbol identity"
+            }
+            JSONObject(configurations.single().toString()).put("mark_price", prices.single().opt("markPrice"))
+        }
     }
 
     /** Idempotently enforce this bot's account policy before entry. */
@@ -859,6 +892,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             params["reduceOnly"] != "true" && params["closePosition"] != "true"
         if (increasesExposure) {
             try {
+                williamsNewRiskSymbolBlocker(params["symbol"].orEmpty())?.let { error(it) }
                 beforeExposureMutation()
             } catch (failure: Exception) {
                 throw FuturesExposureNotSubmittedException(failure)
@@ -903,7 +937,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         // It is deliberately absent from reduce-only exits and protective STOPs.
         if (increasesExposure) {
             try {
+                williamsNewRiskSymbolBlocker(params["symbol"].orEmpty())?.let { error(it) }
                 beforeExposureTransport()
+                halfMarginTransportFence?.invoke(params)
             } catch (failure: Exception) {
                 throw FuturesExposureNotSubmittedException(failure)
             }

@@ -1,0 +1,198 @@
+{
+  "schema": "NTD_EXPLICIT_NUMERIC_EXAMPLES_V1",
+  "source_id": "NTD_RU",
+  "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+  "scope": "VISIBLE_BOOK_NUMBERS_ONLY_NO_OHLC_DIGITIZATION",
+  "tables": [
+    {
+      "case_id": "NTD.AC.TABLE_6_1",
+      "pdf_page": 89,
+      "table_label": "6-1",
+      "side": "LONG",
+      "exit_price": "957.95",
+      "implied_usd_per_displayed_price_unit": "500",
+      "multiplier_status": "INFERRED_FROM_TABLE_NOT_HISTORICAL_CONTRACT_CERTIFICATION",
+      "rows": [
+        {
+          "signal_price": "780.05",
+          "fill_price": "780.40",
+          "reported_points": "177.55",
+          "reported_gross_usd": "88775.00",
+          "reported_cumulative_usd": "88775.00",
+          "row_number": 1
+        },
+        {
+          "signal_price": "815.35",
+          "fill_price": "815.40",
+          "reported_points": "142.55",
+          "reported_gross_usd": "71275.00",
+          "reported_cumulative_usd": "160050.00",
+          "row_number": 2
+        },
+        {
+          "signal_price": "876.05",
+          "fill_price": "876.15",
+          "reported_points": "81.80",
+          "reported_gross_usd": "40900.00",
+          "reported_cumulative_usd": "200950.00",
+          "row_number": 3
+        },
+        {
+          "signal_price": "916.05",
+          "fill_price": "916.35",
+          "reported_points": "41.60",
+          "reported_gross_usd": "20800.00",
+          "reported_cumulative_usd": "221750.00",
+          "row_number": 4
+        },
+        {
+          "signal_price": "949.05",
+          "fill_price": "949.15",
+          "reported_points": "8.80",
+          "reported_gross_usd": "4400.00",
+          "reported_cumulative_usd": "226150.00",
+          "row_number": 5
+        }
+      ],
+      "reported_total_points": "452.30",
+      "reported_total_gross_usd": "226150.00"
+    },
+    {
+      "case_id": "NTD.ZONE.TABLE_7_1",
+      "pdf_page": 98,
+      "table_label": "7-1",
+      "side": "LONG",
+      "exit_price": "957.95",
+      "implied_usd_per_displayed_price_unit": "500",
+      "multiplier_status": "INFERRED_FROM_TABLE_NOT_HISTORICAL_CONTRACT_CERTIFICATION",
+      "rows": [
+        {
+          "signal_price": "771.90",
+          "fill_price": "788.60",
+          "reported_points": "169.35",
+          "reported_gross_usd": "84675.00",
+          "reported_cumulative_usd": "84675.00",
+          "row_number": 1
+        },
+        {
+          "signal_price": "807.80",
+          "fill_price": "810.80",
+          "reported_points": "147.15",
+          "reported_gross_usd": "73575.00",
+          "reported_cumulative_usd": "158250.00",
+          "row_number": 2
+        },
+        {
+          "signal_price": "810.00",
+          "fill_price": "824.65",
+          "reported_points": "133.30",
+          "reported_gross_usd": "66650.00",
+          "reported_cumulative_usd": "224900.00",
+          "row_number": 3
+        },
+        {
+          "signal_price": "842.65",
+          "fill_price": "845.05",
+          "reported_points": "112.90",
+          "reported_gross_usd": "56450.00",
+          "reported_cumulative_usd": "281350.00",
+          "row_number": 4
+        },
+        {
+          "signal_price": "848.60",
+          "fill_price": "853.45",
+          "reported_points": "104.50",
+          "reported_gross_usd": "52250.00",
+          "reported_cumulative_usd": "333600.00",
+          "row_number": 5
+        },
+        {
+          "signal_price": "877.60",
+          "fill_price": "879.40",
+          "reported_points": "7.55",
+          "reported_gross_usd": "39275.00",
+          "reported_cumulative_usd": "372875.00",
+          "row_number": 6
+        },
+        {
+          "signal_price": "879.40",
+          "fill_price": "895.10",
+          "reported_points": "62.85",
+          "reported_gross_usd": "31425.00",
+          "reported_cumulative_usd": "404300.00",
+          "row_number": 7
+        },
+        {
+          "signal_price": "895.10",
+          "fill_price": "903.45",
+          "reported_points": "54.50",
+          "reported_gross_usd": "27250.00",
+          "reported_cumulative_usd": "431550.00",
+          "row_number": 8
+        },
+        {
+          "signal_price": "918.35",
+          "fill_price": "927.80",
+          "reported_points": "30.15",
+          "reported_gross_usd": "15075.00",
+          "reported_cumulative_usd": "446625.00",
+          "row_number": 9
+        },
+        {
+          "signal_price": "943.65",
+          "fill_price": "947.00",
+          "reported_points": "10.95",
+          "reported_gross_usd": "5475.00",
+          "reported_cumulative_usd": "452100.00",
+          "row_number": 10
+        }
+      ],
+      "reported_total_points": "904.20",
+      "reported_total_gross_usd": "452100.00"
+    }
+  ],
+  "arithmetic_claims": [
+    {
+      "claim_id": "NTD.SQUARING.POSITIVE_CONTROL",
+      "pdf_page": 27,
+      "operator": "multiply",
+      "left": "1.1",
+      "right": "1.1",
+      "reported": "1.21"
+    },
+    {
+      "claim_id": "NTD.SQUARING.UP",
+      "pdf_page": 27,
+      "operator": "multiply",
+      "left": "1.21",
+      "right": "1.21",
+      "reported": "1.461"
+    },
+    {
+      "claim_id": "NTD.SQUARING.DOWN",
+      "pdf_page": 27,
+      "operator": "multiply",
+      "left": "0.81",
+      "right": "0.81",
+      "reported": "0.06561"
+    },
+    {
+      "claim_id": "NTD.DIMENSION.ROUNDED_DIFFERENCE",
+      "pdf_page": 28,
+      "operator": "subtract",
+      "left": "1.618",
+      "right": "1.58",
+      "reported": "0.032"
+    }
+  ],
+  "compounding": {
+    "pdf_page": 123,
+    "initial_usd": "10000",
+    "constant_monthly_rate": "0.10",
+    "target_usd": "1000000",
+    "interpretation": "HYPOTHETICAL_CONSTANT_RATE_NOT_A_FORECAST_OR_CERTIFIED_AVERAGE_RETURN"
+  },
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

@@ -1,0 +1,556 @@
+{
+  "schema": "TC2_TRANSLATION_CONFLICT_REGISTER_V1",
+  "scope": "SELECTED_SOURCE_CONFLICTS_NOT_FULL_TRANSLATION_CERTIFICATION",
+  "conflicts": [
+    {
+      "conflict_id": "TC2.C12.RU_SHORT_LABEL",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            178,
+            179
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            157,
+            158
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            207,
+            208
+          ]
+        }
+      ],
+      "observation": "Both Russian short introductions/item1 say bullish; higher high/lower-half close, following bearish steps and English say bearish. Rendered pages confirm text, not OCR artefact.",
+      "bounded_interpretation": "Use bearish geometry and conditional sell trigger; never turn a short into long by majority agreement between Russian copies. Translation genealogy is not certified.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C12.RU_BUY_STOP_OFFSET",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            176
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            155
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            205
+          ]
+        }
+      ],
+      "observation": "Russian item3 allows stop at the high or a few ticks above; English specifies one or very few ticks above high.",
+      "bounded_interpretation": "Retain strictly positive exchange-tick breakout offset. Source comparison is not proof of exchange tick rounding or actual submit behavior.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C12.RU314_GOLD_LABEL10",
+      "kind": "FIGURE_VERSUS_BODY_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            174,
+            175
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            153,
+            154
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            203,
+            204
+          ]
+        }
+      ],
+      "observation": "Only RU314 figure12.1 label10 says bullish; its own body, RU224 label/body and English identify bearish divergent bar plus final fractal entry.",
+      "bounded_interpretation": "Opposite setup must trigger subsequently to reverse; raster annotation is not executable OHLC or same-bar fill gold.",
+      "related_rules": [
+        "TC2.EXIT.STOP_AND_REVERSE"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C12.AO_COLOUR_TERMINOLOGY",
+      "kind": "SHARED_ORIGINAL_WORDING_CAVEAT",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            174,
+            176,
+            178,
+            179
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            153,
+            155,
+            157,
+            158
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            203,
+            205,
+            207,
+            208,
+            209
+          ]
+        }
+      ],
+      "observation": "English itself alternates AO colour with green/red price bars; Apple diagram calls third negative AO bar while marking an above-zero histogram location. Russian wording repeats this.",
+      "bounded_interpretation": "Use three AO histogram colours and corresponding closed price-bar edge, not candle body colour or AO zero-line sign. Treat origin wording ambiguity separately from translation error.",
+      "related_rules": [
+        "TC2.WM2.THREE_AO_BARS"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C12.COSTCO_APPROXIMATE_PROFIT",
+      "kind": "APPROXIMATE_ARITHMETIC_AND_COST_CAVEAT",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            183,
+            184
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            162,
+            163
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            213,
+            214
+          ]
+        }
+      ],
+      "observation": "All three print approximate entries34.16/35.75/37.01, exit38.74 and profit9.29. One-share-per-entry gross at those displayed prices totals9.30; entry weights, true cents and costs are unknown.",
+      "bounded_interpretation": "A0.01 difference is not a certified arithmetic defect because prices are approximate. No net-per-share, actual fill or risk-adjusted claim follows; do not manufacture a0.01 cost to reconcile.",
+      "related_rules": [
+        "TC2.PYRAMID.QUANTITIES"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C12.GOLD_UNMATCHED_EXPOSURE",
+      "kind": "AUTHOR_PERFORMANCE_COMPARABILITY_CAVEAT",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            175,
+            176,
+            185
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            154,
+            155,
+            164
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            204,
+            205,
+            215
+          ]
+        }
+      ],
+      "observation": "Gold four-row totals14660 and47100 reconcile under one contract each versus1,5,4,3 contracts. These are4 versus13 contracts. Narrative says fifth was not entered, while notation10 is described as third fractal entry; no fifth profit row is supplied.",
+      "bounded_interpretation": "Ratio about3.21 compares different gross exposures. Fifth-tranche actual execution/profit, matched capital/margin/stop path/cost evidence are unknown. Do not fabricate a fifth result or certify equal-risk/percentage-return improvement.",
+      "related_rules": [
+        "TC2.PYRAMID.QUANTITIES",
+        "TC2.PYRAMID.PROFIT"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.RU_BOND_BEARISH_LABEL",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            140,
+            141
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            122,
+            123
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            163,
+            164
+          ]
+        }
+      ],
+      "observation": "English9.3 labels the upper divergent setup bearish and SELL below low. Both Russian diagram annotations call it bullish while retaining the sell-below-low instruction; Russian body itself says bearish. Rendered pages confirm the labels.",
+      "bounded_interpretation": "Use higher-high/lower-half-close bearish geometry and conditional sell below its low. Agreement of the two Russian copies is not independent confirmation.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR",
+        "TC2.WM1.ANGULATION"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.RU_REVERSAL_WRONG_BAR_EDGE",
+      "kind": "VISIBLE_TRANSLATION_CONTRADICTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            149,
+            150
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            131
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            173
+          ]
+        }
+      ],
+      "observation": "English long-to-short example places stop-and-reverse below the bearish signal bar. Both Russian body paragraphs instead name the bullish bar low even though surrounding text describes the bearish bar and closing long1/opening net short1.",
+      "bounded_interpretation": "Retain bearish signal edge; order quantity2 comprises close1 plus open1, not a net short2. This is a book illustration, not authority for an exchange reversal.",
+      "related_rules": [
+        "TC2.WM1.DIVERGENT_BAR",
+        "TC2.EXIT.STOP_AND_REVERSE"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C9.EURODOLLAR_BODY_VERSUS_FIGURE",
+      "kind": "SOURCE_BODY_FIGURE_CONTRADICTION_PRESERVED_IN_TRANSLATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            148
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            128,
+            130
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            171,
+            172
+          ]
+        }
+      ],
+      "observation": "The9.12 diagram calls two bullish divergent bars valid; the adjacent narrative identifies the first as valid but rejects the later bar for lack of angle. Both translations preserve the discrepancy.",
+      "bounded_interpretation": "Do not label both as expert-gold signals or override missing angle with the later rally. Requires independent diagram/context adjudication; no exact OHLC recovered.",
+      "related_rules": [
+        "TC2.WM1.ANGULATION"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C10.PRINTED_MIDPOINT_REPEATED",
+      "kind": "SOURCE_FORMULA_CONTRADICTION_PRESERVED_IN_TRANSLATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            155,
+            247
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            136
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            179
+          ]
+        }
+      ],
+      "observation": "Figure10.1 prints midpoint(H-L)/2 in English and Russian copies. The supplied English Appendix7 AO code at247 explicitly uses PRICE((H+L)/2), AVERAGE5 minus AVERAGE34. This is not a translation-only defect.",
+      "bounded_interpretation": "Keep the already implemented median(H+L)/2 formula, explicit warmup and strict AO colour comparison. Never train from majority repetition of the printed minus sign.",
+      "related_rules": [
+        "TC2.AO.PRINTED_MIDPOINT_CONFLICT"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.INTRO.RU314_SOROS_IDENTITY",
+      "kind": "EDITION_IDENTITY_OVERATTRIBUTION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            26
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            13
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            20
+          ]
+        }
+      ],
+      "observation": "English describes an unnamed trader in the same category as George Soros and then uses a pronoun. RU224 preserves this distinction; RU314 names Soros in the following sentence.",
+      "bounded_interpretation": "Do not assert the unnamed offer came from Soros. An index entry is not corroborating evidence or a trading rule.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP2.RU314_WINNER_COUNT",
+      "kind": "TRANSLATION_CHANGES_GROWING_WINNERS_TO_GROWING_NUMBER",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            212
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            192
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            255
+          ]
+        }
+      ],
+      "observation": "English says to let winning trades run; RU224 retains growth of winning trades. RU314 instead says to let the number of winning trades grow.",
+      "bounded_interpretation": "No mandate to increase trade frequency, duplicate orders or add positions follows. Existing source-confirmed entry/exit, exposure and pending-order gates remain authoritative.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP3.RU314_HEART_FORMULA",
+      "kind": "EDITION_ADDITION_VERSUS_INCOMPLETE_ORIGINAL_ENUMERATION",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            221
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            200,
+            201
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            267
+          ]
+        }
+      ],
+      "observation": "English calls the next group four formulas but explicitly quotes only breathing, solar-plexus and forehead phrases. RU224 retains that omission. RU314 adds an explicit heart formula.",
+      "bounded_interpretation": "Record an edition difference; the added sentence is not a quotation from the supplied English passage. No clinical efficacy, training authority or market-entry rule is established.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.APP2.ROI_MONTH_YEAR_AMBIGUITY",
+      "kind": "SOURCE_ARITHMETIC_AND_PERIOD_AMBIGUITY_INHERITED_BY_TRANSLATIONS",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            210
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            189
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            252
+          ]
+        }
+      ],
+      "observation": "All three state a10percent monthly ROI goal, more than300percent yearly, then10percent a year. This monthly/yearly switch already occurs in English. Compounding10percent monthly for12months gives213.8428376721percent net gain and313.8428376721percent final equity relative to initial equity.",
+      "bounded_interpretation": "The text does not distinguish final-equity percentage from net return. Neither interpretation establishes achieved returns. Do not train a guaranteed-return target, alter risk to meet it, or label this solely a Russian translation error.",
+      "related_rules": [],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    }
+  ],
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false,
+  "entire_translations_certified": false
+}

@@ -8,6 +8,7 @@ authorized risk reduction.
 """
 from williams_edition_rules import TC2, NTD, COURSE
 from williams_course_exit import BOOK_EXIT_REASONS as COURSE_BOOK_EXIT_REASONS
+from williams_symbol_policy import symbol_policy_snapshot
 
 EXECUTION_PROFILE = TC2
 EXECUTION_PROFILES = (TC2,)
@@ -27,6 +28,7 @@ def execution_policy_snapshot():
     return {"mode": EXECUTION_POLICY, "execution_profile": EXECUTION_PROFILE,
             "execution_profiles": list(EXECUTION_PROFILES),
             "observer_profiles": list(OBSERVER_PROFILES), "one_campaign_per_symbol": True,
+            "symbols": symbol_policy_snapshot(),
             "legacy_management": "PINNED_SOURCE_VALIDATED_CYCLE_REQUIRED_FOR_ADDITIONS"}
 
 

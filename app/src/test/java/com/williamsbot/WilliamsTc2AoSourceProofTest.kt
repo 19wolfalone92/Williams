@@ -5,6 +5,18 @@ import org.junit.Test
 
 /** TC2 PDF137–139 third changing AO bar (LONG and mirrored SHORT). */
 class WilliamsTc2AoSourceProofTest {
+    @Test fun firstObservableAoChangeIsIndex34AndThirdIs36() {
+        val ao=MutableList(46) { Double.NaN }
+        for(i in 33..45) ao[i]=(i-36).toDouble()
+        assertEquals(3,williamsTc2ConsecutiveAoRise(36){ao[it]})
+        assertEquals(12,williamsTc2ConsecutiveAoRise(45){ao[it]})
+        assertEquals(36,45-(williamsTc2ConsecutiveAoRise(45){ao[it]}-3))
+        // A previously hard-coded 35 silently moved the signal to bar37.
+        assertEquals(37,45-(williamsTc2ConsecutiveAoRise(45,35){ao[it]}-3))
+        val falling=ao.map { -it }
+        assertEquals(3,williamsTc2ConsecutiveAoRise(36){-falling[it]})
+    }
+
     @Test fun thirdActualChangeNotThirdPositiveAoAndNoZeroLineRequirement() {
         val ao=MutableList(46) { 0.0 }
         // Previous 3 red or flat values cannot produce a new green streak.

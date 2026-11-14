@@ -1,0 +1,485 @@
+{
+  "schema": "TC1_PRINTED_NUMBER_AUDIT_V1",
+  "source_id": "TC1_RU",
+  "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+  "input_sha256": "8925af50638017dab139ddc4d5d6d4470fb393669414bece7fba1e9348d6247e",
+  "provenance": "BOOK_REPORTED_NUMBERS_NOT_EXCHANGE_VERIFIED",
+  "allocation": "FIFO_EXPLICITLY_USED_IN_PRINTED_TABLES",
+  "cases": [
+    {
+      "case_id": "TC1_CHF_BODY_P90_91",
+      "source_pages": [
+        90,
+        91
+      ],
+      "body_ledger": {
+        "events": [
+          {
+            "event_id": "initial",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "0.00",
+            "open_quantity": 3,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "first_trim",
+            "realized_gross_usd": "14600.00",
+            "cumulative_realized_gross_usd": "14600.00",
+            "open_quantity": 1,
+            "lot_allocations": [
+              {
+                "entry_event_id": "initial",
+                "quantity": 2,
+                "entry_price": "5736",
+                "gross_usd": "14600.00"
+              }
+            ]
+          },
+          {
+            "event_id": "w2_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "14600.00",
+            "open_quantity": 6,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "w3_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "14600.00",
+            "open_quantity": 10,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "w3_trim",
+            "realized_gross_usd": "176812.50",
+            "cumulative_realized_gross_usd": "191412.50",
+            "open_quantity": 3,
+            "lot_allocations": [
+              {
+                "entry_event_id": "initial",
+                "quantity": 1,
+                "entry_price": "5736",
+                "gross_usd": "27862.50"
+              },
+              {
+                "entry_event_id": "w2_add",
+                "quantity": 5,
+                "entry_price": "5854",
+                "gross_usd": "131937.50"
+              },
+              {
+                "entry_event_id": "w3_add",
+                "quantity": 1,
+                "entry_price": "6604",
+                "gross_usd": "17012.50"
+              }
+            ]
+          },
+          {
+            "event_id": "w4_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "191412.50",
+            "open_quantity": 6,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "final_stop",
+            "realized_gross_usd": "-2062.50",
+            "cumulative_realized_gross_usd": "189350.00",
+            "open_quantity": 0,
+            "lot_allocations": [
+              {
+                "entry_event_id": "w3_add",
+                "quantity": 3,
+                "entry_price": "6604",
+                "gross_usd": "975.00"
+              },
+              {
+                "entry_event_id": "w4_add",
+                "quantity": 3,
+                "entry_price": "6711",
+                "gross_usd": "-3037.50"
+              }
+            ]
+          }
+        ],
+        "realized_gross_usd": "189350.00",
+        "open_quantity": 0,
+        "open_lots": [],
+        "net_profit_usd": null,
+        "costs_verified": false,
+        "margin_path_verified": false,
+        "historical_fills_verified": false
+      },
+      "printed_claim_checks": [
+        {
+          "claim_id": "initial_loss",
+          "event_id": "initial",
+          "metric": "initial_stop_loss",
+          "reported_usd": "6262.50",
+          "pdf_page": 90,
+          "calculated_usd": "6262.50",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "first_realized",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "14600.00",
+          "pdf_page": 90,
+          "calculated_usd": "14600.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "first_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "27802.50",
+          "pdf_page": 91,
+          "allocation_index": 0,
+          "calculated_usd": "27862.50",
+          "reported_minus_calculated_usd": "-60.00",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "second_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "131937.50",
+          "pdf_page": 91,
+          "allocation_index": 1,
+          "calculated_usd": "131937.50",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "third_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "17012.50",
+          "pdf_page": 91,
+          "allocation_index": 2,
+          "calculated_usd": "17012.50",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "earlier_actual_vs_hypothetical",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "22225.00",
+          "pdf_page": 91,
+          "calculated_usd": "14600.00",
+          "reported_minus_calculated_usd": "7625.00",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "trim_cumulative",
+          "event_id": "w3_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "198977.50",
+          "pdf_page": 91,
+          "calculated_usd": "191412.50",
+          "reported_minus_calculated_usd": "7565.00",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "final_loss",
+          "event_id": "final_stop",
+          "metric": "event_gross",
+          "reported_usd": "-4125.00",
+          "pdf_page": 91,
+          "calculated_usd": "-2062.50",
+          "reported_minus_calculated_usd": "-2062.50",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "final_total",
+          "event_id": "final_stop",
+          "metric": "cumulative_gross",
+          "reported_usd": "194100.00",
+          "pdf_page": 91,
+          "calculated_usd": "189350.00",
+          "reported_minus_calculated_usd": "4750.00",
+          "matches_literal_body_ledger": false
+        }
+      ],
+      "explicit_chart_variants": [
+        {
+          "event_id": "w3_trim",
+          "chart_price": "8065",
+          "body_price": "7965",
+          "pdf_page": 90,
+          "figure_label": "9-10",
+          "meaning": "Explicit chart sell-seven annotation conflicts with the body exit price; not an OHLC reconstruction.",
+          "realized_gross_usd": "198100.00",
+          "status": "ONE_PRICE_VARIANT_OTHER_BODY_PRICES_UNCHANGED_NOT_ACTUAL_PNL"
+        }
+      ],
+      "hypothetical_stop": {
+        "event_id": "hypothetical_stop",
+        "realized_gross_usd": "22225.00",
+        "cumulative_realized_gross_usd": "36825.00",
+        "open_quantity": 0,
+        "lot_allocations": [
+          {
+            "entry_event_id": "initial",
+            "quantity": 1,
+            "entry_price": "5736",
+            "gross_usd": "7300.00"
+          },
+          {
+            "entry_event_id": "w2_add",
+            "quantity": 5,
+            "entry_price": "5854",
+            "gross_usd": "29125.00"
+          },
+          {
+            "entry_event_id": "w3_add",
+            "quantity": 4,
+            "entry_price": "6604",
+            "gross_usd": "-14200.00"
+          }
+        ],
+        "status": "UNEXECUTED_STOP_SCENARIO_EXCLUDED_FROM_REALIZED_LEDGER"
+      },
+      "printed_internal_arithmetic": [
+        {
+          "minuend_usd": "198977.50",
+          "subtrahend_usd": "4125.00",
+          "reported_usd": "194100.00",
+          "pdf_page": 91,
+          "calculated_usd": "194852.50",
+          "matches_printed_result": false
+        }
+      ],
+      "all_printed_claims_reconciled": false
+    },
+    {
+      "case_id": "TC1_SOY_BODY_P92_93",
+      "source_pages": [
+        92,
+        93
+      ],
+      "body_ledger": {
+        "events": [
+          {
+            "event_id": "initial",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "0.00",
+            "open_quantity": 3,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "first_trim",
+            "realized_gross_usd": "2550.00",
+            "cumulative_realized_gross_usd": "2550.00",
+            "open_quantity": 1,
+            "lot_allocations": [
+              {
+                "entry_event_id": "initial",
+                "quantity": 2,
+                "entry_price": "663",
+                "gross_usd": "2550.00"
+              }
+            ]
+          },
+          {
+            "event_id": "w2_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "2550.00",
+            "open_quantity": 6,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "w3_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "2550.00",
+            "open_quantity": 10,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "w3_trim",
+            "realized_gross_usd": "17262.50",
+            "cumulative_realized_gross_usd": "19812.50",
+            "open_quantity": 3,
+            "lot_allocations": [
+              {
+                "entry_event_id": "initial",
+                "quantity": 1,
+                "entry_price": "663",
+                "gross_usd": "3050.00"
+              },
+              {
+                "entry_event_id": "w2_add",
+                "quantity": 5,
+                "entry_price": "654.75",
+                "gross_usd": "13187.50"
+              },
+              {
+                "entry_event_id": "w3_add",
+                "quantity": 1,
+                "entry_price": "622.5",
+                "gross_usd": "1025.00"
+              }
+            ]
+          },
+          {
+            "event_id": "w4_add",
+            "realized_gross_usd": "0.00",
+            "cumulative_realized_gross_usd": "19812.50",
+            "open_quantity": 6,
+            "lot_allocations": []
+          },
+          {
+            "event_id": "final_exit",
+            "realized_gross_usd": "17925.00",
+            "cumulative_realized_gross_usd": "37737.50",
+            "open_quantity": 0,
+            "lot_allocations": [
+              {
+                "entry_event_id": "w3_add",
+                "quantity": 3,
+                "entry_price": "622.5",
+                "gross_usd": "9225.00"
+              },
+              {
+                "entry_event_id": "w4_add",
+                "quantity": 3,
+                "entry_price": "619",
+                "gross_usd": "8700.00"
+              }
+            ]
+          }
+        ],
+        "realized_gross_usd": "37737.50",
+        "open_quantity": 0,
+        "open_lots": [],
+        "net_profit_usd": null,
+        "costs_verified": false,
+        "margin_path_verified": false,
+        "historical_fills_verified": false
+      },
+      "printed_claim_checks": [
+        {
+          "claim_id": "initial_loss",
+          "event_id": "initial",
+          "metric": "initial_stop_loss",
+          "reported_usd": "1375.00",
+          "pdf_page": 92,
+          "calculated_usd": "825.00",
+          "reported_minus_calculated_usd": "550.00",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "first_realized",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "2550.00",
+          "pdf_page": 92,
+          "calculated_usd": "2550.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "first_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "3050.00",
+          "pdf_page": 93,
+          "allocation_index": 0,
+          "calculated_usd": "3050.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "second_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "13187.50",
+          "pdf_page": 93,
+          "allocation_index": 1,
+          "calculated_usd": "13187.50",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "third_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "1025.00",
+          "pdf_page": 93,
+          "allocation_index": 2,
+          "calculated_usd": "1025.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "trim_cumulative",
+          "event_id": "w3_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "17262.50",
+          "pdf_page": 93,
+          "calculated_usd": "19812.50",
+          "reported_minus_calculated_usd": "-2550.00",
+          "matches_literal_body_ledger": false
+        },
+        {
+          "claim_id": "final_old_lots",
+          "event_id": "final_exit",
+          "metric": "allocation_gross",
+          "reported_usd": "9225.00",
+          "pdf_page": 93,
+          "allocation_index": 0,
+          "calculated_usd": "9225.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "final_new_lots",
+          "event_id": "final_exit",
+          "metric": "allocation_gross",
+          "reported_usd": "8700.00",
+          "pdf_page": 93,
+          "allocation_index": 1,
+          "calculated_usd": "8700.00",
+          "reported_minus_calculated_usd": "0.00",
+          "matches_literal_body_ledger": true
+        },
+        {
+          "claim_id": "final_total",
+          "event_id": "final_exit",
+          "metric": "cumulative_gross",
+          "reported_usd": "35187.50",
+          "pdf_page": 93,
+          "calculated_usd": "37737.50",
+          "reported_minus_calculated_usd": "-2550.00",
+          "matches_literal_body_ledger": false
+        }
+      ],
+      "explicit_chart_variants": [
+        {
+          "event_id": "w2_add",
+          "chart_price": "654.5",
+          "body_price": "654.75",
+          "pdf_page": 92,
+          "figure_label": "9-11",
+          "meaning": "Explicit chart sell-five annotation differs by a quarter point from the body/table. Remaining chart extremum labels are not assumed to be executions.",
+          "realized_gross_usd": "37675.00",
+          "status": "ONE_PRICE_VARIANT_OTHER_BODY_PRICES_UNCHANGED_NOT_ACTUAL_PNL"
+        }
+      ],
+      "hypothetical_stop": null,
+      "printed_internal_arithmetic": [],
+      "all_printed_claims_reconciled": false
+    }
+  ],
+  "all_printed_claims_reconciled": false,
+  "is_backtest": false,
+  "expert_gold": false,
+  "execution_authority": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

@@ -18,6 +18,135 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val now = System.currentTimeMillis()
+            var permitted = true
+            val time = java.time.Instant.ofEpochMilli(now).atOffset(java.time.ZoneOffset.UTC)
+            val start = (time.hour * 60 + time.minute + 60) % 1440
+            fun hhmm(minute: Int) = "%02d:%02d".format(minute / 60, minute % 60)
+            val blockedPolicy = WilliamsEntryTimePolicy("UTC_WINDOW", hhmm(start), hhmm((start + 1) % 1440))
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(Journal(), clock = { now }) {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", exchange.client,
+                    beforeExposureTransport = { permitted = false })
+            }
+            coordinator.setEntryTimePolicyProvider { if (permitted) WilliamsEntryTimePolicy() else blockedPolicy }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.toString(), result.optString("error").contains("ENTRY_TIME_POLICY_BLOCKED_BEFORE_TRANSPORT"))
+            assertEquals(0, exchange.posts("/fapi/v1/algoOrder") + exchange.posts("/fapi/v1/order"))
+            assertFalse(isEntryCampaignReserved(coordinator.intentsSnapshot().getJSONObject(0)))
+        }
+    }
+    @Test fun halfMarginBlocksAtTheFinalDoorAndNeverReservesAPhantomEntry() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries)
+        for (fault in listOf("OVER_HALF", "MISSING_MARGIN", "MODE_CONFLICT", "CHANGED_READS", "POSITION_CHANGED")) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            var reads = 0
+            exchange.afterLeverage = {
+                exchange.accountTransform = { account ->
+                    when (fault) {
+                        "OVER_HALF" -> account.put("totalInitialMargin", "5500")
+                        "MISSING_MARGIN" -> account.apply { remove("totalInitialMargin") }
+                        "MODE_CONFLICT" -> account.put("multiAssetsMargin", "false")
+                        "POSITION_CHANGED" -> account.put("positions", JSONArray().put(JSONObject()
+                            .put("symbol", "BTCUSDT").put("positionSide", "BOTH").put("positionAmt", "1")
+                            .put("initialMargin", "50").put("isolatedWallet", "50").put("isolatedMargin", "50").put("updateTime", 100)))
+                        else -> account.apply {
+                            if (++reads > 1) {
+                                put("totalWalletBalance", "9900").put("totalMarginBalance", "9900")
+                                getJSONArray("assets").getJSONObject(0).put("walletBalance", "9900")
+                            }
+                        }
+                    }
+                }
+            }
+            val result = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(), result.getBoolean("accepted"))
+            assertTrue(result.toString(), result.getBoolean("safe_rejection"))
+            assertFalse(result.getBoolean("order_mutation_attempted"))
+            assertTrue(result.toString(), result.optString("error").contains("FUTURES_HALF_MARGIN"))
+            assertEquals(0, exchange.posts("/fapi/v1/order") + exchange.posts("/fapi/v1/algoOrder"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("REJECTED", owner.getString("order_status"))
+            assertFalse(owner.getBoolean("entry_submission_attempted"))
+            assertFalse(isEntryCampaignReserved(owner))
+            exchange.accountTransform = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(restarted.reconcile().getBoolean("ok"))
+            assertTrue(restarted.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
+        val journal = Journal()
+        val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+        exchange.beforeRequest = { request, _ ->
+            if (request.method == "POST" && request.url.encodedPath == "/fapi/v1/algoOrder") {
+                val row = JSONArray(journal.readState("futures_campaign_intents_v2")).getJSONObject(0)
+                assertTrue(row.getJSONObject("half_margin_proof").getBoolean("allowed"))
+            }
+        }
+        assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
+    }
+    @Test fun preupgradeManagementOnlyIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
+        for(symbol in listOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"))
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
+        for(mode in listOf("UNFILLED","PARTIAL","TRIGGERING","UNKNOWN")) {
+            val journal=Journal();val exchange=Exchange(direction,symbol)
+            val cid="W2E_LEGACY_${symbol}_${direction.name}"
+            val owner=JSONObject().put("symbol",symbol).put("direction",direction.name)
+                .put("intent_role","ENTRY").put("client_id",cid).put("kind","STOP")
+                .put("quantity","1").put("entry_price",if(direction.name=="LONG") "101" else "99")
+                .put("protective_stop",if(direction.name=="LONG") "95" else "105")
+                .put("initial_protective_stop",if(direction.name=="LONG") "95" else "105")
+                .put("requested_leverage",2).put("risk_pct",.002)
+                .put("order_status",if(mode=="UNKNOWN") "SUBMISSION_UNKNOWN" else "NEW")
+                .put("exchange_status",if(mode=="UNKNOWN") "SUBMISSION_UNKNOWN" else "NEW")
+                .put("campaign_status","ENTRY_PENDING").put("strategy_profile",williamsTc2Profile)
+                .put("strategy_ownership_verified",true).put("created_at_ms",System.currentTimeMillis())
+            journal.writeState("futures_campaign_intents_v2",JSONArray().put(owner).toString())
+            exchange.algos["1"]=JSONObject().put("symbol",symbol).put("algoId","1")
+                .put("clientAlgoId",cid).put("side",if(direction.name=="LONG") "BUY" else "SELL")
+                .put("algoStatus",if(mode=="TRIGGERING") "TRIGGERING" else "NEW")
+                .put("orderType","STOP_MARKET").put("triggerPrice",owner.getString("entry_price"))
+                .put("quantity","1").put("actualOrderId","")
+            if(mode=="PARTIAL") exchange.fill(fraction=.5)
+            if(mode=="UNKNOWN") exchange.beforeRequest={ request,_ ->
+                if(request.method=="GET" && request.url.encodedPath in setOf("/fapi/v1/order","/fapi/v1/algoOrder"))
+                    throw java.io.IOException("modeled unknown signed observation")
+            }
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val observed=coordinator.reconcile()
+            if(mode=="UNKNOWN") assertFalse(observed.toString(),observed.getBoolean("ok"))
+            else assertTrue(observed.toString(),observed.getBoolean("ok"))
+            val retained=coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals(cid,retained.getString("client_id"))
+            assertTrue(isEntryCampaignReserved(retained))
+            assertEquals(.002,retained.getDouble("risk_pct"),0.0)
+            assertFalse(exchange.requests.any { it.method=="POST" &&
+                it.url.encodedPath in setOf("/fapi/v1/order","/fapi/v1/algoOrder") &&
+                Exchange.params(it)["closePosition"]!="true" && Exchange.params(it)["reduceOnly"]!="true" })
+            exchange.beforeRequest=null
+            if(mode!="PARTIAL") exchange.fill()
+            val restarted=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val result=restarted.reconcile()
+            assertTrue("$symbol $direction $mode: $result",result.getBoolean("ok"))
+            val protectedOwner=restarted.intentsSnapshot().getJSONObject(0)
+            assertEquals("OPEN_PROTECTED",campaignLifecycleStatus(protectedOwner))
+            assertEquals("PROTECTED",protectedOwner.getString("protection_status"))
+            val rejected=restarted.submitPendingEntry(plan(direction).copy(symbol=symbol))
+            assertFalse(rejected.getBoolean("accepted"))
+            assertTrue(rejected.getString("blocker").contains("FUTURES_SYMBOL_MANAGEMENT_ONLY"))
+        }
+    }
     @Test fun transportGateRejectionDoesNotPersistAPhantomPendingEntryForEitherDirection() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) for (earlyGate in listOf(false, true)) {
             val journal = Journal()
@@ -202,7 +331,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    private class Exchange(val direction: NativeFuturesCampaignCoordinator.Direction) {
+    private class Exchange(val direction: NativeFuturesCampaignCoordinator.Direction, val symbol:String="BTCUSDT") {
         val requests = mutableListOf<Request>()
         val algos = linkedMapOf<String, JSONObject>()
         val orders = linkedMapOf<String, JSONObject>()
@@ -232,6 +361,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var closeStatus = "FILLED"
         var positionSide = "BOTH"
         var positionSnapshotTransform: ((JSONArray) -> JSONArray)? = null
+        var accountTransform: ((JSONObject) -> JSONObject)? = null
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
             requests += request
@@ -243,39 +373,57 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/positionSide/dual" -> JSONObject().put("dualSidePosition", false)
                 "/fapi/v3/account" -> JSONObject().put("canTrade", true).put("totalWalletBalance", "10000")
                     .put("totalMarginBalance", "10000").put("totalUnrealizedProfit", "0")
-                    .put("availableBalance", "10000").put("assets", JSONArray())
+                    .put("availableBalance", "10000").apply {
+                        val margin = kotlin.math.abs(quantity) * mark / leverage
+                        put("totalInitialMargin", margin.toString()).put("totalPositionInitialMargin", margin.toString())
+                            .put("totalOpenOrderInitialMargin", "0")
+                            .put("assets", JSONArray().put(JSONObject().put("asset", "USDT").put("walletBalance", "10000")
+                                .put("initialMargin", margin.toString()).put("positionInitialMargin", margin.toString())
+                                .put("openOrderInitialMargin", "0")))
+                            .put("positions", JSONArray().apply {
+                                if (quantity != 0.0) put(JSONObject().put("symbol", symbol).put("positionSide", "BOTH")
+                                    .put("positionAmt", quantity.toString()).put("initialMargin", margin.toString())
+                                    .put("isolatedWallet", margin.toString()).put("isolatedMargin", margin.toString()).put("updateTime", 100))
+                            })
+                    }.let { accountTransform?.invoke(it) ?: it }
+                "/fapi/v1/accountConfig" -> JSONObject().put("canTrade", true)
+                    .put("dualSidePosition", false).put("multiAssetsMargin", false)
                 "/fapi/v3/positionRisk" -> positions()
                 "/fapi/v1/premiumIndex" -> { beforeMarkRead?.invoke()
-                    JSONObject().put("symbol", "BTCUSDT").put("markPrice", mark.toString()) }
-                "/fapi/v2/ticker/price" -> JSONObject().put("symbol","BTCUSDT").put("price",(contract ?: mark).toString())
-                "/fapi/v1/ticker/bookTicker" -> JSONObject().put("symbol","BTCUSDT")
+                    JSONObject().put("symbol", symbol).put("markPrice", mark.toString()) }
+                "/fapi/v2/ticker/price" -> JSONObject().put("symbol",symbol).put("price",(contract ?: mark).toString())
+                "/fapi/v1/ticker/bookTicker" -> JSONObject().put("symbol",symbol)
                     .put("bidPrice",(contract ?: mark).toString()).put("askPrice",(contract ?: mark).toString())
-                "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","filters":[
+                "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"$symbol","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"0.1"},
                     {"filterType":"MIN_NOTIONAL","notional":"5"}]}]}""")
-                "/fapi/v1/leverageBracket" -> JSONObject("""{"symbol":"BTCUSDT","brackets":[
+                "/fapi/v1/leverageBracket" -> JSONObject("""{"symbol":"$symbol","brackets":[
                     {"notionalFloor":0,"notionalCap":1000000,"initialLeverage":125,"maintMarginRatio":0.005}]}""")
                 "/fapi/v1/marginType" -> JSONObject().put("code", 200)
                 "/fapi/v1/leverage" -> {
                     leverage = p.getValue("leverage").toInt()
                     afterLeverage?.invoke()
-                    JSONObject().put("symbol", "BTCUSDT").put("leverage", if (badConfirmation) 1 else leverage)
+                    JSONObject().put("symbol", symbol).put("leverage", if (badConfirmation) 1 else leverage)
                         .put("maxNotionalValue", "1000000")
                 }
-                "/fapi/v1/symbolConfig" -> { afterSymbolConfig?.invoke(); JSONArray().put(JSONObject().put("symbol", "BTCUSDT")
+                "/fapi/v1/symbolConfig" -> { afterSymbolConfig?.invoke(); JSONArray().put(JSONObject().put("symbol", symbol)
                     .put("marginType", "ISOLATED").put("leverage", leverage).put("maxNotionalValue", "1000000"))
                 }
                 "/fapi/v1/openOrders" -> JSONArray(orders.values.filter {
                     it.optString("status") in setOf("NEW", "PARTIALLY_FILLED") &&
                         (p["symbol"] == null || it.optString("symbol") == p["symbol"])
-                })
+                }.map { JSONObject(it.toString()).apply { if (!has("price")) put("price", "0") } })
                 "/fapi/v1/userTrades" -> JSONArray((0 until tradeFills.length()).map { tradeFills.getJSONObject(it) }
                     .filter { p["orderId"]==null || it.optString("orderId")==p["orderId"] })
                 "/fapi/v1/openAlgoOrders" -> JSONArray(algos.values.filter {
                     it.optString("algoStatus") == "NEW" && (p["symbol"] == null || it.optString("symbol") == p["symbol"])
-                })
+                }.map { JSONObject(it.toString()).apply {
+                    if (!has("positionSide")) put("positionSide", "BOTH")
+                    if (!has("reduceOnly")) put("reduceOnly", false)
+                    if (!has("closePosition")) put("closePosition", false)
+                } })
                 "/fapi/v1/algoOrder" -> when (request.method) {
                     "POST" -> {
                         val protective=p["closePosition"]=="true" || p["reduceOnly"]=="true"
@@ -352,7 +500,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }.build()
 
         fun positions(): JSONArray = JSONArray().apply {
-            if (quantity != 0.0) put(JSONObject().put("symbol", "BTCUSDT").put("positionSide", positionSide)
+            if (quantity != 0.0) put(JSONObject().put("symbol", symbol).put("positionSide", positionSide)
                 .put("positionAmt", quantity.toString()).put("entryPrice", entry.toString())
                 .put("markPrice", mark.toString()).put("liquidationPrice", liquidation))
         }.let { positionSnapshotTransform?.invoke(it) ?: it }
@@ -365,7 +513,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 if (pending.getString("side") == "BUY") 1.0 else -1.0
             mark = if (quantity > 0) 102.0 else 98.0
             pending.put("algoStatus", "FINISHED").put("actualOrderId", childOrderId)
-            orders[childOrderId] = JSONObject().put("symbol", "BTCUSDT").put("orderId", childOrderId)
+            orders[childOrderId] = JSONObject().put("symbol", symbol).put("orderId", childOrderId)
                 .put("clientOrderId", childClientId ?: pending.getString("clientAlgoId"))
                 .put("status", if (fraction == 1.0) "FILLED" else "PARTIALLY_FILLED")
                 .put("origQty", pending.getString("quantity")).put("executedQty", kotlin.math.abs(quantity).toString())
@@ -378,7 +526,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             quantity=(quantity.toString().toBigDecimal()+(if(quantity>0) qty else -qty).toString().toBigDecimal()).toDouble();mark=price+(if(quantity>0) 1 else -1)
             val id=(200+orders.size).toString()
             parent.put("algoStatus","FINISHED").put("actualOrderId",id)
-            orders[id]=JSONObject().put("symbol","BTCUSDT").put("orderId",id).put("clientOrderId",clientId)
+            orders[id]=JSONObject().put("symbol",symbol).put("orderId",id).put("clientOrderId",clientId)
                 .put("status","FILLED").put("origQty",qty.toString()).put("executedQty",qty.toString())
                 .put("side",parent.getString("side")).put("avgPrice",price.toString()).put("reduceOnly",false).put("positionSide","BOTH")
         }

@@ -9,7 +9,8 @@ package com.williamsbot
  */
 internal fun williamsTc2ConsecutiveAoRise(
     lastIndex:Int,
-    minSignalIndex:Int=35,
+    // SMA34 first exists at index33; its FIRST observable change is index34.
+    minSignalIndex:Int=34,
     aoAt:(Int)->Double
 ):Int {
     if(lastIndex<minSignalIndex || minSignalIndex<1) return 0
