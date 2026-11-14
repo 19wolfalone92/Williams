@@ -101,6 +101,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
         while j >= 0 and count < 2:
             if value(j)==extreme:
                 start=j
+                count=0  # group ownership begins at its first equal extreme
             elif value(j)>extreme if long else value(j)<extreme:
                 count+=1
             else:

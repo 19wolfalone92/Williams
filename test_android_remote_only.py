@@ -417,7 +417,7 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "trigger<=teeth.last()" in setups
     assert "trigger>=teeth.last()" in setups
     assert "p<=teeth.last()" not in setups
-    assert "if (value==p) start=j" in setups
+    assert "if (value==p) { start=j;count=0 }" in setups
     assert ".minOf { bars[it].l }-tick" in setups
     assert "bar.h<mouth.min()" in setups
 

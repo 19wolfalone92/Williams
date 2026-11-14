@@ -360,7 +360,8 @@
     "printed_page": 131,
     "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not an independent second review or exact chart digitization.",
+      "14.11 continuation: hard multi-outside-bar veto replaced by bounded mouth-to-single-bar slope/gap evidence; exact author OHLC and independent visual equivalence remain unavailable."
     ]
   },
   "TC2_EN:161": {
@@ -447,7 +448,8 @@
     "printed_page": 137,
     "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not an independent second review or exact chart digitization.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_EN:167": {
@@ -464,7 +466,8 @@
     "printed_page": 138,
     "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
-      "Single reviewer; not an independent second review or exact chart digitization."
+      "Single reviewer; not an independent second review or exact chart digitization.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_EN:168": {
@@ -12088,21 +12091,28 @@
     "section": "CH11",
     "printed_page": 130,
     "content": "Ideal follow-through, break above previous extreme and four schematic patterns including shared bars.",
-    "rules": [],
-    "figures": [],
-    "visual_review": false,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "11.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "page_kind": "GRAPHIC_AND_TEXT",
     "uncertainties": [
       "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
-      "Source/translation conflicts remain explicit; no training or exchange authority."
+      "Source/translation conflicts remain explicit; no training or exchange authority.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_RU_224:146": {
     "section": "CH11",
     "printed_page": 131,
     "content": "Minimum-five definition, dual/shared fractals, equal-high six-bar case and nine-bar illustration; exact synthetic geometry remains separate.",
-    "rules": [],
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
     "figures": [
       "11.2"
     ],
@@ -12111,7 +12121,8 @@
     "page_kind": "GRAPHIC_AND_TEXT",
     "uncertainties": [
       "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
-      "Source/translation conflicts remain explicit; no training or exchange authority."
+      "Source/translation conflicts remain explicit; no training or exchange authority.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_RU_224:147": {
@@ -12899,21 +12910,28 @@
     "section": "CH11",
     "printed_page": 192,
     "content": "Minimum-five fractal, shared/dual extremes and six-bar pattern11.1.",
-    "rules": [],
-    "figures": [],
-    "visual_review": false,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
+    "figures": [
+      "11.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "page_kind": "GRAPHIC_AND_TEXT",
     "uncertainties": [
       "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
-      "Source/translation conflicts remain explicit; no training or exchange authority."
+      "Source/translation conflicts remain explicit; no training or exchange authority.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_RU_314:193": {
     "section": "CH11",
     "printed_page": 193,
     "content": "Equal-high extension and nine-bar11.2 figure; numerical synthetic exemplars are separate from raster OHLC.",
-    "rules": [],
+    "rules": [
+      "TC2.FRACTAL.EQUAL_EXTREMES"
+    ],
     "figures": [
       "11.2"
     ],
@@ -12922,7 +12940,8 @@
     "page_kind": "GRAPHIC_AND_TEXT",
     "uncertainties": [
       "Single reviewer; no independent figure certification or exact chart OHLC reconstruction.",
-      "Source/translation conflicts remain explicit; no training or exchange authority."
+      "Source/translation conflicts remain explicit; no training or exchange authority.",
+      "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING: enlarged figures/text rechecked 14.11; early separated-tie confirmation remains unresolved; whole-group boundary fix is bounded engineering validation, not independent certification."
     ]
   },
   "TC2_RU_314:194": {

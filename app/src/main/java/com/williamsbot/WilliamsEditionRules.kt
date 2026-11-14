@@ -91,6 +91,7 @@ internal fun confirmedWilliamsEditionFractals(bars:List<WilliamsWaveBar>):List<W
                 if (v==p) {
                     if (step==1) { ok=false;break }
                     start=j
+                    count=0 // left neighbours precede the entire equal group
                 } else if ((v>p)==(kind=="LOW")) count++
                 else { ok=false;break }
                 if (count==2) { if (step<0) leftStart=j else confirmation=j }

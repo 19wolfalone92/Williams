@@ -591,6 +591,46 @@
       "independent_second_review": false,
       "execution_authority": false,
       "training_allowed": false
+    },
+    {
+      "conflict_id": "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING",
+      "kind": "VISIBLE_WITHIN_SOURCE_TIMING_AMBIGUITY_REPEATED_IN_TRANSLATIONS",
+      "evidence": [
+        {
+          "source_id": "TC2_EN",
+          "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+          "pdf_pages": [
+            166,
+            167
+          ]
+        },
+        {
+          "source_id": "TC2_RU_224",
+          "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+          "pdf_pages": [
+            145,
+            146
+          ]
+        },
+        {
+          "source_id": "TC2_RU_314",
+          "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+          "pdf_pages": [
+            192,
+            193
+          ]
+        }
+      ],
+      "observation": "Fig11.1D and its body explicitly describe six bars with the fifth bar equal to the earlier peak. Fig11.2D/E show separated equal extrema followed by two bars after the last tie; E is explicitly nine bars. Both supplied Russian versions repeat these drawings and the six/nine-bar wording. The ambiguity is visible in the source, not resolved by agreement between translations.",
+      "bounded_interpretation": "Retain two consecutive right bars after the last equal extremum; do not enable early six-bar confirmation for separated ties. Adjacent equal-extreme six-bar groups remain valid. Preserve the ENTIRE repeated-extreme group and prove two left neighbours before its first extremum. No exact OHLC, author erratum, intrabar chronology or independent resolution is claimed.",
+      "related_rules": [
+        "TC2.FRACTAL.EQUAL_EXTREMES"
+      ],
+      "status": "SINGLE_REVIEW_SOURCE_COMPARISON",
+      "all_cited_pages_read": true,
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
     }
   ],
   "independent_second_review": false,

@@ -44,7 +44,7 @@ internal fun selectWilliamsPendingFractal(
         var j=i-1
         while (j>=0 && count<2) {
             val value=extreme(j)
-            if (value==p) start=j
+            if (value==p) { start=j;count=0 } // left flank before the WHOLE group
             else if (if (long) value<p else value>p) count++
             else break
             j--

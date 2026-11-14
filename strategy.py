@@ -266,6 +266,10 @@ def calculate_indicators(df, cfg):
                     break
                 if prior==value:
                     start=j
+                    # The two left neighbours must precede the ENTIRE equal
+                    # group, not be inner bars between its repeated extrema.
+                    # Otherwise a nine-bar group loses its first price/STOP.
+                    count=0
                 elif (prior<value if high else prior>value):
                     count+=1
                 else:

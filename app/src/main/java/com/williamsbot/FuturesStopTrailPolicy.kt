@@ -77,7 +77,7 @@ internal fun planFuturesStopTrail(
         bars.all { it.high.isFinite() && it.low.isFinite() && it.high >= it.low &&
             it.low > 0.0 }) {
         // TC2 figs11.1/11.2: equality can be separated by an inner bar.
-        // Count two strict neighbours to the left, skipping equal extremes,
+        // Count two strict neighbours before the ENTIRE equal group,
         // exactly as for ENTRY. Only the last tied extremum is the pivot.
         for (i in bars.lastIndex - 2 downTo 2) {
             if (bars[i].openTimeMs < openedObservedAtMs) break
@@ -90,7 +90,7 @@ internal fun planFuturesStopTrail(
                 if (direction == "LONG") bars[j].low > extreme else bars[j].high < extreme
             var count=0;var j=i-1
             while(j>=0 && count<2) {
-                if(sameExtreme(j)) start=j
+                if(sameExtreme(j)) { start=j;count=0 }
                 else if(onProtectiveSide(j)) count++
                 else break
                 j--

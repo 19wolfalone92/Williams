@@ -17,14 +17,15 @@ internal fun williamsFirstWiseManAoBlocker(side:String,aoNow:Double,aoBefore:Dou
     }
 }
 
-/** TC2 PDF122-124: last mouth passage, highs on a downward path and lows
+/** TC2_EN PDF140-142/160: last mouth passage, highs on a downward path and lows
  * on an upward path, compared with Jaw/Teeth over the same interval.
  * Regression is an explicit numerical interpretation of the visual rule. */
 internal data class WilliamsAngulation(
     val valid:Boolean=false,val score:Double=0.0,val reason:String="MOUTH_CROSSING_UNOBSERVED",
     val anchor:Int?=null,val examinedBars:Int=0,val priceSlope:Double?=null,
     val jawSlope:Double?=null,val teethSlope:Double?=null,
-    val firstOutside:Int?=null,val outsideGapGrowthPct:Double?=null
+    val firstOutside:Int?=null,val outsideGapGrowthPct:Double?=null,
+    val gapGrowthBaseline:Int?=null,val gapGrowthBasis:String?=null
 ) {
     fun toJson():JSONObject=JSONObject().put("valid",valid).put("score",score).put("reason",reason)
         .put("method","MOUTH_ANCHORED_EDGE_SLOPES").put("numerical_interpretation",true)
@@ -33,12 +34,14 @@ internal data class WilliamsAngulation(
         .put("teeth_slope",teethSlope ?: JSONObject.NULL)
         .put("first_outside_index",firstOutside ?: JSONObject.NULL)
         .put("outside_gap_growth_pct",outsideGapGrowthPct ?: JSONObject.NULL)
-        .put("book_reference","TC2_CH9_FIG_9_3_TO_9_11")
+        .put("gap_growth_baseline_index",gapGrowthBaseline ?: JSONObject.NULL)
+        .put("gap_growth_basis",gapGrowthBasis ?: JSONObject.NULL)
+        .put("book_reference","TC2_CH9_FIG_9_3_TO_9_11_AND_CH10_FIG_10_7")
 }
-/** TC2 ch9, PDF 122–130: four visual rules, represented by a causal
+/** TC2_EN PDF142/160: four visual rules and fig10.7, represented by a causal
  * conservative numerical test. A wide price/Alligator distance is NOT enough:
- * price must depart from the most recent mouth passage and continue opening
- * an angle after the first candle entirely outside the mouth. Regression and
+ * price must depart from the most recent mouth passage. One outside candle
+ * may itself create the angle; later candles must continue opening it. Regression and
  * positive Jaw/Teeth gap growth are engineering proxies, not Williams formulas.
  */
 internal fun williamsAngulation(side:String,bars:List<WilliamsWaveBar>,jaw:List<Double>,
@@ -65,16 +68,20 @@ internal fun williamsAngulation(side:String,bars:List<WilliamsWaveBar>,jaw:List<
         if(crossesMouth(i)) { anchor=i;break }
     }
     val start=anchor ?: return WilliamsAngulation()
-    if(n-start<3 || !(start until n).all { usable(it) })
+    if(!(start until n).all { usable(it) })
         return WilliamsAngulation(reason="INSUFFICIENT_PATH",anchor=start)
     val step=expectedStepMs ?: (bars[n-1].t-bars[n-2].t)
     if(step<=0 || (start+1 until n).any { bars[it].t-bars[it-1].t!=step })
         return WilliamsAngulation(reason="CANDLE_PATH_GAP",anchor=start,examinedBars=n-start)
-    // The initial transition out of the mouth is not evidence of continuing
-    // angular separation. Two parallel paths after an initial gap are INVALID.
+    // Fig10.7 permits a single divergent bar to create its own angle. If more
+    // outside bars exist, the original post-exit check still rejects two
+    // parallel paths after an initial gap (fig9.5). No ATR/size cutoff.
     val firstOutside=((start+1) until n).firstOrNull { outsideMouth(it) }
-    if(firstOutside==null || firstOutside==n-1)
+    if(firstOutside==null)
         return WilliamsAngulation(reason="INSUFFICIENT_OUTSIDE_PATH",anchor=start,examinedBars=n-start)
+    val singleBar=firstOutside==n-1
+    val baseline=if(singleBar) start else firstOutside
+    val basis=if(singleBar) "MOUTH_TO_SINGLE_OUTSIDE_BAR" else "AFTER_FIRST_OUTSIDE_BAR"
     fun slope(values:List<Double>):Double {
         val x=(values.size-1)/2.0;val mean=values.average()
         return values.indices.sumOf { (it-x)*(values[it]-mean) }/
@@ -91,17 +98,25 @@ internal fun williamsAngulation(side:String,bars:List<WilliamsWaveBar>,jaw:List<
         val edgeAt=if(side=="LONG") bars[index].h else bars[index].l
         return sign*(edgeAt-line[index])
     }
-    val postGrowth=minOf(gapTo(jaw,n-1)-gapTo(jaw,firstOutside),
-        gapTo(teeth,n-1)-gapTo(teeth,firstOutside))
+    val postGrowth=minOf(gapTo(jaw,n-1)-gapTo(jaw,baseline),
+        gapTo(teeth,n-1)-gapTo(teeth,baseline))
+    fun unverified()=WilliamsAngulation(reason="NUMERICAL_GEOMETRY_UNVERIFIED",
+        anchor=start,examinedBars=n-start,firstOutside=firstOutside,
+        gapGrowthBaseline=baseline,gapGrowthBasis=basis)
+    if(listOf(price,j,t,separation,endpoint,postGrowth).any { !it.isFinite() }) return unverified()
     val valid=basic && postGrowth>0
+    val score=if(valid) separation/bars.last().c*100 else 0.0
+    val growthPct=postGrowth/bars.last().c*100
+    if(!score.isFinite() || !growthPct.isFinite()) return unverified()
     val reason=when {
         !basic->"PRICE_PATH_NOT_STEEPER"
         postGrowth<=0->"PARALLEL_AFTER_MOUTH_EXIT"
+        singleBar->"SINGLE_BAR_ANGULAR_DEPARTURE"
         else->"DIVERGING_PRICE_PATH"
     }
-    return WilliamsAngulation(valid,if(valid) separation/bars.last().c*100 else 0.0,
+    return WilliamsAngulation(valid,score,
         reason,start,n-start,price,j,t,firstOutside,
-        postGrowth/bars.last().c*100)
+        growthPct,baseline,basis)
 }
 
 /** NTD ch3/ch10. A narrowing ordered trend is satiated, not sleeping.

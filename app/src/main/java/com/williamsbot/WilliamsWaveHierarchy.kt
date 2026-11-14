@@ -140,6 +140,7 @@ internal fun confirmedWilliamsWaveAnchors(bars: List<WilliamsWaveBar>, duration:
                     val value = if (kind == "LOW") bars[j].l else bars[j].h
                     if (value == extreme) {
                         if (step == 1) { good = false; break }
+                        count = 0 // left flank precedes the entire equal group
                     } else if ((value > extreme) == (kind == "LOW")) count++
                     else { good = false; break }
                     if (step == 1 && count == 2) confirmation = j

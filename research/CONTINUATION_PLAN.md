@@ -4,7 +4,19 @@
 Перед записью сверить main и ветку; не перезаписывать новые чужие SHA.
 Не объединять15 старых PR пачкой. Два новых main commits проверить отдельно.
 
-Актуальное продолжение14.11,4.64.33: исправлена Python WM2 ordinal boundary:
+Актуальное продолжение14.11,4.64.34: WM1 больше не требует следующую внешнюю
+свечу, если текущий дивергентный бар сам доказывает угол от пасти; для более
+длинного пути post-exit opening сохранён. Source numeric geometry остаётся
+явной инженерной трактовкой. У WM3 исправлена потеря первого равного экстремума
+длинной группы: initial STOP/ownership и left-flank proof учитывают всю группу
+в обоих runtimes, wave/exit включены. Неоднозначность separated-tie fig11.1D
+против extended fig11.2 подтверждена в3 изданиях; раннее подтверждение не включено.
+Отчёт: `TC2_WM1_WM3_CONTINUATION_20261114.md`. Visual297,figures210,
+TC2 source comparisons16; independent0,6 complete bounded numeric specs.
+Следующий source шаг — независимый fig11.1D/11.2/11.7 и оставшаяся semantic map;
+signed Demo/device acceptance открыта, main не объединён.
+
+Предыдущее продолжение14.11,4.64.33: исправлена Python WM2 ordinal boundary:
 неверный cached count больше не заменяет исходную третью свечу позднейшей,
 не меняет её trigger/STOP/ID/expiry и не прерывает сканер приInfinity.
 Сверено17 страниц приложения7; добавлены Alligator/AO numeric atomic specs,
@@ -24,7 +36,7 @@ Signed Demo/device acceptance по-прежнему открыта; main не о
 в17 общих разделах явно отмечено повторное использование совпавших токенов
 из прочитанного первого и ручное чтение всех изменённых фрагментов; это
 не независимое повторное чтение и не полная двусторонняя semantic map.
-Visual295,figures208,independent0; технических page mappings104 глав8–11,
+Visual297,figures210,independent0; технических page mappings104 глав8–11,
 отдельных Appendix7 content comparisons17, selected anchors16. Исходный отчёт
 первого прохода: `TC2_TRANSLATION_FIRST_TEXT_PASS_20261114.md`.
 Предыдущие823/1213 и «390 осталось» ниже — исторические checkpoints.
@@ -67,8 +79,9 @@ signed debug APK4886 скачан, hash и certificate проверены. Ре�
    unfilled, partial, triggering, unknown old intents до изменения допуска.
 7. Actual Demo/device: LONG+SHORT entry→partial/full→owned STOP readback→trail,
    disconnect, unknown POST, process restart, screen off; измерить сегменты latency.
-8. Реализовывать только source-confirmed расхождения; большие WM1 углы и
-   расширенные фракталы сначала закрепить качественными эталонами, не ATR-fit.
+8. Большой WM1 и полная группа extended WM3 имеют bounded shared cases4.64.34;
+   independent equivalence и неоднозначный separated-tie fig11.1D всё ещё OPEN.
+   Не включать ранний фрактал или произвольный ATR-fit по одному спорному рисунку.
 9. AI: versioned candidate schema adapter без изменения старого train/test;
    expert source/market cohort прежде нового обучения.
 10. Полные Python/Android CI и независимый исторический holdout после фиксации

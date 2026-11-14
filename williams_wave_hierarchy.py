@@ -191,6 +191,7 @@ def confirmed_wave_anchors(bars: Sequence[WaveBar], duration: int) -> list[WaveA
                         if step == 1:
                             good = False
                             break
+                        count = 0  # left flank precedes the entire equal group
                     elif (value > extreme) == (kind == "LOW"):
                         count += 1
                     else:

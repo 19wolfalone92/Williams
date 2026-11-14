@@ -421,7 +421,7 @@ def main() -> None:
     # TC2 chapter 11 (PDF pp.147-149): validate the triggered price beyond
     # red Teeth, not the raw pivot before its +1/-1 tick breakout buffer.
     # The older pivot-based release string check incorrectly forbade this fix.
-    for needle in ("trigger<=teeth.last()", "trigger>=teeth.last()", "if (value==p) start=j",
+    for needle in ("trigger<=teeth.last()", "trigger>=teeth.last()", "if (value==p) { start=j;count=0 }",
                    ".minOf { bars[it].l }-tick", "bars[it].h>=trigger", "bar.h<mouth.min()"):
         must(setup_source,needle,"WilliamsSetupRules.kt confirmed book setup")
     must_not(setup_source, "p<=teeth.last()", "TC2 breakout-vs-formation book contract")

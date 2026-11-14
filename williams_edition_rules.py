@@ -82,6 +82,7 @@ def edition_fractals(bars: Sequence[WaveBar]) -> list[EditionFractal]:
                         if step==1:
                             ok=False;break
                         start=j
+                        count=0  # prove two left neighbours before the whole group
                     elif (v>p)==(kind=="LOW"):
                         count+=1
                     else:

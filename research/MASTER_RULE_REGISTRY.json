@@ -139,21 +139,25 @@
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
       "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
-      "INVALIDATION": "5/6/7/9-bar synthetic book figures now also exercise the actual LIVE TC2 WM3 pending selector, confirmation and current Teeth veto, on both sides. This does not digitize every historical figure or verify actual Binance trigger/STOP lifecycle.",
+      "INVALIDATION": "Complete equal-extreme group preserved: two strict LEFT neighbours must precede its first equal extremum; two consecutive RIGHT closes remain after its last. Counting inner bars across repeated equal extrema truncated nine-bar groups and could change initial STOP/ownership. TC2 figs11.1D/11.2 timing ambiguity is explicitly unresolved; no earlier confirmation exception. Synthetic tests do not certify all author figures or signed Demo.",
       "STOP_PLACEMENT": "Source-specific initial/trailing rule; authenticated exchange proof is separate.",
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
-      "EXCEPTIONS": "5/6/7/9-bar synthetic book figures now also exercise the actual LIVE TC2 WM3 pending selector, confirmation and current Teeth veto, on both sides. This does not digitize every historical figure or verify actual Binance trigger/STOP lifecycle.",
-      "CONFLICTS": [],
+      "EXCEPTIONS": "Complete equal-extreme group preserved: two strict LEFT neighbours must precede its first equal extremum; two consecutive RIGHT closes remain after its last. Counting inner bars across repeated equal extrema truncated nine-bar groups and could change initial STOP/ownership. TC2 figs11.1D/11.2 timing ambiguity is explicitly unresolved; no earlier confirmation exception. Synthetic tests do not certify all author figures or signed Demo.",
+      "CONFLICTS": [
+        "TC2.C11.SEPARATED_EQUAL_EXTREME_TIMING"
+      ],
       "CONFIDENCE": "SINGLE_SOURCE_REVIEW_NOT_INDEPENDENT_CERTIFICATION",
       "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
       "PRIOR_REGISTRY_STATUS": "BOUNDED_TESTED",
       "TESTS": [
         "tests/test_williams_book_rules_contract.py::test_protection_and_entry_use_the_same_five_six_seven_nine_bar_geometry",
         "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals",
-        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::liveTc2ThirdWiseManSelectorMatchesFiveSixSevenNineClosedBarFigures"
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::liveTc2ThirdWiseManSelectorMatchesFiveSixSevenNineClosedBarFigures",
+        "tests/test_tc2_fractal_source_ambiguity.py",
+        "app/src/test/java/com/williamsbot/WilliamsFractalSourceAmbiguityTest.kt"
       ],
-      "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
+      "TEST_RESULTS": "See TC2_WM1_WM3_CONTINUATION_20261114.md; shared original-source boundaries and timing/ownership regression cases.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,
@@ -413,11 +417,11 @@
       "CONFIRMATION": "A signal is knowable only at its actual close/confirmation, not its historical pivot.",
       "TRIGGER": "Source-specific; do not treat formation as a filled order.",
       "ORDER_ACTION": "NO_AUTHORITY_FROM_REGISTRY",
-      "INVALIDATION": "Python/Kotlin mirrored hand-constructed qualitative figure 9.5 and 9.11 counterexamples and closed-bar continuity are bounded tested; numerical slope/distance thresholds are engineering interpretations, NOT author formulas. Independent expert-labelled all actual figures and 95% decision agreement are NOT proven.",
+      "INVALIDATION": "Bounded causal mouth-to-current-bar proxy permits an angle created by the first fully outside divergent bar (TC2_EN160 fig10.7); multiple outside bars retain the post-exit opening test. No ATR/size/degree cutoff. Independent visual equivalence and signed Demo remain unverified.",
       "STOP_PLACEMENT": "Source-specific initial/trailing rule; authenticated exchange proof is separate.",
       "POSITION_MANAGEMENT": "Edition ownership and risk gates remain mandatory.",
       "EXIT_CONDITIONS": "Unspecified for non-exit rules; never inferred from this registry.",
-      "EXCEPTIONS": "Python/Kotlin mirrored hand-constructed qualitative figure 9.5 and 9.11 counterexamples and closed-bar continuity are bounded tested; numerical slope/distance thresholds are engineering interpretations, NOT author formulas. Independent expert-labelled all actual figures and 95% decision agreement are NOT proven.",
+      "EXCEPTIONS": "Bounded causal mouth-to-current-bar proxy permits an angle created by the first fully outside divergent bar (TC2_EN160 fig10.7); multiple outside bars retain the post-exit opening test. No ATR/size/degree cutoff. Independent visual equivalence and signed Demo remain unverified.",
       "CONFLICTS": [
         "TC2.ANGULATION.SINGLE_LARGE_BAR"
       ],
@@ -429,9 +433,11 @@
         "tests/test_williams_market_geometry.py::test_tc2_fig_9_11_mouth_touch_invalid_even_if_prior_path_diverges",
         "tests/test_williams_market_geometry.py::test_tc2_angle_requires_continuous_history_and_reusable_evidence",
         "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2AngulationBookCounterexamplesRejectParallelAndMouthTouch",
-        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2AngulationClosedCandleContinuityAndEvidenceAreRequired"
+        "app/src/test/java/com/williamsbot/WilliamsMarketGeometryTest.kt::tc2AngulationClosedCandleContinuityAndEvidenceAreRequired",
+        "tests/test_tc2_wm1_single_bar_angulation.py",
+        "app/src/test/java/com/williamsbot/WilliamsWm1SingleBarAngulationTest.kt"
       ],
-      "TEST_RESULTS": "Inherited offline tests included in 2086-test baseline; exact rule completeness not established.",
+      "TEST_RESULTS": "See TC2_WM1_WM3_CONTINUATION_20261114.md; synthetic cases, not author chart OHLC or independent expert certification.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,
@@ -3866,8 +3872,10 @@
       "PAGE": [
         160
       ],
-      "FIGURE": [],
-      "CLASSIFICATION": "UNRESOLVED",
+      "FIGURE": [
+        "10.7"
+      ],
+      "CLASSIFICATION": "INTERPRETED",
       "ORIGINAL_MEANING": "Large divergent price bar may generate its own angle; two fully outside bars are not stated as a universal book prerequisite.",
       "MARKET_CONTEXT": "Research/crosscheck, no order authority.",
       "PRECONDITIONS": "Closed observations with honest source provenance.",
@@ -3875,21 +3883,28 @@
         "See rule-specific test/spec"
       ],
       "SIGNAL_DEFINITION": {
-        "kind": "RESEARCH_OR_ENGINEERING_CONSTRAINT"
+        "kind": "BOUNDED_ENGINEERING_INTERPRETATION_NOT_FULL_ATOMIC_SPEC",
+        "modules": [
+          "williams_market_geometry.py",
+          "app/src/main/java/com/williamsbot/WilliamsMarketGeometry.kt"
+        ]
       },
-      "CONFIRMATION": "Source review recorded; independent second review pending.",
+      "CONFIRMATION": "Known after the fully closed divergent bar; actual AO, raw reversal-price proof and all source/risk/STOP gates remain separate.",
       "TRIGGER": "NONE_FROM_REGISTRY",
       "ORDER_ACTION": "NONE",
-      "INVALIDATION": "Missing source/data; no certification.",
+      "INVALIDATION": "Bounded causal mouth-to-current-bar proxy permits an angle created by the first fully outside divergent bar (TC2_EN160 fig10.7); multiple outside bars retain the post-exit opening test. No ATR/size/degree cutoff. Independent visual equivalence and signed Demo remain unverified.",
       "STOP_PLACEMENT": "No STOP authority",
       "POSITION_MANAGEMENT": "No authority",
       "EXIT_CONDITIONS": "No authority",
-      "EXCEPTIONS": [],
+      "EXCEPTIONS": "Bounded causal mouth-to-current-bar proxy permits an angle created by the first fully outside divergent bar (TC2_EN160 fig10.7); multiple outside bars retain the post-exit opening test. No ATR/size/degree cutoff. Independent visual equivalence and signed Demo remain unverified.",
       "CONFLICTS": [],
       "CONFIDENCE": "SINGLE_REVIEW",
-      "IMPLEMENTATION_STATUS": "DOCUMENTED_PENDING_FULL_SPEC",
-      "TESTS": [],
-      "TEST_RESULTS": "See regression report; not certification of a whole book.",
+      "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
+      "TESTS": [
+        "tests/test_tc2_wm1_single_bar_angulation.py",
+        "app/src/test/java/com/williamsbot/WilliamsWm1SingleBarAngulationTest.kt"
+      ],
+      "TEST_RESULTS": "See TC2_WM1_WM3_CONTINUATION_20261114.md; synthetic cases, not author chart OHLC or independent expert certification.",
       "FULL_ATOMIC_SPEC_COMPLETE": false,
       "source_reviewed_this_run": true,
       "execution_authority": false,
