@@ -115,3 +115,30 @@ fill→owned protective STOP→trail/restart/reconcile и физический A
  Новая quantity не рассчитывается при неконечном/нечисловом лимите.
 - Это не account-wide50% margin gate, не real Demo и не новый market backtest.
  Source/OCR identities не менялись; exact-final-SHA CI фиксируется вPR240.
+
+## TC2 structure и глава12 —14.11.2026
+
+- Полный Python после финального уточнения неизвестного пятого исполнения:
+  **2495 passed,2 skipped,4 прежних FastAPI warnings,39.04s**.
+  Включены37 новых случаев `tests/test_tc2_translation_audit.py`.
+- Полные795 физических листов трёх TC2 распределены по разделам, но68 crops
+  заголовков не увеличивают semantic/visual full-page counters.16 выбранных
+  semantic anchors не являются полным переводным сопоставлением.
+- Сопоставлены все Chapter12 leaves трёх файлов и7 рисунков в каждом переводе.
+  Новых first-pass receipts26: итого724/1213,216 visual,157 figure entries.
+  Остальные489 страниц двух переводов не объявлены прочитанными; independent0.
+- Три видимых translation/label discrepancies и три контекстных caveats
+  закреплены6 cross-edition records. Scope/authority, source hashes, повторные
+  edition IDs, перекрытия и unread citations проверяются новым CLI и master audit.
+- Decimal gold totals14660/47100 сходятся при4/13контрактах; matched-risk/net
+  не установлен. Fifth profit row отсутствует, реальное пятое исполнение неизвестно.
+  Costco displayed gross9.30 при условном1share/entry против printed9.29
+  не сертифицируется как ошибка при приблизительных ценах/неизвестных весах.
+- AO PDF247 metadata исправлены с Appendix3 на Appendix7 без смены формулы.
+  AI synthetic example заново закреплён и остаётся ABSTAIN/authority=false.
+- Ruff/release/book-registry integrity:PASS. Static safety в clean-CI режиме:
+  **0failures/11existing warnings**; production DB не инспектировалась.
+- Все6 source SHA повторно совпали;1091 non-Course inventory rows воспроизведены
+  полностью;1213 acquisition identities/lengths сохранены,122 Course rows неизменны.
+- Master/translation integrityPASS; оба `--require-complete` ожидаемоexit2.
+  Native production не менялся; CI нового точного SHA будет зафиксирован вPR240.

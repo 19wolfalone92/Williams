@@ -973,7 +973,7 @@
     ]
   },
   "TC2_EN:247": {
-    "section": "APPENDIX3_AO_SOURCE_CODE",
+    "section": "APPENDIX7_AO_SOURCE_CODE",
     "printed_page": 218,
     "content": "Author EasyLanguage AO code explicitly uses PRICE((H+L)/2), SMA5-SMA34 and strict AO colour differences; adjudicates midpoint typo in fig10.1.",
     "rules": [
@@ -1260,24 +1260,25 @@
       "TC2.EXIT.PARTIAL_DISCRETION"
     ],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 157,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
     ]
   },
   "TC2_EN:187": {
     "section": "INTERCHAPTER",
-    "content": "Blank physical page retained; no trading rule inferred.",
+    "content": "Full-page render confirms blank separator after Chapter12; included in physical section interval only.",
     "rules": [],
     "figures": [],
-    "visual_review": false,
+    "visual_review": true,
     "printed_page": 158,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "verification_status": "REVIEWED_SINGLE_PASS",
     "uncertainties": [
       "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
-    ]
+    ],
+    "page_kind": "VISUALLY_CONFIRMED_BLANK"
   },
   "TC2_EN:188": {
     "section": "CH13",
@@ -1587,31 +1588,36 @@
   },
   "TC2_RU_224:164": {
     "section": "CH12",
-    "content": "Profit prerequisite and illustrated reverse-pyramid quantities1,5,4,3,2.",
+    "printed_page": 149,
+    "content": "Reverse pyramid is example quantity sequence1,5,4,3,2 after profitable initial entry. Gold four-entry table omits fifth tranche; author performance claims are not equal-risk evidence.",
     "rules": [
       "TC2.PYRAMID.QUANTITIES",
       "TC2.PYRAMID.PROFIT"
     ],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 149,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_224:165": {
     "section": "CH12",
-    "content": "Three/five-bar usual exit and discretionary complete/partial reduction.",
+    "printed_page": 150,
+    "content": "3–5-bar structural exit commonly precedes opposite signal. Half exit is discretionary, explicitly no universal rule; it cannot become automatic50-percent trimming.",
     "rules": [
-      "TC2.EXIT.PARTIAL_DISCRETION"
+      "TC2.EXIT.PARTIAL_DISCRETION",
+      "TC2.STOP.THREE_OR_FIVE"
     ],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 150,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_224:182": {
@@ -1702,57 +1708,66 @@
   },
   "TC2_RU_314:214": {
     "section": "CH12",
-    "content": "Costco known sequence and beginning of allocation discussion; right-hand confirmation cannot be backdated.",
+    "printed_page": 214,
+    "content": "Costco Sep23 AO signal/Sep24 entry and fractal center, Oct4 fractal trigger, Oct13 five-bar stop. Approximate prices yield9.30 for one share per entry, not certified9.29 net; asset-allocation introduction.",
     "rules": [],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 214,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_314:215": {
     "section": "CH12",
-    "content": "Profitable first entry and reverse-pyramid quantity example1,5,4,3,2.",
+    "printed_page": 215,
+    "content": "Reverse pyramid1,5,4,3,2 follows profitable first entry; total15 is capacity, four executed gold tranches total13. Percentage improvement claim lacks matched account-risk/cost evidence.",
     "rules": [
       "TC2.PYRAMID.QUANTITIES",
       "TC2.PYRAMID.PROFIT"
     ],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 215,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_314:216": {
     "section": "CH12",
-    "content": "Three/five-bar usual trail and optional partial exit discussed as discretionary.",
+    "printed_page": 216,
+    "content": "3–5-bar exit usually precedes opposite signal; half-exit section explicitly declines universal policy. Protect remaining position, no source-derived fixed auto-trim rule.",
     "rules": [
-      "TC2.EXIT.PARTIAL_DISCRETION"
+      "TC2.EXIT.PARTIAL_DISCRETION",
+      "TC2.STOP.THREE_OR_FIVE"
     ],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 216,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_314:217": {
     "section": "CH12",
-    "content": "Discretionary psychological exit caveat and chapter summary.",
+    "printed_page": 217,
+    "content": "Partial exit is suited by author to experienced discretionary traders; chapter summary transitions to psychology rather than a new entry signal.",
     "rules": [
       "TC2.EXIT.PARTIAL_DISCRETION"
     ],
     "figures": [],
-    "visual_review": false,
-    "printed_page": 217,
-    "verification_status": "REVIEWED_TEXT_ONLY",
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
     "uncertainties": [
-      "Single-reviewer continuation; not an independent second review. Text-only receipts do not certify unviewed figures. No exact chart OHLC is reconstructed."
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   },
   "TC2_RU_314:242": {
@@ -11093,6 +11108,445 @@
     "uncertainties": [
       "New derived OCR is not the original acquisition text; its errors, unread diagram details and unknown annotation authorship remain explicit.",
       "Single first pass, not independent certification; external Computorial/personal tutorial material is not supplied."
+    ]
+  },
+  "TC2_RU_224:153": {
+    "section": "CH12",
+    "printed_page": 138,
+    "content": "Chapter12 goal and ideal WM1→WM2→fractal sequence; gold labels separate setup from later trigger; opposite setup at10 is not itself an executed reversal.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:154": {
+    "section": "CH12",
+    "printed_page": 139,
+    "content": "Gold figure12.1 and printed profit table. Label10 correctly says bearish here. Four printed per-contract profits and weighted1,5,4,3 entries are author-reported arithmetic, not verified fills.",
+    "rules": [
+      "TC2.PYRAMID.QUANTITIES"
+    ],
+    "figures": [
+      "12.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:155": {
+    "section": "CH12",
+    "printed_page": 140,
+    "content": "Long numbered strategy: translation admits buy stop at the high unlike English positive tick offset; paragraphs6-7 share English AO/price-bar wording ambiguity. Reverse only on an actual opposite trigger.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:156": {
+    "section": "CH12",
+    "printed_page": 141,
+    "content": "After second entry seek confirmed fractal; 3–5-bar trail. Fractal or SuperAO may present first; initial stop alternatives are separate from subsequent trailing.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING",
+      "TC2.WM2.FIRST_STOP",
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:157": {
+    "section": "CH12",
+    "printed_page": 142,
+    "content": "Long alternatives and start of short example. Short introduction and item1 wrongly say bullish although higher-high/lower-half close, later bearish wording and English specify bearish.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:158": {
+    "section": "CH12",
+    "printed_page": 143,
+    "content": "Apple12.2: initial short, AO/fractal additions, three-bar trailing exit, separate later fractal reentry and bullish exit. Red AO colour is not an AO-below-zero requirement.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "12.2"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:159": {
+    "section": "CH12",
+    "printed_page": 144,
+    "content": "Yahoo12.3 and Teva12.4 translated practice charts; WM1/WM2/fractal setup arrows precede entries, Teva10 is opposite-fractal stop-and-reverse. Exact OHLC/timestamps unavailable.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [
+      "12.3",
+      "12.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:160": {
+    "section": "CH12",
+    "printed_page": 145,
+    "content": "S&P500 ten-minute12.5 and DollarTree12.6 practice charts: fractal may precede AO in entry order; chart labels specify one-tick breakouts and later exit, not universal backtest results.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING"
+    ],
+    "figures": [
+      "12.5",
+      "12.6"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:161": {
+    "section": "CH12",
+    "printed_page": 146,
+    "content": "Continuation of Apple short trail and later reentry. First-presenting fractal below Teeth or SuperAO is allowed; broader bearish trend can continue after a trailing-stop exit.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING",
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:162": {
+    "section": "CH12",
+    "printed_page": 147,
+    "content": "Short alternatives, practice instructions and Costco exercise: Sep14 setup/Sep15 entry, Sep23 AO/Sep24 entry and fractal center; the center needs two subsequent right bars before recognition.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:163": {
+    "section": "CH12",
+    "printed_page": 148,
+    "content": "Costco12.7 and printed approximate entries34.16/35.75/37.01, exit38.74. One-share-per-entry gross sum9.30 differs from printed9.29 by0.01; approximate prices, unknown weights/costs forbid a certified net-per-share result.",
+    "rules": [],
+    "figures": [
+      "12.7"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_224:166": {
+    "section": "CH12",
+    "printed_page": 151,
+    "content": "Chapter summary leads into psychological exercises; promises of personal improvement are attributed author claims, not executable market facts.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:201": {
+    "section": "CH12",
+    "printed_page": null,
+    "content": "Chapter12 title and goal only; title leaf is counted separately from substantive trading text.",
+    "rules": [],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "CHAPTER_TITLE",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:202": {
+    "section": "CH12",
+    "printed_page": null,
+    "content": "Visually confirmed blank separator after Chapter12 title; zero text is not used alone as proof of a blank page.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:203": {
+    "section": "CH12",
+    "printed_page": 203,
+    "content": "Ideal WM1→WM2→fractal sequence and gold narrative. Body identifies notation10 as bearish opposite setup with next-bar trigger, contradicting this edition’s figure label.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:204": {
+    "section": "CH12",
+    "printed_page": 204,
+    "content": "Gold12.1/table. Figure label10 incorrectly says bullish while English figure and this edition’s body say bearish. Printed profits are author numbers; four tranches1,5,4,3 total13 contracts.",
+    "rules": [
+      "TC2.PYRAMID.QUANTITIES"
+    ],
+    "figures": [
+      "12.1"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:205": {
+    "section": "CH12",
+    "printed_page": 205,
+    "content": "Long numbered strategy shares at-high buy-stop translation and AO/price-bar wording with224-page file; English requires positive tick offset and AO histogram colours.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:206": {
+    "section": "CH12",
+    "printed_page": 206,
+    "content": "Long continuation, confirmed fractal add, structural trail, first-presenting fractal above Teeth and first-presenting SuperAO; initial stop alternatives begin here.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING",
+      "TC2.WM2.FIRST_STOP",
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:207": {
+    "section": "CH12",
+    "printed_page": 207,
+    "content": "SuperAO initial/trailing stops, long alternatives and short introduction. Short intro/item1 share bullish-label error with224-page file; geometry and following items specify bearish.",
+    "rules": [
+      "TC2.WM1.DIVERGENT_BAR",
+      "TC2.WM2.FIRST_STOP"
+    ],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:208": {
+    "section": "CH12",
+    "printed_page": 208,
+    "content": "Apple12.2 and remaining short steps: stop below bearish setup, protection above it, contingent opposite-fractal reversal. AO histogram red colour, not sign relative to zero.",
+    "rules": [
+      "TC2.STOP.THREE_OR_FIVE",
+      "TC2.WM2.THREE_AO_BARS"
+    ],
+    "figures": [
+      "12.2"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:209": {
+    "section": "CH12",
+    "printed_page": 209,
+    "content": "Apple continuation: entries and three-bar trail exit followed by a distinct later reentry and bullish opposite exit. Short first-fractal alternative starts.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING",
+      "TC2.STOP.THREE_OR_FIVE"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:210": {
+    "section": "CH12",
+    "printed_page": 210,
+    "content": "Short first-fractal/first-AO alternatives and practice-chart instructions. Author all-markets/all-timeframes claim is not external validation of Binance H1.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING"
+    ],
+    "figures": [],
+    "visual_review": false,
+    "verification_status": "REVIEWED_TEXT_ONLY",
+    "page_kind": "SUBSTANTIVE_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:211": {
+    "section": "CH12",
+    "printed_page": 211,
+    "content": "Yahoo12.3 and Teva12.4 translated practice diagrams; formation arrows and executed entry arrows differ. Teva10 is opposite-fractal stop-and-reverse, no exact OHLC reconstructed.",
+    "rules": [
+      "TC2.EXIT.STOP_AND_REVERSE"
+    ],
+    "figures": [
+      "12.3",
+      "12.4"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:212": {
+    "section": "CH12",
+    "printed_page": 212,
+    "content": "S&P500 ten-minute12.5 and DollarTree12.6 diagrams: first-presenting order can differ, tick offsets are explicit; ASO label is inherited text, not another indicator.",
+    "rules": [
+      "TC2.WISEMEN.FIRST_PRESENTING"
+    ],
+    "figures": [
+      "12.5",
+      "12.6"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:213": {
+    "section": "CH12",
+    "printed_page": 213,
+    "content": "Costco12.7 exercise and Sep14 bullish setup/Sep15 entry; identification exercise is already seen source material, not an unseen examination cohort.",
+    "rules": [],
+    "figures": [
+      "12.7"
+    ],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "GRAPHIC_AND_TEXT",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
+    ]
+  },
+  "TC2_RU_314:218": {
+    "section": "CH12",
+    "printed_page": null,
+    "content": "Visually confirmed blank separator before Chapter13, not missing trading text.",
+    "rules": [],
+    "figures": [],
+    "visual_review": true,
+    "verification_status": "REVIEWED_SINGLE_PASS",
+    "page_kind": "VISUALLY_CONFIRMED_BLANK",
+    "uncertainties": [
+      "Single-review comparison; not independent corroboration or exact chart digitization.",
+      "Russian wording/labels may repeat source or translation errors; see TC2_TRANSLATION_CONFLICT_REGISTER.json."
     ]
   }
 }

@@ -8,15 +8,16 @@
    Текст и OCR являются приватными промежуточными файлами и не входят в Git.
 2. `python tools/williams_master_inventory.py --source-dir <PDF_DIR>` с
    локальным OCR directory воспроизводит реестр; `review_notes.json` сохраняет
-   ручные receipts (сейчас698) и не выдаёт их за независимую сертификацию.
+   ручные receipts (сейчас724) и не выдаёт их за независимую сертификацию.
 3. `python tools/audit_williams_master_research.py --require-complete` должен
    завершаться2, пока source/figure/implementation/Device gates не завершены.
    Успех integrity CLI без этого флага означает только валидный реестр.
-4. Статус13.11: TC2_EN257/257, TC1_RU140/140, NTD_RU156/156 и
+4. Статус14.11: TC2_EN257/257, TC1_RU140/140, NTD_RU156/156 и
    Course122/122 имеют первое текстовое/OCR чтение предоставленного файла.
-   Полные визуальные/независимые проверки и межпереводные page maps не завершены.
-   Следующий source route — непрочитанные страницы двух переводовTC2 и полная
-   смысловая page map. Course external tutorial/Computorial отсутствуют вPDF;
+   Глава12 сопоставлена с обоими переводами. Структурная карта всех795 листов
+   TC2 готова, но не заменяет чтение/смысловую карту;68 heading crops отдельно.
+   Следующий source route — технические главы8–11, затем оставшиеся489 страниц
+   двух переводовTC2 и полная смысловая page map. Course external tutorial/Computorial отсутствуют вPDF;
    первое чтение122 физических листов не закрывает этот пробел.
 5. Независимое повторное чтение сложных9.10/10.7/11.2/11.7/12.1-4. Не
    реконструировать точные OHLC из нечисленных рисунков; отдельные synthetic cases.
@@ -178,3 +179,31 @@ guard отклоняет такой sizing до quantity normalization. Коне
 static0failures/11existing warnings. Source counters698/190/143/147 и все
 старые acquisition hashes не менялись; complete gate остаётсяexit2.
 Следующие этапы и запрет main merge из предыдущей контрольной точки сохранены.
+
+## Продолжение14.11.2026 — структураTC2 и глава12
+
+Отчёт `TC2_TRANSLATION_CH12_CONTINUATION_20261114.md`. Навигационная карта
+`TC2_EDITION_STRUCTURE_MAP.json` покрывает все795 физических листов трёх TC2,
+но68 heading crops не засчитываются как полное чтение страниц. Все32 листа
+Chapter12 двух переводов сопоставлены с English174–187; новых receipts26,
+итого724/1213,216 visual,157 qualitative figure entries,16 selected anchors.
+147 rules/142 source-rechecked/4 atomic specs/independent0 сохранены.
+
+Три видимых расхождения перевода/подписей и три caveats закреплены6 records.
+Short bearish geometry и положительный buy-stop tick offset не заменены
+ошибочными Russian labels. AO code PDF247 относится к Appendix7; старое
+указание Appendix3 исправлено в наших реестрах. Production trading path не менялся.
+Gold47100/14660 сравнивает разные4/13контрактов, не equal-risk return;
+Costco9.30/9.29 при approximate prices не стал сертифицированным erratum/net.
+
+Новый audit/37 regression cases не допускают ложной полноты, подмены headings
+за full-page review или выдуманной пятой profit row. Полный Python2495 passed,
+2 skipped/4existing warnings,39.04s;ruff/releasePASS,static0failures/11warnings.
+1091 non-Course rows воспроизведены,1213 acquisition identities сохранены;
+master/translation complete gates ожидаемоexit2. Новый exact-head CI — вPR240.
+
+Следующий source route: полная смысловая сверка технических глав8–11 двух
+переводов, затем оставшиеся главы/приложения (489 непрочитанных физических листов).
+Независимые figures/atomic specs, aggregate half-margin ledger/final-submit,
+expert cohort/holdout и actual signed Demo/physical Android остаются открыты.
+Main и отдельный Williams-AI не изменены. Не объединять старые PR пачкой.

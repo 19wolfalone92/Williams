@@ -7,6 +7,11 @@ import json
 from pathlib import Path
 import re
 
+if __package__:
+    from .audit_tc2_translation import audit as audit_tc2_translation
+else:
+    from audit_tc2_translation import audit as audit_tc2_translation
+
 ROOT=Path(__file__).resolve().parents[1]
 STAGES={'IMAGE_ONLY_PENDING_OCR','OCR_ACQUIRED_UNVERIFIED','TEXT_ACQUIRED_UNVERIFIED',
         'REVIEWED_TEXT_ONLY','REVIEWED_SINGLE_PASS','VERIFIED'}
@@ -146,6 +151,8 @@ def audit(root=ROOT):
                 or entry['derived_ocr_characters']<0
                 or (entry['derived_ocr_characters']==0 and receipt.get('visual_review') is not True)):
             errors.append('COURSE_REVIEW_OCR_UNSUPPORTED_REVIEW_METHOD')
+    tc2=audit_tc2_translation(root)
+    errors.extend(tc2['errors'])
     certified=sum(p['verification_status']=='VERIFIED' for p in pages)
     reviewed=sum(p['verification_status'].startswith('REVIEWED') for p in pages)
     counts=Counter(p['verification_status'] for p in pages)
@@ -172,8 +179,13 @@ def audit(root=ROOT):
         'per_source':per_source},
       'figure_coverage':{'qualitative_single_review_entries':len(figures),
         'independent_second_reviews':0,'total_substantive_figures':None,'percent':None},
-      'source_conflicts':{'visible_single_review_entries':len(conflict_ids),
+      'translation_alignment':{**tc2['structure'],
+        'selected_semantic_anchors':len(crosswalk['anchors']),
+        'chapter12_comparison_records':tc2['chapter12_comparison_records'],
+        'full_translation_certified':False},
+      'source_conflicts':{'visible_single_review_entries':len(conflict_ids)+tc2['chapter12_comparison_records'],
         'per_source':conflicts_per_source,
+        'cross_edition_TC2':tc2['chapter12_comparison_records'],
         'independent_second_reviews':0,'unseen_original_english_errata_certified':False},
       'rule_extraction':{'registered':len(ids),'rechecked_against_sources_this_run':sum(r['source_reviewed_this_run'] for r in registry['rules']),
         'total_rules_in_books':None,'percent':None},

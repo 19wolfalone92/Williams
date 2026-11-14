@@ -1,0 +1,1195 @@
+{
+  "schema": "TC2_EDITION_STRUCTURE_MAP_V1",
+  "scope": "PHYSICAL_SECTION_INTERVALS_ONLY",
+  "canonical_units": [
+    {
+      "unit_id": "CH01",
+      "topic": "Market perception"
+    },
+    {
+      "unit_id": "CH02",
+      "topic": "Chaos theory"
+    },
+    {
+      "unit_id": "CH03",
+      "topic": "Underlying structure"
+    },
+    {
+      "unit_id": "CH04",
+      "topic": "Preparing to trade"
+    },
+    {
+      "unit_id": "CH05",
+      "topic": "Trader consciousness"
+    },
+    {
+      "unit_id": "CH06",
+      "topic": "Super-natural trade/vesting"
+    },
+    {
+      "unit_id": "CH07",
+      "topic": "Navigation and learning"
+    },
+    {
+      "unit_id": "CH08",
+      "topic": "Alligator"
+    },
+    {
+      "unit_id": "CH09",
+      "topic": "First Wise Man"
+    },
+    {
+      "unit_id": "CH10",
+      "topic": "Second Wise Man"
+    },
+    {
+      "unit_id": "CH11",
+      "topic": "Third Wise Man"
+    },
+    {
+      "unit_id": "CH12",
+      "topic": "Combining Wise Men and managing campaigns"
+    },
+    {
+      "unit_id": "CH13",
+      "topic": "Psychological recovery"
+    },
+    {
+      "unit_id": "EPILOGUE",
+      "topic": "Epilogue"
+    },
+    {
+      "unit_id": "APPENDIX1",
+      "topic": "Checklists"
+    },
+    {
+      "unit_id": "APPENDIX2",
+      "topic": "Frequently asked questions"
+    },
+    {
+      "unit_id": "APPENDIX3",
+      "topic": "Autogenic training"
+    },
+    {
+      "unit_id": "APPENDIX4",
+      "topic": "Investor’s Dream setup"
+    },
+    {
+      "unit_id": "APPENDIX5",
+      "topic": "CQG setup"
+    },
+    {
+      "unit_id": "APPENDIX6",
+      "topic": "MetaStock setup"
+    },
+    {
+      "unit_id": "APPENDIX7",
+      "topic": "TradeStation setup and indicator source code"
+    },
+    {
+      "unit_id": "BIBLIOGRAPHY",
+      "topic": "Bibliography"
+    },
+    {
+      "unit_id": "INDEX",
+      "topic": "Subject index"
+    }
+  ],
+  "editions": [
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "physical_pages": 257,
+      "segments": [
+        {
+          "unit_id": "FRONT_MATTER",
+          "pdf_span": [
+            1,
+            29
+          ],
+          "relation": "EDITION_SPECIFIC_PARATEXT_NOT_SEMANTICALLY_ALIGNED",
+          "heading_review": null
+        },
+        {
+          "unit_id": "CH01",
+          "pdf_span": [
+            30,
+            41
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 30,
+            "acquired_text_sha256": "dfe1da37418697fd20b64c2da6b8a3c8881288869d0fa6f588a013062c25b6ff",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH02",
+          "pdf_span": [
+            42,
+            55
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 42,
+            "acquired_text_sha256": "1ca64ad6de368897f693345a9b5c974e6cdd4512dffdda2e65bde92ad1fc2c45",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH03",
+          "pdf_span": [
+            56,
+            65
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 56,
+            "acquired_text_sha256": "2d0a0231569c0c675b3bd7c6b8f9dfd6749ce1cf4a56b3601e6883dd0754a6c4",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH04",
+          "pdf_span": [
+            66,
+            79
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 66,
+            "acquired_text_sha256": "76cd1293b83fe9b145207c51fb8813057a3432ba6b7ca91444c2baedcf53b460",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH05",
+          "pdf_span": [
+            80,
+            87
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 80,
+            "acquired_text_sha256": "e9508ec3937c34fd747435f34d6eb57e1beb6b09d2ae9ba884fdec11ef0cd2a5",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH06",
+          "pdf_span": [
+            88,
+            115
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 88,
+            "acquired_text_sha256": "b3e613e29053aafa7557beaf7de6ecd2165e6afee5e67fd26b36e426ccb7c3a8",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH07",
+          "pdf_span": [
+            116,
+            123
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 116,
+            "acquired_text_sha256": "c14f9520cf6060a170cbc59e3dbf872f447485e7d8fc9182e0d0f41b82e576b4",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH08",
+          "pdf_span": [
+            124,
+            137
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 124,
+            "acquired_text_sha256": "964bb3c37e4d1fddd09bbb215f821fe183db6ac110b7e074957f960a3f7de11f",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH09",
+          "pdf_span": [
+            138,
+            153
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 138,
+            "acquired_text_sha256": "f20878c51f1038d52e976cce2ed03d232b47e03f4df1115d049d7db97c5c6be2",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH10",
+          "pdf_span": [
+            154,
+            163
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 154,
+            "acquired_text_sha256": "4bbe3d89806112aed56d5332c35bdbfad16bcc8ecf1309092e46fc65b18d90b7",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH11",
+          "pdf_span": [
+            164,
+            173
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 164,
+            "acquired_text_sha256": "59a0beaed336b42f4cf48f1ef5fb532f087d443df0cb27c351bc7d96386e2cd7",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH12",
+          "pdf_span": [
+            174,
+            187
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 174,
+            "acquired_text_sha256": "718a9f65e5c91886cb52b7bbecbb1d8db962e00daf8800af9c5817afe5f72408",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH13",
+          "pdf_span": [
+            188,
+            197
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 188,
+            "acquired_text_sha256": "fde900d4014fbceadf13d3184503f26d952956c3942765bbc5677cb8b3315abb",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "EPILOGUE",
+          "pdf_span": [
+            198,
+            199
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 198,
+            "acquired_text_sha256": "4cb15542c155ff16b4543f9823d1abe35b252906bc099104b9e157ac805f115d",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX1",
+          "pdf_span": [
+            200,
+            205
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 200,
+            "acquired_text_sha256": "95f7fc6ff8e712505fda22aefa5f057d0ce335068e52fcff105c8787914f5f1d",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX2",
+          "pdf_span": [
+            206,
+            215
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 206,
+            "acquired_text_sha256": "939183ebfde08aabcef973eed8cdf38f5ce51f2077bc42277220743e12533787",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX3",
+          "pdf_span": [
+            216,
+            223
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 216,
+            "acquired_text_sha256": "72961ab53816efa9ae8a683b60714877ec1127132e55490e1162a1722ca74852",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX4",
+          "pdf_span": [
+            224,
+            227
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 224,
+            "acquired_text_sha256": "d2b30772356caaa4bfb8b0aab54b9347b56f57bf57a5e9b4e3840b64c15e4c60",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX5",
+          "pdf_span": [
+            228,
+            231
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 228,
+            "acquired_text_sha256": "9c4f1ef999cbf2881824946f32a32c6fa50f365fee7d457454d9b8802bd520fc",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX6",
+          "pdf_span": [
+            232,
+            239
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 232,
+            "acquired_text_sha256": "59c25ff2288fba64d16dc1ab34e29ead2c747dc70bc625027918903c88778a67",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX7",
+          "pdf_span": [
+            240,
+            247
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 240,
+            "acquired_text_sha256": "11743a11485729f44687c7a0dfe2c4e7dfc3db59c47b3a3c335b3e4c639f401f",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "BIBLIOGRAPHY",
+          "pdf_span": [
+            248,
+            253
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 248,
+            "acquired_text_sha256": "9a6f71a626a95179056f9f5d953cd6f14d01262497990a3bf16b018042af48f6",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "INDEX",
+          "pdf_span": [
+            254,
+            257
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 254,
+            "acquired_text_sha256": "f1ba5b7b7c62ab5a2d84919bb919be17d5141eaaa68031dc1050729d715f547e",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        }
+      ],
+      "absent_units": [],
+      "absence_scope": "SUPPLIED_FILE_ONLY",
+      "absence_note": null
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "physical_pages": 224,
+      "segments": [
+        {
+          "unit_id": "FRONT_MATTER",
+          "pdf_span": [
+            1,
+            15
+          ],
+          "relation": "EDITION_SPECIFIC_PARATEXT_NOT_SEMANTICALLY_ALIGNED",
+          "heading_review": null
+        },
+        {
+          "unit_id": "CH01",
+          "pdf_span": [
+            16,
+            27
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 16,
+            "acquired_text_sha256": "6cce00ec9c193d01258906c921d5f63a4679a25d689b6d541e9941bade43fe80",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH02",
+          "pdf_span": [
+            28,
+            40
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 28,
+            "acquired_text_sha256": "57be0c1c4326252155ec77c508da21267e9c53136c7ef0c8724b87399f7d310d",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH03",
+          "pdf_span": [
+            41,
+            49
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 41,
+            "acquired_text_sha256": "3b6d1819d7ee078b377c0bd403ba0dbce03011bfe15712bd7dc26bea28dece3a",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH04",
+          "pdf_span": [
+            50,
+            62
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 50,
+            "acquired_text_sha256": "c504902b4b1a8bfd5024ce2e8423149b8a08329e33a3606b2259bbe368d2be11",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH05",
+          "pdf_span": [
+            63,
+            71
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 63,
+            "acquired_text_sha256": "0f0198c9525232ec41a07c42a297811d581e6200f37c69d24c44c4133a336e58",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH06",
+          "pdf_span": [
+            72,
+            97
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 72,
+            "acquired_text_sha256": "10cf05e1e6cf0c6461b274dfd207f3fdbb858841566cb90ba605707d014d1ab4",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH07",
+          "pdf_span": [
+            98,
+            106
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 98,
+            "acquired_text_sha256": "eae8a7ae6625556001a35a09ac8685c89013fd6ff4207a73aa27559b2d7671ca",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH08",
+          "pdf_span": [
+            107,
+            119
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 107,
+            "acquired_text_sha256": "4729787192e76647e74175d04dd381b2f4c473b1f859b033b2ffbac3f5ac9927",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH09",
+          "pdf_span": [
+            120,
+            134
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 120,
+            "acquired_text_sha256": "51bc71e5e4789963af702b232ab8e31030f26c9af8694d8a73e4f425a9ee6f0e",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH10",
+          "pdf_span": [
+            135,
+            143
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 135,
+            "acquired_text_sha256": "eb4943e3ded3a3a3dc036d4eb3942becbbd53850a209992abca8b43bc2bdb0f8",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH11",
+          "pdf_span": [
+            144,
+            152
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 144,
+            "acquired_text_sha256": "3f796b7ded1c75aa2b9022fb83595789d7725e5d3ce12b40ea1cde91005dd6ba",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH12",
+          "pdf_span": [
+            153,
+            166
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 153,
+            "acquired_text_sha256": "73bb5533900551e109fb109268d4f43e5b435b1226d26dc2c7fec9e93277d6b0",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH13",
+          "pdf_span": [
+            167,
+            176
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 167,
+            "acquired_text_sha256": "82eff809384921f59a5102aa2d8300b6f738f6ab4c9071521d42f1c89ccefe05",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "EPILOGUE",
+          "pdf_span": [
+            177,
+            178
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 177,
+            "acquired_text_sha256": "df2f36346b99d182c22252ca77d358345c0d2e3b69ee1bfadd659718c4776a34",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX1",
+          "pdf_span": [
+            179,
+            183
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 179,
+            "acquired_text_sha256": "b5196107de17173ea9963450eac63def4b678f79cdeacaa30cdd91481c4c8090",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX2",
+          "pdf_span": [
+            184,
+            194
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 184,
+            "acquired_text_sha256": "374ec1c93bbb46c3583b13e0222cbd35f8a1c6837730f0520841fa7f96f24fd2",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX3",
+          "pdf_span": [
+            195,
+            202
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 195,
+            "acquired_text_sha256": "b23825f7b2d9f2a2379a4935e10ebf6628701871361378ef801247fae4cb3c83",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX4",
+          "pdf_span": [
+            203,
+            205
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 203,
+            "acquired_text_sha256": "d8ab7cf0f3fe091405484b817eb01d791d12ea955d4f35a11716d3ecf4473b13",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX5",
+          "pdf_span": [
+            206,
+            209
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 206,
+            "acquired_text_sha256": "e6d7ac1cc6504f68f0fbcc814f66c409a043c4aaa40ccd3055a80b15b8a9fc16",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX6",
+          "pdf_span": [
+            210,
+            217
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 210,
+            "acquired_text_sha256": "755467af941c90b33ae96d18c07fc44e9479915f77a065d7578e62ec64898ae2",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX7",
+          "pdf_span": [
+            218,
+            224
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 218,
+            "acquired_text_sha256": "8c6a8e961abf90be6e578698ee99a88be9102cc77c3c2b212dd694bdd2f6c533",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        }
+      ],
+      "absent_units": [
+        "BIBLIOGRAPHY",
+        "INDEX"
+      ],
+      "absence_scope": "SUPPLIED_FILE_ONLY",
+      "absence_note": "Supplied224-page file ends within Appendix7 source code; reason for absent bibliography/index is unknown."
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "physical_pages": 314,
+      "segments": [
+        {
+          "unit_id": "FRONT_MATTER",
+          "pdf_span": [
+            1,
+            22
+          ],
+          "relation": "EDITION_SPECIFIC_PARATEXT_NOT_SEMANTICALLY_ALIGNED",
+          "heading_review": null
+        },
+        {
+          "unit_id": "CH01",
+          "pdf_span": [
+            23,
+            38
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 23,
+            "acquired_text_sha256": "3d4c069bc899fd584f0b18572c5ec9759230446233fbd2a0e0fa9e695dc95359",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH02",
+          "pdf_span": [
+            39,
+            54
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 39,
+            "acquired_text_sha256": "61ca3ecbe6baa348acc94cd7e901a826e44ecd07f9671ef82e59168e0d2a5f24",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH03",
+          "pdf_span": [
+            55,
+            66
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 55,
+            "acquired_text_sha256": "be8f9835b8481799d3c8864e1bb1d277b7504bbba4b0f140a126b3f7d1334d61",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH04",
+          "pdf_span": [
+            67,
+            84
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 67,
+            "acquired_text_sha256": "1832dcf7d6a6374d5f85cf662bf966c1c645de6c3d0cfd4405068c4db3580dd1",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH05",
+          "pdf_span": [
+            85,
+            96
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 85,
+            "acquired_text_sha256": "c9e4a4a74ff7117e7731503c07f975289eb9e662fa76a2e5eb0154f0ad609e37",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH06",
+          "pdf_span": [
+            97,
+            130
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 97,
+            "acquired_text_sha256": "8f3d513be0cb2daccc1d521832fc7af50ae09e94881b0bbcdffbca00c2de49ec",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH07",
+          "pdf_span": [
+            131,
+            142
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 131,
+            "acquired_text_sha256": "b4658f57076f539d9e0279f547b7fdef3129ad8d2dc12211d60475378663abf7",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH08",
+          "pdf_span": [
+            143,
+            158
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 143,
+            "acquired_text_sha256": "c719a4aed7c6ff71530ec448077334d31b04f80da948e88060ff54bfe18a6158",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH09",
+          "pdf_span": [
+            159,
+            176
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 159,
+            "acquired_text_sha256": "e1569ae52a4bf3dc50edee7345c6b29451770c5f851a4dbc3e13c8c03cde6e4c",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH10",
+          "pdf_span": [
+            177,
+            188
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 177,
+            "acquired_text_sha256": "71ec0df2698391f6d5e4167f3a41d852208a0d1a05f0fb5fd263c1c6ad88d610",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH11",
+          "pdf_span": [
+            189,
+            200
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 189,
+            "acquired_text_sha256": "e65f424d344f4c02494e0ee1b4f2922181da3f3012bb1a5588fb94acdd4de3f8",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH12",
+          "pdf_span": [
+            201,
+            218
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 201,
+            "acquired_text_sha256": "732605c5e93d94d64cf3512e74d9e7f46298a098bcf3742f3bc9ca6781097767",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "CH13",
+          "pdf_span": [
+            219,
+            232
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 219,
+            "acquired_text_sha256": "41c35622349ac5effb546ff7b3ef4bc0fa539bf9f3164914e188758d22ac5cbc",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "EPILOGUE",
+          "pdf_span": [
+            233,
+            236
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 233,
+            "acquired_text_sha256": "5b67ffaef49d9422ed9c962fa8dad3fad3af6630b6e5465cda3f8c4d8bafceff",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX1",
+          "pdf_span": [
+            237,
+            244
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 237,
+            "acquired_text_sha256": "cf8a72d16de73799aae4aefc10f0431f73c940ce1a016fd4e6d5f491a336f6e6",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX2",
+          "pdf_span": [
+            245,
+            258
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 245,
+            "acquired_text_sha256": "a3a5b2d5ac709e1d9b47c606c7fdd39183fee02167c87b92f228bad8fafccff1",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX3",
+          "pdf_span": [
+            259,
+            270
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 259,
+            "acquired_text_sha256": "8ac676d331d4b5e7f8f4f5604199063bfc87829fb258a4081eaa573cdeaa1dd3",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX4",
+          "pdf_span": [
+            271,
+            276
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 271,
+            "acquired_text_sha256": "1875565be3152d9b7444de92cf432f306a226a7a90a3674f44019034c9437b44",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX5",
+          "pdf_span": [
+            277,
+            282
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 277,
+            "acquired_text_sha256": "2b41fd9ec7b9763b8ddb77f26e31205b86c67da9b897b7a46422a9d11f122ab3",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX6",
+          "pdf_span": [
+            283,
+            292
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 283,
+            "acquired_text_sha256": "03812061ba57e8bf9b027d9ebca0e6164dfc0e6b9bfc7aeaa5f94a56e712e55d",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "APPENDIX7",
+          "pdf_span": [
+            293,
+            302
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 293,
+            "acquired_text_sha256": "6fcbf17c18071a0dafb1f6681ca82039422aa0bdb9a2e120a2c55f4ade073f40",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "BIBLIOGRAPHY",
+          "pdf_span": [
+            303,
+            308
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 303,
+            "acquired_text_sha256": "6d5ba608f97d3d58f1b062292a42a41bbbb68e499ee907e09eb5e62612fba581",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "INDEX",
+          "pdf_span": [
+            309,
+            310
+          ],
+          "relation": "CORRESPONDING_SECTION_NOT_PAGE_BIJECTION",
+          "heading_review": {
+            "pdf_page": 309,
+            "acquired_text_sha256": "a99038d5686bf4eac79832a8c42e37511e26e97b5a6b134eaeb70db280e8bfe5",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          }
+        },
+        {
+          "unit_id": "PUBLISHER_PARATEXT",
+          "pdf_span": [
+            311,
+            314
+          ],
+          "relation": "EDITION_SPECIFIC_PARATEXT_NOT_SEMANTICALLY_ALIGNED",
+          "heading_review": {
+            "pdf_page": 311,
+            "acquired_text_sha256": "e4a58d184ec68a6a3e73398d1a6e670fd49a38acbf301a04bf7c3ce7aa6b6030",
+            "scope": "TOP_49_PERCENT_HEADING_CROP_ONLY",
+            "rendered_heading_checked": true,
+            "full_page_reading_claimed": false
+          },
+          "note": "Sponsor advertising311-312, visually blank313 and image-only back cover314. The empty text layer at314 is not a blank page."
+        }
+      ],
+      "absent_units": [],
+      "absence_scope": "SUPPLIED_FILE_ONLY",
+      "absence_note": null
+    }
+  ],
+  "physical_section_partition_complete": true,
+  "semantic_alignment_complete": false,
+  "page_bijection_claimed": false,
+  "constant_offset_claimed": false,
+  "all_pages_read_claimed": false,
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false,
+  "limits": [
+    "Intervals include intervening title/blank/separator pages; not every page contains substantive text.",
+    "Front matter and publisher paratext have no asserted one-to-one translation.",
+    "Russian copies share substantial wording and visible errors; agreement is not independent corroboration.",
+    "Source/heading hashes prove identity, not semantic equivalence; single-review manual boundaries require independent review."
+  ]
+}

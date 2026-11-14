@@ -24,7 +24,7 @@ def test_english_first_pass_does_not_certify_other_books_or_independent_review()
     assert english['first_pass_receipts']==257
     assert english['independently_verified']==0
     assert not english['full_content_certified']
-    assert english['classified_page_kinds']['VISUALLY_CONFIRMED_BLANK']==11
+    assert english['classified_page_kinds']['VISUALLY_CONFIRMED_BLANK']==12
     assert not coverage['per_source']['TC2_RU_224']['all_physical_pages_have_first_pass_receipts']
 
 

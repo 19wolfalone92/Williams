@@ -3901,7 +3901,7 @@
       ],
       "FIGURE": [],
       "CLASSIFICATION": "CONTRADICTED",
-      "ORIGINAL_MEANING": "Figure10.1 prints (H-L)/2 but author EasyLanguage source in appendix3 PDF247 explicitly specifies (H+L)/2, SMA5-SMA34; retain median-price implementation and document typesetting contradiction.",
+      "ORIGINAL_MEANING": "Figure10.1 prints (H-L)/2 but author EasyLanguage source in appendix7 PDF247 explicitly specifies (H+L)/2, SMA5-SMA34; retain median-price implementation and document typesetting contradiction.",
       "MARKET_CONTEXT": "Research/crosscheck, no order authority.",
       "PRECONDITIONS": "Closed observations with honest source provenance.",
       "REQUIRED_DATA": [
@@ -3919,7 +3919,7 @@
       "EXIT_CONDITIONS": "No authority",
       "EXCEPTIONS": [],
       "CONFLICTS": [
-        "TC2_EN155_fig10.1 versus TC2_EN247_appendix3"
+        "TC2_EN155_fig10.1 versus TC2_EN247_appendix7"
       ],
       "CONFIDENCE": "SAME_EDITION_CODE_AND_RENDER_CHECKED_SINGLE_REVIEW",
       "IMPLEMENTATION_STATUS": "ADJUDICATED_BY_SAME_EDITION_AUTHOR_SOURCE_CODE",
