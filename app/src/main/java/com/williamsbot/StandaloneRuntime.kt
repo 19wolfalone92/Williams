@@ -1277,9 +1277,11 @@ internal fun reflectedTc2SetupContext(
         JSONObject(originalContext)
     }
     context.optJSONObject("angulation")?.let { proof ->
-        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope",
+            "departure_price_slope","departure_jaw_slope","departure_teeth_slope")) {
             if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
         }
+        if(proof.has("price_edge")) proof.put("price_edge","LOW")
     }
     // SHORT uses a reflected price/AO sequence. Convert BOTH colour and
     // its diagnostic reason back into actual exchange-candle coordinates.
