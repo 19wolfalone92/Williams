@@ -469,11 +469,19 @@ class CockpitDiagnosticsTest {
 
     @Test fun scannerBlockedAndCoordinatorBlockedAreDifferentFromTechnicalReadiness() {
         val s = healthy().put("scanner_state", "READY_BLOCKED")
+            .put("scanner_last_scan_at",now-1690L)
         val c = coordinator().put("ready_for_new_entry", false)
             .put("blocker", "exchange_confirmed_pending_entry_or_fill_not_yet_resolved")
         val r = CockpitDiagnostics.readiness(s, c, now)
         assertTrue(r.getBoolean("technical_ready"))
         assertFalse(r.getBoolean("new_entries_allowed"))
+        assertTrue(r.getBoolean("scanner_last_complete_analysis_fresh"))
+        assertFalse(CockpitDiagnostics.readiness(
+            s.put("scanner_last_scan_at",now+1L),c,now)
+            .getBoolean("scanner_last_complete_analysis_fresh"))
+        assertFalse(CockpitDiagnostics.readiness(
+            s.put("scanner_last_scan_at",now-120_001L),c,now)
+            .getBoolean("scanner_last_complete_analysis_fresh"))
         assertTrue(r.getString("new_entries_reason").contains("исполнение"))
     }
     @Test fun diagnostic3TwoUnfilledShortAlgosNeedFreshReconciliationNotPrematureSL() {

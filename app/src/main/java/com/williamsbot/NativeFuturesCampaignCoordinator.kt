@@ -4797,6 +4797,9 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("liquidation_guard_audited_at_ms", item.opt("liquidation_guard_audited_at_ms") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
                     .put("confirmed_position_qty", item.opt("confirmed_position_qty") ?: JSONObject.NULL)
+                    // Last completed position observation stays a fact during
+                    // the next refresh; this projection never grants admission.
+                    .put("execution_observation",williamsEntryExecutionObservation(item,now,true))
                     .put("actual_entry_price", item.opt("actual_entry_price") ?: JSONObject.NULL)
                     .put("client_id_suffix", item.optString("client_id").takeLast(8))
                     .put("order_status", orderStatus)

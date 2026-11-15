@@ -34,6 +34,41 @@ class WilliamsEntryPassportTest {
         assertEquals(now-500,chain.getLong("last_reconciled_ms"))
     }
 
+    @Test fun diagnostic19OwnedPositionIsNotHiddenByTheSavedNewZeroAlgoResponse() {
+        val row=owner().put("order_status","NEW").put("executed_qty","0")
+            .put("confirmed_position_qty","329")
+        val p=view(rows=JSONArray().put(row))
+        assertEquals("POSITION_RECONCILED",p.getString("state"))
+        val observation=p.getJSONObject("execution_observation")
+        assertEquals("OWNED_POSITION_RECONCILED",observation.getString("position_observation"))
+        assertEquals("329",observation.getString("confirmed_position_qty"))
+        assertEquals("EXACT_FILL_NOT_VERIFIED",observation.getString("order_fill_observation"))
+        assertFalse(observation.getBoolean("exact_entry_fill_verified"))
+        assertFalse(observation.getBoolean("can_place_orders"))
+        assertEquals("NEW",p.getJSONObject("order").getString("order_status"))
+        assertEquals("0",row.getString("executed_qty"))
+    }
+
+    @Test fun oldUnownedClosedOrParentQuantityCannotBecomeAnEntryFill() {
+        val row=owner().put("order_status","NEW").put("executed_qty","0")
+            .put("confirmed_position_qty","329")
+        val invalid=listOf(row.toString()).flatMap { listOf(
+            JSONObject(it).put("last_reconciled_ms",now-30_001),
+            JSONObject(it).put("last_reconciled_ms",now+1),
+            JSONObject(it).put("strategy_ownership_verified",false),
+            JSONObject(it).put("campaign_status","CLOSED_OR_STOPPED"),
+            JSONObject(it).put("intent_role","ADD_ON"),
+            JSONObject(it).put("confirmed_position_qty","NaN")) }
+        for(candidate in invalid) {
+            val observation=williamsEntryExecutionObservation(candidate,now,true)
+            assertEquals("NOT_VERIFIED",observation.getString("position_observation"))
+            assertTrue(observation.isNull("confirmed_position_qty"))
+            assertFalse(observation.getBoolean("exact_entry_fill_verified"))
+        }
+        assertEquals("NOT_VERIFIED",williamsEntryExecutionObservation(row,now,false)
+            .getString("position_observation"))
+    }
+
     @Test fun anotherPairSideSourceSignalOrDuplicateCannotLendItsStop() {
         for((key,value) in listOf("symbol" to "ETHUSDT","direction" to "SHORT",
             "strategy_profile" to williamsNtdProfile,"signal_id" to "other","client_id" to "other")) {

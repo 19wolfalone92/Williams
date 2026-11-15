@@ -12852,6 +12852,8 @@ private class NativeEngine(
                 "; подтверждённые соответствия="+signedStopJoin.optInt("signed_stop_matched_count")+
                 "; неразрешённые="+signedStopJoin.optInt("unresolved_position_count")+
                 "; неоднозначные="+signedStopJoin.optInt("ambiguous_proof_count")+
+                "; совпадение стороны/количества/цены="+signedStopJoin.optInt("observed_tuple_matched_count")+
+                "; ожидают завершения сверки="+signedStopJoin.optInt("reconciliation_pending_count")+
                 ". Это наблюдательное сравнение двух кешированных signed снимков, " +
                 "НЕ допуск к новым входам и НЕ доказательство STOP с момента FILLED."))
         val scannerEvidenceSnapshot = scannerSnapshot()

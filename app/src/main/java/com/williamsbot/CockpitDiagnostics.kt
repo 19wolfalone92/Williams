@@ -30,7 +30,7 @@ internal object CockpitDiagnostics {
         // Actual orders are still restricted by the coordinator, 90s signed
         // REST proof, real H1 candidate, risk limits and final transport guard.
         val scannerState = status.optString("scanner_state")
-        val scannerReady = scannerState in setOf("READY","RUNNING") &&
+        val scannerReady = scannerState in setOf("READY","READY_BLOCKED","RUNNING") &&
             fresh(status.optLong("scanner_last_scan_at"), now, 120_000L)
         // The available NEW exposure budget is independent of the daily loss reset.
         // Accepted STOP entries reserve capital risk even before a position opens;

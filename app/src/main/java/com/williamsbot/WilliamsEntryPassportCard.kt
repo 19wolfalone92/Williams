@@ -30,6 +30,7 @@ internal fun WilliamsEntryPassportCard(passport:JSONObject) {
                 "SUBMISSION_OUTCOME_UNKNOWN" -> "Результат отправки неизвестен. Требуется сверка Binance."
                 "EXCHANGE_RECONCILED_AFTER_UNKNOWN" -> "Результат восстановлен по сверке Binance; исходный ответ не был подтверждён."
                 "INTENT_JOURNALED" -> "Заявка записана в журнал. Исполнение и защита показаны отдельно."
+                "POSITION_RECONCILED" -> "При последней сверке подтверждена открытая позиция этой кампании."
                 "ACCEPTED_UNVERIFIED" -> "Координатор принял запрос; соответствующая биржевая запись не подтверждена."
                 "JOURNAL_UNAVAILABLE" -> "Журнал исполнения недоступен; результат требует сверки."
                 else -> "Результат заявки требует сверки."
@@ -50,7 +51,16 @@ internal fun WilliamsEntryPassportCard(passport:JSONObject) {
                 val blocker=outcome?.optString("blocker").orEmpty()
                 if(blocker.isNotBlank()) Text(russianExecutionBlocker(blocker),style=MaterialTheme.typography.bodySmall)
                 val order=passport.optJSONObject("order")
-                if(order!=null) Text("Заявка: "+russianStatus(order.optString("order_status"))+
+                val executionObservation=passport.optJSONObject("execution_observation")
+                if(executionObservation?.optString("position_observation")=="OWNED_POSITION_RECONCILED") {
+                    Text("Подтверждённый объём позиции: "+value(executionObservation,"confirmed_position_qty")+
+                        " · сверка: "+cockpitTime(executionObservation.optLong("position_observed_at_ms")),
+                        style=MaterialTheme.typography.bodySmall)
+                    if(executionObservation.optString("order_fill_observation")=="EXACT_FILL_NOT_VERIFIED")
+                        Text("Точные исполнения исходной заявки ещё не восстановлены. Ответ NEW / 0 не означает отсутствия позиции.",
+                            style=MaterialTheme.typography.bodySmall)
+                }
+                if(order!=null) Text("Записанный ответ заявки: "+russianStatus(order.optString("order_status"))+
                     " · кампания: "+russianStatus(order.optString("campaign_status")),
                     style=MaterialTheme.typography.bodySmall)
                 val owner=passport.optJSONObject("protection_owner")

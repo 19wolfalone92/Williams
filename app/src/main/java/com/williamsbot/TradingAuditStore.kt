@@ -20,7 +20,8 @@ internal fun stopTrailDecisionAuditEvent(
     require(symbol.isNotBlank() && campaignId.isNotBlank() && recordedAtMs > 0L)
     require(direction == "LONG" || direction == "SHORT")
     require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
-        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED"))
+        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED",
+        "RECOVERY_COMPLETED"))
     require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
     require(evidence.optString("direction") == direction)
     if (phase == "REVIEW_DEFERRED")
@@ -29,19 +30,20 @@ internal fun stopTrailDecisionAuditEvent(
             "Deferred audit must preserve its actual refusal reason"
         }
     if (phase == "PROPOSED_BEFORE_MUTATION" || phase == "EXCHANGE_RESPONSE_OK" ||
-        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED") {
+        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED" ||
+        phase == "RECOVERY_COMPLETED") {
         require(evidence.optString("decision") == "PROPOSE_TIGHTEN_ONLY" &&
             evidence.optString("proposed_binance_protection_client_id").isNotBlank()) {
             "Stop mutation audit requires a traceable actual proposal and client ID"
         }
     }
-    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED") {
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED" || phase == "RECOVERY_COMPLETED") {
         require(exchangeOutcome != null && exchangeOutcome.optBoolean("ok") ==
-            (phase == "EXCHANGE_RESPONSE_OK")) {
+            (phase != "EXCHANGE_NOT_CONFIRMED")) {
             "Exchange status must agree with the signed coordinator response"
         }
     }
-    if (phase == "EXCHANGE_RESPONSE_OK") {
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "RECOVERY_COMPLETED") {
         val proposedId=evidence.getString("proposed_binance_protection_client_id")
         // Compare exact decimal strings submitted to Binance, not unrounded
         // IEEE-754 proposal doubles (e.g. DOGE 0.07687000000000001).
@@ -61,6 +63,23 @@ internal fun stopTrailDecisionAuditEvent(
             observedId==proposedId && (stop !is JSONObject ||
                 stop.optString("algoStatus",stop.optString("status")) in setOf("NEW","WORKING","ACCEPTED"))) {
             "An accepted receipt must reference the exact confirmed Binance stop ID and trigger"
+        }
+    }
+    if(phase=="RECOVERY_COMPLETED") {
+        val receipt=requireNotNull(exchangeOutcome)
+        val tx=requireNotNull(receipt.optJSONObject("replacement"))
+        require(receipt.optString("recovery_proof")=="PERSISTED_COORDINATOR_COMPLETION_NOT_CURRENT_SIGNED_GET" &&
+            receipt.optLong("original_proposal_event_id")>0L &&
+            receipt.optLong("original_unconfirmed_event_id")>receipt.optLong("original_proposal_event_id") &&
+            tx.optString("phase")=="COMPLETED" &&
+            tx.optString("final_outcome") in setOf("ACKNOWLEDGED","SUBMISSION_UNKNOWN") &&
+            tx.optString("new_id")==evidence.optString("proposed_binance_protection_client_id") &&
+            tx.optString("new_stop").toBigDecimalOrNull()?.compareTo(
+                receipt.optString("stop").toBigDecimalOrNull())==0 &&
+            tx.optLong("created_at_ms")>0L && tx.optLong("resolved_at_ms") in tx.optLong("created_at_ms")..recordedAtMs &&
+            receipt.optLong("recovery_completed_at_ms")==tx.optLong("resolved_at_ms") &&
+            receipt.opt("can_place_orders")==false && receipt.opt("can_manage_stops")==false) {
+            "Recovery needs exact completed coordinator evidence and original decision identities"
         }
     }
     if (phase == "EXCHANGE_EXCEPTION_UNVERIFIED")
@@ -142,7 +161,7 @@ internal const val COCKPIT_INCIDENT_TRIM_SQL =
     "DELETE FROM events WHERE event_type = 'COCKPIT_INCIDENT' AND id NOT IN (SELECT id FROM events WHERE event_type = 'COCKPIT_INCIDENT' ORDER BY id DESC LIMIT 100)"
 
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 6) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
@@ -283,6 +302,7 @@ class TradingAuditStore(context: Context) :
             val fingerprint = fields.joinToString("|") { item.optString(it) }
             val previouslyObserved = lastCampaignObservations.containsKey(id)
             recordChangedCampaignObservation(lastCampaignObservations,id,fingerprint) {
+            recordStopTrailRecovery(item)
             val audit = CockpitDiagnostics.lifecycleAudit(item)
             val lifecycle = campaignLifecycleStatus(item)
             val severity = audit.optString("severity")
@@ -304,6 +324,46 @@ class TradingAuditStore(context: Context) :
             }
             }
         }
+    }
+
+    /** Completion and its unique marker commit together. A failed append is
+     * retried on the next observation; restarts cannot duplicate a recovery. */
+    private fun recordStopTrailRecovery(owner:JSONObject) {
+        val tx=owner.optJSONObject("last_native_stop_replacement") ?: return
+        if(tx.optString("phase")!="COMPLETED" || owner.has("native_stop_replacement") ||
+            owner.optString("strategy_profile")!=williamsTc2Profile ||
+            owner.optString("protection_status")!="PROTECTED") return
+        val campaignId=owner.optString("client_id")
+        val newId=tx.optString("new_id")
+        if(campaignId.isBlank() || newId.isBlank()) return
+        val db=writableDatabase
+        db.beginTransaction()
+        try {
+            db.query("stop_trail_recovery_receipts",arrayOf("recovery_event_id"),
+                "campaign_id=? AND protection_client_id=?",arrayOf(campaignId,newId),
+                null,null,null,"1").use { if(it.moveToFirst()) return }
+            val prior=JSONArray()
+            db.query("events",arrayOf("id","raw_json"),
+                "event_type=? AND instr(raw_json,?)>0 AND instr(raw_json,?)>0",
+                arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1",
+                    "\"campaign_id\":"+JSONObject.quote(campaignId),
+                    "\"proposed_binance_protection_client_id\":"+JSONObject.quote(newId)),
+                null,null,"id ASC").use { cursor ->
+                while(cursor.moveToNext()) prior.put(JSONObject(cursor.getString(1))
+                    .put("audit_event_id",cursor.getLong(0)))
+            }
+            val event=williamsStopTrailRecoveryEvent(owner,prior,System.currentTimeMillis()) ?: return
+            val eventId=db.insertOrThrow("events",null,ContentValues().apply {
+                put("event_type",event.getString("e"));put("event_time",event.getLong("E"))
+                put("received_at",System.currentTimeMillis());put("raw_json",event.toString())
+            })
+            db.insertOrThrow("stop_trail_recovery_receipts",null,ContentValues().apply {
+                put("campaign_id",campaignId);put("protection_client_id",newId)
+                put("proposal_event_id",event.getJSONObject("exchange_outcome").getLong("original_proposal_event_id"))
+                put("recovery_event_id",eventId)
+            })
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     @Synchronized
@@ -421,6 +481,7 @@ class TradingAuditStore(context: Context) :
                 raw_json TEXT NOT NULL
             )
         """.trimIndent())
+        stopTrailRecoverySchema.forEach(db::execSQL)
 
         db.execSQL("""
             CREATE TABLE rest_calls(
@@ -473,6 +534,7 @@ class TradingAuditStore(context: Context) :
         newVersion: Int
     ) {
         h1EntryPassportSchema.forEach(db::execSQL)
+        stopTrailRecoverySchema.forEach(db::execSQL)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS trades(
                 trade_id TEXT PRIMARY KEY,

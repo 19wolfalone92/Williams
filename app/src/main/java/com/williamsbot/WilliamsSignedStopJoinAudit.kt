@@ -33,6 +33,8 @@ internal object WilliamsSignedStopJoinAudit {
         var matched=0
         var missing=0
         var ambiguous=0
+        var reconciliationPending=0
+        var tupleMatches=0
         for(i in 0 until rows.length()) {
             val position=rows.optJSONObject(i) ?: continue
             val qty=dec(position.opt("positionAmt"))
@@ -71,6 +73,11 @@ internal object WilliamsSignedStopJoinAudit {
                 coordinator.optString("state")!="RECONCILE_REQUIRED"
             val displayMatched=position.optString("stop_verification_status")=="OWNED_STOP_SEEN" &&
                 position.optBoolean("strategy_ownership_verified",false)
+            // Numeric agreement and a finished coordinator generation are
+            // separate facts. A normal in-flight signed refresh must not turn
+            // an agreeing side/qty/price into a fictitious numeric mismatch.
+            val tupleMatched=candidates.size==1 && stopsMatch
+            if(tupleMatched) tupleMatches++
             val wellFormedProof=positionFresh && candidates.size==1 &&
                 fresh(proofAt,observedAtMs) && signedSourceObserved &&
                 snapshotConsistent && displayMatched &&
@@ -80,23 +87,26 @@ internal object WilliamsSignedStopJoinAudit {
                 candidates.isEmpty() -> "WARNING_SIGNED_STOP_PROOF_MISSING_OR_WRONG_QTY"
                 candidates.size>1 -> "WARNING_AMBIGUOUS_PROTECTION_PROOFS"
                 !fresh(proofAt,observedAtMs) -> "NOT_VERIFIED_STOP_PROOF_STALE"
-                !snapshotConsistent -> "NOT_VERIFIED_COORDINATOR_RECONCILING"
-                !displayMatched -> "NOT_VERIFIED_DISPLAY_AND_PROOF_NOT_SAME_GENERATION"
                 !stopsMatch -> "WARNING_POSITION_STOP_PRICE_MISMATCH"
                 !strategyOwned -> "NOT_VERIFIED_STRATEGY_OWNERSHIP"
                 !active -> "WARNING_SIGNED_ACTIVE_OWNED_STOP_ABSENT"
+                !snapshotConsistent -> "NOT_VERIFIED_COORDINATOR_RECONCILING"
+                !displayMatched -> "NOT_VERIFIED_DISPLAY_AND_PROOF_NOT_SAME_GENERATION"
                 wellFormedProof -> "OBSERVED_FRESH_SIGNED_PROOF_MATCH"
                 else -> "NOT_VERIFIED"
             }
             if(wellFormedProof) matched++
             else if(candidates.size>1) ambiguous++
             else missing++
+            if(state=="NOT_VERIFIED_COORDINATOR_RECONCILING") reconciliationPending++
             if(observed.length()<25) observed.put(JSONObject()
                 .put("symbol",symbol).put("direction",direction)
                 .put("position_snapshot_at_ms",positionAt)
                 .put("signed_stop_observed_at_ms",if(proofAt>0L) proofAt else JSONObject.NULL)
                 .put("proof_count_for_signed_qty",candidates.size)
-                .put("matching_side_quantity_and_stop",wellFormedProof)
+                .put("matching_side_quantity_and_stop",tupleMatched)
+                .put("coordinator_snapshot_complete",snapshotConsistent)
+                .put("protection_verification_complete",wellFormedProof)
                 .put("strategy_owned",strategyOwned)
                 .put("stop_proof_state",state)
                 .put("signed_stop_client_id_present",
@@ -105,6 +115,7 @@ internal object WilliamsSignedStopJoinAudit {
         }
         val severity=when {
             open==0 -> "NOT_VERIFIED"
+            ambiguous==0 && missing>0 && missing==reconciliationPending -> "NOT_VERIFIED"
             ambiguous>0 || missing>0 -> "WARNING"
             else -> "PASS"
         }
@@ -117,6 +128,8 @@ internal object WilliamsSignedStopJoinAudit {
             .put("proof_origin","NATIVE_COORDINATOR_SIGNED_GET_OPEN_ALGO_ORDERS")
             .put("stop_uniqueness_rule","OWNED_STOP_SEEN_REQUIRES_UPSTREAM_EXACTLY_ONE_SIGNED_STOP")
             .put("open_position_count",open).put("signed_stop_matched_count",matched)
+            .put("observed_tuple_matched_count",tupleMatches)
+            .put("reconciliation_pending_count",reconciliationPending)
             .put("unresolved_position_count",missing)
             .put("ambiguous_proof_count",ambiguous)
             .put("severity",severity)
