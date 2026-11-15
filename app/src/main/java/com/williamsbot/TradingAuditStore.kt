@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 import org.json.JSONObject
 import org.json.JSONArray
 
@@ -337,11 +338,10 @@ class TradingAuditStore(context: Context) :
         val newId=tx.optString("new_id")
         if(campaignId.isBlank() || newId.isBlank()) return
         val db=writableDatabase
-        db.beginTransaction()
-        try {
+        db.transaction {
             db.query("stop_trail_recovery_receipts",arrayOf("recovery_event_id"),
                 "campaign_id=? AND protection_client_id=?",arrayOf(campaignId,newId),
-                null,null,null,"1").use { if(it.moveToFirst()) return }
+                null,null,null,"1").use { if(it.moveToFirst()) return@transaction }
             val prior=JSONArray()
             db.query("events",arrayOf("id","raw_json"),
                 "event_type=? AND instr(raw_json,?)>0 AND instr(raw_json,?)>0",
@@ -352,7 +352,7 @@ class TradingAuditStore(context: Context) :
                 while(cursor.moveToNext()) prior.put(JSONObject(cursor.getString(1))
                     .put("audit_event_id",cursor.getLong(0)))
             }
-            val event=williamsStopTrailRecoveryEvent(owner,prior,System.currentTimeMillis()) ?: return
+            val event=williamsStopTrailRecoveryEvent(owner,prior,System.currentTimeMillis()) ?: return@transaction
             val eventId=db.insertOrThrow("events",null,ContentValues().apply {
                 put("event_type",event.getString("e"));put("event_time",event.getLong("E"))
                 put("received_at",System.currentTimeMillis());put("raw_json",event.toString())
@@ -362,8 +362,7 @@ class TradingAuditStore(context: Context) :
                 put("proposal_event_id",event.getJSONObject("exchange_outcome").getLong("original_proposal_event_id"))
                 put("recovery_event_id",eventId)
             })
-            db.setTransactionSuccessful()
-        } finally { db.endTransaction() }
+        }
     }
 
     @Synchronized
