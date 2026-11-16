@@ -1,5 +1,11 @@
 """Regression tests for the approved conservative Futures campaign risk profile."""
 from trading_config import TradingConfig
+from williams_tc2_pyramid import initial_unit_risk_pct
+
+
+def test_tc2_initial_unit_risk_matches_android_full_pyramid_reservation():
+    # 1:5:4:3:2 totals 15 units; reserve the 5-unit max tranche within 0.25%.
+    assert initial_unit_risk_pct(0.002, 0.006, 0.0025) == 0.0004
 
 
 def test_futures_defaults_use_single_campaign_risk_limits():
