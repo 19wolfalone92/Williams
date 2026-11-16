@@ -8,3 +8,11 @@ internal fun privateFuturesStateEventDemandsImmediateReconcile(event: JSONObject
         "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
         "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT"
     )
+
+/** New-risk admission is fail-closed until this credential's durable private-event inbox is empty. */
+internal fun privateUserEventInboxAllowsExposure(snapshot: JSONObject?): Boolean =
+    snapshot != null &&
+        snapshot.optString("schema") == "PRIVATE_USER_EVENT_INBOX_V1" &&
+        snapshot.optLong("pending_count", -1L) == 0L &&
+        snapshot.optLong("other_account_pending_count", -1L) >= 0L
+
