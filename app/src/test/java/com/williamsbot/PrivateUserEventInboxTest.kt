@@ -25,6 +25,27 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun stateAndProtectionUpdatesDemandImmediateSignedReconciliation() {
+        val required = listOf(
+            "ORDER_TRADE_UPDATE",
+            "ACCOUNT_UPDATE",
+            "ALGO_UPDATE",
+            "ACCOUNT_CONFIG_UPDATE",
+            "CONDITIONAL_ORDER_TRIGGER_REJECT"
+        )
+        required.forEach { eventType ->
+            assertTrue(eventType, privateFuturesStateEventDemandsImmediateReconcile(
+                org.json.JSONObject().put("e", eventType)
+            ))
+        }
+        listOf("listenKeyExpired", "serverShutdown", "outboundAccountPosition", "unknown").forEach { eventType ->
+            assertFalse(eventType, privateFuturesStateEventDemandsImmediateReconcile(
+                org.json.JSONObject().put("e", eventType)
+            ))
+        }
+    }
+
+    @Test
     fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
         assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
         assertTrue(privateEventDrainMayReschedule(true, false, 4L, 4L))
