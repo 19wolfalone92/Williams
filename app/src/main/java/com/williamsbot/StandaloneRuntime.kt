@@ -8722,12 +8722,6 @@ private class NativeEngine(
         }
     }
 
-    private fun privateFuturesStateEventDemandsImmediateReconcile(event: JSONObject): Boolean =
-        event.optString("e") in setOf(
-            "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
-            "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT"
-        )
-
     /**
      * The callback does only three things: immediately revoke entry freshness,
      * durably append the raw event, and wake the single serialized inbox drainer.
