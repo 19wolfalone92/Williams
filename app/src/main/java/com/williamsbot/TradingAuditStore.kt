@@ -873,7 +873,7 @@ class TradingAuditStore(context: Context) :
 
     /** Oldest-first replay preserves callback receipt order across process restarts. */
     @Synchronized
-    fun pendingPrivateUserEvents(
+    internal fun pendingPrivateUserEvents(
         accountFingerprint: String,
         limit: Int = 64
     ): List<DurablePrivateUserEvent> {
@@ -929,7 +929,7 @@ class TradingAuditStore(context: Context) :
         require(eventId > 0L && accountFingerprint.matches(Regex("[0-9a-f]{64}")))
         writableDatabase.execSQL(
             "UPDATE private_user_event_inbox SET attempt_count=attempt_count+1,last_error=? WHERE event_id=? AND account_fingerprint=? AND status='PENDING'",
-            arrayOf(safeDiagnosticText(reason).take(500), eventId, accountFingerprint)
+            arrayOf<Any>(safeDiagnosticText(reason).take(500), eventId, accountFingerprint)
         )
         val stillExists = readableDatabase.rawQuery(
             "SELECT 1 FROM private_user_event_inbox WHERE event_id=? AND account_fingerprint=?",
