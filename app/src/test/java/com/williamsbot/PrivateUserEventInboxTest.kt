@@ -46,6 +46,23 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun newExposureRequiresAValidEmptyInboxForCurrentCredential() {
+        assertFalse(privateUserEventInboxAllowsExposure(null))
+        assertFalse(privateUserEventInboxAllowsExposure(org.json.JSONObject()))
+        assertFalse(privateUserEventInboxAllowsExposure(org.json.JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("pending_count", 1)
+            .put("other_account_pending_count", 0)))
+        assertFalse(privateUserEventInboxAllowsExposure(org.json.JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("pending_count", 0)))
+        assertTrue(privateUserEventInboxAllowsExposure(org.json.JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("pending_count", 0)
+            .put("other_account_pending_count", 2)))
+    }
+
+    @Test
     fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
         assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
         assertTrue(privateEventDrainMayReschedule(true, false, 4L, 4L))
