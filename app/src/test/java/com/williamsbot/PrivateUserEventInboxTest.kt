@@ -56,9 +56,17 @@ class PrivateUserEventInboxTest {
         assertFalse(privateUserEventInboxAllowsExposure(org.json.JSONObject()
             .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
             .put("pending_count", 0)))
+        assertFalse(privateUserEventInboxAllowsExposure(org.json.JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("account_fingerprint_present", false)
+            .put("pending_count", 0)
+            .put("processed_count", 0)
+            .put("other_account_pending_count", 0)))
         assertTrue(privateUserEventInboxAllowsExposure(org.json.JSONObject()
             .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("account_fingerprint_present", true)
             .put("pending_count", 0)
+            .put("processed_count", 7)
             .put("other_account_pending_count", 2)))
     }
 
