@@ -77,11 +77,29 @@ internal object WilliamsDiagnosticResourceHealth {
         val historyQueue=snapshot.optInt("history_backfill_queue_size",-1)
         val indicatorQueue=snapshot.optInt("indicator_queue_size",-1)
         val active=snapshot.optInt("scanner_active_threads",-1)
+        val inbox=snapshot.optJSONObject("private_event_inbox")
+        val inboxPending=inbox?.optLong("pending_count",-1L) ?: -1L
+        val inboxOtherAccount=inbox?.optLong("other_account_pending_count",-1L) ?: -1L
+        val inboxAge=inbox?.optLong("oldest_pending_age_ms",-1L) ?: -1L
+        val inboxVerified=inbox?.optString("schema")=="PRIVATE_USER_EVENT_INBOX_V1" &&
+            inboxPending>=0L && inboxOtherAccount>=0L &&
+            (inboxPending==0L || inboxAge>=0L)
+        val inboxSeverity=when {
+            !inboxVerified -> "NOT_VERIFIED"
+            inboxOtherAccount>0L -> "WARNING"
+            inboxPending>=1000L || inboxAge>=120_000L -> "WARNING"
+            inboxPending>=250L || inboxAge>=30_000L -> "WARNING"
+            else -> "PASS"
+        }
         if(scanQueue<0 || scanCapacity<=0 || researchQueue<0 ||
             historyQueue<0 || indicatorQueue<0 || active<0)
-            return out.put("severity","NOT_VERIFIED").put("reason","EXECUTOR_COUNTERS_UNKNOWN")
+            return out.put("severity","NOT_VERIFIED")
+                .put("private_event_inbox_severity",inboxSeverity)
+                .put("private_event_inbox",inbox ?: JSONObject().put("status","NOT_VERIFIED"))
+                .put("reason","EXECUTOR_COUNTERS_UNKNOWN")
         val pressure=(scanQueue>=scanCapacity*9/10 && scanQueue>0) ||
-            researchQueue>=12 || historyQueue>=100 || indicatorQueue>=100
+            researchQueue>=12 || historyQueue>=100 || indicatorQueue>=100 ||
+            inboxSeverity=="WARNING"
         return out.put("severity",if(pressure) "WARNING" else "PASS")
             .put("scanner_active_threads",active)
             .put("scanner_queue_size",scanQueue)
@@ -90,8 +108,20 @@ internal object WilliamsDiagnosticResourceHealth {
             .put("history_queue_size",historyQueue)
             .put("indicator_queue_size",indicatorQueue)
             .put("history_and_indicator_queues_unbounded",true)
-            .put("reason",if(pressure) "EXECUTOR_BACKLOG_PRESSURE"
-                else "QUEUE_BELOW_WARNING_THRESHOLD_AT_CAPTURE")
+            .put("private_event_inbox",inbox ?: JSONObject().put("schema","PRIVATE_USER_EVENT_INBOX_V1")
+                .put("status","NOT_VERIFIED"))
+            .put("private_event_inbox_severity",inboxSeverity)
+            .put("private_event_pending_count",if(inboxPending>=0L) inboxPending else JSONObject.NULL)
+            .put("private_event_other_account_pending_count",if(inboxOtherAccount>=0L) inboxOtherAccount else JSONObject.NULL)
+            .put("private_event_oldest_pending_age_ms",if(inboxAge>=0L) inboxAge else JSONObject.NULL)
+            .put("private_event_actor_queue_size",snapshot.optInt("private_event_actor_queue_size",-1))
+            .put("private_event_actor_queue_peak",snapshot.optInt("private_event_actor_queue_peak",-1))
+            .put("private_event_drain_scheduled",snapshot.optBoolean("private_event_drain_scheduled",false))
+            .put("reason",when {
+                inboxSeverity=="WARNING" -> "PRIVATE_EVENT_BACKLOG_OR_ACCOUNT_MISMATCH"
+                pressure -> "EXECUTOR_BACKLOG_PRESSURE"
+                else -> "QUEUE_BELOW_WARNING_THRESHOLD_AT_CAPTURE"
+            })
     }
 
     fun snapshot(memory:JSONObject?,rate:JSONObject?,executor:JSONObject?):JSONObject {
