@@ -190,7 +190,8 @@ object DiagnosticsArchive {
                         .put("status","NOT_COMPARABLE"))
                 addJson(zip,"diagnostic_comparison.json",comparison
                     ?: org.json.JSONObject().put("status","NOT_COMPARABLE"))
-                add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,comparison))
+                add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,comparison,
+                    report.optJSONObject("runtime_resource_diagnostics")))
                 addJson(zip,"event_timeline.json",report.optJSONArray("event_timeline") ?: org.json.JSONArray())
                 addJson(zip,"android_background_health.json",report.optJSONObject("status")
                     ?.optJSONObject("android_runtime") ?: org.json.JSONObject())
@@ -303,12 +304,23 @@ object DiagnosticsArchive {
     }
 
     private fun buildTriageOverview(triage: org.json.JSONObject,
-        comparison: org.json.JSONObject?): String = buildString {
+        comparison: org.json.JSONObject?,
+        resources: org.json.JSONObject?): String = buildString {
         appendLine("WILLIAMS BOT — КРАТКАЯ ДИАГНОСТИКА")
         appendLine("Итог компонентных проверок: ${triage.optString("overall")}")
         appendLine("Ошибки: ${triage.optInt("failed_count")}, предупреждения: ${triage.optInt("warning_count")}, непроверено: ${triage.optInt("unverified_count")}")
         appendLine("Новые входы разрешены по снимку: ${triage.optBoolean("new_entries_allowed_at_snapshot")}")
         appendLine("ВАЖНО: успех тестов НЕ означает 100% точность, верность всем книгам или испытания Binance Demo.")
+        // Pre-capture heap PASS must not hide a later WARNING while assembling
+        // the large diagnostic report (real phone diagnostic #20: 39.5% -> 81.7%).
+        // Post-build pressure is informational; it cannot change trade gates.
+        val postHeap=resources?.optJSONObject("post_report_build_heap")
+        if(postHeap!=null && postHeap.optString("severity")=="WARNING") {
+            appendLine("ВНИМАНИЕ: после построения диагностического отчёта Java heap=" +
+                postHeap.optInt("java_heap_used_pct") + "%; свободно=" +
+                postHeap.optInt("java_heap_headroom_mib") +
+                " MiB. Риск OOM при повторном экспорте; это НЕ успешная проверка памяти.")
+        }
         appendLine()
         val priority=triage.optJSONArray("priority_issues") ?: org.json.JSONArray()
         for (i in 0 until priority.length()) {
