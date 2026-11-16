@@ -1,0 +1,34 @@
+package com.williamsbot
+
+import org.junit.Assert.*
+import org.junit.Test
+
+class PrivateUserEventInboxTest {
+    @Test
+    fun accountFingerprintIsStableNonSecretAndAccountScoped() {
+        val apiKeyA = "demo-api-key-account-a"
+        val apiKeyB = "demo-api-key-account-b"
+        val fingerprintA = futuresApiKeyFingerprint(apiKeyA)
+        assertEquals(fingerprintA, futuresApiKeyFingerprint(apiKeyA))
+        assertNotEquals(fingerprintA, futuresApiKeyFingerprint(apiKeyB))
+        assertTrue(fingerprintA.matches(Regex("[0-9a-f]{64}")))
+        assertFalse(fingerprintA.contains(apiKeyA))
+    }
+
+    @Test
+    fun eventFingerprintDeduplicatesExactPayloadButSeparatesChangedPayload() {
+        val first = """{"e":"ORDER_TRADE_UPDATE","E":1000,"o":{"s":"BTCUSDT","i":7,"t":9}}"""
+        val second = """{"e":"ORDER_TRADE_UPDATE","E":1001,"o":{"s":"BTCUSDT","i":7,"t":10}}"""
+        assertEquals(privateUserEventFingerprint(first), privateUserEventFingerprint(first))
+        assertNotEquals(privateUserEventFingerprint(first), privateUserEventFingerprint(second))
+        assertTrue(privateUserEventFingerprint(first).matches(Regex("[0-9a-f]{64}")))
+    }
+
+    @Test
+    fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
+        assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
+        assertTrue(privateEventDrainMayReschedule(true, false, 4L, 4L))
+        assertFalse(privateEventDrainMayReschedule(true, true, 4L, 4L))
+        assertTrue(privateEventDrainMayReschedule(true, true, 4L, 5L))
+    }
+}
