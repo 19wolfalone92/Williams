@@ -13128,6 +13128,12 @@ private class NativeEngine(
         tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
             .put("domain", "database").put("ok", sqliteHealth.optBoolean("ok"))
             .put("severity", if (sqliteHealth.optBoolean("ok")) "PASS" else "FAIL").put("detail", sqliteHealth.toString()))
+        val intentShadow = executionStore.campaignIntentShadowSnapshot()
+        tests.put(JSONObject().put("id","DB-INTENT-SHADOW-01")
+            .put("name","Campaign intent JSON ↔ normalized SQLite shadow parity")
+            .put("domain","database")
+            .put("severity",intentShadow.optString("severity","NOT_VERIFIED"))
+            .put("detail",intentShadow.toString()))
         // Diagnostic 12 captured a signed BNB STOP at 14:26:28Z while
         // the position UI was still a snapshot from 14:26:17Z. Flag this
         // explicitly: a more recent STOP observation is evidence that the
@@ -13303,6 +13309,7 @@ private class NativeEngine(
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
+            .put("futures_intent_shadow_parity",intentShadow)
             .put("unified_strategy_evidence", unifiedEvidence)
             // Full on-device historical research diary, accessible in ZIP
             // even if the scanner/UI candidate list is currently empty.
