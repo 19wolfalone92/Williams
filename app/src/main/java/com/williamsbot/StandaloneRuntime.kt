@@ -8805,32 +8805,32 @@ private class NativeEngine(
             tradingEventLoop.post {
                 var failed = false
                 try {
-                    while (true) {
-                        val batch = auditStore.pendingPrivateUserEvents(accountFingerprint, 64)
-                        if (batch.isEmpty()) break
-                        for (record in batch) {
-                            try {
-                                val event = JSONObject(record.rawJson)
-                                // An event replayed after process death has no surviving
-                                // urgent worker. Recreate the fill wake-up before applying it.
-                                when {
-                                    privateFuturesFillDemandsImmediateReconcile(event) ->
-                                        scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
-                                    privateFuturesStateEventDemandsImmediateReconcile(event) ->
-                                        scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_DURABLE_REPLAY", force = true)
-                                }
-                                handleUserEventSerialized(event)
-                                auditStore.completePrivateUserEvent(record.eventId, accountFingerprint)
-                            } catch (failure: Exception) {
-                                failed = true
-                                runCatching {
-                                    auditStore.failPrivateUserEvent(
-                                        record.eventId, accountFingerprint,
-                                        failure.message ?: failure.javaClass.simpleName
-                                    )
-                                }
-                                throw failure
+                    // Process one bounded batch per actor turn. If more events
+                    // remain, the finally block re-posts one drain at the tail
+                    // of the serialized queue, allowing other actor work to run.
+                    val batch = auditStore.pendingPrivateUserEvents(accountFingerprint, 64)
+                    for (record in batch) {
+                        try {
+                            val event = JSONObject(record.rawJson)
+                            // An event replayed after process death has no surviving
+                            // urgent worker. Recreate the fill wake-up before applying it.
+                            when {
+                                privateFuturesFillDemandsImmediateReconcile(event) ->
+                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
+                                privateFuturesStateEventDemandsImmediateReconcile(event) ->
+                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_DURABLE_REPLAY", force = true)
                             }
+                            handleUserEventSerialized(event)
+                            auditStore.completePrivateUserEvent(record.eventId, accountFingerprint)
+                        } catch (failure: Exception) {
+                            failed = true
+                            runCatching {
+                                auditStore.failPrivateUserEvent(
+                                    record.eventId, accountFingerprint,
+                                    failure.message ?: failure.javaClass.simpleName
+                                )
+                            }
+                            throw failure
                         }
                     }
                 } catch (failure: Exception) {
