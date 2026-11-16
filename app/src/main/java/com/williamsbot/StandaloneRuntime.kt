@@ -25,6 +25,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -1717,6 +1719,9 @@ private class NativeEngine(
         }
     )
     private val tradingEventLoop = TradingEventLoop()
+    // Only one actor drain is queued; the SQLite inbox, not an unbounded RAM queue, owns events.
+    private val privateEventDrainScheduled = AtomicBoolean(false)
+    private val privateEventReceiveGeneration = AtomicLong(0L)
     private val executionGate = ExecutionGate()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
@@ -3062,6 +3067,9 @@ private class NativeEngine(
         // initialize again. Execution gates remain separate and fail-closed.
         RuntimeServiceState.refreshLease?.invoke()
         RuntimeStartupEvidence.clear(context)
+        // Resume any private events that were durably received before a prior
+        // process death. The user stream remains unsynchronized until signed REST.
+        schedulePrivateEventDrain()
         return JSONObject()
             .put("started", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
@@ -8714,10 +8722,12 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * The callback does only three things: immediately revoke entry freshness,
+     * durably append the raw event, and wake the single serialized inbox drainer.
+     * No order mutation or protection decision is authorized by a WS payload.
+     */
     private fun handleUserEvent(event: JSONObject) {
-        // Invalidate entry authority on receipt, before a busy serialized actor
-        // can delay applying a real fill/account update. Callback delivery itself
-        // must never be mistaken for a successful durable event application.
         if (event.optString("e") in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
                 "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT", "listenKeyExpired", "serverShutdown")) {
             synchronized(this) {
@@ -8726,30 +8736,112 @@ private class NativeEngine(
                 if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
             }
         }
-        // A real WS fill used to wait behind the serialized cockpit/SQLite
-        // event loop before it could even request a signed STOP reconciliation.
-        // The urgent path is ONLY a wake-up: no mutation is authorized by WS.
-        // Execution Door and exact Binance signed proof still govern all orders.
+        val accountFingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrElse { failure ->
+            val reason = "Private Futures event cannot be account-pinned: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            lastUserStreamSyncAtMs = 0L
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_ACCOUNT_IDENTITY_FAILURE", force = true)
+            return
+        }
+        try {
+            // Write-ahead receipt: if this fails, do not pretend the event entered
+            // the serialized pipeline. Keep the stream unsynchronized and reconcile.
+            auditStore.enqueuePrivateUserEvent(event, accountFingerprint)
+        } catch (failure: Exception) {
+            val reason = "Private Futures event inbox persistence failed: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            lastUserStreamSyncAtMs = 0L
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_INBOX_WRITE_FAILURE", force = true)
+            return
+        }
+        privateEventReceiveGeneration.incrementAndGet()
+
+        // Urgent path is still only a wake-up. Exact signed account/position/algo
+        // reconciliation and the Execution Door remain the sole order authority.
         if (privateFuturesFillDemandsImmediateReconcile(event)) {
             scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
         }
-        tradingEventLoop.post {
-            try {
-                handleUserEventSerialized(event)
-            } catch (failure: Exception) {
-                val reason = "Private Futures event application failed: " +
-                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
-                userStreamSyncRequired = true
-                lastUserStreamSyncAtMs = 0L
-                userStreamLastError = reason
-                setReconcileRequired(reason)
+        schedulePrivateEventDrain()
+    }
+
+    private fun schedulePrivateEventDrain() {
+        val accountFingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrElse { failure ->
+            userStreamSyncRequired = true
+            userStreamLastError = "Private event replay account identity unavailable: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            setReconcileRequired(userStreamLastError ?: "PRIVATE_EVENT_ACCOUNT_IDENTITY_FAILURE")
+            return
+        }
+        if (!privateEventDrainScheduled.compareAndSet(false, true)) return
+        val generationAtStart = privateEventReceiveGeneration.get()
+        try {
+            tradingEventLoop.post {
+                var failed = false
+                try {
+                    while (true) {
+                        val batch = auditStore.pendingPrivateUserEvents(accountFingerprint, 64)
+                        if (batch.isEmpty()) break
+                        for (record in batch) {
+                            try {
+                                val event = JSONObject(record.rawJson)
+                                // An event replayed after process death has no surviving
+                                // urgent worker. Recreate the fill wake-up before applying it.
+                                if (privateFuturesFillDemandsImmediateReconcile(event)) {
+                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
+                                }
+                                handleUserEventSerialized(event)
+                                auditStore.completePrivateUserEvent(record.eventId, accountFingerprint)
+                            } catch (failure: Exception) {
+                                failed = true
+                                runCatching {
+                                    auditStore.failPrivateUserEvent(
+                                        record.eventId, accountFingerprint,
+                                        failure.message ?: failure.javaClass.simpleName
+                                    )
+                                }
+                                throw failure
+                            }
+                        }
+                    }
+                } catch (failure: Exception) {
+                    val reason = "Private Futures durable event replay failed: " +
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+                    userStreamSyncRequired = true
+                    lastUserStreamSyncAtMs = 0L
+                    userStreamLastError = reason
+                    setReconcileRequired(reason)
+                    scheduleFuturesStreamReconciliation("PRIVATE_EVENT_REPLAY_FAILURE", force = true)
+                } finally {
+                    privateEventDrainScheduled.set(false)
+                    val pending = runCatching {
+                        auditStore.hasPendingPrivateUserEvents(accountFingerprint)
+                    }.getOrDefault(true)
+                    val newReceiptArrived = privateEventReceiveGeneration.get() > generationAtStart
+                    // On a persistent handler/storage failure, do not spin. A new
+                    // receipt or the next process start is the next bounded retry edge.
+                    if (pending && (!failed || newReceiptArrived)) schedulePrivateEventDrain()
+                }
             }
+        } catch (failure: Exception) {
+            privateEventDrainScheduled.set(false)
+            val reason = "Private Futures event actor rejected inbox wake-up: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_ACTOR_REJECTED", force = true)
         }
     }
 
     private fun handleUserEventSerialized(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
-        auditStore.recordUserEvent(event)
+        auditStore.recordUserEvent(event, rawEventAlreadyPersisted = true)
         executionAccumulator.accept(event)
 
         val eventType = event.optString("e", "unknown")
@@ -8763,8 +8855,9 @@ private class NativeEngine(
             val previous = lastUserEventTimeByType[eventType]
             if (previous != null && eventTime < previous) {
                 userStreamSyncRequired = true
-                lastError =
-                    "user ws: out-of-order $eventType event; REST resync required"
+                lastUserStreamSyncAtMs = 0L
+                lastError = "user ws: out-of-order $eventType event; REST resync required"
+                scheduleFuturesStreamReconciliation("PRIVATE_EVENT_OUT_OF_ORDER", force = true)
                 return
             }
             lastUserEventTimeByType[eventType] =
@@ -12784,6 +12877,15 @@ private class NativeEngine(
             .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
             .put("private_event_actor_queue_peak",tradingEventLoop.peakQueueDepth())
             .put("private_event_actor_active",tradingEventLoop.actorActive())
+            .put("private_event_drain_scheduled",privateEventDrainScheduled.get())
+            .put("private_event_receive_generation",privateEventReceiveGeneration.get())
+            .put("private_event_inbox",runCatching {
+                auditStore.privateUserEventInboxSnapshot(futuresApiKeyFingerprint(key()))
+            }.getOrElse {
+                JSONObject().put("schema","PRIVATE_USER_EVENT_INBOX_V1")
+                    .put("status","NOT_VERIFIED")
+                    .put("error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
+            })
             .put("depth_resync_inflight_symbols",depthResyncInFlight.size)
             .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
