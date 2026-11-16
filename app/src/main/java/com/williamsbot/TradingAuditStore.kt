@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import org.json.JSONObject
 import org.json.JSONArray
+import java.security.MessageDigest
 
 /**
  * Full, machine-readable TC2 decision event. Keep it OUTSIDE the bounded
@@ -161,8 +162,25 @@ internal const val COCKPIT_PROJECTION_TRIM_SQL =
 internal const val COCKPIT_INCIDENT_TRIM_SQL =
     "DELETE FROM events WHERE event_type = 'COCKPIT_INCIDENT' AND id NOT IN (SELECT id FROM events WHERE event_type = 'COCKPIT_INCIDENT' ORDER BY id DESC LIMIT 100)"
 
+
+internal data class DurablePrivateUserEvent(val eventId: Long, val rawJson: String)
+
+internal fun futuresApiKeyFingerprint(apiKey: String): String {
+    require(apiKey.isNotBlank()) { "PRIVATE_EVENT_ACCOUNT_IDENTITY_UNAVAILABLE" }
+    return privateEventSha256(apiKey)
+}
+
+internal fun privateUserEventFingerprint(rawJson: String): String {
+    require(rawJson.isNotBlank()) { "PRIVATE_EVENT_PAYLOAD_EMPTY" }
+    return privateEventSha256(rawJson)
+}
+
+private fun privateEventSha256(value: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(value.toByteArray(Charsets.UTF_8))
+    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 6) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 7) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
@@ -432,6 +450,28 @@ class TradingAuditStore(context: Context) :
             .put("source_scope", "HISTORICAL_SQLITE_INCIDENT_NOT_LIVE_BINANCE_PROOF")
     }
 
+
+    private fun ensurePrivateUserEventInboxSchema(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS private_user_event_inbox(
+                event_id INTEGER PRIMARY KEY NOT NULL,
+                account_fingerprint TEXT NOT NULL,
+                event_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING'
+                    CHECK(status IN ('PENDING','PROCESSED')),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                received_at_ms INTEGER NOT NULL,
+                processed_at_ms INTEGER,
+                UNIQUE(account_fingerprint,event_key)
+            )
+        """.trimIndent())
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_private_user_event_pending
+            ON private_user_event_inbox(account_fingerprint,status,event_id)
+        """.trimIndent())
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         h1EntryPassportSchema.forEach(db::execSQL)
         db.execSQL("""
@@ -481,6 +521,7 @@ class TradingAuditStore(context: Context) :
             )
         """.trimIndent())
         stopTrailRecoverySchema.forEach(db::execSQL)
+        ensurePrivateUserEventInboxSchema(db)
 
         db.execSQL("""
             CREATE TABLE rest_calls(
@@ -534,6 +575,7 @@ class TradingAuditStore(context: Context) :
     ) {
         h1EntryPassportSchema.forEach(db::execSQL)
         stopTrailRecoverySchema.forEach(db::execSQL)
+        ensurePrivateUserEventInboxSchema(db)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS trades(
                 trade_id TEXT PRIMARY KEY,
@@ -779,13 +821,165 @@ class TradingAuditStore(context: Context) :
         else writableDatabase.insert("events", null, values)
     }
 
+
+    /**
+     * Persist a private Binance event and its pending-delivery receipt in one
+     * SQLite transaction before any in-memory actor work is queued.
+     * Exact duplicate payloads are idempotent per API-key fingerprint.
+     */
     @Synchronized
-    fun recordUserEvent(event: JSONObject) {
+    fun enqueuePrivateUserEvent(event: JSONObject, accountFingerprint: String): Long {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "PRIVATE_EVENT_ACCOUNT_IDENTITY_INVALID"
+        }
+        val raw = event.toString()
+        val eventKey = privateUserEventFingerprint(raw)
+        val db = writableDatabase
+        var resultId = 0L
+        db.transaction {
+            val existing = db.rawQuery(
+                "SELECT event_id FROM private_user_event_inbox WHERE account_fingerprint=? AND event_key=? LIMIT 1",
+                arrayOf(accountFingerprint, eventKey)
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
+            if (existing > 0L) {
+                resultId = existing
+            } else {
+                val receivedAt = System.currentTimeMillis()
+                val eventValues = ContentValues().apply {
+                    put("event_type", event.optString("e", "unknown"))
+                    put("event_time", event.optLong("E", 0L))
+                    put("received_at", receivedAt)
+                    put("raw_json", raw)
+                }
+                val eventId = db.insertOrThrow("events", null, eventValues)
+                val inboxValues = ContentValues().apply {
+                    put("event_id", eventId)
+                    put("account_fingerprint", accountFingerprint)
+                    put("event_key", eventKey)
+                    put("status", "PENDING")
+                    put("received_at_ms", receivedAt)
+                }
+                db.insertOrThrow("private_user_event_inbox", null, inboxValues)
+                resultId = eventId
+            }
+        }
+        check(resultId > 0L) { "PRIVATE_EVENT_INBOX_PERSISTENCE_FAILED" }
+        return resultId
+    }
+
+    /** Oldest-first replay preserves callback receipt order across process restarts. */
+    @Synchronized
+    fun pendingPrivateUserEvents(
+        accountFingerprint: String,
+        limit: Int = 64
+    ): List<DurablePrivateUserEvent> {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(limit in 1..512)
+        val rows = mutableListOf<DurablePrivateUserEvent>()
+        readableDatabase.rawQuery(
+            """
+            SELECT e.id,e.raw_json
+            FROM private_user_event_inbox i
+            JOIN events e ON e.id=i.event_id
+            WHERE i.account_fingerprint=? AND i.status='PENDING'
+            ORDER BY i.event_id ASC LIMIT ?
+            """.trimIndent(),
+            arrayOf(accountFingerprint, limit.toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += DurablePrivateUserEvent(cursor.getLong(0), cursor.getString(1))
+            }
+        }
+        return rows
+    }
+
+    /** Acknowledgement is durable and is written only after event handling succeeds. */
+    @Synchronized
+    fun completePrivateUserEvent(eventId: Long, accountFingerprint: String) {
+        require(eventId > 0L && accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        val db = writableDatabase
+        db.transaction {
+            val changed = db.update(
+                "private_user_event_inbox",
+                ContentValues().apply {
+                    put("status", "PROCESSED")
+                    put("processed_at_ms", System.currentTimeMillis())
+                    put("last_error", "")
+                },
+                "event_id=? AND account_fingerprint=? AND status='PENDING'",
+                arrayOf(eventId.toString(), accountFingerprint)
+            )
+            if (changed == 0) {
+                val alreadyProcessed = db.rawQuery(
+                    "SELECT 1 FROM private_user_event_inbox WHERE event_id=? AND account_fingerprint=? AND status='PROCESSED'",
+                    arrayOf(eventId.toString(), accountFingerprint)
+                ).use { it.moveToFirst() }
+                check(alreadyProcessed) { "PRIVATE_EVENT_ACK_IDENTITY_OR_ROW_MISMATCH" }
+            }
+        }
+    }
+
+    /** A failure increments diagnostics but never removes or acknowledges the event. */
+    @Synchronized
+    fun failPrivateUserEvent(eventId: Long, accountFingerprint: String, reason: String) {
+        require(eventId > 0L && accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        writableDatabase.execSQL(
+            "UPDATE private_user_event_inbox SET attempt_count=attempt_count+1,last_error=? WHERE event_id=? AND account_fingerprint=? AND status='PENDING'",
+            arrayOf(safeDiagnosticText(reason).take(500), eventId, accountFingerprint)
+        )
+        val stillExists = readableDatabase.rawQuery(
+            "SELECT 1 FROM private_user_event_inbox WHERE event_id=? AND account_fingerprint=?",
+            arrayOf(eventId.toString(), accountFingerprint)
+        ).use { it.moveToFirst() }
+        check(stillExists) { "PRIVATE_EVENT_FAILURE_IDENTITY_OR_ROW_MISMATCH" }
+    }
+
+    @Synchronized
+    fun privateUserEventInboxSnapshot(accountFingerprint: String): JSONObject {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        val db = readableDatabase
+        fun count(sql: String, args: Array<String>): Long =
+            db.rawQuery(sql, args).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        val pending = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        val processed = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PROCESSED'",
+            arrayOf(accountFingerprint))
+        val otherPending = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint<>? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        val oldest = db.rawQuery(
+            "SELECT MIN(received_at_ms) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint)
+        ).use { if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L }
+        val attempts = count(
+            "SELECT COALESCE(SUM(attempt_count),0) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        return JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("account_fingerprint_present", true)
+            .put("pending_count", pending)
+            .put("processed_count", processed)
+            .put("other_account_pending_count", otherPending)
+            .put("oldest_pending_received_at_ms", if (oldest > 0L) oldest else JSONObject.NULL)
+            .put("oldest_pending_age_ms", if (oldest > 0L) (System.currentTimeMillis() - oldest).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("pending_retry_attempts", attempts)
+            .put("delivery_contract", "DURABLE_AT_LEAST_ONCE_UNTIL_HANDLER_ACK")
+            .put("financial_truth", "SIGNED_BINANCE_RECONCILIATION_ONLY")
+    }
+
+    @Synchronized
+    fun hasPendingPrivateUserEvents(accountFingerprint: String): Boolean =
+        pendingPrivateUserEvents(accountFingerprint, 1).isNotEmpty()
+
+    @Synchronized
+    fun recordUserEvent(event: JSONObject, rawEventAlreadyPersisted: Boolean = false) {
         val eventType = event.optString("e", "unknown")
         val eventTime = event.optLong("E", 0L)
-        // Keep the raw User Stream handler's existing best-effort insert contract.
-        // Strict durability is scoped to campaign observations before caching them.
-        recordRawEvent(event, requireDurable = false)
+        // The inbox already inserted the raw event atomically with its PENDING
+        // receipt. Other callers retain the historical best-effort insert path.
+        if (!rawEventAlreadyPersisted) recordRawEvent(event, requireDurable = false)
 
         // Binance USD-M Futures sends ORDER_TRADE_UPDATE with all execution fields
         // nested in "o"; Spot-style executionReport fields live at the root. Normalize
