@@ -2,16 +2,15 @@
 
 Testnet-first реализация торгового бота по Williams (Alligator + AO + Fractals) для Binance USDⓈ-M Futures с симметричными Long/Short кампаниями, SQLite recovery и жёсткими execution/risk gates.
 
-## Исследовательский кандидат 4.64.37 — durable private Futures event inbox
+## Исследовательский кандидат 4.64.38 — transactional intent ledger shadow
 
-- Последняя версия основной ветки на 16.11.2026 — **4.64.18**. Кандидаты 4.64.34–4.64.37 находятся в stacked draft PR; они не объединены в main и не являются допущенным релизом.
-- Кандидат 4.64.36 (PR #242) исправляет ложную WM1-ангуляцию после выхода цены из пасти. Инженерная регрессия/численная разрешимость не выдаются за опубликованную формулу Билла Вильямса.
-- Кандидат 4.64.37 добавляет SQLite write-ahead inbox для приватных Binance Futures WebSocket событий: raw event и PENDING receipt фиксируются одной транзакцией до постановки actor-задачи; событие обрабатывается oldest-first и подтверждается только после успешной сериализованной обработки.
-- RAM actor получает один объединённый drain wake-up вместо отдельной неограниченной задачи на каждое WS-событие. После перезапуска PENDING события воспроизводятся; для FILLED и изменений позиции/защиты сразу запрашивается signed REST reconciliation. WebSocket-событие само по себе не даёт права менять ордера или считать позицию защищённой.
-- Диагностика показывает pending/processed, возраст старейшего события, backlog и событие другого account fingerprint. API key хранится только в защищённом хранилище; в inbox используется его SHA-256 fingerprint, сам ключ туда не записывается.
-- **Ограничение:** это at-least-once durable inbox, а не доказательство безошибочной доставки Binance. Постоянная ошибка обработчика оставляет событие PENDING и включает RECONCILE_REQUIRED. Дисковая квота/компактация inbox и полная signed Demo проверка остаются отдельными задачами; financial truth — подписанная сверка Binance.
-- START_HERE_RU.md обновлён: устаревшее описание Spot Testnet заменено на Futures Demo и актуальные ограничения. Не устанавливайте APK с временной debug-подписью из Campaign CI.
-- Ветка: fix/nov16-durable-private-event-inbox-4.64.37; main не изменён. Нужны полный exact-head CI, физический Android и signed Demo LONG/SHORT с partial fill.
+- Последняя версия main на 16.11.2026 — **4.64.18**. Draft PR #244 предлагает 4.64.37; ветка 4.64.38 — отдельное stacked продолжение и не является релизом.
+- 4.64.37 (PR #244) добавляет SQLite write-ahead inbox приватных Binance USDⓈ-M Futures событий: raw event + PENDING receipt в одной транзакции, oldest-first at-least-once replay, coalesced actor drain, forced signed reconciliation на fill/protection changes. WS не получает финансовых полномочий.
+- 4.64.38 добавляет SQLite v2 таблицу `futures_intent_shadow`. Legacy `futures_campaign_intents_v2` JSON остаётся единственным источником истины; обновление JSON и нормализованной проекции выполняется в одной SQLite-транзакции. Диагностика сравнивает порядок, ключевые поля и SHA256 каждой строки.
+- Миграция намеренно работает в shadow mode: никакие чтения торгового runtime не переключены на таблицу shadow; authority switch запрещён до независимых restart/rollback/parity испытаний и документированной приёмки. Невалидный старый JSON не переписывается; он получает NOT_VERIFIED.
+- Риск-политика не менялась. Для TC2 1:5:4:3:2 фактический первоначальный budget при cap 0,20% / campaign 0,60% / entry 0,25% равен **0,04%**: min(0,20%, 0,60%/15, 0,25%/5). 0,20% — верхняя граница, а не фактическая initial unit allocation.
+- Неприняты: durable inbox disk retention/quota, физический Android Demo LONG/SHORT + partial fills, непрерывность FILLED→STOP и полный transactional DB fault-injection на реальном Android. main не изменён.
+- Ветка 4.64.38: `feat/nov16-intent-ledger-shadow-4.64.38-stacked-v2`, основана на текущей ветке 4.64.37 PR #244. Нужны exact-head CI и отдельная экспертная/Demo приёмка.
 
 
 ## Кандидат 4.64.28-debug — атрибуция STOP и объяснение непринятого TC2 (Binance Demo)
