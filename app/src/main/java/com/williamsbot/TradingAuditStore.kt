@@ -175,6 +175,10 @@ internal fun privateUserEventFingerprint(rawJson: String): String {
     return privateEventSha256(rawJson)
 }
 
+internal fun privateEventDrainMayReschedule(
+    pending: Boolean, failed: Boolean, generationAtStart: Long, currentGeneration: Long
+): Boolean = pending && (!failed || currentGeneration > generationAtStart)
+
 private fun privateEventSha256(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8))
     .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
@@ -1018,12 +1022,19 @@ class TradingAuditStore(context: Context) :
         execution.put("event_time", executionEventTime)
         execution.put("transaction_time", transactionTime)
         execution.put("raw_json", event.toString())
-        writableDatabase.insertWithOnConflict(
+        val executionDb = writableDatabase
+        val executionInsert = executionDb.insertWithOnConflict(
             "executions",
             null,
             execution,
             SQLiteDatabase.CONFLICT_IGNORE
         )
+        if (executionInsert == -1L) {
+            val persisted = executionDb.rawQuery(
+                "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+            ).use { it.moveToFirst() }
+            check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+        }
 
         val order = ContentValues()
         order.put("client_order_id", clientId.ifBlank { orderId })
@@ -1042,11 +1053,11 @@ class TradingAuditStore(context: Context) :
         order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
         order.put("raw_json", event.toString())
-        writableDatabase.insertWithOnConflict(
+        check(executionDb.insertWithOnConflict(
             "orders",
             null,
             order,
             SQLiteDatabase.CONFLICT_REPLACE
-        )
+        ) != -1L) { "PRIVATE_EVENT_ORDER_JOURNAL_WRITE_FAILED" }
     }
 }
