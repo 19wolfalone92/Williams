@@ -73,6 +73,7 @@ class PrivateUserEventInboxTest {
     @Test
     fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
         assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
+        assertFalse(privateEventDrainMayReschedule(null, false, 4L, 4L))
         assertTrue(privateEventDrainMayReschedule(true, false, 4L, 4L))
         assertFalse(privateEventDrainMayReschedule(true, true, 4L, 4L))
         assertTrue(privateEventDrainMayReschedule(true, true, 4L, 5L))
