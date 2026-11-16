@@ -1679,9 +1679,15 @@ private class NativeEngine(
                 beforeExposureMutation = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
+                    check(privateEventInboxReadyForExposure()) {
+                        "PRIVATE_FUTURES_EVENT_INBOX_NOT_DRAINED_OR_VERIFIED"
+                    }
                 },
                 beforeExposureTransport = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
+                    check(privateEventInboxReadyForExposure()) {
+                        "PRIVATE_FUTURES_EVENT_INBOX_NOT_DRAINED_OR_VERIFIED"
+                    }
                     futuresExposureTransportBlocker(
                         RuntimeServiceState.active, RuntimeServiceState.monitorHeartbeatStale,
                         userStreamConnected, userStreamSyncRequired,
@@ -2299,8 +2305,18 @@ private class NativeEngine(
         )
     }
 
+    /** Read the current credential's durable inbox; missing/unreadable evidence blocks new risk. */
+    private fun privateEventInboxReadyForExposure(): Boolean {
+        val fingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrNull() ?: return false
+        val snapshot = runCatching {
+            auditStore.privateUserEventInboxSnapshot(fingerprint)
+        }.getOrNull() ?: return false
+        return privateUserEventInboxAllowsExposure(snapshot)
+    }
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
+            privateEventInboxReadyForExposure() &&
             RuntimeServiceState.active &&
             !RuntimeServiceState.monitorHeartbeatStale &&
             campaignCoordinatorReadyForEntry() &&
@@ -2343,6 +2359,7 @@ private class NativeEngine(
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
             if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
+            if (!privateEventInboxReadyForExposure()) add("private_futures_event_inbox_pending_or_unverified")
             if (!signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()))
                 add("signed_futures_account_position_stop_reconciliation_stale_or_unknown")
             if (signedStopDisplayUnverified)
