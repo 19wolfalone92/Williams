@@ -99,3 +99,8 @@ Legacy Android execution store сохранял весь массив `futures_c
 ## 7. Release disposition
 
 4.64.38 — stacked draft candidate, не релиз. Base — PR #244 (4.64.37). Main не менялся. Binance credentials не использовались, ордера не отправлялись, реальные средства не затрагивались, Williams-AI не изменялся. Live-торговля запрещена до завершения P0 signed Demo и физической Android acceptance.
+
+## Дополнение из базовой версии 4.64.37
+
+- Базовая ветка PR #244 дополнительно блокирует новый риск до верифицированного пустого inbox текущего credential fingerprint; reduce-only exits и защитные STOP не затрагиваются.
+- Inbox actor обрабатывает до 64 событий за один turn и yield-ит в конец очереди, чтобы большой backlog не монополизировал общий actor.
