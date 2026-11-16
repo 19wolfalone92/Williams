@@ -132,14 +132,9 @@ internal class FuturesExecutionStore(context: Context) :
         // discard persisted orders, campaigns, or unresolved execution state.
         onCreate(db)
         ensureIntentShadowSchema(db)
-        db.rawQuery(
-            "SELECT state_value FROM runtime_state WHERE state_key=? LIMIT 1",
-            arrayOf(KEY_CAMPAIGN_INTENTS)
-        ).use { cursor ->
-            if (cursor.moveToFirst()) {
-                runCatching { replaceIntentShadow(db, cursor.getString(0)) }
-            }
-        }
+        // The app's explicit migrateLegacyState() call performs the first shadow
+        // projection after this schema upgrade. Do not parse or rewrite financial
+        // state inside onUpgrade; a malformed legacy blob must remain preserved.
     }
 
     /** Migrate pre-SQLite JSON state once; SQLite wins after the first successful copy. */
@@ -170,7 +165,15 @@ internal class FuturesExecutionStore(context: Context) :
                 "SELECT state_value FROM runtime_state WHERE state_key=? LIMIT 1",
                 arrayOf(KEY_CAMPAIGN_INTENTS)
             ).use { cursor ->
-                if (cursor.moveToFirst()) replaceIntentShadow(db, cursor.getString(0))
+                if (cursor.moveToFirst()) {
+                    val raw = cursor.getString(0)
+                    // Preserve legacy JSON exactly even when it is malformed.
+                    // An unprojectable shadow remains NOT_VERIFIED; it never
+                    // replaces the canonical execution journal.
+                    if (projectFuturesCampaignIntents(raw) != null) {
+                        replaceIntentShadow(db, raw)
+                    }
+                }
             }
         }
     }
