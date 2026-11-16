@@ -13,6 +13,8 @@ internal fun privateFuturesStateEventDemandsImmediateReconcile(event: JSONObject
 internal fun privateUserEventInboxAllowsExposure(snapshot: JSONObject?): Boolean =
     snapshot != null &&
         snapshot.optString("schema") == "PRIVATE_USER_EVENT_INBOX_V1" &&
+        snapshot.optBoolean("account_fingerprint_present", false) &&
         snapshot.optLong("pending_count", -1L) == 0L &&
+        snapshot.optLong("processed_count", -1L) >= 0L &&
         snapshot.optLong("other_account_pending_count", -1L) >= 0L
 
