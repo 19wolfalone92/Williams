@@ -119,6 +119,11 @@ class AndroidRebootRecoveryEvidenceTest {
         assertEquals("BOOT_FGS_CREATION_NOT_OBSERVED",wrongEpoch.getString("status"))
 
         base.getJSONObject(0).put("elapsed_ms",54_030L)
+        base.getJSONObject(4).put("at_ms",boot-1L)
+        val beforeBootOnly=AndroidRebootRecoveryEvidence.assess(
+            JSONObject().put("events",base),android(),status(),now)
+        assertEquals("BOOT_RUNTIME_START_NOT_OBSERVED_AFTER_BROADCAST",
+            beforeBootOnly.getString("status"))
         base.remove(4) // no post-boot worker start observation
         val noRuntime=AndroidRebootRecoveryEvidence.assess(
             JSONObject().put("events",base),android(),status(),now)
