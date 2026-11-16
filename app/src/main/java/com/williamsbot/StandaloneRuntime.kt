@@ -8843,15 +8843,26 @@ private class NativeEngine(
                     scheduleFuturesStreamReconciliation("PRIVATE_EVENT_REPLAY_FAILURE", force = true)
                 } finally {
                     privateEventDrainScheduled.set(false)
-                    val pending = runCatching {
+                    val pendingCheck = runCatching {
                         auditStore.hasPendingPrivateUserEvents(accountFingerprint)
-                    }.getOrDefault(true)
-                    val newReceiptArrived = privateEventReceiveGeneration.get() > generationAtStart
-                    // On a persistent handler/storage failure, do not spin. A new
-                    // receipt or the next process start is the next bounded retry edge.
-                    if (privateEventDrainMayReschedule(
-                            pending, failed, generationAtStart, privateEventReceiveGeneration.get()
-                        )) schedulePrivateEventDrain()
+                    }.getOrNull()
+                    val currentGeneration = privateEventReceiveGeneration.get()
+                    if (pendingCheck == null) {
+                        // A failed inbox read is NOT equivalent to an empty inbox.
+                        // Latch reconciliation and do not spin on a broken SQLite read.
+                        val reason = "Private Futures durable inbox pending-state read failed"
+                        userStreamSyncRequired = true
+                        lastUserStreamSyncAtMs = 0L
+                        userStreamLastError = reason
+                        setReconcileRequired(reason)
+                        scheduleFuturesStreamReconciliation("PRIVATE_EVENT_INBOX_READ_FAILURE", force = true)
+                    } else if (privateEventDrainMayReschedule(
+                            pendingCheck, failed, generationAtStart, currentGeneration
+                        )) {
+                        // One batch per actor turn. Requeue at the tail so other
+                        // serialized work can run before the next bounded batch.
+                        schedulePrivateEventDrain()
+                    }
                 }
             }
         } catch (failure: Exception) {
