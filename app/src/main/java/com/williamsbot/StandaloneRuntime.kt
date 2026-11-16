@@ -8722,6 +8722,12 @@ private class NativeEngine(
         }
     }
 
+    private fun privateFuturesStateEventDemandsImmediateReconcile(event: JSONObject): Boolean =
+        event.optString("e") in setOf(
+            "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+            "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT"
+        )
+
     /**
      * The callback does only three things: immediately revoke entry freshness,
      * durably append the raw event, and wake the single serialized inbox drainer.
@@ -8762,10 +8768,14 @@ private class NativeEngine(
         }
         privateEventReceiveGeneration.incrementAndGet()
 
-        // Urgent path is still only a wake-up. Exact signed account/position/algo
-        // reconciliation and the Execution Door remain the sole order authority.
-        if (privateFuturesFillDemandsImmediateReconcile(event)) {
-            scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
+        // Signed REST reconciliation is requested immediately for all private
+        // account/position/order/protection changes, before the serialized actor
+        // can be delayed by a preceding backlog. WS is only a wake-up, never proof.
+        when {
+            privateFuturesFillDemandsImmediateReconcile(event) ->
+                scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
+            privateFuturesStateEventDemandsImmediateReconcile(event) ->
+                scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_URGENT", force = true)
         }
         schedulePrivateEventDrain()
     }
@@ -8792,8 +8802,11 @@ private class NativeEngine(
                                 val event = JSONObject(record.rawJson)
                                 // An event replayed after process death has no surviving
                                 // urgent worker. Recreate the fill wake-up before applying it.
-                                if (privateFuturesFillDemandsImmediateReconcile(event)) {
-                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
+                                when {
+                                    privateFuturesFillDemandsImmediateReconcile(event) ->
+                                        scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
+                                    privateFuturesStateEventDemandsImmediateReconcile(event) ->
+                                        scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_DURABLE_REPLAY", force = true)
                                 }
                                 handleUserEventSerialized(event)
                                 auditStore.completePrivateUserEvent(record.eventId, accountFingerprint)
@@ -8869,10 +8882,10 @@ private class NativeEngine(
         when (eventType) {
             "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
             "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
-                // The urgent fill was already queued on the WS callback,
-                // before this (possibly delayed) event-loop step. Avoid
-                // forcing a redundant full REST pass for that same update.
-                if (!privateFuturesFillDemandsImmediateReconcile(event)) {
+                // Every execution/account/protection update already requested
+                // signed reconciliation in the WebSocket callback (or durable replay).
+                // Keep this serialized actor for journal/order projection only.
+                if (!privateFuturesStateEventDemandsImmediateReconcile(event)) {
                     scheduleFuturesStreamReconciliation(eventType)
                 }
                 return
