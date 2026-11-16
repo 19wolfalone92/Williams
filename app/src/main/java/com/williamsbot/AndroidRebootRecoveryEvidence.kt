@@ -71,7 +71,7 @@ internal object AndroidRebootRecoveryEvidence {
         val signedSyncAt=status.optLong("user_stream_last_successful_sync_ms",0L)
         val heartbeatAge=android.optLong("runtime_worker_heartbeat_age_ms",Long.MAX_VALUE)
         val runtimeObservedAt=if(serviceAt>0L)
-            latestAfter("SERVICE_RUNTIME_OBSERVED",serviceAt) else 0L
+            latestAfter("SERVICE_RUNTIME_OBSERVED",maxOf(serviceAt,bootAt)) else 0L
         // A verified start is NOT a verified continuing worker heartbeat.
         // In the first service-guard interval after package replacement, the
         // service's cached heartbeat can still be absent even though the
