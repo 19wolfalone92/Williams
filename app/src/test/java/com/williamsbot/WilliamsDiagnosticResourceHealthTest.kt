@@ -66,6 +66,35 @@ class WilliamsDiagnosticResourceHealthTest {
             .getString("severity"))
     }
 
+    @Test fun durablePrivateEventInboxBacklogIsExportedAndWarned() {
+        val input=queues().put("private_event_actor_queue_size",0)
+            .put("private_event_actor_queue_peak",1)
+            .put("private_event_drain_scheduled",true)
+            .put("private_event_inbox",JSONObject()
+                .put("schema","PRIVATE_USER_EVENT_INBOX_V1")
+                .put("pending_count",1000)
+                .put("other_account_pending_count",0)
+                .put("oldest_pending_age_ms",120_000L))
+        val result=WilliamsDiagnosticResourceHealth.queues(input)
+        assertEquals("WARNING",result.getString("severity"))
+        assertEquals("WARNING",result.getString("private_event_inbox_severity"))
+        assertEquals(1000L,result.getLong("private_event_pending_count"))
+        assertEquals(120_000L,result.getLong("private_event_oldest_pending_age_ms"))
+        assertEquals(0,result.getInt("private_event_actor_queue_size"))
+        assertTrue(result.getBoolean("private_event_drain_scheduled"))
+    }
+
+    @Test fun inboxForAnotherAccountIsVisibleAsWarningNotSilentlyIgnored() {
+        val input=queues().put("private_event_inbox",JSONObject()
+            .put("schema","PRIVATE_USER_EVENT_INBOX_V1")
+            .put("pending_count",0)
+            .put("other_account_pending_count",3))
+        val result=WilliamsDiagnosticResourceHealth.queues(input)
+        assertEquals("WARNING",result.getString("private_event_inbox_severity"))
+        assertEquals(3L,result.getLong("private_event_other_account_pending_count"))
+        assertEquals("WARNING",result.getString("severity"))
+    }
+
     @Test fun noResourceDiagnosticIsAllowedToMutateTrading() {
         val result=WilliamsDiagnosticResourceHealth.snapshot(
             heap(150L*MiB),rate(),queues())
