@@ -27,6 +27,93 @@ internal class FuturesExecutionStore(context: Context) :
             .put("observed_at_ms", System.currentTimeMillis()).put("schema_version", DATABASE_VERSION)
     }.getOrElse { JSONObject().put("ok", false).put("error", safeDiagnosticText(it.message.orEmpty())) }
 
+    private fun ensureIntentShadowSchema(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS futures_intent_shadow(
+                ordinal INTEGER PRIMARY KEY NOT NULL,
+                client_id TEXT NOT NULL DEFAULT '',
+                symbol TEXT NOT NULL DEFAULT '',
+                intent_role TEXT NOT NULL DEFAULT 'ENTRY',
+                campaign_status TEXT NOT NULL DEFAULT '',
+                order_status TEXT NOT NULL DEFAULT '',
+                exchange_status TEXT NOT NULL DEFAULT '',
+                protection_status TEXT NOT NULL DEFAULT '',
+                strategy_profile TEXT NOT NULL DEFAULT '',
+                payload_sha256 TEXT NOT NULL,
+                projected_at_ms INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_futures_intent_shadow_client ON futures_intent_shadow(client_id)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_futures_intent_shadow_symbol ON futures_intent_shadow(symbol, intent_role, campaign_status)")
+    }
+
+    /** The shadow is rebuilt atomically but never becomes execution authority in this phase. */
+    private fun replaceIntentShadow(db: SQLiteDatabase, rawJson: String) {
+        val projection = projectFuturesCampaignIntents(rawJson)
+            ?: error("FUTURES_INTENT_SHADOW_PROJECTION_INVALID")
+        db.delete("futures_intent_shadow", null, null)
+        val now = System.currentTimeMillis()
+        projection.rows.forEach { item ->
+            val row = ContentValues().apply {
+                put("ordinal", item.ordinal)
+                put("client_id", item.clientId)
+                put("symbol", item.symbol)
+                put("intent_role", item.intentRole)
+                put("campaign_status", item.campaignStatus)
+                put("order_status", item.orderStatus)
+                put("exchange_status", item.exchangeStatus)
+                put("protection_status", item.protectionStatus)
+                put("strategy_profile", item.strategyProfile)
+                put("payload_sha256", item.payloadSha256)
+                put("projected_at_ms", now)
+            }
+            check(db.insertOrThrow("futures_intent_shadow", null, row) != -1L) {
+                "FUTURES_INTENT_SHADOW_WRITE_FAILED"
+            }
+        }
+    }
+
+    @Synchronized
+    private fun readIntentShadowRows(): List<FuturesIntentShadowRow> {
+        val rows = mutableListOf<FuturesIntentShadowRow>()
+        readableDatabase.query(
+            "futures_intent_shadow",
+            arrayOf("ordinal", "client_id", "symbol", "intent_role", "campaign_status",
+                "order_status", "exchange_status", "protection_status", "strategy_profile", "payload_sha256"),
+            null, null, null, null, "ordinal ASC"
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += FuturesIntentShadowRow(
+                    ordinal = cursor.getInt(0),
+                    clientId = cursor.getString(1),
+                    symbol = cursor.getString(2),
+                    intentRole = cursor.getString(3),
+                    campaignStatus = cursor.getString(4),
+                    orderStatus = cursor.getString(5),
+                    exchangeStatus = cursor.getString(6),
+                    protectionStatus = cursor.getString(7),
+                    strategyProfile = cursor.getString(8),
+                    payloadSha256 = cursor.getString(9)
+                )
+            }
+        }
+        return rows
+    }
+
+    /** Observational dual-write parity. Legacy JSON remains the only source of truth. */
+    @Synchronized
+    fun campaignIntentShadowSnapshot(): JSONObject = runCatching {
+        val canonicalRaw = readState(KEY_CAMPAIGN_INTENTS)
+        val canonical = canonicalRaw?.let(::projectFuturesCampaignIntents)
+        futuresIntentShadowParity(canonical, readIntentShadowRows())
+    }.getOrElse {
+        JSONObject()
+            .put("schema", "FUTURES_INTENT_SHADOW_PARITY_V1")
+            .put("severity", "NOT_VERIFIED")
+            .put("authority", "LEGACY_JSON_ONLY")
+            .put("error", safeDiagnosticText(it.message ?: it.javaClass.simpleName))
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -37,12 +124,22 @@ internal class FuturesExecutionStore(context: Context) :
             )
             """.trimIndent()
         )
+        ensureIntentShadowSchema(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         // The key/value journal schema is forward-compatible; upgrades must never
         // discard persisted orders, campaigns, or unresolved execution state.
         onCreate(db)
+        ensureIntentShadowSchema(db)
+        db.rawQuery(
+            "SELECT state_value FROM runtime_state WHERE state_key=? LIMIT 1",
+            arrayOf(KEY_CAMPAIGN_INTENTS)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                runCatching { replaceIntentShadow(db, cursor.getString(0)) }
+            }
+        }
     }
 
     /** Migrate pre-SQLite JSON state once; SQLite wins after the first successful copy. */
@@ -68,6 +165,12 @@ internal class FuturesExecutionStore(context: Context) :
                         "SQLite migration insert failed for $key"
                     }
                 }
+            }
+            db.rawQuery(
+                "SELECT state_value FROM runtime_state WHERE state_key=? LIMIT 1",
+                arrayOf(KEY_CAMPAIGN_INTENTS)
+            ).use { cursor ->
+                if (cursor.moveToFirst()) replaceIntentShadow(db, cursor.getString(0))
             }
         }
     }
@@ -133,6 +236,9 @@ internal class FuturesExecutionStore(context: Context) :
                         ) != -1L
                     ) { "SQLite write failed for $key" }
                 }
+                values[KEY_CAMPAIGN_INTENTS]?.let { rawJson ->
+                    replaceIntentShadow(db, rawJson)
+                }
             }
             true
         } catch (_: Exception) {
@@ -142,8 +248,9 @@ internal class FuturesExecutionStore(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "williams_futures_execution.sqlite"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
         private const val KEY_POSITIONS = "positions_json"
         private const val KEY_PENDING_ENTRIES = "pending_entries_json"
+        private const val KEY_CAMPAIGN_INTENTS = "futures_campaign_intents_v2"
     }
 }
