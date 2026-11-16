@@ -8825,7 +8825,9 @@ private class NativeEngine(
                     val newReceiptArrived = privateEventReceiveGeneration.get() > generationAtStart
                     // On a persistent handler/storage failure, do not spin. A new
                     // receipt or the next process start is the next bounded retry edge.
-                    if (pending && (!failed || newReceiptArrived)) schedulePrivateEventDrain()
+                    if (privateEventDrainMayReschedule(
+                            pending, failed, generationAtStart, privateEventReceiveGeneration.get()
+                        )) schedulePrivateEventDrain()
                 }
             }
         } catch (failure: Exception) {
