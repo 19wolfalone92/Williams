@@ -176,8 +176,8 @@ internal fun privateUserEventFingerprint(rawJson: String): String {
 }
 
 internal fun privateEventDrainMayReschedule(
-    pending: Boolean, failed: Boolean, generationAtStart: Long, currentGeneration: Long
-): Boolean = pending && (!failed || currentGeneration > generationAtStart)
+    pending: Boolean?, failed: Boolean, generationAtStart: Long, currentGeneration: Long
+): Boolean = pending == true && (!failed || currentGeneration > generationAtStart)
 
 private fun privateEventSha256(value: String): String = MessageDigest.getInstance("SHA-256")
     .digest(value.toByteArray(Charsets.UTF_8))
