@@ -7565,7 +7565,10 @@ private class NativeEngine(
         }
         if (!dailyLossAllowsEntry) return rejectDecision(symbol,"DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED: "+lastError)
         if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
-        if (candidate.spreadPct !in 0.0..maxSpreadPct) return rejectDecision(symbol,"SPREAD_LIMIT: ${candidate.spreadPct} > $maxSpreadPct")
+        // Historical/scanner spread is cached read-only ranking evidence, not a
+        // current Binance executable quote. Only the fresh top-of-book below
+        // may veto NEW risk. Otherwise an old wide quote can suppress TC2
+        // entries even after the exchange spread has normalized.
         val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
             lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
                 (failure.message ?: failure.javaClass.simpleName)
@@ -10492,8 +10495,7 @@ private class NativeEngine(
         var strictSignal =
             if (campaignEngineEnabled) {
                 campaignSignals.any { williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) } &&
-                    atrPct in 0.0..0.08 &&
-                    spread <= maxSpreadPct
+                    atrPct in 0.0..0.08
             } else {
                 bullish &&
                     aoPositive &&
@@ -10897,8 +10899,9 @@ private class NativeEngine(
         // Its contained structure validates the separately labelled correction
         // mode in submitNativeFuturesCampaignEntry; it does not veto TREND entries.
         val finalSignal = if (campaignEngineEnabled) {
-            primaryDecisionSignal != null && baseCandidate.atrPct in 0.0..0.08 &&
-                baseCandidate.spreadPct in 0.0..0.0015
+            // Liquidity is a last-moment exchange gate, not an H1 structural
+            // signal attribute. A cached scanner book quote cannot erase TC2.
+            primaryDecisionSignal != null && baseCandidate.atrPct in 0.0..0.08
         } else baseCandidate.signal
         var score = (baseCandidate.score+bonus).coerceIn(0.0,100.0)
         if (!finalSignal && baseCandidate.signal) score=minOf(score,84.0)
