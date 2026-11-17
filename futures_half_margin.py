@@ -80,11 +80,25 @@ def margin_observation(account, configuration, orders, symbols):
     _require(len({x.get("asset") for x in assets}) == len(assets), "DUPLICATE_ASSET")
     usdt = [x for x in assets if x.get("asset") == "USDT"]
     _require(len(usdt) == 1, "USDT_ASSET")
+    foreign_identity = []
     for row in assets:
-        # Zero foreign wallets are allowed; foreign collateral/exposure is not.
-        if row.get("asset") != "USDT":
-            for key in ("walletBalance", "unrealizedProfit", "initialMargin"):
+        if row.get("asset") == "USDT":
+            continue
+        # In signed single-asset mode Binance's account-level totals are
+        # USDT-only. A non-USDT fee wallet (e.g. BNB) is not USDT collateral.
+        # It must NOT veto every TC2 entry. Actual foreign margin, debt or
+        # unrealized exposure is unknown to this USDT-only risk envelope.
+        foreign_wallet = _number(row.get("walletBalance"), signed=True)
+        _require(foreign_wallet >= 0, "FOREIGN_ASSET")
+        for key in ("unrealizedProfit", "initialMargin", "positionInitialMargin",
+                    "openOrderInitialMargin", "maintMargin"):
+            if foreign_wallet != 0:
+                _require(key in row, "FOREIGN_ASSET_UNVERIFIED")
+            if key in row or key in ("unrealizedProfit", "initialMargin"):
                 _require(_number(row.get(key), signed=True) == 0, "FOREIGN_ASSET")
+        if "crossUnPnl" in row:
+            _require(_number(row["crossUnPnl"], signed=True) == 0, "FOREIGN_ASSET")
+        foreign_identity.append((row.get("asset"), foreign_wallet))
     asset = usdt[0]
     _require(abs(_number(asset.get("walletBalance")) - wallet) <= Decimal("0.00000001"), "USDT_WALLET")
     asset_initial = _number(asset.get("initialMargin"))
@@ -159,7 +173,8 @@ def margin_observation(account, configuration, orders, symbols):
                position_margin + max(confirmed_orders, pending))
     return {"base": min(wallet, equity), "available": available, "confirmed": confirmed,
             "used": used, "cost_notional": cost_notional, "orders": by_client, "live": live,
-            "identity": (wallet, tuple(sorted(position_identity)), tuple(sorted(order_identity))),
+            "identity": (wallet, tuple(sorted(position_identity)), tuple(sorted(order_identity)),
+                         tuple(sorted(foreign_identity))),
             "symbols": symbols}
 
 
