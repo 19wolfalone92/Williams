@@ -48,14 +48,14 @@ class FuturesFinalTransportGateTest {
             assertEquals(2, requests.count { it.method == "POST" })
         }
     }
-    @Test fun managementOnlySymbolsRejectEveryExposureDoorAndKeepStopsExitsAndReads() {
-        val legacy=APPROVED_FUTURES_SYMBOLS.filter { it !in williamsNewRiskSymbols }
-        assertEquals(setOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"),legacy.toSet())
-        for(symbol in legacy) for(direction in listOf("LONG","SHORT")) {
-            val requests=mutableListOf<Request>()
-            val client=OkHttpClient.Builder().addInterceptor { chain ->
-                val r=chain.request();requests+=r
-                response(r,when(r.url.encodedPath) {
+    @Test fun restoredFivePairsReachHalfMarginFenceAndKeepStopsAndExits() {
+        val restored = listOf("SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT")
+        assertTrue(restored.all { it in williamsNewRiskSymbols })
+        for (symbol in restored) for (direction in listOf("LONG", "SHORT")) {
+            val requests = mutableListOf<Request>()
+            val client = OkHttpClient.Builder().addInterceptor { chain ->
+                val r = chain.request(); requests += r
+                response(r, when (r.url.encodedPath) {
                     "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
                     "/fapi/v1/positionSide/dual" -> """{"dualSidePosition":false}"""
                     "/fapi/v1/premiumIndex" -> """{"symbol":"$symbol","markPrice":"100"}"""
@@ -64,25 +64,44 @@ class FuturesFinalTransportGateTest {
                     else -> "{}"
                 })
             }.build()
-            val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",client)
-            val side=if(direction=="LONG") "BUY" else "SELL"
-            val actions=listOf<()->Unit>(
-                { adapter.newOrder(symbol,side,"1",false,"W2E_DENIED") },
-                { adapter.placeLimitOrder(symbol,side,"1","100",false,false,"W2E_DENIED") },
-                { adapter.placeConditionalEntry(symbol,direction,"STOP","1",if(direction=="LONG") "101" else "99","W2E_DENIED") }
+            val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+            // A restored symbol must reach the next independent risk fence;
+            // symbol admission alone must never authorize an HTTP order.
+            adapter.halfMarginTransportFence = { error("FUTURES_HALF_MARGIN_UNKNOWN:STALE") }
+            val side = if (direction == "LONG") "BUY" else "SELL"
+            val actions = listOf<() -> Unit>(
+                { adapter.newOrder(symbol, side, "1", false, "W2E_MARGIN_BLOCK") },
+                { adapter.placeLimitOrder(symbol, side, "1", "100", false, false, "W2E_MARGIN_BLOCK") },
+                { adapter.placeConditionalEntry(symbol, direction, "STOP", "1",
+                    if (direction == "LONG") "101" else "99", "W2E_MARGIN_BLOCK") }
             )
-            for(action in actions) {
-                try { action();fail("Management-only symbol admitted new risk") }
-                catch(expected:FuturesExposureNotSubmittedException) {
-                    assertTrue(expected.message.orEmpty().contains("FUTURES_SYMBOL_MANAGEMENT_ONLY"))
+            for (action in actions) {
+                try { action(); fail("Unknown margin must veto restored symbol entry") }
+                catch (expected: FuturesExposureNotSubmittedException) {
+                    assertTrue(expected.toString(), expected.message.orEmpty().contains("FUTURES_HALF_MARGIN"))
                 }
             }
-            assertFalse(requests.any { it.method=="POST" })
+            assertFalse(requests.any { it.method == "POST" })
             adapter.positions()
-            adapter.placeProtectiveStop(symbol,direction,if(direction=="LONG") "95" else "105","W2P_LEGACY")
-            adapter.closeMarketPosition(symbol,direction,"1","W2X_LEGACY")
-            assertEquals(2,requests.count { it.method=="POST" })
+            adapter.placeProtectiveStop(symbol, direction, if (direction == "LONG") "95" else "105", "W2P_RESTORED")
+            adapter.closeMarketPosition(symbol, direction, "1", "W2X_RESTORED")
+            assertEquals(2, requests.count { it.method == "POST" })
         }
+    }
+
+    @Test fun unapprovedPairCannotBypassFinalNewRiskSymbolGate() {
+        val requests = mutableListOf<Request>()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            val r = chain.request(); requests += r
+            response(r, if (r.url.encodedPath == "/fapi/v1/time")
+                """{"serverTime":${System.currentTimeMillis()}}""" else "{}")
+        }.build()
+        val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
+        try { adapter.newOrder("SANTOSUSDT", "BUY", "1", false, "W2E_OUTSIDE"); fail("Unapproved order") }
+        catch (expected: FuturesExposureNotSubmittedException) {
+            assertTrue(expected.toString(), expected.message.orEmpty().contains("FUTURES_SYMBOL_NOT_APPROVED"))
+        }
+        assertFalse(requests.any { it.method == "POST" })
     }
     @Test fun exchangeCooldownRejectionBeforePostHasADefiniteNotSubmittedOutcome() {
         var posts = 0
