@@ -88,6 +88,9 @@ def margin_observation(account, configuration, orders, symbols):
         # USDT-only. A non-USDT fee wallet (e.g. BNB) is not USDT collateral.
         # It must NOT veto every TC2 entry. Actual foreign margin, debt or
         # unrealized exposure is unknown to this USDT-only risk envelope.
+        foreign_asset = row.get("asset")
+        _require(type(foreign_asset) is str and foreign_asset.isascii()
+                 and foreign_asset.isalnum() and foreign_asset.isupper(), "FOREIGN_ASSET_IDENTITY")
         foreign_wallet = _number(row.get("walletBalance"), signed=True)
         _require(foreign_wallet >= 0, "FOREIGN_ASSET")
         for key in ("unrealizedProfit", "initialMargin", "positionInitialMargin",
