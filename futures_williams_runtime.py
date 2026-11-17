@@ -2094,6 +2094,11 @@ class FuturesWilliamsRuntime:
 
     @serialized_campaign_operation
     def _arm_add_on(self, campaign, signal):
+        # A legacy/pending owner does not authorize an arbitrary, partially
+        # populated add-on object. Reject malformed evidence before touching
+        # the exchange or attempting campaign-state transitions.
+        if any(not hasattr(signal, field) for field in ("symbol", "timeframe", "signal_id")):
+            raise RuntimeError("FUTURES_ADD_ON_SIGNAL_UNVERIFIED")
         blocker = new_risk_symbol_blocker(signal.symbol)
         if blocker:
             raise RuntimeError(blocker)
