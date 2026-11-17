@@ -18,6 +18,17 @@ def test_shared_utc_policy_boundaries(case):
 def test_shared_signal_lifecycle(case):
     assert signal_lifecycle(case['signal'],case['owner'],case['now'],case['snapshot_at_ms'],case['current'])==case['state']
 
+@pytest.mark.parametrize(('reconciled','created','expected'), [
+    (0, 1792411199900, 'PENDING_UNVERIFIED'),
+    (1792411079999, 1792411199900, 'PENDING_UNVERIFIED'),
+    (1792411199000, 0, 'BINANCE_PENDING'),
+])
+def test_local_intent_timestamp_is_not_signed_exchange_confirmation(reconciled, created, expected):
+    case=next(c for c in CONTRACT['lifecycle_cases'] if c['name']=='NEW')
+    owner=dict(case['owner'],last_reconciled_ms=reconciled,created_at_ms=created)
+    assert signal_lifecycle(case['signal'],owner,case['now'],case['snapshot_at_ms'],True)==expected
+
+
 @pytest.mark.parametrize('policy',[dict(mode='AUTO'),dict(mode='UTC_WINDOW',start_utc='08:00',end_utc='08:00'),dict(start_utc='8:00'),dict(end_utc='24:00')])
 def test_invalid_policy_cannot_widen_entry_hours(policy):
     with pytest.raises(ValueError):EntryTimePolicy(**policy)
