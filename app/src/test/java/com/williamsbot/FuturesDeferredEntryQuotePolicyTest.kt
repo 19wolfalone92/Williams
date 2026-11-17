@@ -4,8 +4,6 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FuturesDeferredEntryQuotePolicyTest {
-    private val kind = NativeFuturesCampaignCoordinator.EntryKind
-
     @Test fun deferredStopArmingDoesNotDependOnCurrentBidAsk() {
         for (spread in listOf(0.01, 0.0043751709, 0.50, Double.NaN, Double.POSITIVE_INFINITY)) {
             // There is no executable market order at the instant of arming.
