@@ -24,7 +24,9 @@ internal fun williamsSignalLifecycle(s:JSONObject,owner:JSONObject?,now:Long,sna
         if(order=="FILLED") return "FILLED"
         if(order=="PARTIALLY_FILLED") return "PARTIAL_FILL"
         if(order in setOf("NEW","ACCEPTED","WORKING") && owner.optString("campaign_status")=="ENTRY_PENDING") {
-            val observed=maxOf(owner.optLong("last_reconciled_ms"),owner.optLong("created_at_ms"))
+            // Local intent creation is NOT evidence of an exchange-observed order.
+            // Only the last signed REST reconciliation can make this state verified.
+            val observed=owner.optLong("last_reconciled_ms",0L)
             return if(observed>0 && now>=observed && now-observed<=120_000L) "BINANCE_PENDING" else "PENDING_UNVERIFIED"
         }
         if(order.contains("UNKNOWN") || order in setOf("TRIGGERED","PENDING")) return "PENDING_UNVERIFIED"
