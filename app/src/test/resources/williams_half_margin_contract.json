@@ -17,6 +17,581 @@
             "initialMargin": "440",
             "positionInitialMargin": "440",
             "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0",
+            "initialMargin": "0",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_fee_wallet_is_not_collateral",
+      "expected": "PASS"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0",
+            "initialMargin": "0.1",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_wallet_used_as_margin_blocks",
+      "expected": "UNKNOWN:FOREIGN_ASSET"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0",
+            "initialMargin": "0",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0.1",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_wallet_open_order_margin_blocks",
+      "expected": "UNKNOWN:FOREIGN_ASSET"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0.1",
+            "initialMargin": "0",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_wallet_unrealized_pnl_blocks",
+      "expected": "UNKNOWN:FOREIGN_ASSET"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "-0.1",
+            "unrealizedProfit": "0",
+            "initialMargin": "0",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_wallet_negative_debt_blocks",
+      "expected": "UNKNOWN:FOREIGN_ASSET"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0",
+            "initialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "non_usdt_wallet_unknown_liability_fields_block",
+      "expected": "UNKNOWN:FOREIGN_ASSET_UNVERIFIED"
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
+          },
+          {
+            "asset": "BNB",
+            "walletBalance": "0.7",
+            "unrealizedProfit": "0",
+            "initialMargin": "0",
+            "positionInitialMargin": "0",
+            "openOrderInitialMargin": "0",
+            "maintMargin": "0",
+            "crossUnPnl": "0"
+          }
+        ],
+        "positions": [
+          {
+            "symbol": "BTCUSDT",
+            "positionSide": "BOTH",
+            "positionAmt": "8.8",
+            "initialMargin": "440",
+            "isolatedWallet": "440",
+            "isolatedMargin": "440",
+            "updateTime": 100
+          }
+        ]
+      },
+      "configuration": {
+        "canTrade": true,
+        "dualSidePosition": false,
+        "multiAssetsMargin": false
+      },
+      "orders": [],
+      "symbols": {
+        "ETHUSDT": {
+          "symbol": "ETHUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        },
+        "SOLUSDT": {
+          "symbol": "SOLUSDT",
+          "leverage": 2,
+          "marginType": "ISOLATED",
+          "mark_price": "100"
+        }
+      },
+      "proposal": {
+        "symbol": "ETHUSDT",
+        "client_id": "new",
+        "side": "BUY",
+        "quantity": ".6",
+        "price": "100",
+        "leverage": 2
+      },
+      "liabilities": [],
+      "id": "fee_wallet_changed_across_two_signed_reads",
+      "expected": "UNKNOWN:READS_CHANGED",
+      "second": {
+        "account": {
+          "totalWalletBalance": "1000",
+          "totalUnrealizedProfit": "0",
+          "totalMarginBalance": "1000",
+          "availableBalance": "1000",
+          "totalInitialMargin": "440",
+          "totalPositionInitialMargin": "440",
+          "totalOpenOrderInitialMargin": "0",
+          "assets": [
+            {
+              "asset": "USDT",
+              "walletBalance": "1000",
+              "initialMargin": "440",
+              "positionInitialMargin": "440",
+              "openOrderInitialMargin": "0"
+            },
+            {
+              "asset": "BNB",
+              "walletBalance": "0.8",
+              "unrealizedProfit": "0",
+              "initialMargin": "0",
+              "positionInitialMargin": "0",
+              "openOrderInitialMargin": "0",
+              "maintMargin": "0",
+              "crossUnPnl": "0"
+            }
+          ],
+          "positions": [
+            {
+              "symbol": "BTCUSDT",
+              "positionSide": "BOTH",
+              "positionAmt": "8.8",
+              "initialMargin": "440",
+              "isolatedWallet": "440",
+              "isolatedMargin": "440",
+              "updateTime": 100
+            }
+          ]
+        },
+        "configuration": {
+          "canTrade": true,
+          "dualSidePosition": false,
+          "multiAssetsMargin": false
+        },
+        "orders": [],
+        "symbols": {
+          "ETHUSDT": {
+            "symbol": "ETHUSDT",
+            "leverage": 2,
+            "marginType": "ISOLATED",
+            "mark_price": "100"
+          },
+          "SOLUSDT": {
+            "symbol": "SOLUSDT",
+            "leverage": 2,
+            "marginType": "ISOLATED",
+            "mark_price": "100"
+          }
+        },
+        "proposal": {
+          "symbol": "ETHUSDT",
+          "client_id": "new",
+          "side": "BUY",
+          "quantity": ".6",
+          "price": "100",
+          "leverage": 2
+        },
+        "liabilities": [],
+        "id": "fee_wallet_changed_across_two_signed_reads",
+        "expected": "UNKNOWN:READS_CHANGED"
+      }
+    },
+    {
+      "account": {
+        "totalWalletBalance": "1000",
+        "totalUnrealizedProfit": "0",
+        "totalMarginBalance": "1000",
+        "availableBalance": "1000",
+        "totalInitialMargin": "440",
+        "totalPositionInitialMargin": "440",
+        "totalOpenOrderInitialMargin": "0",
+        "assets": [
+          {
+            "asset": "USDT",
+            "walletBalance": "1000",
+            "initialMargin": "440",
+            "positionInitialMargin": "440",
+            "openOrderInitialMargin": "0"
           }
         ],
         "positions": [
@@ -2709,8 +3284,8 @@
         "leverage": 2
       },
       "liabilities": [],
-      "id": "foreign_asset_collateral",
-      "expected": "UNKNOWN:FOREIGN_ASSET"
+      "id": "foreign_asset_missing_margin_fields",
+      "expected": "UNKNOWN:FOREIGN_ASSET_UNVERIFIED"
     },
     {
       "account": {
