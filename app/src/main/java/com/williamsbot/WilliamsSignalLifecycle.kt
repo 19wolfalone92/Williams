@@ -91,7 +91,7 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
             JSONObject(s.toString()).put("state",williamsSignalLifecycle(s,owner,now,data.optLong("snapshot_at_ms"),s.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms")))
                 .put("can_place_orders",false).apply { if(owner!=null) {
                     put("client_id",owner.optString("client_id")).put("order_status",owner.optString("order_status"))
-                    put("cancel_reason",owner.optString("cancel_reason")).put("exchange_observed_at_ms",maxOf(owner.optLong("last_reconciled_ms"),owner.optLong("created_at_ms")))
+                    put("cancel_reason",owner.optString("cancel_reason")).put("exchange_observed_at_ms",owner.optLong("last_reconciled_ms",0L))
                     put("trigger",owner.optString("entry_price").toDoubleOrNull() ?: s.optDouble("trigger"))
                     put("protective_stop",owner.optString("protective_stop").toDoubleOrNull() ?: s.optDouble("protective_stop"))
                 } }
