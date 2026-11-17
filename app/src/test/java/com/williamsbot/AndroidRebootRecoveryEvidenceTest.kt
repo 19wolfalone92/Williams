@@ -38,6 +38,36 @@ class AndroidRebootRecoveryEvidenceTest {
             AndroidRebootRecoveryEvidence.assess(chain(),android(),old,now).getString("status"))
     }
 
+    @Test fun diag9NewApkFirstGuardNotMisreportedAsDeadEngine() {
+        // A real Samsung archive captured ~29s after PACKAGE_REPLACED:
+        // new service + verified worker startup, but guard heartbeat still null.
+        val reboot=now-3L*60L*60L*1000L
+        val service=now-29_000L
+        val events=JSONObject().put("events",JSONArray()
+            .put(record("BOOT_COMPLETED_OBSERVED",reboot))
+            .put(record("BOOT_OPT_IN_VERIFIED",reboot+1_000L))
+            .put(record("BOOT_FGS_START_REQUESTED",service-600L))
+            .put(record("SERVICE_FOREGROUND_CREATED",service))
+            .put(record("SERVICE_RUNTIME_OBSERVED",service+10_000L)))
+        val phone=android().put("runtime_worker_heartbeat_age_ms",JSONObject.NULL)
+        val awaiting= status().put("user_stream_last_successful_sync_ms",0L)
+            .put("user_stream_sync_required",true)
+        val assessed=AndroidRebootRecoveryEvidence.assess(events,phone,awaiting,now)
+        assertEquals("BOOT_WORKER_HEARTBEAT_PENDING_AFTER_VERIFIED_START",
+            assessed.getString("status"))
+        assertTrue(assessed.getBoolean("worker_startup_observed_pending_heartbeat"))
+        assertFalse(assessed.getBoolean("worker_live_now"))
+        assertFalse(assessed.getBoolean("signed_sync_after_boot"))
+        assertFalse(assessed.getBoolean("recovery_technical_proven"))
+        // Once a fresh loop timestamp exists the failure, if any, belongs to
+        // the unsigned CURRENT user-stream sync, not an invented dead worker.
+        phone.put("runtime_worker_heartbeat_age_ms",2_000L)
+        val afterHeartbeat=AndroidRebootRecoveryEvidence.assess(events,phone,awaiting,now)
+        assertEquals("BOOT_SIGNED_RECONCILIATION_NOT_VERIFIED",
+            afterHeartbeat.getString("status"))
+        assertFalse(afterHeartbeat.getBoolean("recovery_technical_proven"))
+    }
+
     @Test fun missedBroadcastAndStaleWorkerCannotFakeRecovery() {
         assertEquals("NO_REBOOT_EVIDENCE_RETAINED",
             AndroidRebootRecoveryEvidence.assess(JSONObject(),android(),status(),now).getString("status"))
@@ -48,4 +78,77 @@ class AndroidRebootRecoveryEvidenceTest {
         assertEquals("BOOT_OPT_IN_NOT_VERIFIED",
             AndroidRebootRecoveryEvidence.assess(missing,android(),status(),now).getString("status"))
     }
+    @Test fun diag20FgsCreated21msBeforeBootReceiverIsNotALostService() {
+        // Captured device chronology: FGS created at elapsed 54030,
+        // BOOT_COMPLETED recorded at elapsed 54051; restart request followed.
+        val events=JSONObject().put("events",JSONArray()
+            .put(record("SERVICE_FOREGROUND_CREATED",boot-21L)
+                .put("elapsed_ms",54_030L))
+            .put(record("BOOT_COMPLETED_OBSERVED",boot)
+                .put("elapsed_ms",54_051L))
+            .put(record("BOOT_OPT_IN_VERIFIED",boot+472L)
+                .put("elapsed_ms",54_523L))
+            .put(record("BOOT_FGS_START_REQUESTED",boot+504L)
+                .put("elapsed_ms",54_555L))
+            .put(record("SERVICE_RUNTIME_OBSERVED",boot+25_000L)
+                .put("elapsed_ms",79_051L)))
+        val result=AndroidRebootRecoveryEvidence.assess(events,android(),status(),now)
+        assertEquals("BOOT_MONITOR_AND_SIGNED_RECONCILIATION_OBSERVED",
+            result.getString("status"))
+        assertEquals(boot-21L,result.getLong("fgs_created_at_ms"))
+        assertTrue(result.getBoolean("fgs_created_before_boot_broadcast"))
+        assertTrue(result.getBoolean("recovery_technical_proven"))
+        assertFalse(result.getBoolean("continuous_24h_proven"))
+    }
+
+    @Test fun preBroadcastServiceNeedsSameBootMonotonicProofAndRuntimeStart() {
+        val base=JSONArray()
+            .put(record("SERVICE_FOREGROUND_CREATED",boot-21L))
+            .put(record("BOOT_COMPLETED_OBSERVED",boot).put("elapsed_ms",54_051L))
+            .put(record("BOOT_OPT_IN_VERIFIED",boot+472L))
+            .put(record("BOOT_FGS_START_REQUESTED",boot+504L))
+            .put(record("SERVICE_RUNTIME_OBSERVED",boot+25_000L))
+        val noElapsed=AndroidRebootRecoveryEvidence.assess(
+            JSONObject().put("events",base),android(),status(),now)
+        assertEquals("BOOT_FGS_CREATION_NOT_OBSERVED",noElapsed.getString("status"))
+        assertFalse(noElapsed.getBoolean("recovery_technical_proven"))
+
+        base.getJSONObject(0).put("elapsed_ms",90_000L) // different boot/epoch
+        val wrongEpoch=AndroidRebootRecoveryEvidence.assess(
+            JSONObject().put("events",base),android(),status(),now)
+        assertEquals("BOOT_FGS_CREATION_NOT_OBSERVED",wrongEpoch.getString("status"))
+
+        base.getJSONObject(0).put("elapsed_ms",54_030L)
+        base.getJSONObject(4).put("at_ms",boot-1L)
+        val beforeBootOnly=AndroidRebootRecoveryEvidence.assess(
+            JSONObject().put("events",base),android(),status(),now)
+        assertEquals("BOOT_RUNTIME_START_NOT_OBSERVED_AFTER_BROADCAST",
+            beforeBootOnly.getString("status"))
+        base.remove(4) // no post-boot worker start observation
+        val noRuntime=AndroidRebootRecoveryEvidence.assess(
+            JSONObject().put("events",base),android(),status(),now)
+        assertEquals("BOOT_RUNTIME_START_NOT_OBSERVED_AFTER_BROADCAST",
+            noRuntime.getString("status"))
+        assertFalse(noRuntime.getBoolean("recovery_technical_proven"))
+    }
+
+    @Test fun postBootServiceMustStillHaveCurrentWorkerAndSignedExchangeSync() {
+        val events=JSONObject().put("events",JSONArray()
+            .put(record("SERVICE_FOREGROUND_CREATED",boot-21L)
+                .put("elapsed_ms",54_030L))
+            .put(record("BOOT_COMPLETED_OBSERVED",boot)
+                .put("elapsed_ms",54_051L))
+            .put(record("BOOT_OPT_IN_VERIFIED",boot+472L))
+            .put(record("BOOT_FGS_START_REQUESTED",boot+504L))
+            .put(record("SERVICE_RUNTIME_OBSERVED",boot+25_000L)))
+        val stale=android().put("runtime_worker_heartbeat_age_ms",180_000L)
+        assertEquals("BOOT_NATIVE_WORKER_NOT_PROVEN_LIVE",
+            AndroidRebootRecoveryEvidence.assess(events,stale,status(),now)
+                .getString("status"))
+        val unsigned=status().put("user_stream_sync_required",true)
+        assertEquals("BOOT_SIGNED_RECONCILIATION_NOT_VERIFIED",
+            AndroidRebootRecoveryEvidence.assess(events,android(),unsigned,now)
+                .getString("status"))
+    }
+
 }

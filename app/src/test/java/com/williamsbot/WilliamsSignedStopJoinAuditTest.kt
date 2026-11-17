@@ -106,13 +106,30 @@ class WilliamsSignedStopJoinAuditTest {
             .put("reconciliation_running",true)
             .put("exchange_protection_observations",JSONArray().put(proof()))
         val out=WilliamsSignedStopJoinAudit.inspect(status(),signed,now)
-        assertEquals("WARNING",out.getString("severity"))
+        assertEquals("NOT_VERIFIED",out.getString("severity"))
         assertEquals("NOT_VERIFIED_COORDINATOR_RECONCILING",
             out.getJSONArray("positions").getJSONObject(0).getString("stop_proof_state"))
+        val row=out.getJSONArray("positions").getJSONObject(0)
+        assertTrue(row.getBoolean("matching_side_quantity_and_stop"))
+        assertFalse(row.getBoolean("protection_verification_complete"))
+        assertEquals(1,out.getInt("reconciliation_pending_count"))
+        assertEquals(0,out.getInt("signed_stop_matched_count"))
+        assertFalse(out.getBoolean("can_trade_or_manage_stops"))
         signed.put("reconciliation_running",false)
         val display=status(position().put("strategy_ownership_verified",false))
         val mis=WilliamsSignedStopJoinAudit.inspect(display,signed,now)
         assertEquals("NOT_VERIFIED_DISPLAY_AND_PROOF_NOT_SAME_GENERATION",
             mis.getJSONArray("positions").getJSONObject(0).getString("stop_proof_state"))
+    }
+
+    @Test fun reconciliationCannotHideAnActualSignedStopMismatch() {
+        for (badProof in listOf(proof(stop="233.05"),proof(qty="-0.505"),
+            proof().put("stop_proof","STOP_UNCONFIRMED"))) {
+            val out=WilliamsSignedStopJoinAudit.inspect(status(),JSONObject()
+                .put("state","RECONCILE_REQUIRED").put("reconciliation_running",true)
+                .put("exchange_protection_observations",JSONArray().put(badProof)),now)
+            assertEquals(out.toString(),"WARNING",out.getString("severity"))
+            assertEquals(0,out.getInt("signed_stop_matched_count"))
+        }
     }
 }

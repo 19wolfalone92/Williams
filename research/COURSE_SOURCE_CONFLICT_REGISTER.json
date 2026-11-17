@@ -1,0 +1,144 @@
+{
+  "schema": "COURSE_SOURCE_CAVEATS_V1",
+  "source_id": "COURSE_EN",
+  "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+  "scope": "SUPPLIED_HOME_STUDY_SCAN_WITH_UNATTRIBUTED_HANDWRITING_NOT_CERTIFIED_ORIGINAL_ERRATA",
+  "conflicts": [
+    {
+      "conflict_id": "COURSE.CAVEAT.DRIFTER_ANNOTATION",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        19
+      ],
+      "visual_evidence_pages": [
+        19
+      ],
+      "observation": "Printed drifter list repeats1-2; the supplied scan has a handwritten correction to1-3, consistent with the adjacent drawing.",
+      "handling": "Keep print and handwriting distinct; annotator identity is not authenticated.",
+      "status": "UNATTRIBUTED_HANDWRITTEN_CORRECTION",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.W5_PROJECTION_WORDING",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        39,
+        44,
+        51
+      ],
+      "visual_evidence_pages": [
+        44,
+        51
+      ],
+      "observation": "Body measures p0-to-p3 distance; summary51 literally says combined W1+W3 length.",
+      "handling": "Do not silently identify the sum of impulse lengths with the endpoint distance across a correction; exact interpretation remains unresolved.",
+      "status": "UNRESOLVED_FORMULA_WORDING",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.CORRECTION_NEGATION",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        52
+      ],
+      "visual_evidence_pages": [
+        52
+      ],
+      "observation": "Handwritten not and and qualify a printed hard-and-fast-rule sentence. OCR misses the handwritten negation.",
+      "handling": "Do not promote the unqualified printed sentence as an absolute rule; the supplied annotation is visible but its author is unknown.",
+      "status": "UNATTRIBUTED_HANDWRITTEN_CORRECTION",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.THUMB_IDEAL_VS_WEAK",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        69,
+        71,
+        92
+      ],
+      "visual_evidence_pages": [
+        71
+      ],
+      "observation": "Body69 accepts any two increasing-volume Green/Squat bars;71 prefers one of each and calls missing mix weak.",
+      "handling": "Record quality versus eligibility separately; weak is not automatically invalid and no mandatory mixed-pair veto follows.",
+      "status": "QUALITY_APPLICABILITY_DISTINCTION",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.CORRECTIVE_REMAINDER_SIDE",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        83,
+        84
+      ],
+      "visual_evidence_pages": [
+        84
+      ],
+      "observation": "Covering two in the down correction is said to leave one long, while following short adds/buy-seven-to-net-long-three assume one remaining short.",
+      "handling": "Retain printed side conflict; do not interpret a partial cover as an actual reversal or fabricate signed fills.",
+      "status": "VISIBLE_DIRECTION_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.AIRBAG_REFERENCE_SIGN",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        71,
+        86,
+        87
+      ],
+      "visual_evidence_pages": [
+        71,
+        86,
+        87
+      ],
+      "observation": "Course86 literally says bottom plus one tick for the described long airbag; continuation87 speaks of protection below the reverse point.",
+      "handling": "Keep this reference/sign ambiguity separate from other editions that describe a tick beyond the low. Do not choose a numeric offset without a complete applicability specification.",
+      "status": "UNRESOLVED_POINT_REFERENCE",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "COURSE.CAVEAT.EXTERNAL_LEVEL5",
+      "source_id": "COURSE_EN",
+      "source_sha256": "fc57f707378087bfc5146db5e242c51ce8135e0b359f0c607305b364e0decfca",
+      "pdf_pages": [
+        84,
+        119,
+        122
+      ],
+      "visual_evidence_pages": [
+        84,
+        119,
+        122
+      ],
+      "observation": "Actual PPT examples are referred to external Computorial; final notice explicitly defers individual material to personal tutorial.",
+      "handling": "122 physical pages do not constitute all external course media or a complete individual Level5 curriculum.",
+      "status": "MATERIAL_NOT_INCLUDED_IN_SUPPLIED_FILE",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    }
+  ],
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

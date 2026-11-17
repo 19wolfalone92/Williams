@@ -49,7 +49,12 @@ def test_full_trace_is_available_once_in_status_not_built_twice_for_zip():
     assert "private fun diagnosticSettings(): JSONObject = buildSettings(includeDecisionTraces = false)" in source
     assert "fun settings(): JSONObject = buildSettings(includeDecisionTraces = true)" in source
     assert '.apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }' in source
-    assert '.put("decision_traces", decisionTraceSnapshot())' in source or '.put("decision_traces",decisionTraceSnapshot())' in source
+    # Public status retains full traces, but forensic status must not eagerly
+    # build them just to discard them before ZIP export.
+    assert "fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true)" in source
+    assert "status(fast = true, includeDecisionTraces = false)" in diagnostic
+    assert 'check(!statusSnapshot.has("decision_traces"))' in diagnostic
+    assert '.put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))' in diagnostic
     # An omitted tree MUST NOT make provenance disappear or claim execution.
     projection = PROJECTION.read_text(encoding="utf-8")
     assert '"status.decision_traces"' in projection

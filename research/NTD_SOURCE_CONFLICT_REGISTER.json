@@ -1,0 +1,282 @@
+{
+  "schema": "NTD_SOURCE_CONFLICTS_V1",
+  "source_id": "NTD_RU",
+  "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+  "scope": "SUPPLIED_RUSSIAN_REFLOW_NOT_CERTIFIED_ORIGINAL_ENGLISH_ERRATA",
+  "conflicts": [
+    {
+      "conflict_id": "NTD.CONFLICT.SQUARING",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        27
+      ],
+      "visual_evidence_pages": [
+        27
+      ],
+      "observation": "Repeated-squaring example prints1.21 squared1.461 and0.81 squared0.06561; literal Decimal values are1.4641 and0.6561.",
+      "handling": "Keep visible printed numbers and calculated values distinct; do not certify unseen original-English errata.",
+      "status": "VISIBLE_ARITHMETIC_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.ROUNDED_DIMENSION",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        28
+      ],
+      "visual_evidence_pages": [
+        28
+      ],
+      "observation": "Printed1.618-1.58 difference0.032 is not the literal difference0.038. Exact Sierpinski/Cantor dimensions are different constants from golden-ratio quantities.",
+      "handling": "No Fibonacci identity or predictive edge follows from the rounded analogy.",
+      "status": "VISIBLE_ARITHMETIC_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.MARGINAL_SETUPS",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        34,
+        35
+      ],
+      "visual_evidence_pages": [
+        34
+      ],
+      "observation": "Opening chapter sentence includes marginal setups while surrounding discussion tells the reader to avoid them.",
+      "handling": "Retain possible missing-negation/translation ambiguity; do not introduce a marginal-entry exception.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.LIPS_SHIFT",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        36
+      ],
+      "visual_evidence_pages": [
+        36
+      ],
+      "observation": "Detailed Alligator specification gives Lips5/3; figure3-4 inset gives5/2.",
+      "handling": "Detailed5/3 and independently read TC2 code agree; supplied inset is retained as a source conflict.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.INITIAL_FRACTAL_BOUNDARY",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        38,
+        42,
+        43,
+        53,
+        54
+      ],
+      "visual_evidence_pages": [
+        38,
+        42,
+        53,
+        54
+      ],
+      "observation": "Isolated Jaw/inside-mouth wording differs from detailed first-fractal eligibility relative to Teeth at the actual break.",
+      "handling": "Do not substitute a permanent pivot-time Jaw veto for the chapter4 current-Teeth rule.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.UNUSED_BUY_LABEL",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        50
+      ],
+      "visual_evidence_pages": [
+        50
+      ],
+      "observation": "Last sentence calls ignored signals above Teeth buy signals, conflicting with the surrounding buy-above/sell-below rule.",
+      "handling": "Retain directional-label ambiguity; no automatic reversal of the explicit chapter rule.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.AO_MEDIAN_SIGN",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        55
+      ],
+      "visual_evidence_pages": [
+        55
+      ],
+      "observation": "Body and figure5-2 print midpoint as(H-L)/2 instead of(H+L)/2. Half-range is not the bar midpoint.",
+      "handling": "Keep conflict visible; do not replace the existing median-price AO corroborated by TC2 source code.",
+      "status": "VISIBLE_FORMULA_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.AC_EXTRA_SMOOTHING",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        73
+      ],
+      "visual_evidence_pages": [
+        73
+      ],
+      "observation": "AC prose can be read as a5-bar moving average of the AO-minus-SMA5(AO) difference, unlike standard AO-SMA5(AO).",
+      "handling": "Exact original-English wording/footnote resolution unavailable; do not add an extra smoothing from this ambiguous passage.",
+      "status": "UNRESOLVED_FORMULA_WORDING",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.ZONE_TABLE_ROW6",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        98
+      ],
+      "visual_evidence_pages": [
+        98
+      ],
+      "observation": "Table7-1 row6 prints7.55 points;957.95-879.40=78.55, and39275USD/cumulative372875 use78.55 with implied500 per displayed unit.",
+      "handling": "Preserve typo cell; total904.20/452100 matches fills. Use offline explicit-number audit, not profitability gold.",
+      "status": "VISIBLE_ARITHMETIC_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.SP_QUOTE_UNITS",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        89,
+        98
+      ],
+      "visual_evidence_pages": [
+        89,
+        98
+      ],
+      "observation": "Table dollar columns imply500USD per displayed price unit; page98 prose says5USD per point and later halving.",
+      "handling": "A quote subunit may explain it. Historical exchange unit convention is unresolved; do not transfer either factor to Binance.",
+      "status": "UNRESOLVED_UNIT_CONVENTION",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.NEW_BUY_BASE",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        103,
+        104,
+        106
+      ],
+      "visual_evidence_pages": [
+        103,
+        104
+      ],
+      "observation": "Page104 calls a new higher-high bar another buy base, while103/106 and its continuation diagram describe a new lower-high pullback base.",
+      "handling": "Retain direction-wording conflict and the distinction between a continuing high and a new local base.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.SELL_WORDING",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        108,
+        111,
+        114
+      ],
+      "visual_evidence_pages": [
+        108,
+        111
+      ],
+      "observation": "Page111 labels a below-line sell illustration buy and describes a lower-low pullback where the surrounding sell-base explanation uses a higher low.",
+      "handling": "Preserve wording conflicts; explicit final adverse-zone rule doubles LONG red and SHORT green requirements.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.SEVENTH_ZONE_COLOR",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        118
+      ],
+      "visual_evidence_pages": [
+        118
+      ],
+      "observation": "The seventh bar is described first as red and later as gray in the same fifth-zone exit discussion.",
+      "handling": "Trailing continues after the fifth qualifying bar regardless of later color; do not derive exact OHLC from this label conflict.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.ANNUAL_RETURN_LABEL",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        123
+      ],
+      "visual_evidence_pages": [
+        123
+      ],
+      "observation": "Ten percent monthly is described as almost300 percent annually; constant compounding gives313.8428376721 percent ending balance but213.8428376721 percent profit.",
+      "handling": "Treat return/balance wording separately. Constant-rate illustration is neither an arithmetic-average guarantee nor a forecast.",
+      "status": "UNRESOLVED_RETURN_LABEL",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "NTD.CONFLICT.LIPS_OR_GREEN",
+      "source_id": "NTD_RU",
+      "source_sha256": "855eb052353c852f208436952b12e46d9a18badf7c1dac7ade7580d57b9f4bb4",
+      "pdf_pages": [
+        130
+      ],
+      "visual_evidence_pages": [
+        130
+      ],
+      "observation": "Exit summary says Lips or Green line whichever closer, although Lips is the Green line in this edition.",
+      "handling": "Do not invent a second independent line or a numeric selector from the redundant wording.",
+      "status": "VISIBLE_WORDING_DISAGREEMENT",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    }
+  ],
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

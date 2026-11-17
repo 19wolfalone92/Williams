@@ -142,13 +142,15 @@ def test_html_success_for_order_is_ambiguous_and_redirects_are_disabled(client):
         return response(200, "<html>gateway error</html>")
     client.session = SimpleNamespace(request=send)
     with pytest.raises(BinanceAPIError) as caught:
-        client._request("POST", "/fapi/v1/order", {}, signed=True)
+        client._request("POST", "/fapi/v1/order", {"symbol": "BTCUSDT"}, signed=True)
     assert caught.value.unknown_execution
     assert len(calls) == 1 and calls[0]["allow_redirects"] is False
 
 
 def test_runtime_unwraps_execution_result_to_exchange_payload(runtime):
-    intent = OrderIntent.new("BTCUSDT", "BUY", "STOP_MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    # Transport/persistence contract; protective management remains independent
+    # of the account-wide NEW-risk gate (covered by full lifecycle tests).
+    intent = OrderIntent.new("BTCUSDT", "BUY", "STOP_MARKET", {}, purpose="CAMPAIGN_PROTECTION")
     assert runtime._submit(intent, lambda: {"orderId": "algo:7"}) == {"orderId": "algo:7"}
 
 
@@ -167,7 +169,7 @@ def test_submitted_but_unpersisted_result_latches_reconciliation(runtime, monkey
     monkeypatch.setattr(runtime.db, "save_execution_intent", save)
     states = []
     runtime._set_state = lambda *args: states.append(args)
-    intent = OrderIntent.new("BTCUSDT", "BUY", "STOP_MARKET", {}, purpose="CAMPAIGN_ENTRY")
+    intent = OrderIntent.new("BTCUSDT", "BUY", "STOP_MARKET", {}, purpose="CAMPAIGN_PROTECTION")
     sent = []
     with pytest.raises(RuntimeError, match="persistence_failed"):
         runtime._submit(intent, lambda: sent.append(1) or {"orderId": 1})

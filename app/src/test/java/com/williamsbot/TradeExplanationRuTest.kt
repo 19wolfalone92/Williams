@@ -17,6 +17,25 @@ class TradeExplanationRuTest {
         assertFalse(text.contains("eligible"))
     }
 
+    @Test fun exactBinanceStopProofIsHumanReadableButNotATradeSignal() {
+        val explanation = russianTradeExitExplanation("VERIFIED_PROTECTIVE_STOP_FILLED", true)
+        assertTrue(explanation.contains("Защитный STOP"))
+        assertTrue(explanation.contains("дочернего"))
+        assertTrue(explanation.contains("подписанных"))
+        assertFalse(explanation.contains("VERIFIED_PROTECTIVE"))
+    }
+
+    @Test fun tc2RawFormationFunnelExplainsMissedShortWithoutEnablingResearch() {
+        assertTrue(russianH1EntryFunnelReason("H1_SIGNAL_TIME_NOT_ELIGIBLE")
+            .contains("срок"))
+        assertTrue(russianH1EntryFunnelReason("PARENT_INVALIDATED:OPPOSITE")
+            .contains("утратил силу"))
+        assertTrue(russianH1EntryFunnelReason("OBSERVATION_ONLY_DIFFERENT_BOOK_PROFILE")
+            .contains("запрещены"))
+        assertTrue(russianH1EntryFunnelReason("H1_OPPOSITION_OR_PARENT_LIFECYCLE_REJECTED")
+            .contains("отклонили"))
+    }
+
     @Test fun unknownExchangeCloseNeverInventsStopOrManualExit() {
         val text = russianTradeExitExplanation("EXCHANGE_RECONCILED_CLOSE", true)
         assertTrue(text.contains("сверила закрытие"))

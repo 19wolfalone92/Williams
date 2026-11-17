@@ -162,7 +162,8 @@ object TradeJournal {
         reason: String,
         entrySnapshot: JSONObject,
         entrySlippagePct: Double,
-        fillCount: Int
+        fillCount: Int,
+        exitAttribution: JSONObject? = null
     ) {
         require(id.isNotBlank() && symbol.isNotBlank())
         require(direction == "LONG" || direction == "SHORT")
@@ -209,6 +210,11 @@ object TradeJournal {
             .put("r_multiple", rMultiple)
             .put("outcome", outcome)
             .put("exit_reason", reason)
+            // Exchange-flat confirmation alone is NOT proof of which order
+            // caused the exit. This identity chain is read-only evidence.
+            .put("exit_attribution", exitAttribution ?: JSONObject()
+                .put("status", "NOT_VERIFIED")
+                .put("reason", "NO_VERIFIED_ORDER_CAUSE"))
             .put("entry_reason", entrySnapshot.optString("signal_reason").ifBlank {
                 "Причина сигнала не записана; тип заявки " + entrySnapshot.optString("kind")
             })

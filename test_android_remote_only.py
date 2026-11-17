@@ -417,7 +417,7 @@ def test_android_williams_indicator_decisions_use_chart_aligned_alligator_and_ca
     assert "trigger<=teeth.last()" in setups
     assert "trigger>=teeth.last()" in setups
     assert "p<=teeth.last()" not in setups
-    assert "if (value==p) start=j" in setups
+    assert "if (value==p) { start=j;count=0 }" in setups
     assert ".minOf { bars[it].l }-tick" in setups
     assert "bar.h<mouth.min()" in setups
 
@@ -882,7 +882,8 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     # self-test was removed when readiness moved into the regular runtime snapshot.
     # Read-only diagnostic fields now come from one synchronized scanner
     # snapshot. READY must never be published before scanning=false.
-    assert "@Synchronized\n    private fun scannerSnapshot(): JSONObject" in runtime
+    assert "@Synchronized\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
+    assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in runtime
     assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
     assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
@@ -912,7 +913,9 @@ def test_actions_testnet_gate_distinguishes_push_warning_from_manual_signed_acce
 def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe():
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
-    assert 'api.get("/api/v1/cockpit")' in ui
+    assert 'else "/api/v1/cockpit"' in ui
+    assert '"/api/v1/cockpit?compact=true"' in ui
+    assert 'val compact = tab == 0 || tab == 2' in ui
     assert 'payload.getJSONObject("status")' in ui
     assert 'payload.getJSONObject("scanner")' in ui
     assert '.put("scanner_progress_symbols", scan.optInt("progress_symbols"))' in runtime
@@ -1004,7 +1007,8 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     )[0]
     assert "primaryDecisionSignal != null" in final_gate
     assert "baseCandidate.atrPct in 0.0..0.08" in final_gate
-    assert "baseCandidate.spreadPct in 0.0..1.5E-3" in final_gate or "baseCandidate.spreadPct in 0.0..0.0015" in final_gate
+    # Deferred H1 STOP_MARKET does not execute at the scanner's current spread.
+    assert "baseCandidate.spreadPct" not in final_gate
     assert "htfConfirmed &&" not in final_gate
     assert "junior != null" not in final_gate
     assert "entryInsideCorrection" not in final_gate

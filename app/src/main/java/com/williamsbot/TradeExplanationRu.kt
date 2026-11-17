@@ -47,6 +47,10 @@ internal fun russianTradeExitExplanation(raw: String?, verifiedFills: Boolean): 
     val proof = if (verifiedFills) "Биржевые исполнения закрытия учтены в истории. "
         else "Полнота биржевых исполнений закрытия не подтверждена. "
     return when {
+        code == "VERIFIED_PROTECTIVE_STOP_FILLED" ->
+            "Защитный STOP исполнен на Binance. Точное совпадение идентификатора " +
+                "стратегического Algo STOP, дочернего биржевого ордера и подписанных " +
+                "исполнений подтверждено в сохранённых доказательствах. " + proof
         code == "EXCHANGE_RECONCILED_CLOSE" ->
             proof + "Система обнаружила и сверила закрытие с Binance, но не установила " +
                 "его непосредственную причину. По одному факту сверки нельзя утверждать, " +
@@ -87,6 +91,26 @@ internal fun russianTradeExitExplanation(raw: String?, verifiedFills: Boolean): 
             proof + "Техническая причина выхода не получила однозначной расшифровки. " +
                 "Исходный код сохранён в диагностическом архиве; причина не подменяется предположением."
     }
+}
+
+/** Read-only explanation of H1 raw→eligible rule filtering. */
+internal fun russianH1EntryFunnelReason(code: String): String = when {
+    code == "QUALIFIED_H1_SIGNAL_NOT_ORDER_AUTHORITY" ->
+        "H1-сигнал прошёл проверку структуры, но заявка требует отдельной сверки Binance и риска"
+    code == "H1_SIGNAL_TIME_NOT_ELIGIBLE" ->
+        "срок действия сигнала истёк либо свеча ещё не допускает вход"
+    code.startsWith("PARENT_INVALIDATED:") ->
+        "исходный H1-сигнал утратил силу: " +
+            code.removePrefix("PARENT_INVALIDATED:").take(160)
+    code == "H1_OPPOSITION_OR_PARENT_LIFECYCLE_REJECTED" ->
+        "встречный сигнал или проверка жизненного цикла H1 отклонили формацию"
+    code == "ADDITION_REQUIRES_OWNED_CAMPAIGN" ->
+        "сигнал добавления, а не самостоятельный первоначальный вход"
+    code == "OBSERVATION_ONLY_DIFFERENT_BOOK_PROFILE" ->
+        "обнаружен исследовательским профилем NTD/Course, которому запрещены торговые заявки"
+    code == "PARENT_INVALIDATION_CHECK_UNVERIFIED" ->
+        "проверка отмены сигнала недоступна; вход запрещён"
+    else -> "правило допуска: " + code.take(120)
 }
 
 internal fun russianTradeClassification(code: String?, feeKnown: Boolean = true): String {

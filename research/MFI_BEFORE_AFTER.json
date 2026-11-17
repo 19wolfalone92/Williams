@@ -1,0 +1,9 @@
+{
+  "constructed_mfi_tie": {
+    "old_window": "SQUAT",
+    "new_window": "STABLE"
+  },
+  "execution_orders": 0,
+  "before_prefix_causal": false,
+  "after_prefix_causal": true
+}

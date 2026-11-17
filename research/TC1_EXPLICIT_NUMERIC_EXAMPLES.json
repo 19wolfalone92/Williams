@@ -1,0 +1,327 @@
+{
+  "schema": "TC1_EXPLICIT_NUMERIC_EXAMPLES_V1",
+  "source_id": "TC1_RU",
+  "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+  "provenance": "MANUAL_FIRST_REVIEW_OF_EXPLICIT_PRINTED_NUMBERS",
+  "visual_pages": [
+    90,
+    91,
+    92,
+    93
+  ],
+  "independent_second_review": false,
+  "exact_ohlc_available": false,
+  "execution_authority": false,
+  "training_allowed": false,
+  "cases": [
+    {
+      "case_id": "TC1_CHF_BODY_P90_91",
+      "side": "LONG",
+      "source_pages": [
+        90,
+        91
+      ],
+      "point_value_usd": "12.50",
+      "initial_stop_price": "5569",
+      "initial_account_usd_reported": "10000",
+      "account_and_margin_path_verified": false,
+      "events": [
+        {
+          "event_id": "initial",
+          "action": "OPEN",
+          "quantity": 3,
+          "price": "5736",
+          "pdf_page": 90
+        },
+        {
+          "event_id": "first_trim",
+          "action": "CLOSE",
+          "quantity": 2,
+          "price": "6320",
+          "pdf_page": 90
+        },
+        {
+          "event_id": "w2_add",
+          "action": "OPEN",
+          "quantity": 5,
+          "price": "5854",
+          "pdf_page": 90
+        },
+        {
+          "event_id": "w3_add",
+          "action": "OPEN",
+          "quantity": 4,
+          "price": "6604",
+          "pdf_page": 91
+        },
+        {
+          "event_id": "w3_trim",
+          "action": "CLOSE",
+          "quantity": 7,
+          "price": "7965",
+          "pdf_page": 91
+        },
+        {
+          "event_id": "w4_add",
+          "action": "OPEN",
+          "quantity": 3,
+          "price": "6711",
+          "pdf_page": 91
+        },
+        {
+          "event_id": "final_stop",
+          "action": "CLOSE",
+          "quantity": 6,
+          "price": "6630",
+          "pdf_page": 91
+        }
+      ],
+      "printed_claims": [
+        {
+          "claim_id": "initial_loss",
+          "event_id": "initial",
+          "metric": "initial_stop_loss",
+          "reported_usd": "6262.50",
+          "pdf_page": 90
+        },
+        {
+          "claim_id": "first_realized",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "14600.00",
+          "pdf_page": 90
+        },
+        {
+          "claim_id": "first_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "27802.50",
+          "pdf_page": 91,
+          "allocation_index": 0
+        },
+        {
+          "claim_id": "second_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "131937.50",
+          "pdf_page": 91,
+          "allocation_index": 1
+        },
+        {
+          "claim_id": "third_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "17012.50",
+          "pdf_page": 91,
+          "allocation_index": 2
+        },
+        {
+          "claim_id": "earlier_actual_vs_hypothetical",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "22225.00",
+          "pdf_page": 91
+        },
+        {
+          "claim_id": "trim_cumulative",
+          "event_id": "w3_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "198977.50",
+          "pdf_page": 91
+        },
+        {
+          "claim_id": "final_loss",
+          "event_id": "final_stop",
+          "metric": "event_gross",
+          "reported_usd": "-4125.00",
+          "pdf_page": 91
+        },
+        {
+          "claim_id": "final_total",
+          "event_id": "final_stop",
+          "metric": "cumulative_gross",
+          "reported_usd": "194100.00",
+          "pdf_page": 91
+        }
+      ],
+      "hypothetical_stop": {
+        "after_event_id": "w3_add",
+        "price": "6320",
+        "reported_open_lots_gross_usd": "22225.00",
+        "pdf_page": 91
+      },
+      "explicit_chart_variants": [
+        {
+          "event_id": "w3_trim",
+          "chart_price": "8065",
+          "body_price": "7965",
+          "pdf_page": 90,
+          "figure_label": "9-10",
+          "meaning": "Explicit chart sell-seven annotation conflicts with the body exit price; not an OHLC reconstruction."
+        }
+      ],
+      "printed_subtractions": [
+        {
+          "minuend_usd": "198977.50",
+          "subtrahend_usd": "4125.00",
+          "reported_usd": "194100.00",
+          "pdf_page": 91
+        }
+      ],
+      "uncertainties": [
+        "No exact OHLC series, historical fills or fees provided.",
+        "Illustrated final stop and subtotal contain mutually inconsistent arithmetic.",
+        "Rounded Fibonacci projection is not an exact fill derivation."
+      ]
+    },
+    {
+      "case_id": "TC1_SOY_BODY_P92_93",
+      "side": "SHORT",
+      "source_pages": [
+        92,
+        93
+      ],
+      "point_value_usd": "50",
+      "initial_stop_price": "668.5",
+      "initial_account_usd_reported": "15000",
+      "account_and_margin_path_verified": false,
+      "events": [
+        {
+          "event_id": "initial",
+          "action": "OPEN",
+          "quantity": 3,
+          "price": "663",
+          "pdf_page": 92
+        },
+        {
+          "event_id": "first_trim",
+          "action": "CLOSE",
+          "quantity": 2,
+          "price": "637.5",
+          "pdf_page": 92
+        },
+        {
+          "event_id": "w2_add",
+          "action": "OPEN",
+          "quantity": 5,
+          "price": "654.75",
+          "pdf_page": 92
+        },
+        {
+          "event_id": "w3_add",
+          "action": "OPEN",
+          "quantity": 4,
+          "price": "622.5",
+          "pdf_page": 92
+        },
+        {
+          "event_id": "w3_trim",
+          "action": "CLOSE",
+          "quantity": 7,
+          "price": "602",
+          "pdf_page": 93
+        },
+        {
+          "event_id": "w4_add",
+          "action": "OPEN",
+          "quantity": 3,
+          "price": "619",
+          "pdf_page": 93
+        },
+        {
+          "event_id": "final_exit",
+          "action": "CLOSE",
+          "quantity": 6,
+          "price": "561",
+          "pdf_page": 93
+        }
+      ],
+      "printed_claims": [
+        {
+          "claim_id": "initial_loss",
+          "event_id": "initial",
+          "metric": "initial_stop_loss",
+          "reported_usd": "1375.00",
+          "pdf_page": 92
+        },
+        {
+          "claim_id": "first_realized",
+          "event_id": "first_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "2550.00",
+          "pdf_page": 92
+        },
+        {
+          "claim_id": "first_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "3050.00",
+          "pdf_page": 93,
+          "allocation_index": 0
+        },
+        {
+          "claim_id": "second_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "13187.50",
+          "pdf_page": 93,
+          "allocation_index": 1
+        },
+        {
+          "claim_id": "third_lot_trim",
+          "event_id": "w3_trim",
+          "metric": "allocation_gross",
+          "reported_usd": "1025.00",
+          "pdf_page": 93,
+          "allocation_index": 2
+        },
+        {
+          "claim_id": "trim_cumulative",
+          "event_id": "w3_trim",
+          "metric": "cumulative_gross",
+          "reported_usd": "17262.50",
+          "pdf_page": 93
+        },
+        {
+          "claim_id": "final_old_lots",
+          "event_id": "final_exit",
+          "metric": "allocation_gross",
+          "reported_usd": "9225.00",
+          "pdf_page": 93,
+          "allocation_index": 0
+        },
+        {
+          "claim_id": "final_new_lots",
+          "event_id": "final_exit",
+          "metric": "allocation_gross",
+          "reported_usd": "8700.00",
+          "pdf_page": 93,
+          "allocation_index": 1
+        },
+        {
+          "claim_id": "final_total",
+          "event_id": "final_exit",
+          "metric": "cumulative_gross",
+          "reported_usd": "35187.50",
+          "pdf_page": 93
+        }
+      ],
+      "explicit_chart_variants": [
+        {
+          "event_id": "w2_add",
+          "chart_price": "654.5",
+          "body_price": "654.75",
+          "pdf_page": 92,
+          "figure_label": "9-11",
+          "meaning": "Explicit chart sell-five annotation differs by a quarter point from the body/table. Remaining chart extremum labels are not assumed to be executions."
+        }
+      ],
+      "printed_subtractions": [],
+      "uncertainties": [
+        "The chart carries price-extremum labels that cannot be assigned as fills without textual evidence.",
+        "Missing first realized profit in the printed subtotal is arithmetic, not a market backtest.",
+        "No fee, funding, historical margin or account-value path verified."
+      ]
+    }
+  ]
+}

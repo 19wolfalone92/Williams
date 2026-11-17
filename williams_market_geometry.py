@@ -1,12 +1,12 @@
 """Causal numerical readings of Williams' visual chart rules.
 
-TC2 ch9, PDF122-124: start at the last passage through the mouth and
+TC2_EN ch9, PDF140-142: start at the last passage through the mouth and
 compare the PRICE EDGE (highs in a decline, lows in an advance) with Jaw
 and Teeth over the SAME interval. Regression is an explicit engineering
 interpretation, not a formula printed by Williams. No ATR/angle threshold.
 NTD ch3/ch10: sleep is intertwined lines, not merely a narrowing trend.
 """
-from math import isfinite
+from math import fsum, isfinite, ulp
 
 
 def first_wise_man_ao_blocker(side, ao_now, ao_before):
@@ -29,21 +29,39 @@ def first_wise_man_ao_blocker(side, ao_now, ao_before):
 def _slope(values):
     n = len(values)
     x = (n - 1) / 2
-    mean = sum(values) / n
-    return sum((i-x)*(v-mean) for i,v in enumerate(values)) / sum((i-x)**2 for i in range(n))
+    try:
+        # Preserve fail-closed overflow handling, then remove the absolute
+        # price level before fitting. A price translation is not a new angle.
+        if not isfinite(fsum(values) / n):
+            return float('nan')
+        origin = values[0]
+        mean = fsum(v-origin for v in values) / n
+        return fsum((i-x)*((v-origin)-mean) for i,v in enumerate(values)) / fsum((i-x)**2 for i in range(n))
+    except (OverflowError, ValueError):
+        return float('nan')
 
 
 def angulation_evidence(side, bars, jaw, teeth, lips, *, expected_step_ms=None):
-    """TC2 ch9 figs 9.3–9.11: mouth passage, price-facing edge, Jaw/Teeth
-    slopes and continued angular opening AFTER the first fully outside bar.
+    """TC2_EN142/160, figs 9.3–9.11/10.7: mouth passage, price-facing edge,
+    Jaw/Teeth slopes; a single outside bar may itself create the angle.
 
-    No arbitrary angle threshold. Regression and gap growth are declared
-    conservative numerical proxies, not exact author-defined formulas.
+    Fit the actual outside path as well as the mouth-anchored path: an old
+    jump must not lend its angle to later flat/parallel/converging prices.
+    Regression and the eight-ULP precision guard are engineering choices,
+    not a printed formula, ATR cutoff, or angle-in-degrees trading threshold.
     """
     result = dict(valid=False, score=0.0, reason="MOUTH_CROSSING_UNOBSERVED",
                   anchor_index=None, method="MOUTH_ANCHORED_EDGE_SLOPES",
                   numerical_interpretation=True, first_outside_index=None,
-                  outside_gap_growth_pct=None, book_reference="TC2_CH9_FIG_9_3_TO_9_11")
+                  outside_gap_growth_pct=None, gap_growth_baseline_index=None,
+                  gap_growth_basis=None,
+                  method_version=2, price_edge=None,
+                  anchor_time_ms=None, source_end_bar_open_ms=None,
+                  numeric_price_resolution=None, departure_price_slope=None,
+                  departure_jaw_slope=None, departure_teeth_slope=None,
+                  departure_relative_slope=None,
+                  score_units='PERCENT_OF_SIGNAL_CLOSE_PER_BAR_NOT_ANGLE_DEGREES',
+                  book_reference="TC2_CH9_FIG_9_3_TO_9_11_AND_CH10_FIG_10_7")
     n = len(bars)
     if (side not in {"LONG", "SHORT"} or n < 3 or
             any(len(x) != n for x in (jaw, teeth, lips)) or
@@ -72,14 +90,21 @@ def angulation_evidence(side, bars, jaw, teeth, lips, *, expected_step_ms=None):
             break
     if anchor is None:
         return result
-    if n-anchor < 3 or not all(usable(i) for i in range(anchor,n)):
+    if not all(usable(i) for i in range(anchor,n)):
         return result | {"anchor_index":anchor,"reason":"INSUFFICIENT_PATH"}
     step = expected_step_ms if expected_step_ms is not None else bars[-1].t-bars[-2].t
     if step <= 0 or any(bars[i].t-bars[i-1].t != step for i in range(anchor+1,n)):
         return result | {"anchor_index":anchor,"examined_bars":n-anchor,"reason":"CANDLE_PATH_GAP"}
     first_outside = next((i for i in range(anchor+1,n) if outside_mouth(i)),None)
-    if first_outside is None or first_outside==n-1:
+    if first_outside is None:
         return result | {"anchor_index":anchor,"examined_bars":n-anchor,"reason":"INSUFFICIENT_OUTSIDE_PATH"}
+    # Fig10.7 explicitly allows the divergent bar to create its own angle.
+    # With only one outside bar, compare its edge with the observed mouth
+    # passage. Otherwise retain the post-exit check: a first gap followed by
+    # parallel paths still fails (fig9.5). Neither branch invents an ATR rule.
+    single_bar = first_outside == n-1
+    baseline = anchor if single_bar else first_outside
+    basis = "MOUTH_TO_SINGLE_OUTSIDE_BAR" if single_bar else "AFTER_FIRST_OUTSIDE_BAR"
     sign = -1 if side == "LONG" else 1
     edge = [b.h if side == "LONG" else b.l for b in bars[anchor:]]
     price_slope, jaw_slope, teeth_slope = map(_slope,(edge,jaw[anchor:],teeth[anchor:]))
@@ -88,16 +113,51 @@ def angulation_evidence(side, bars, jaw, teeth, lips, *, expected_step_ms=None):
     basic = sign*price_slope > 0 and sign*(edge[-1]-edge[0]) > 0 and separation > 0 and endpoint > 0
     def gap(line,i):
         return sign*((bars[i].h if side=="LONG" else bars[i].l)-line[i])
-    post_growth = min(gap(jaw,n-1)-gap(jaw,first_outside),
-                      gap(teeth,n-1)-gap(teeth,first_outside))
-    valid = basic and post_growth>0
-    reason = ("PRICE_PATH_NOT_STEEPER" if not basic
-              else "PARALLEL_AFTER_MOUTH_EXIT" if post_growth<=0
+    post_growth = min(gap(jaw,n-1)-gap(jaw,baseline),
+                      gap(teeth,n-1)-gap(teeth,baseline))
+    outside_edge = [b.h if side == 'LONG' else b.l for b in bars[baseline:]]
+    post_price, post_jaw, post_teeth = map(_slope, (outside_edge, jaw[baseline:], teeth[baseline:]))
+    post_separation = min(sign*(post_price-post_jaw), sign*(post_price-post_teeth))
+    post_motion = sign*(outside_edge[-1]-outside_edge[0])
+    # Four endpoint operands plus rounding of the subtractions need a numeric
+    # resolution guard. Eight ULP is machine precision, NOT a book distance,
+    # candle-size, ATR, or angle-in-degrees trading threshold.
+    resolution = 8 * max(ulp(v) for series in (edge, jaw[anchor:], teeth[anchor:]) for v in series)
+    if not all(isfinite(v) for v in (price_slope,jaw_slope,teeth_slope,separation,endpoint,
+                                     post_growth,post_price,post_jaw,post_teeth,
+                                     post_separation,post_motion,resolution)):
+        return result | {"reason":"NUMERICAL_GEOMETRY_UNVERIFIED","anchor_index":anchor,
+                         "examined_bars":n-anchor,"first_outside_index":first_outside,
+                         "gap_growth_baseline_index":baseline,"gap_growth_basis":basis}
+    span, post_span = n-anchor-1, n-baseline-1
+    whole_resolved = min(sign*price_slope*span, sign*(edge[-1]-edge[0]),
+                         separation*span, endpoint) > resolution
+    post_moves = sign*post_price*post_span > resolution and post_motion > resolution
+    post_resolved = min(sign*post_price*post_span, post_motion,
+                        post_separation*post_span, post_growth) > resolution
+    valid = basic and whole_resolved and post_growth > 0 and post_moves and post_separation > 0 and post_resolved
+    score = separation/bars[-1].c*100 if valid else 0.0
+    growth_pct = post_growth/bars[-1].c*100
+    if not isfinite(score) or not isfinite(growth_pct):
+        return result | {"reason":"NUMERICAL_GEOMETRY_UNVERIFIED","anchor_index":anchor,
+                         "examined_bars":n-anchor,"first_outside_index":first_outside,
+                         "gap_growth_baseline_index":baseline,"gap_growth_basis":basis}
+    reason = ("PRICE_PATH_NOT_STEEPER" if not whole_resolved
+              else "PARALLEL_AFTER_MOUTH_EXIT" if post_growth<=resolution
+              else "PRICE_NOT_DEPARTING_AFTER_MOUTH_EXIT" if not post_moves
+              else "PRICE_PATH_NOT_STEEPER_AFTER_MOUTH_EXIT" if post_separation*post_span<=resolution
+              else "SINGLE_BAR_ANGULAR_DEPARTURE" if single_bar
               else "DIVERGING_PRICE_PATH")
-    return result | dict(valid=valid, score=separation/bars[-1].c*100 if valid else 0.0,
+    return result | dict(valid=valid, score=score,
         reason=reason,anchor_index=anchor,examined_bars=n-anchor,
         price_slope=price_slope,jaw_slope=jaw_slope,teeth_slope=teeth_slope,
-        first_outside_index=first_outside,outside_gap_growth_pct=post_growth/bars[-1].c*100)
+        first_outside_index=first_outside,outside_gap_growth_pct=growth_pct,
+        gap_growth_baseline_index=baseline,gap_growth_basis=basis,
+        price_edge='HIGH' if side == 'LONG' else 'LOW',
+        anchor_time_ms=bars[anchor].t, source_end_bar_open_ms=bars[-1].t,
+        numeric_price_resolution=resolution, departure_price_slope=post_price,
+        departure_jaw_slope=post_jaw, departure_teeth_slope=post_teeth,
+        departure_relative_slope=post_separation)
 
 
 def alligator_phases(bars, jaw, teeth, lips):

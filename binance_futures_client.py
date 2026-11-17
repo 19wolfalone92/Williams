@@ -19,6 +19,8 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from binance_client import BinanceAPIError
+from williams_symbol_policy import new_risk_symbol_blocker
+from futures_account_contract import account_with_configuration, FuturesAccountContractError
 
 
 class BinanceFuturesClient:
@@ -115,10 +117,28 @@ class BinanceFuturesClient:
         time_resync_attempted = False
 
         for attempt in range(max_attempts):
+            # Every signed order attempt, including an explicit -1021 retry,
+            # rechecks admission. GET/DELETE and protective reductions retain
+            # access to all management symbols.
+            if method == "POST" and path in {"/fapi/v1/order", "/fapi/v1/algoOrder"}:
+                values = params or {}
+                if str(values.get("reduceOnly", "")).lower() != "true" and str(values.get("closePosition", "")).lower() != "true":
+                    blocker = new_risk_symbol_blocker(values.get("symbol"))
+                    if blocker:
+                        raise ValueError(blocker)
             wait = max(0.0, self.rate_limit_pause_until - time.time())
             while wait > 0:
                 time.sleep(min(wait, 30.0))
                 wait = max(0.0, self.rate_limit_pause_until - time.time())
+
+            if (method == "POST" and path in {"/fapi/v1/order", "/fapi/v1/algoOrder"}
+                    and str((params or {}).get("reduceOnly", "")).lower() != "true"
+                    and str((params or {}).get("closePosition", "")).lower() != "true"):
+                # Also runs on the only allowed explicit -1021 retry. No GETs
+                # here: this fence must remain local after any rate wait.
+                fence = getattr(self, "before_exposure_transport", None)
+                if fence is not None:
+                    fence(dict(params or {}))
 
             payload = dict(params or {})
             if signed:
@@ -324,11 +344,16 @@ class BinanceFuturesClient:
         )
 
     def account(self):
-        # Binance replaced the account V2 endpoint with V3. Keep the backend aligned
-        # with the Android adapter so Testnet account reconciliation uses one API contract.
+        # V3 balances omit V2 permission flags in the documented response. Obtain
+        # missing permission from signed accountConfig, never default it to true.
         raw = self._require_object(self._request("GET", "/fapi/v3/account", signed=True))
-        if not isinstance(raw.get("canTrade"), bool) or not isinstance(raw.get("assets"), list):
+        if not isinstance(raw.get("assets"), list) or any(not isinstance(row, dict) for row in raw["assets"]):
             raise BinanceAPIError("Malformed Futures account snapshot", payload=raw)
+        try:
+            configuration = self.account_configuration() if "canTrade" not in raw else None
+            raw = account_with_configuration(raw, configuration)
+        except FuturesAccountContractError as exc:
+            raise BinanceAPIError(str(exc), payload=raw) from exc
         assets = raw.get("assets", []) or []
         balances = []
         for asset in assets:
@@ -350,6 +375,9 @@ class BinanceFuturesClient:
             "totalUnrealizedProfit": raw.get("totalUnrealizedProfit", "0"),
             "availableBalance": raw.get("availableBalance", "0"),
         }
+
+    def account_configuration(self):
+        return self._require_object(self._request("GET", "/fapi/v1/accountConfig", signed=True))
 
     def position_risk(self, symbol=None):
         rows = self._require_array(self._request(
@@ -439,6 +467,28 @@ class BinanceFuturesClient:
         if len(matches) != 1:
             raise BinanceAPIError("Missing or ambiguous Futures symbol configuration", payload=payload)
         return matches[0]
+
+    def half_margin_symbol_configurations(self, symbols):
+        """Fresh account-wide settings/marks in bounded requests, never a cache.
+
+        The single-symbol path retains the lower public request weight. With
+        multiple pending symbols, two bulk reads replace 2*N serial requests.
+        Required identities must be unique in both independent responses.
+        """
+        if len(symbols) == 1:
+            symbol = next(iter(symbols))
+            return {symbol: {**self.symbol_configuration(symbol),
+                             "mark_price": self.mark_price(symbol).get("markPrice")}}
+        settings = self._require_array(self._request("GET", "/fapi/v1/symbolConfig", signed=True))
+        marks = self._require_array(self._request("GET", "/fapi/v1/premiumIndex"))
+        result = {}
+        for symbol in symbols:
+            configurations = [row for row in settings if row.get("symbol") == symbol]
+            prices = [row for row in marks if row.get("symbol") == symbol]
+            if len(configurations) != 1 or len(prices) != 1:
+                raise BinanceAPIError("Missing or ambiguous half-margin symbol identity")
+            result[symbol] = {**configurations[0], "mark_price": prices[0].get("markPrice")}
+        return result
 
     def api_restrictions(self):
         # Testnet credentials must never be sent to the live Wallet API host.
@@ -580,6 +630,10 @@ class BinanceFuturesClient:
         close_position=False,
     ):
         type_name = str(type_).upper()
+        if not reduce_only and not close_position:
+            blocker = new_risk_symbol_blocker(symbol)
+            if blocker:
+                raise ValueError(blocker)
         if type_name == "STOP_LOSS":
             type_name = "STOP_MARKET"
         if quote_order_qty is not None:

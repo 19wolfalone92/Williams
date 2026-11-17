@@ -4,8 +4,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import androidx.core.database.sqlite.transaction
 import org.json.JSONObject
 import org.json.JSONArray
+import java.security.MessageDigest
 
 /**
  * Full, machine-readable TC2 decision event. Keep it OUTSIDE the bounded
@@ -20,7 +22,8 @@ internal fun stopTrailDecisionAuditEvent(
     require(symbol.isNotBlank() && campaignId.isNotBlank() && recordedAtMs > 0L)
     require(direction == "LONG" || direction == "SHORT")
     require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
-        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED"))
+        "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED",
+        "RECOVERY_COMPLETED"))
     require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
     require(evidence.optString("direction") == direction)
     if (phase == "REVIEW_DEFERRED")
@@ -29,19 +32,20 @@ internal fun stopTrailDecisionAuditEvent(
             "Deferred audit must preserve its actual refusal reason"
         }
     if (phase == "PROPOSED_BEFORE_MUTATION" || phase == "EXCHANGE_RESPONSE_OK" ||
-        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED") {
+        phase == "EXCHANGE_NOT_CONFIRMED" || phase == "EXCHANGE_EXCEPTION_UNVERIFIED" ||
+        phase == "RECOVERY_COMPLETED") {
         require(evidence.optString("decision") == "PROPOSE_TIGHTEN_ONLY" &&
             evidence.optString("proposed_binance_protection_client_id").isNotBlank()) {
             "Stop mutation audit requires a traceable actual proposal and client ID"
         }
     }
-    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED") {
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "EXCHANGE_NOT_CONFIRMED" || phase == "RECOVERY_COMPLETED") {
         require(exchangeOutcome != null && exchangeOutcome.optBoolean("ok") ==
-            (phase == "EXCHANGE_RESPONSE_OK")) {
+            (phase != "EXCHANGE_NOT_CONFIRMED")) {
             "Exchange status must agree with the signed coordinator response"
         }
     }
-    if (phase == "EXCHANGE_RESPONSE_OK") {
+    if (phase == "EXCHANGE_RESPONSE_OK" || phase == "RECOVERY_COMPLETED") {
         val proposedId=evidence.getString("proposed_binance_protection_client_id")
         // Compare exact decimal strings submitted to Binance, not unrounded
         // IEEE-754 proposal doubles (e.g. DOGE 0.07687000000000001).
@@ -61,6 +65,23 @@ internal fun stopTrailDecisionAuditEvent(
             observedId==proposedId && (stop !is JSONObject ||
                 stop.optString("algoStatus",stop.optString("status")) in setOf("NEW","WORKING","ACCEPTED"))) {
             "An accepted receipt must reference the exact confirmed Binance stop ID and trigger"
+        }
+    }
+    if(phase=="RECOVERY_COMPLETED") {
+        val receipt=requireNotNull(exchangeOutcome)
+        val tx=requireNotNull(receipt.optJSONObject("replacement"))
+        require(receipt.optString("recovery_proof")=="PERSISTED_COORDINATOR_COMPLETION_NOT_CURRENT_SIGNED_GET" &&
+            receipt.optLong("original_proposal_event_id")>0L &&
+            receipt.optLong("original_unconfirmed_event_id")>receipt.optLong("original_proposal_event_id") &&
+            tx.optString("phase")=="COMPLETED" &&
+            tx.optString("final_outcome") in setOf("ACKNOWLEDGED","SUBMISSION_UNKNOWN") &&
+            tx.optString("new_id")==evidence.optString("proposed_binance_protection_client_id") &&
+            tx.optString("new_stop").toBigDecimalOrNull()?.compareTo(
+                receipt.optString("stop").toBigDecimalOrNull())==0 &&
+            tx.optLong("created_at_ms")>0L && tx.optLong("resolved_at_ms") in tx.optLong("created_at_ms")..recordedAtMs &&
+            receipt.optLong("recovery_completed_at_ms")==tx.optLong("resolved_at_ms") &&
+            receipt.opt("can_place_orders")==false && receipt.opt("can_manage_stops")==false) {
+            "Recovery needs exact completed coordinator evidence and original decision identities"
         }
     }
     if (phase == "EXCHANGE_EXCEPTION_UNVERIFIED")
@@ -141,8 +162,29 @@ internal const val COCKPIT_PROJECTION_TRIM_SQL =
 internal const val COCKPIT_INCIDENT_TRIM_SQL =
     "DELETE FROM events WHERE event_type = 'COCKPIT_INCIDENT' AND id NOT IN (SELECT id FROM events WHERE event_type = 'COCKPIT_INCIDENT' ORDER BY id DESC LIMIT 100)"
 
+
+internal data class DurablePrivateUserEvent(val eventId: Long, val rawJson: String)
+
+internal fun futuresApiKeyFingerprint(apiKey: String): String {
+    require(apiKey.isNotBlank()) { "PRIVATE_EVENT_ACCOUNT_IDENTITY_UNAVAILABLE" }
+    return privateEventSha256(apiKey)
+}
+
+internal fun privateUserEventFingerprint(rawJson: String): String {
+    require(rawJson.isNotBlank()) { "PRIVATE_EVENT_PAYLOAD_EMPTY" }
+    return privateEventSha256(rawJson)
+}
+
+internal fun privateEventDrainMayReschedule(
+    pending: Boolean?, failed: Boolean, generationAtStart: Long, currentGeneration: Long
+): Boolean = pending == true && (!failed || currentGeneration > generationAtStart)
+
+private fun privateEventSha256(value: String): String = MessageDigest.getInstance("SHA-256")
+    .digest(value.toByteArray(Charsets.UTF_8))
+    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 5) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 7) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
@@ -283,6 +325,7 @@ class TradingAuditStore(context: Context) :
             val fingerprint = fields.joinToString("|") { item.optString(it) }
             val previouslyObserved = lastCampaignObservations.containsKey(id)
             recordChangedCampaignObservation(lastCampaignObservations,id,fingerprint) {
+            recordStopTrailRecovery(item)
             val audit = CockpitDiagnostics.lifecycleAudit(item)
             val lifecycle = campaignLifecycleStatus(item)
             val severity = audit.optString("severity")
@@ -303,6 +346,44 @@ class TradingAuditStore(context: Context) :
                 check(writableDatabase.insert("events", null, values)>0L) { "COCKPIT_INCIDENT_WRITE_FAILED" }
             }
             }
+        }
+    }
+
+    /** Completion and its unique marker commit together. A failed append is
+     * retried on the next observation; restarts cannot duplicate a recovery. */
+    private fun recordStopTrailRecovery(owner:JSONObject) {
+        val tx=owner.optJSONObject("last_native_stop_replacement") ?: return
+        if(tx.optString("phase")!="COMPLETED" || owner.has("native_stop_replacement") ||
+            owner.optString("strategy_profile")!=williamsTc2Profile ||
+            owner.optString("protection_status")!="PROTECTED") return
+        val campaignId=owner.optString("client_id")
+        val newId=tx.optString("new_id")
+        if(campaignId.isBlank() || newId.isBlank()) return
+        val db=writableDatabase
+        db.transaction {
+            db.query("stop_trail_recovery_receipts",arrayOf("recovery_event_id"),
+                "campaign_id=? AND protection_client_id=?",arrayOf(campaignId,newId),
+                null,null,null,"1").use { if(it.moveToFirst()) return@transaction }
+            val prior=JSONArray()
+            db.query("events",arrayOf("id","raw_json"),
+                "event_type=? AND instr(raw_json,?)>0 AND instr(raw_json,?)>0",
+                arrayOf("WILLIAMS_STOP_TRAIL_DECISION_V1",
+                    "\"campaign_id\":"+JSONObject.quote(campaignId),
+                    "\"proposed_binance_protection_client_id\":"+JSONObject.quote(newId)),
+                null,null,"id ASC").use { cursor ->
+                while(cursor.moveToNext()) prior.put(JSONObject(cursor.getString(1))
+                    .put("audit_event_id",cursor.getLong(0)))
+            }
+            val event=williamsStopTrailRecoveryEvent(owner,prior,System.currentTimeMillis()) ?: return@transaction
+            val eventId=db.insertOrThrow("events",null,ContentValues().apply {
+                put("event_type",event.getString("e"));put("event_time",event.getLong("E"))
+                put("received_at",System.currentTimeMillis());put("raw_json",event.toString())
+            })
+            db.insertOrThrow("stop_trail_recovery_receipts",null,ContentValues().apply {
+                put("campaign_id",campaignId);put("protection_client_id",newId)
+                put("proposal_event_id",event.getJSONObject("exchange_outcome").getLong("original_proposal_event_id"))
+                put("recovery_event_id",eventId)
+            })
         }
     }
 
@@ -373,6 +454,28 @@ class TradingAuditStore(context: Context) :
             .put("source_scope", "HISTORICAL_SQLITE_INCIDENT_NOT_LIVE_BINANCE_PROOF")
     }
 
+
+    private fun ensurePrivateUserEventInboxSchema(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS private_user_event_inbox(
+                event_id INTEGER PRIMARY KEY NOT NULL,
+                account_fingerprint TEXT NOT NULL,
+                event_key TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING'
+                    CHECK(status IN ('PENDING','PROCESSED')),
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                received_at_ms INTEGER NOT NULL,
+                processed_at_ms INTEGER,
+                UNIQUE(account_fingerprint,event_key)
+            )
+        """.trimIndent())
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_private_user_event_pending
+            ON private_user_event_inbox(account_fingerprint,status,event_id)
+        """.trimIndent())
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         h1EntryPassportSchema.forEach(db::execSQL)
         db.execSQL("""
@@ -421,6 +524,8 @@ class TradingAuditStore(context: Context) :
                 raw_json TEXT NOT NULL
             )
         """.trimIndent())
+        stopTrailRecoverySchema.forEach(db::execSQL)
+        ensurePrivateUserEventInboxSchema(db)
 
         db.execSQL("""
             CREATE TABLE rest_calls(
@@ -473,6 +578,8 @@ class TradingAuditStore(context: Context) :
         newVersion: Int
     ) {
         h1EntryPassportSchema.forEach(db::execSQL)
+        stopTrailRecoverySchema.forEach(db::execSQL)
+        ensurePrivateUserEventInboxSchema(db)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS trades(
                 trade_id TEXT PRIMARY KEY,
@@ -648,6 +755,34 @@ class TradingAuditStore(context: Context) :
         return feeUsdt to known
     }
 
+    /**
+     * Read-only, bounded private Binance ALGO_UPDATE receipts for a campaign
+     * close. A page touching the limit is incomplete evidence, not a proof.
+     * Financial/STOP event retention is unchanged.
+     */
+    @Synchronized
+    fun recentPrivateAlgoExitEvents(
+        symbol: String, closedAtMs: Long, lookbackMs: Long = 300_000L
+    ): JSONArray? {
+        if (symbol.isBlank() || closedAtMs <= 0L || lookbackMs !in 1L..3_600_000L)
+            return null
+        val rows = JSONArray()
+        val lower = (closedAtMs - lookbackMs).coerceAtLeast(0L)
+        readableDatabase.query("events", arrayOf("raw_json"),
+            "event_type = ? AND event_time >= ? AND event_time <= ?",
+            arrayOf("ALGO_UPDATE", lower.toString(), (closedAtMs + 30_000L).toString()),
+            null, null, "id DESC", "501").use { cursor ->
+            while (cursor.moveToNext()) {
+                val event = JSONObject(cursor.getString(0))
+                if (event.optJSONObject("o")?.optString("s") == symbol) rows.put(event)
+                // A page may truncate other symbols. Do not claim complete proof
+                // from any potentially truncated source evidence.
+                if (cursor.position >= 500) return null
+            }
+        }
+        return rows
+    }
+
     @Synchronized
     fun executionEvents(orderId: String): List<JSONObject> {
         val rows = mutableListOf<JSONObject>()
@@ -690,13 +825,165 @@ class TradingAuditStore(context: Context) :
         else writableDatabase.insert("events", null, values)
     }
 
+
+    /**
+     * Persist a private Binance event and its pending-delivery receipt in one
+     * SQLite transaction before any in-memory actor work is queued.
+     * Exact duplicate payloads are idempotent per API-key fingerprint.
+     */
     @Synchronized
-    fun recordUserEvent(event: JSONObject) {
+    fun enqueuePrivateUserEvent(event: JSONObject, accountFingerprint: String): Long {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}"))) {
+            "PRIVATE_EVENT_ACCOUNT_IDENTITY_INVALID"
+        }
+        val raw = event.toString()
+        val eventKey = privateUserEventFingerprint(raw)
+        val db = writableDatabase
+        var resultId = 0L
+        db.transaction {
+            val existing = db.rawQuery(
+                "SELECT event_id FROM private_user_event_inbox WHERE account_fingerprint=? AND event_key=? LIMIT 1",
+                arrayOf(accountFingerprint, eventKey)
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L }
+            if (existing > 0L) {
+                resultId = existing
+            } else {
+                val receivedAt = System.currentTimeMillis()
+                val eventValues = ContentValues().apply {
+                    put("event_type", event.optString("e", "unknown"))
+                    put("event_time", event.optLong("E", 0L))
+                    put("received_at", receivedAt)
+                    put("raw_json", raw)
+                }
+                val eventId = db.insertOrThrow("events", null, eventValues)
+                val inboxValues = ContentValues().apply {
+                    put("event_id", eventId)
+                    put("account_fingerprint", accountFingerprint)
+                    put("event_key", eventKey)
+                    put("status", "PENDING")
+                    put("received_at_ms", receivedAt)
+                }
+                db.insertOrThrow("private_user_event_inbox", null, inboxValues)
+                resultId = eventId
+            }
+        }
+        check(resultId > 0L) { "PRIVATE_EVENT_INBOX_PERSISTENCE_FAILED" }
+        return resultId
+    }
+
+    /** Oldest-first replay preserves callback receipt order across process restarts. */
+    @Synchronized
+    internal fun pendingPrivateUserEvents(
+        accountFingerprint: String,
+        limit: Int = 64
+    ): List<DurablePrivateUserEvent> {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        require(limit in 1..512)
+        val rows = mutableListOf<DurablePrivateUserEvent>()
+        readableDatabase.rawQuery(
+            """
+            SELECT e.id,e.raw_json
+            FROM private_user_event_inbox i
+            JOIN events e ON e.id=i.event_id
+            WHERE i.account_fingerprint=? AND i.status='PENDING'
+            ORDER BY i.event_id ASC LIMIT ?
+            """.trimIndent(),
+            arrayOf(accountFingerprint, limit.toString())
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                rows += DurablePrivateUserEvent(cursor.getLong(0), cursor.getString(1))
+            }
+        }
+        return rows
+    }
+
+    /** Acknowledgement is durable and is written only after event handling succeeds. */
+    @Synchronized
+    fun completePrivateUserEvent(eventId: Long, accountFingerprint: String) {
+        require(eventId > 0L && accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        val db = writableDatabase
+        db.transaction {
+            val changed = db.update(
+                "private_user_event_inbox",
+                ContentValues().apply {
+                    put("status", "PROCESSED")
+                    put("processed_at_ms", System.currentTimeMillis())
+                    put("last_error", "")
+                },
+                "event_id=? AND account_fingerprint=? AND status='PENDING'",
+                arrayOf(eventId.toString(), accountFingerprint)
+            )
+            if (changed == 0) {
+                val alreadyProcessed = db.rawQuery(
+                    "SELECT 1 FROM private_user_event_inbox WHERE event_id=? AND account_fingerprint=? AND status='PROCESSED'",
+                    arrayOf(eventId.toString(), accountFingerprint)
+                ).use { it.moveToFirst() }
+                check(alreadyProcessed) { "PRIVATE_EVENT_ACK_IDENTITY_OR_ROW_MISMATCH" }
+            }
+        }
+    }
+
+    /** A failure increments diagnostics but never removes or acknowledges the event. */
+    @Synchronized
+    fun failPrivateUserEvent(eventId: Long, accountFingerprint: String, reason: String) {
+        require(eventId > 0L && accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        writableDatabase.execSQL(
+            "UPDATE private_user_event_inbox SET attempt_count=attempt_count+1,last_error=? WHERE event_id=? AND account_fingerprint=? AND status='PENDING'",
+            arrayOf<Any>(safeDiagnosticText(reason).take(500), eventId, accountFingerprint)
+        )
+        val stillExists = readableDatabase.rawQuery(
+            "SELECT 1 FROM private_user_event_inbox WHERE event_id=? AND account_fingerprint=?",
+            arrayOf(eventId.toString(), accountFingerprint)
+        ).use { it.moveToFirst() }
+        check(stillExists) { "PRIVATE_EVENT_FAILURE_IDENTITY_OR_ROW_MISMATCH" }
+    }
+
+    @Synchronized
+    fun privateUserEventInboxSnapshot(accountFingerprint: String): JSONObject {
+        require(accountFingerprint.matches(Regex("[0-9a-f]{64}")))
+        val db = readableDatabase
+        fun count(sql: String, args: Array<String>): Long =
+            db.rawQuery(sql, args).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+        val pending = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        val processed = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PROCESSED'",
+            arrayOf(accountFingerprint))
+        val otherPending = count(
+            "SELECT COUNT(*) FROM private_user_event_inbox WHERE account_fingerprint<>? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        val oldest = db.rawQuery(
+            "SELECT MIN(received_at_ms) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint)
+        ).use { if (it.moveToFirst() && !it.isNull(0)) it.getLong(0) else 0L }
+        val attempts = count(
+            "SELECT COALESCE(SUM(attempt_count),0) FROM private_user_event_inbox WHERE account_fingerprint=? AND status='PENDING'",
+            arrayOf(accountFingerprint))
+        return JSONObject()
+            .put("schema", "PRIVATE_USER_EVENT_INBOX_V1")
+            .put("account_fingerprint_present", true)
+            .put("pending_count", pending)
+            .put("processed_count", processed)
+            .put("other_account_pending_count", otherPending)
+            .put("oldest_pending_received_at_ms", if (oldest > 0L) oldest else JSONObject.NULL)
+            .put("oldest_pending_age_ms", if (oldest > 0L) (System.currentTimeMillis() - oldest).coerceAtLeast(0L) else JSONObject.NULL)
+            .put("pending_retry_attempts", attempts)
+            .put("delivery_contract", "DURABLE_AT_LEAST_ONCE_UNTIL_HANDLER_ACK")
+            .put("financial_truth", "SIGNED_BINANCE_RECONCILIATION_ONLY")
+    }
+
+    @Synchronized
+    fun hasPendingPrivateUserEvents(accountFingerprint: String): Boolean =
+        pendingPrivateUserEvents(accountFingerprint, 1).isNotEmpty()
+
+    @Synchronized
+    fun recordUserEvent(event: JSONObject, rawEventAlreadyPersisted: Boolean = false) {
         val eventType = event.optString("e", "unknown")
         val eventTime = event.optLong("E", 0L)
-        // Keep the raw User Stream handler's existing best-effort insert contract.
-        // Strict durability is scoped to campaign observations before caching them.
-        recordRawEvent(event, requireDurable = false)
+        // The inbox already inserted the raw event atomically with its PENDING
+        // receipt. Other callers retain the historical best-effort insert path.
+        if (!rawEventAlreadyPersisted) recordRawEvent(event, requireDurable = false)
 
         // Binance USD-M Futures sends ORDER_TRADE_UPDATE with all execution fields
         // nested in "o"; Spot-style executionReport fields live at the root. Normalize
@@ -735,12 +1022,19 @@ class TradingAuditStore(context: Context) :
         execution.put("event_time", executionEventTime)
         execution.put("transaction_time", transactionTime)
         execution.put("raw_json", event.toString())
-        writableDatabase.insertWithOnConflict(
+        val executionDb = writableDatabase
+        val executionInsert = executionDb.insertWithOnConflict(
             "executions",
             null,
             execution,
             SQLiteDatabase.CONFLICT_IGNORE
         )
+        if (executionInsert == -1L) {
+            val persisted = executionDb.rawQuery(
+                "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+            ).use { it.moveToFirst() }
+            check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+        }
 
         val order = ContentValues()
         order.put("client_order_id", clientId.ifBlank { orderId })
@@ -759,11 +1053,11 @@ class TradingAuditStore(context: Context) :
         order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
         order.put("raw_json", event.toString())
-        writableDatabase.insertWithOnConflict(
+        check(executionDb.insertWithOnConflict(
             "orders",
             null,
             order,
             SQLiteDatabase.CONFLICT_REPLACE
-        )
+        ) != -1L) { "PRIVATE_EVENT_ORDER_JOURNAL_WRITE_FAILED" }
     }
 }

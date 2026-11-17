@@ -3,6 +3,24 @@ package com.williamsbot
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Geometry of the latest closed bar is not a complete executable WM1. */
+internal fun williamsAngulationObservationRu(side:String,proof:JSONObject?):String {
+    val edge=if(side=="LONG") "верхние края баров" else "нижние края баров"
+    val observation=when(proof?.optString("reason")) {
+        "SINGLE_BAR_ANGULAR_DEPARTURE" -> "первая внешняя свеча сама создаёт наблюдаемое расхождение с пастью"
+        "DIVERGING_PRICE_PATH" -> "путь цены продолжает расходиться с челюстью и зубами после выхода из пасти"
+        "PARALLEL_AFTER_MOUTH_EXIT" -> "после первого отрыва пути параллельны или сходятся; ангуляция не подтверждена"
+        "PRICE_NOT_DEPARTING_AFTER_MOUTH_EXIT" -> "после первого отрыва сама цена не продолжает движение от пасти"
+        "PRICE_PATH_NOT_STEEPER_AFTER_MOUTH_EXIT" -> "после первого отрыва наклон пути цены не подтверждает расхождение с пастью"
+        "PRICE_PATH_NOT_STEEPER" -> "более крутой уход цены от пасти не подтверждён"
+        "SIGNAL_BAR_TOUCHES_MOUTH" -> "бар касается пасти или находится внутри неё; условие WM1 не выполнено"
+        "MOUTH_CROSSING_UNOBSERVED" -> "в доступной истории не найден проход через пасть; ангуляция не подтверждена"
+        "CANDLE_PATH_GAP" -> "между исходными свечами есть пропуск; ангуляция не подтверждена"
+        else -> "данных недостаточно для надёжной проверки ангуляции"
+    }
+    return "Геометрия WM1 $side ($edge): $observation."
+}
+
 /**
  * Human-readable market LOCATION, not a discretionary trading strategy.
  *
@@ -54,6 +72,11 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
                 mfi?.optString("explanation_ru").orEmpty()
             else -> "По TC1 четыре окна MFI/объёма не подтверждены: нет двух проверенных закрытых свечей или объём неверен. Наблюдение не управляет TC2."
         }
+        val angle=if(readingReady && frame=="1h") reading!!.optJSONObject("angulation") else null
+        val angleRu=if(angle==null) "" else
+            listOf("LONG","SHORT").joinToString(" ") {
+                williamsAngulationObservationRu(it,angle.optJSONObject(it))
+            }+" Разворотный бар, AO и пробой уровня проверяются отдельно от геометрии угла."
         val hypotheses=rows(row?.optJSONArray("hypotheses"))
         val unique=hypotheses.map { it.optString("active_label") to it.optString("active_direction") }
             .distinct()
@@ -128,7 +151,8 @@ internal fun williamsMarketNarrative(phase:JSONObject):JSONObject {
             .put("tc1_price_geometry_explanation_ru",geomRu)
             .put("tc1_ratios_can_veto_orders",false)
             .put("complex_research_can_veto_orders",false)
-            .put("explanation_ru",observed+" "+geomRu+" "+mfiRu)
+            .put("tc2_angulation_explanation_ru",angleRu)
+            .put("explanation_ru",listOf(observed,geomRu,mfiRu,angleRu).filter {it.isNotBlank()}.joinToString(" "))
             .put("wave_degree_confirmed",false)
             .put("can_place_orders",false).put("can_close",false))
     }

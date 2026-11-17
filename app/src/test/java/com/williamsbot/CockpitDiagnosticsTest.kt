@@ -160,6 +160,23 @@ class CockpitDiagnosticsTest {
         lifecycle.put("worker_heartbeat_stale_count",1)
         assertEquals("WARNING",severity("AND-04",status))
     }
+    @Test fun missingAndroidBatteryExemptionExplainsBackgroundWarning() {
+        val android=JSONObject().put("foreground_service_active",true)
+            .put("battery_optimization_ignored",false)
+            .put("background_restricted",false)
+            .put("cpu_wake_lock_held",true)
+            .put("service_guard_age_ms",30_000)
+            .put("power_save_mode",false)
+        val status=healthy().put("android_runtime",android)
+        assertEquals("WARNING",severity("AND-01",status))
+        val detail=check("AND-01",status).getString("detail")
+        assertTrue(detail.contains("исключение из оптимизации батареи Android=false"))
+        assertTrue(detail.contains("Без ограничений"))
+        android.put("battery_optimization_ignored",true)
+        assertEquals("NOT_VERIFIED",severity("AND-01",status))
+        // Removing Android power restrictions does NOT prove 24-hour survival.
+    }
+
     @Test fun currentAndroidFlagsCannotCertifyUninterruptedBackgroundOperation() {
         val s=healthy().put("android_runtime",JSONObject().put("foreground_service_active",true)
             .put("battery_optimization_ignored",true).put("background_restricted",false)
@@ -452,11 +469,19 @@ class CockpitDiagnosticsTest {
 
     @Test fun scannerBlockedAndCoordinatorBlockedAreDifferentFromTechnicalReadiness() {
         val s = healthy().put("scanner_state", "READY_BLOCKED")
+            .put("scanner_last_scan_at",now-1690L)
         val c = coordinator().put("ready_for_new_entry", false)
             .put("blocker", "exchange_confirmed_pending_entry_or_fill_not_yet_resolved")
         val r = CockpitDiagnostics.readiness(s, c, now)
         assertTrue(r.getBoolean("technical_ready"))
         assertFalse(r.getBoolean("new_entries_allowed"))
+        assertTrue(r.getBoolean("scanner_last_complete_analysis_fresh"))
+        assertFalse(CockpitDiagnostics.readiness(
+            s.put("scanner_last_scan_at",now+1L),c,now)
+            .getBoolean("scanner_last_complete_analysis_fresh"))
+        assertFalse(CockpitDiagnostics.readiness(
+            s.put("scanner_last_scan_at",now-120_001L),c,now)
+            .getBoolean("scanner_last_complete_analysis_fresh"))
         assertTrue(r.getString("new_entries_reason").contains("исполнение"))
     }
     @Test fun diagnostic3TwoUnfilledShortAlgosNeedFreshReconciliationNotPrematureSL() {

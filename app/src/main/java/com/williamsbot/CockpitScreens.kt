@@ -820,6 +820,137 @@ internal fun CockpitDiagnosticScreen(
             }
         }
         item {
+            val corpus=report?.optJSONObject("four_book_full_chapter_coverage")
+            CockpitCard("📚 Полная карта четырёх книг · 642 страницы") {
+                if(corpus==null) {
+                    Text("Новый постраничный реестр ещё не получен. Проверка книг не подтверждена.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Физически индексировано страниц",
+                        corpus.optInt("source_pages_physically_indexed").toString()+"/642")
+                    CockpitField("Разделов в источниках",
+                        corpus.optInt("source_chapters_in_inventory").toString())
+                    CockpitField("Разделы с независимым экзаменом по рисункам",
+                        corpus.optInt("chapters_with_independent_figure_exam").toString())
+                    val checklist=corpus.optJSONObject("tc2_appendix_1_closed_h1_chart_checklist")
+                    CockpitField("Реальные паспорта H1 по приложению TC2",
+                        (checklist?.optInt("source_chart_observed_count") ?: 0).toString()+"/"+
+                        (checklist?.optInt("symbols_expected") ?: 15).toString())
+                    CockpitField("Завершена ли проверка STOP и рисков по книгам?",
+                        "НЕТ · требуется биржевая подписанная сверка")
+                    CockpitField("Подтверждены ли 99% знаний?",
+                        if(corpus.optBoolean("book_understanding_99_percent_proven")) "ДА" else "НЕТ")
+                    val sources=CockpitDiagnostics.rows(corpus.optJSONArray("source_catalog"))
+                    for(book in sources) {
+                        CockpitField(book.optString("book")+" · страницы / разделы",
+                            book.optInt("indexed_pdf_pages").toString()+" / "+
+                            book.optInt("indexed_sections").toString())
+                    }
+                    Text("Карта всех страниц ≠ понимание всех графиков. Сканы Course, " +
+                        "психология, устаревшие торговые платформы и отсутствующее внешнее " +
+                        "пособие требуют отдельной проверки. Индикаторы TC1/NTD/Course " +
+                        "не изменяют разрешённые входы TC2. Данные доступны в ZIP.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
+            val understanding=report?.optJSONObject("book_causal_understanding")
+            CockpitCard("📚 Понимание четырёх книг · причинная сверка") {
+                if(understanding==null) {
+                    Text("Нужна диагностика новой версии для сопоставления источников и решений.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Достоверная H1 серия",
+                        if(understanding.optBoolean("scanner_data_usable_for_book_observations"))
+                            "Проверена для снимка" else "НЕ подтверждена")
+                    CockpitField("Источник реальных входов", "TC2 · три мудреца")
+                    CockpitField("Чёткие внутренние доказательства H1",
+                        understanding.optInt("internal_h1_setup_proof_count").toString())
+                    CockpitField("Неполные доказательства",
+                        understanding.optInt("incomplete_or_non_tc2_signal_proof_count").toString())
+                    CockpitField("Противоречия AO с исходными H1-свечами",
+                        understanding.optInt("independent_third_ao_source_contradictions").toString())
+                    CockpitField("AO без независимого подтверждения",
+                        understanding.optInt("independent_third_ao_unverified").toString())
+                    CockpitField("Конфликты происхождения",
+                        (understanding.optJSONArray("source_contract_discrepancies")?.length() ?: 0).toString())
+                    CockpitField("Подтверждённые встречные H1-выходы",
+                        understanding.optInt("confirmed_h1_opposing_exit_count").toString())
+                    Text("TC1, NTD и Course — наблюдение. Сигнал ≠ пробой ≠ исполнение ≠ подтверждённый STOP. " +
+                        "Встречный H1 не доказывает разворот H4/D1. Книги целиком не сертифицированы, " +
+                        "ангулляция WM1 и волны частично интерпретируются численно.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
+            val hierarchy=report?.optJSONObject("tc2_book_exit_hierarchy")
+            CockpitCard("📖 Выход по TC2 · 3/4/5 баров или встречный сигнал") {
+                if(hierarchy==null) {
+                    Text("Требуется новая диагностика; оригинальные бары H1 пока не сверены.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    CockpitField("Исторические выходы с подтверждёнными 3/4/5 барами",
+                        hierarchy.optInt("historical_3_4_5_observed").toString())
+                    CockpitField("Полных 3 и 4 бара",
+                        hierarchy.optInt("historical_3_4_only_observed").toString())
+                    CockpitField("Полных только 3 бара",
+                        hierarchy.optInt("historical_only_3_observed").toString())
+                    CockpitField("Недостаточно данных",
+                        hierarchy.optInt("historical_unverified").toString())
+                    val examples=CockpitDiagnostics.rows(hierarchy.optJSONArray("recent_closed_trades"))
+                    for(row in examples.take(3)) {
+                        val symbol=row.optString("symbol")
+                        CockpitField(symbol+" · "+row.optString("direction"),
+                            row.optString("state","NOT_VERIFIED"))
+                        if(row.optString("state").contains("H1_EXTREMES_OBSERVED")) {
+                            CockpitField("Граница последних 3 закрытых H1",
+                                row.optString("book_3_bar_boundary"))
+                            CockpitField("Граница последних 4 закрытых H1",
+                                row.optString("book_4_bar_boundary"))
+                            CockpitField("Граница последних 5 закрытых H1",
+                                row.optString("book_5_bar_boundary"))
+                        }
+                    }
+                    Text("В TC2 обычный выход — структурный стоп последних 3–5 баров; " +
+                        "встречный Wise Man встречается реже. Здесь показаны только экстремумы: " +
+                        "не подтверждены биржевой STOP, цена исполнения или выгода от удержания. " +
+                        "Новые ордера и выходы эта карточка не изменяет.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
+            val exitEvidence=report?.optJSONObject("tc2_recent_exit_forensics")
+            val lastExits=CockpitDiagnostics.rows(exitEvidence?.optJSONArray("recent_closed_trades"))
+            CockpitCard("Почему бот закрыл сделку") {
+                if(exitEvidence==null) {
+                    Text("Для анализа причины выхода запустите диагностику версии 4.64.19.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else if(lastExits.isEmpty()) {
+                    Text("Нет завершённых сделок с доступным биржевым журналом.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                } else {
+                    for(row in lastExits.take(3)) {
+                        CockpitField(row.optString("symbol")+"/"+row.optString("direction"),
+                            row.optString("recorded_exit_reason","NOT_VERIFIED"))
+                        Text(row.optString("why_closed_ru"),
+                            style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                        if(row.optBoolean("opposite_h1_signal_confirmed_in_saved_evidence")) {
+                            CockpitField("Встречный H1",
+                                row.optString("opposite_signal_type")+" · trigger "+
+                                    row.optString("opposite_trigger","?")+" · contract "+
+                                    row.optString("observed_contract_price","?"))
+                        }
+                    }
+                    Text("Встречный TC2-сигнал не означает завершения старшего тренда. " +
+                        "Эта read-only карточка не меняет стопы и торговые правила.",
+                        style=MaterialTheme.typography.bodySmall,color=AppColors.textMuted)
+                }
+            }
+        }
+        item {
             val signed=report?.optJSONObject("signed_position_stop_join")
             val rows=CockpitDiagnostics.rows(signed?.optJSONArray("positions"))
             val severity=signed?.optString("severity","NOT_VERIFIED") ?: "NOT_VERIFIED"

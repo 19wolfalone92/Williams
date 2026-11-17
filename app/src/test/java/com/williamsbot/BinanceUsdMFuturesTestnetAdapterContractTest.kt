@@ -17,6 +17,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
+    @Test fun officialV3ShapeReadsPermissionFromSignedFuturesConfiguration() {
+        for (permission in listOf(true, false)) {
+            val signedPaths=mutableListOf<String>()
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                val request=chain.request()
+                assertEquals("demo-fapi.binance.com",request.url.host)
+                assertEquals("GET",request.method)
+                val body=when(request.url.encodedPath) {
+                    "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                    "/fapi/v3/account" -> {
+                        signedPaths+=request.url.encodedPath
+                        assertTrue(request.url.queryParameter("timestamp")!=null)
+                        assertTrue(request.url.queryParameter("signature")!=null)
+                        """{"totalMarginBalance":"990","assets":[{"asset":"USDT"}],"positions":[]}"""
+                    }
+                    "/fapi/v1/accountConfig" -> {
+                        signedPaths+=request.url.encodedPath
+                        assertTrue(request.url.queryParameter("timestamp")!=null)
+                        assertTrue(request.url.queryParameter("signature")!=null)
+                        JSONObject().put("canTrade",permission).put("dualSidePosition",false)
+                            .put("multiAssetsMargin",false).put("totalMarginBalance","999999").toString()
+                    }
+                    else -> throw AssertionError("Unexpected account-contract request: ${request.url}")
+                }
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            val account=BinanceUsdMFuturesTestnetAdapter("key","secret",http).account()
+            assertEquals(listOf("/fapi/v3/account","/fapi/v1/accountConfig"),signedPaths)
+            assertEquals(permission,account.getBoolean("canTrade"))
+            assertEquals("990",account.getString("totalMarginBalance"))
+            assertEquals("/fapi/v1/accountConfig",account.getString("account_permission_source"))
+        }
+    }
+
     @Test
     fun protectiveStopRateRejectionBeforeTransportIsDefinitelyNotSubmitted() {
         val guard = BinanceRateGuard()
@@ -534,7 +569,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
             } else {
                 val timestamp=request.url.queryParameter("timestamp")!!.toLong()
                 stamps.add(timestamp-System.currentTimeMillis())
-                "{}"
+                """{"canTrade":true}"""
             }
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK")
@@ -594,7 +629,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 accountCalls++
                 assertTrue("Only a signed GET can follow a verified clock probe",
                     request.url.queryParameter("timestamp") != null)
-                "{}"
+                """{"canTrade":true}"""
             }
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK")
@@ -624,11 +659,11 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                     val stamp = request.url.queryParameter("timestamp")!!.toLong()
                     assertTrue("Slow probe must not timestamp >1000ms into exchange future",
                         stamp <= timeFromSlowResponse + 1_000L)
-                    "{}"
+                    """{"canTrade":true}"""
                 }
                 else -> {
                     mutationPosts++
-                    "{}"
+                    """{"canTrade":true}"""
                 }
             }
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
@@ -658,7 +693,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                     if (probes==1) Thread.sleep(3_200L)
                     """{"serverTime":${System.currentTimeMillis()}}"""
                 }
-                "/fapi/v3/account" -> "{}"
+                "/fapi/v3/account" -> """{"canTrade":true}"""
                 "/fapi/v1/leverage" -> {
                     posts++
                     val params=formParams(r)

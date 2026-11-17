@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-07",
-  "release": "4.64.0",
+  "updated": "2026-11-12",
+  "release": "4.64.23",
   "scope": "SELECTED_FORMAL_RULES_NOT_FULL_BOOK",
   "whole_book_certified": false,
   "source_review_complete": false,
@@ -107,11 +107,13 @@
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_exit_policy.py",
-        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsSetupRules.kt"
       ],
       "tests": [
         "tests/test_williams_book_rules_contract.py::test_protection_and_entry_use_the_same_five_six_seven_nine_bar_geometry",
-        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals"
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::entryAndProtectionAgreeForFiveSixSevenAndNineBarFractals",
+        "app/src/test/java/com/williamsbot/WilliamsBookRulesContractTest.kt::liveTc2ThirdWiseManSelectorMatchesFiveSixSevenNineClosedBarFigures"
       ],
       "fixtures": [
         "fractals/five",
@@ -119,7 +121,7 @@
         "fractals/seven-separated-ties",
         "fractals/nine-ties-and-inner-bars"
       ],
-      "remaining_evidence": "These are synthetic boundary fixtures tied to figures11.1/11.2, not digitizations of every historical bar.",
+      "remaining_evidence": "5/6/7/9-bar synthetic book figures now also exercise the actual LIVE TC2 WM3 pending selector, confirmation and current Teeth veto, on both sides. This does not digitize every historical figure or verify actual Binance trigger/STOP lifecycle.",
       "can_place_orders_from_registry": false
     },
     {
@@ -373,16 +375,18 @@
       "status": "BOUNDED_TESTED",
       "modules": [
         "williams_exit_policy.py",
-        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"
+        "app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "tests/test_tc2_exact_exit_price_parity.py::test_shared_python_android_source_tick_contract",
         "tests/test_tc2_no_automatic_breakeven.py::test_book_five_bar_stop_still_tightens_in_both_directions",
         "app/src/test/java/com/williamsbot/WilliamsTc2ExitTickContractTest.kt::fiveClosedBarBookTrailMatchesPythonOnExactExchangeTicks",
-        "app/src/test/java/com/williamsbot/FuturesStopTrailPolicyTest.kt::tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection"
+        "app/src/test/java/com/williamsbot/FuturesStopTrailPolicyTest.kt::tc2BookTrailRequiresVerifiedOpeningTimeButKeepsProtection",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [],
-      "remaining_evidence": "Mirrorable original candle extremes, exact decimal tick, incomplete/unaligned candle failures and 3/5-bar unit tests now linked; physical Binance Demo signed STOP placement/replacement and all original charts remain unverified.",
+      "remaining_evidence": "Mirrorable original candle extremes, exact decimal tick, incomplete/unaligned candle failures and 3/5-bar unit tests now linked; physical Binance Demo signed STOP placement/replacement and all original charts remain unverified. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1059,7 +1063,8 @@
         "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoordinator.kt",
         "williams_tc2_reversal.py",
         "app/src/main/java/com/williamsbot/WilliamsTc2Reversal.kt",
-        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt"
+        "app/src/main/java/com/williamsbot/StandaloneRuntime.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
@@ -1067,7 +1072,8 @@
         "tests/test_williams_tc2_reversal.py::test_shared_two_leg_contract_rejects_unconfirmed_flat_replay_and_price_chasing",
         "app/src/test/java/com/williamsbot/WilliamsTc2ReversalTest.kt::sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing",
         "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart"
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::partialOppositeExitCannotAuthorizeReverseRiskAfterRestart",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [
         "cases/valid",
@@ -1075,7 +1081,7 @@
         "cases/already-admitted",
         "cases/trigger-recovered"
       ],
-      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only.",
+      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false,
       "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json"
     },
@@ -1675,14 +1681,16 @@
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "app/src/main/java/com/williamsbot/Tc2ThreeFiveBarStudy.kt",
-        "app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt"
+        "app/src/main/java/com/williamsbot/WilliamsStopTrailReview.kt",
+        "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt"
       ],
       "tests": [
         "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::longAndShortMirrorExactlyOnThreeFourFiveClosedBars",
-        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::thirdCompletedHourCanBeComparedButFiveIsNotPretended"
+        "app/src/test/java/com/williamsbot/Tc2ThreeFiveBarStudyTest.kt::thirdCompletedHourCanBeComparedButFiveIsNotPretended",
+        "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt::actualOppositeExitComparedToBookThreeAndFiveBarsWithoutProposingNewOrders"
       ],
       "fixtures": [],
-      "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent.",
+      "remaining_evidence": "4-bar closed-H1 exact-tick LONG/SHORT observer is calculated but does not replace signed protective STOP. Controlled out-of-sample comparison 3/4/5 including costs, gap/slippage and real Demo replacement cycles is still absent. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
       "can_place_orders_from_registry": false
     },
     {
@@ -1825,6 +1833,113 @@
       ],
       "remaining_evidence": "Exact ratio and four signs on synthetic closed-price/BASE-volume fixtures are mirrored in Kotlin/Python. Original tick volume is unavailable from Binance klines; no independent digitized chart agreement and no trading/execution/STOP authority; never accept squat alone as wave end.",
       "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC2.APPENDIX1.PAPER_SOURCE_OPERATOR_CHECKLIST",
+      "book": "TC2",
+      "pdf_pages": [
+        179,
+        180,
+        181,
+        182,
+        183
+      ],
+      "rule": "TC2 appendix 1 calls for reliable data, familiarity with margin/tick/order semantics, paper practice and operational preparedness. It is a user-readiness guide, not an algorithmic market signal.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannerFreshnessIsNotProofOfPaperTradeStopOrHumanPsychology"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "TC1.FIVE_TRADER_LEVELS",
+      "book": "TC1",
+      "pdf_pages": [
+        37,
+        49,
+        80,
+        106,
+        127
+      ],
+      "rule": "TC1 distinguishes novice, advanced beginner, competent, proficient and expert education levels; they are competence descriptions and cannot authorize real orders.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "NTD.MASTERY_IS_NOT_MARKET_SIGNAL",
+      "book": "NTD",
+      "pdf_pages": [
+        139,
+        140,
+        141,
+        142,
+        143,
+        144,
+        145,
+        146,
+        147,
+        148,
+        149,
+        150,
+        151,
+        152,
+        153,
+        154,
+        155,
+        156
+      ],
+      "rule": "NTD final chapter explains trader development and mental process, which must not be numerically inferred as a trading signal or risk approval.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannerFreshnessIsNotProofOfPaperTradeStopOrHumanPsychology"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
+    },
+    {
+      "id": "COURSE.FIVE_TRAINING_LEVELS_AND_EXTERNAL_GAP",
+      "book": "COURSE",
+      "pdf_pages": [
+        2,
+        3,
+        15,
+        31,
+        75,
+        99,
+        119,
+        122
+      ],
+      "rule": "The scanned Course has five instructional levels; its final page explicitly delegates individual lessons to an external tutorial not contained in the PDF.",
+      "status": "IMPLEMENTED_PARTIAL",
+      "modules": [
+        "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt"
+      ],
+      "tests": [
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::allFourOriginalsHaveEveryPhysicalPageInChapterMapButNoFakeCertification",
+        "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt::scannedCourseExternalTutorialNotFabricatedFromBookMetadata"
+      ],
+      "fixtures": [],
+      "remaining_evidence": "Section index and non-executable classification are implemented; chapter-by-chapter original-figure golden cases, held-out human grading and market/demo proofs are NOT completed.",
+      "can_place_orders_from_registry": false
     }
   ],
   "required_remaining_evidence": [
@@ -1834,5 +1949,48 @@
     "Verify user-approved TC2 book stop-and-reverse: protected reduce-only flatten followed by separately risk-authorized opposite entry with verified protective STOP, including outage and partial-fill acceptance",
     "Physical Android Binance Futures Demo LONG/SHORT fills, partial fills, protection, restart and offline recovery"
   ],
-  "page_coverage_file": "docs/williams_source_page_coverage.json"
+  "page_coverage_file": "docs/williams_source_page_coverage.json",
+  "runtime_reasoning_audit": {
+    "path": "app/src/main/java/com/williamsbot/WilliamsBookCausalUnderstanding.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsBookCausalUnderstandingTest.kt",
+    "source_pdf_pages_reproduced_as_references_only": true,
+    "infers_higher_timeframe_reversal_from_h1_opposite": false,
+    "cited_rule_count": 14,
+    "no_trading_or_stop_authority": true,
+    "confidence_calibrated": false,
+    "scope": "READ_ONLY_CAUSAL_OBSERVATIONS_NOT_LLM_TRAINING_OR_WHOLE_BOOK_CERTIFICATION"
+  },
+  "historical_exit_book_lens": {
+    "module": "app/src/main/java/com/williamsbot/WilliamsTc2ExitHierarchyLens.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsTc2ExitHierarchyLensTest.kt",
+    "source_book": "TC2",
+    "source_pdf_pages": [
+      156,
+      161,
+      163,
+      165
+    ],
+    "comparable_historical_stop_structures": [
+      3,
+      4,
+      5
+    ],
+    "source_read_only": true,
+    "actual_signed_stop_equivalence_claimed": false,
+    "retrospective_profit_replay_completed": false,
+    "partial_profit_half_position_mandatory": false,
+    "whole_book_fidelity_99_percent_proven": false
+  },
+  "full_book_chapter_inventory": {
+    "path": "docs/williams_four_book_full_section_inventory_46423.json",
+    "module": "app/src/main/java/com/williamsbot/WilliamsFourBookCurriculum.kt",
+    "test": "app/src/test/java/com/williamsbot/WilliamsFourBookCurriculumTest.kt",
+    "source_total_physical_pdf_pages": 642,
+    "indexed_physical_pdf_pages": 642,
+    "section_count": 57,
+    "sections_independently_visual_exam_passed": 0,
+    "course_external_personal_tutorial_available": false,
+    "claimed_source_coverage_accuracy_percent": null,
+    "execution_authority": false
+  }
 }

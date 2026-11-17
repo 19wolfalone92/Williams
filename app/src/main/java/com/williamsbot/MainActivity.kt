@@ -342,7 +342,8 @@ data class Candle(
     val ao: Double? = null,
     val ac: Double? = null,
     val mfiProxy: Double? = null,
-    val signalTypes: List<String> = emptyList()
+    val signalTypes: List<String> = emptyList(),
+    val signalProfiles: List<String> = emptyList()
 )
 
 data class Candidate(
@@ -537,13 +538,22 @@ fun WilliamsApp(context: Context) {
     var criticalSetting by remember { mutableStateOf("") }
     val loadMutex = remember { Mutex() }
 
-    suspend fun loadAll(scan: Boolean) {
-        if (!loadMutex.tryLock()) return
+    suspend fun loadAll(scan: Boolean, waitForLock: Boolean = false) {
+        // Periodic polling may skip a busy refresh. A user explicitly switching
+        // to a detailed screen MUST wait for the previous compact response,
+        // otherwise the one-shot detail refresh can be silently lost for 5s.
+        if (waitForLock) loadMutex.lock()
+        else if (!loadMutex.tryLock()) return
         try {
             refreshing = scan
             val payload = withContext(Dispatchers.IO) {
                 if (scan) api.get("/api/v1/scanner?refresh=true")
-                JSONObject(api.get("/api/v1/cockpit"))
+                // Keep signed safety/risk/status updates at the same 5s cadence.
+                // Only dashboard/trades omit large read-only 15-symbol decision
+                // traces. The market chart and analysis retain full provenance.
+                val compact = tab == 0 || tab == 2
+                JSONObject(api.get(if (compact) "/api/v1/cockpit?compact=true"
+                    else "/api/v1/cockpit"))
             }
             val source = payload.getJSONObject("status")
             val scanner = payload.getJSONObject("scanner")
@@ -1047,6 +1057,9 @@ fun WilliamsApp(context: Context) {
         withContext(Dispatchers.IO) {
             runCatching { api.post("/api/v1/ui/event", JSONObject().put("action", "NAVIGATE").put("detail", "screen=$tab").toString()) }
         }
+        // Switching from a compact dashboard to the market/analysis screen
+        // must not show an empty or stale decision trace for another 5s tick.
+        if (tab == 1 || tab == 7 || tab == 6) loadAll(false, waitForLock = true)
         if (tab == 4 && diagnosticReport == null) runDiagnostics()
     }
     BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }
@@ -2376,7 +2389,7 @@ private fun MarketChartPanel(
                 InfoRow("Количественная оценка", fmt(candidate.quantScore, 2))
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Прибыль / риск", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
-                InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
+                InfoRow("Спред / ATR", (if (candidate.spreadPct.isFinite() && candidate.spreadPct >= 0.0) fmt(candidate.spreadPct * 100.0, 3) + "%" else "нет данных") + " / " + fmt(candidate.atrPct * 100.0, 3) + "%")
                 }
                 InfoRow("Обнаруженный уровень формации", fmt(candidate.entryTriggerPrice))
                 InfoRow("Защита формации до допуска", fmt(candidate.entryProtectivePrice))
@@ -2462,7 +2475,7 @@ private fun CandidateCardModern(candidate: Candidate) {
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ПРИБЫЛЬ/РИСК", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR (волат.)", fmt(candidate.atrPct * 100, 2) + "%")
-                MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
+                MiniMetric("СПРЕД", if (candidate.spreadPct.isFinite() && candidate.spreadPct >= 0.0) fmt(candidate.spreadPct * 100, 3) + "%" else "нет данных")
                 MiniMetric("СОВПАДЕНИЕ", candidate.wiseManCount.toString() + "/3")
             }
 
@@ -3555,9 +3568,18 @@ private fun TradingChart(
     val viewport = chartViewport(series.size, requestedBars, barsBack)
     val visible = series.subList(viewport.start,viewport.start+viewport.count)
     val selectedBar = visible.indexOfFirst { it.time == selectedAt }
-    val pendingTrigger = williamsChartTrigger(status.decisionTracesJson,status.symbol,System.currentTimeMillis(),status.price)
-    val levels = (listOfNotNull(status.tp,status.entry,status.sl,status.price,position?.entry,position?.stop,
-        historicalTrade?.entry,historicalTrade?.exit,historicalTrade?.stopPrice) +
+    val pendingTrigger = if(historicalTrade==null)
+        williamsChartTrigger(status.decisionTracesJson,status.symbol,System.currentTimeMillis(),status.price)
+        else WilliamsChartTrigger("NO_VERIFIED_PENDING_ORDER")
+    // Historical trade data MUST NOT be mixed with today's live quote,
+    // position, active orders or provisional research stop. This previously
+    // distorted the historical axis and hid the actual recorded SL.
+    val projectedLevels = if(historicalTrade!=null)
+        listOfNotNull(historicalTrade.entry,historicalTrade.exit,
+            historicalTrade.stopPrice,historicalTrade.lastStop)
+        else listOfNotNull(status.tp,status.entry,status.sl,status.price,position?.entry,
+            position?.stop,pendingTrigger.trigger,pendingTrigger.stop)
+    val levels = (projectedLevels +
         visible.flatMap { listOfNotNull(if(showJaw) it.jaw else null,if(showTeeth) it.teeth else null,if(showLips) it.lips else null) })
         .filter { it.isFinite() && it>0 }
     val minPrice = min(visible.minOf { it.low },levels.minOrNull() ?: Double.MAX_VALUE)
@@ -3598,9 +3620,11 @@ private fun TradingChart(
                 FilterChip(selected=enabled,onClick=change,label={Text(label)})
             }
         }
-        Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
+        if(historicalTrade==null) Text("Заявка Binance: "+williamsTriggerStateLabel(pendingTrigger.state)+
             (pendingTrigger.trigger?.let {" · "+formatChartPrice(it)} ?: ""),
             color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
+        if(showSignals && historicalTrade==null) Text("WM1/WM2/WM3 — формации TC2 (не биржевые заявки); ИССЛ. — наблюдения других систем",
+            color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
         if(!landscape || layerControls) {
             Text("Аллигатор 13/8 · 8/5 · 5/3. Фрактал известен после двух закрытых свечей справа.",
                 color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
@@ -3684,15 +3708,21 @@ private fun TradingChart(
             if(showTeeth) indicatorLine({it.teeth},AppColors.amber)
             if(showLips) indicatorLine({it.lips},AppColors.primary)
             if(showSignals) visible.forEachIndexed { index,c ->
-                c.signalTypes.distinct().forEachIndexed { order,type ->
+                // Source ownership is preserved per parallel index; never
+                // classify Course/NTD research as a TC2 executable marker.
+                c.signalTypes.withIndex().distinctBy { row ->
+                    row.value to c.signalProfiles.getOrNull(row.index)
+                }.forEachIndexed { order,row ->
+                    val type=row.value
+                    val isTc2=c.signalProfiles.getOrNull(row.index)==williamsTc2Profile
                     val short=type.startsWith("SHORT")
-                    val family=when {
-                        type.contains("REVERSAL")->"WM1";type.contains("SUPER_AO")->"WM2";type.contains("FRACTAL")->"WM3"
-                        else->"СИГНАЛ"
-                    }
+                    val family=if(isTc2) when(type.removePrefix("SHORT_")) {
+                        "REVERSAL"->"WM1";"SUPER_AO"->"WM2";"FRACTAL"->"WM3"
+                        else->"ИССЛ."
+                    } else "ИССЛ."
                     label((if(short) "▼" else "▲")+family,x(index),
                         y(if(short) c.high else c.low)+(if(short) -1 else 1)*(order+1)*(paint.textSize+3f),
-                        if(short) AppColors.red else AppColors.green)
+                        if(family=="ИССЛ.") AppColors.textMuted else if(short) AppColors.red else AppColors.green)
                 }
             }
             fun tradeMarker(at:Long,price:Double?,text:String,color:Color) {
@@ -3715,21 +3745,47 @@ private fun TradingChart(
                 if(price==null || !price.isFinite() || !showLevels || price !in minPrice..(minPrice+range)) return
                 drawLine(color,Offset(plot.left,y(price)),Offset(plot.right,y(price)),1.5f)
             }
-            level(status.price,AppColors.primary)
-            level(position?.entry ?: status.entry,AppColors.primary)
-            level(position?.take ?: status.tp,AppColors.green)
-            level(position?.stop ?: status.sl,AppColors.red)
-            level(pendingTrigger.trigger,AppColors.amber)
-            level(pendingTrigger.stop,AppColors.red)
+            if(historicalTrade!=null) {
+                // Amber is a JOURNAL STOP only: entry stopPrice is not
+                // authenticated proof of a Binance STOP_MARKET. The last
+                // previously confirmed stop also cannot prove it remained
+                // active at the exchange fill timestamp.
+                level(historicalTrade.stopPrice,AppColors.amber)
+                level(historicalTrade.lastStop,AppColors.red)
+            } else {
+                level(status.price,AppColors.primary)
+                level(position?.entry ?: status.entry,AppColors.primary)
+                level(position?.take ?: status.tp,AppColors.green)
+                level(position?.stop ?: status.sl,AppColors.red)
+                level(pendingTrigger.trigger,AppColors.amber)
+                level(pendingTrigger.stop,AppColors.red)
+            }
         }
         if(showLevels) FlowRow(Modifier.fillMaxWidth(),
             horizontalArrangement=Arrangement.spacedBy(12.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
-            status.price?.let {Text("Цена "+formatChartPrice(it),color=AppColors.primary,style=MaterialTheme.typography.labelSmall)}
-            (position?.entry ?: status.entry)?.let {Text("Вход "+formatChartPrice(it),style=MaterialTheme.typography.labelSmall)}
-            (position?.stop ?: status.sl)?.let {Text("SL "+formatChartPrice(it),color=AppColors.red,style=MaterialTheme.typography.labelSmall)}
-            (position?.take ?: status.tp)?.let {Text("TP "+formatChartPrice(it),color=AppColors.green,style=MaterialTheme.typography.labelSmall)}
-            pendingTrigger.trigger?.let {Text("Заявка "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
-            pendingTrigger.stop?.let {Text("План SL "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+            if(historicalTrade!=null) {
+                historicalTrade.entry?.let {Text("Вход "+formatChartPrice(it),color=AppColors.primary,style=MaterialTheme.typography.labelSmall)}
+                historicalTrade.exit?.let {Text("Выход из журнала "+formatChartPrice(it),color=AppColors.violet,style=MaterialTheme.typography.labelSmall)}
+                historicalTrade.stopPrice?.let {Text("Начальный SL (журнал, не доказательство установки) "+formatChartPrice(it),
+                    color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+                historicalTrade.lastStop?.let {Text("Последний записанный SL "+formatChartPrice(it),
+                    color=AppColors.red,style=MaterialTheme.typography.labelSmall)}
+            } else {
+                status.price?.let {Text("Цена "+formatChartPrice(it),color=AppColors.primary,style=MaterialTheme.typography.labelSmall)}
+                (position?.entry ?: status.entry)?.let {Text("Вход "+formatChartPrice(it),style=MaterialTheme.typography.labelSmall)}
+                (position?.stop ?: status.sl)?.let {Text("SL "+formatChartPrice(it),color=AppColors.red,style=MaterialTheme.typography.labelSmall)}
+                (position?.take ?: status.tp)?.let {Text("TP "+formatChartPrice(it),color=AppColors.green,style=MaterialTheme.typography.labelSmall)}
+                pendingTrigger.trigger?.let {Text("Заявка "+formatChartPrice(it),color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+                pendingTrigger.stop?.let {Text("SL после исполнения "+formatChartPrice(it)+" (ещё не выставлен)",color=AppColors.amber,style=MaterialTheme.typography.labelSmall)}
+            }
+        }
+        if(historicalTrade!=null) {
+            Text("Причина выхода (журнал): "+
+                russianTradeExitExplanation(historicalTrade.exitReason,
+                    historicalTrade.tradeAuditSource=="BINANCE_USDM_USER_TRADES" && historicalTrade.fillCount>0),
+                color=AppColors.textMuted,style=MaterialTheme.typography.bodySmall)
+            Text("H1 не показывает последовательность High/Low внутри часа. Выход не равен исполнению SL без точного биржевого доказательства.",
+                color=AppColors.amber,style=MaterialTheme.typography.labelSmall)
         }
         Text(cockpitTime(visible.first().time)+" — "+cockpitTime(visible.last().time),
             color=AppColors.textMuted,style=MaterialTheme.typography.labelSmall)
@@ -4246,7 +4302,8 @@ private fun parseCandles(array: JSONArray): List<Candle> =
             ao = x.optDouble("ao").takeUnless { it.isNaN() || x.isNull("ao") },
             ac = x.optDouble("ac").takeUnless { it.isNaN() || x.isNull("ac") },
             mfiProxy = x.optDouble("mfi_proxy").takeUnless { it.isNaN() || x.isNull("mfi_proxy") },
-            signalTypes = x.optJSONArray("signal_types")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
+            signalTypes = x.optJSONArray("signal_types")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList(),
+            signalProfiles = x.optJSONArray("signal_profiles")?.let { a -> List(a.length()) { a.optString(it) } } ?: emptyList()
         )
     }
 

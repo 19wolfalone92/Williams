@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from market_context import ContextCache, MarketStateSnapshot
+from futures_half_margin import ExposureNotSubmittedError
 
 
 @dataclass(frozen=True)
@@ -233,6 +234,11 @@ class ExecutionBarrier:
             )
             try:
                 response = submit()
+            except ExposureNotSubmittedError as exc:
+                reason = "exposure_not_submitted: " + str(exc)
+                self._persist(intent, "BLOCKED", reason)
+                self._record("WARNING", "execution_blocked", intent, reason)
+                return ExecutionResult(intent.intent_id, False, reason=reason)
             except Exception as exc:
                 self._persist(intent, "AMBIGUOUS", f"{type(exc).__name__}: {exc}")
                 self._record(

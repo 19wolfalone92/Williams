@@ -1,0 +1,586 @@
+{
+  "schema": "WILLIAMS_AI_CANDIDATE_SYNTHETIC_EXAMPLE_V1",
+  "provenance": "HAND_AUTHORED_CONTRACT_DEMO_NOT_MODEL_OUTPUT",
+  "request": {
+    "allowed_citations": [
+      {
+        "pdf_page": 127,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      },
+      {
+        "pdf_page": 133,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      },
+      {
+        "pdf_page": 134,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      },
+      {
+        "pdf_page": 245,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      },
+      {
+        "pdf_page": 246,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      }
+    ],
+    "authority": {
+      "can_cancel_orders": false,
+      "can_close_positions": false,
+      "can_move_stops": false,
+      "can_place_orders": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    "limits": {
+      "classification_is_not_order_permission": true,
+      "expert_gold": false,
+      "semantic_entailment_verified": false,
+      "snapshot_hash_is_not_external_authentication": true
+    },
+    "observation": {
+      "as_of_ms": 1704247200000,
+      "bars": [
+        {
+          "close": 101,
+          "high": 102,
+          "low": 99,
+          "open": 100,
+          "open_time_ms": 1704067200000,
+          "volume": 10
+        },
+        {
+          "close": 102,
+          "high": 103,
+          "low": 100,
+          "open": 101,
+          "open_time_ms": 1704070800000,
+          "volume": 10
+        },
+        {
+          "close": 103,
+          "high": 104,
+          "low": 101,
+          "open": 102,
+          "open_time_ms": 1704074400000,
+          "volume": 10
+        },
+        {
+          "close": 104,
+          "high": 105,
+          "low": 102,
+          "open": 103,
+          "open_time_ms": 1704078000000,
+          "volume": 10
+        },
+        {
+          "close": 105,
+          "high": 106,
+          "low": 103,
+          "open": 104,
+          "open_time_ms": 1704081600000,
+          "volume": 10
+        },
+        {
+          "close": 106,
+          "high": 107,
+          "low": 104,
+          "open": 105,
+          "open_time_ms": 1704085200000,
+          "volume": 10
+        },
+        {
+          "close": 107,
+          "high": 108,
+          "low": 105,
+          "open": 106,
+          "open_time_ms": 1704088800000,
+          "volume": 10
+        },
+        {
+          "close": 108,
+          "high": 109,
+          "low": 106,
+          "open": 107,
+          "open_time_ms": 1704092400000,
+          "volume": 10
+        },
+        {
+          "close": 109,
+          "high": 110,
+          "low": 107,
+          "open": 108,
+          "open_time_ms": 1704096000000,
+          "volume": 10
+        },
+        {
+          "close": 110,
+          "high": 111,
+          "low": 108,
+          "open": 109,
+          "open_time_ms": 1704099600000,
+          "volume": 10
+        },
+        {
+          "close": 111,
+          "high": 112,
+          "low": 109,
+          "open": 110,
+          "open_time_ms": 1704103200000,
+          "volume": 10
+        },
+        {
+          "close": 112,
+          "high": 113,
+          "low": 110,
+          "open": 111,
+          "open_time_ms": 1704106800000,
+          "volume": 10
+        },
+        {
+          "close": 113,
+          "high": 114,
+          "low": 111,
+          "open": 112,
+          "open_time_ms": 1704110400000,
+          "volume": 10
+        },
+        {
+          "close": 114,
+          "high": 115,
+          "low": 112,
+          "open": 113,
+          "open_time_ms": 1704114000000,
+          "volume": 10
+        },
+        {
+          "close": 115,
+          "high": 116,
+          "low": 113,
+          "open": 114,
+          "open_time_ms": 1704117600000,
+          "volume": 10
+        },
+        {
+          "close": 116,
+          "high": 117,
+          "low": 114,
+          "open": 115,
+          "open_time_ms": 1704121200000,
+          "volume": 10
+        },
+        {
+          "close": 117,
+          "high": 118,
+          "low": 115,
+          "open": 116,
+          "open_time_ms": 1704124800000,
+          "volume": 10
+        },
+        {
+          "close": 118,
+          "high": 119,
+          "low": 116,
+          "open": 117,
+          "open_time_ms": 1704128400000,
+          "volume": 10
+        },
+        {
+          "close": 119,
+          "high": 120,
+          "low": 117,
+          "open": 118,
+          "open_time_ms": 1704132000000,
+          "volume": 10
+        },
+        {
+          "close": 120,
+          "high": 121,
+          "low": 118,
+          "open": 119,
+          "open_time_ms": 1704135600000,
+          "volume": 10
+        },
+        {
+          "close": 121,
+          "high": 122,
+          "low": 119,
+          "open": 120,
+          "open_time_ms": 1704139200000,
+          "volume": 10
+        },
+        {
+          "close": 122,
+          "high": 123,
+          "low": 120,
+          "open": 121,
+          "open_time_ms": 1704142800000,
+          "volume": 10
+        },
+        {
+          "close": 123,
+          "high": 124,
+          "low": 121,
+          "open": 122,
+          "open_time_ms": 1704146400000,
+          "volume": 10
+        },
+        {
+          "close": 124,
+          "high": 125,
+          "low": 122,
+          "open": 123,
+          "open_time_ms": 1704150000000,
+          "volume": 10
+        },
+        {
+          "close": 125,
+          "high": 126,
+          "low": 123,
+          "open": 124,
+          "open_time_ms": 1704153600000,
+          "volume": 10
+        },
+        {
+          "close": 126,
+          "high": 127,
+          "low": 124,
+          "open": 125,
+          "open_time_ms": 1704157200000,
+          "volume": 10
+        },
+        {
+          "close": 127,
+          "high": 128,
+          "low": 125,
+          "open": 126,
+          "open_time_ms": 1704160800000,
+          "volume": 10
+        },
+        {
+          "close": 128,
+          "high": 129,
+          "low": 126,
+          "open": 127,
+          "open_time_ms": 1704164400000,
+          "volume": 10
+        },
+        {
+          "close": 129,
+          "high": 130,
+          "low": 127,
+          "open": 128,
+          "open_time_ms": 1704168000000,
+          "volume": 10
+        },
+        {
+          "close": 130,
+          "high": 131,
+          "low": 128,
+          "open": 129,
+          "open_time_ms": 1704171600000,
+          "volume": 10
+        },
+        {
+          "close": 131,
+          "high": 132,
+          "low": 129,
+          "open": 130,
+          "open_time_ms": 1704175200000,
+          "volume": 10
+        },
+        {
+          "close": 132,
+          "high": 133,
+          "low": 130,
+          "open": 131,
+          "open_time_ms": 1704178800000,
+          "volume": 10
+        },
+        {
+          "close": 133,
+          "high": 134,
+          "low": 131,
+          "open": 132,
+          "open_time_ms": 1704182400000,
+          "volume": 10
+        },
+        {
+          "close": 134,
+          "high": 135,
+          "low": 132,
+          "open": 133,
+          "open_time_ms": 1704186000000,
+          "volume": 10
+        },
+        {
+          "close": 135,
+          "high": 136,
+          "low": 133,
+          "open": 134,
+          "open_time_ms": 1704189600000,
+          "volume": 10
+        },
+        {
+          "close": 136,
+          "high": 137,
+          "low": 134,
+          "open": 135,
+          "open_time_ms": 1704193200000,
+          "volume": 10
+        },
+        {
+          "close": 137,
+          "high": 138,
+          "low": 135,
+          "open": 136,
+          "open_time_ms": 1704196800000,
+          "volume": 10
+        },
+        {
+          "close": 138,
+          "high": 139,
+          "low": 136,
+          "open": 137,
+          "open_time_ms": 1704200400000,
+          "volume": 10
+        },
+        {
+          "close": 139,
+          "high": 140,
+          "low": 137,
+          "open": 138,
+          "open_time_ms": 1704204000000,
+          "volume": 10
+        },
+        {
+          "close": 140,
+          "high": 141,
+          "low": 138,
+          "open": 139,
+          "open_time_ms": 1704207600000,
+          "volume": 10
+        },
+        {
+          "close": 141,
+          "high": 142,
+          "low": 139,
+          "open": 140,
+          "open_time_ms": 1704211200000,
+          "volume": 10
+        },
+        {
+          "close": 142,
+          "high": 143,
+          "low": 140,
+          "open": 141,
+          "open_time_ms": 1704214800000,
+          "volume": 10
+        },
+        {
+          "close": 143,
+          "high": 144,
+          "low": 141,
+          "open": 142,
+          "open_time_ms": 1704218400000,
+          "volume": 10
+        },
+        {
+          "close": 144,
+          "high": 145,
+          "low": 142,
+          "open": 143,
+          "open_time_ms": 1704222000000,
+          "volume": 10
+        },
+        {
+          "close": 145,
+          "high": 146,
+          "low": 143,
+          "open": 144,
+          "open_time_ms": 1704225600000,
+          "volume": 10
+        },
+        {
+          "close": 146,
+          "high": 147,
+          "low": 144,
+          "open": 145,
+          "open_time_ms": 1704229200000,
+          "volume": 10
+        },
+        {
+          "close": 147,
+          "high": 148,
+          "low": 145,
+          "open": 146,
+          "open_time_ms": 1704232800000,
+          "volume": 10
+        },
+        {
+          "close": 148,
+          "high": 149,
+          "low": 146,
+          "open": 147,
+          "open_time_ms": 1704236400000,
+          "volume": 10
+        },
+        {
+          "close": 149,
+          "high": 150,
+          "low": 147,
+          "open": 148,
+          "open_time_ms": 1704240000000,
+          "volume": 10
+        },
+        {
+          "close": 150,
+          "high": 151,
+          "low": 148,
+          "open": 149,
+          "open_time_ms": 1704243600000,
+          "volume": 10
+        }
+      ],
+      "interval": "1h",
+      "provenance": "SYNTHETIC",
+      "schema": "WILLIAMS_CLOSED_H1_OBSERVATION_V1",
+      "symbol": "BTCUSDT"
+    },
+    "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
+    "request_sha256": "de77540a34cb263882db296dc54dc5050b1c84164f51423b3dc5781973cdc139",
+    "rules": [
+      {
+        "CHAPTER": "8/12/13/Appendix1/Appendix7",
+        "CLASSIFICATION": "CANONICAL",
+        "CONFIRMATION": "Only information available as of the relevant close; no later outcome certifies earlier formation.",
+        "CONFLICTS": [],
+        "EDITION": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+        "EXCEPTIONS": "Missing seed sample or recursive input never becomes a shorter average; nonlinear graphical claims are not a measured bot success rate.",
+        "FIGURE": [],
+        "FULL_ATOMIC_SPEC_COMPLETE": false,
+        "IMPLEMENTATION_STATUS": "BOUNDED_TESTED",
+        "INVALIDATION": "Missing seed sample or recursive input never becomes a shorter average; nonlinear graphical claims are not a measured bot success rate.",
+        "ORIGINAL_MEANING": "All three balance lines use the same chart median (H+L)/2; seeded smoothed averages have period/plot displacement pairs13/8,8/5,5/3. At plotted time t use raw[t-offset].",
+        "PAGE": [
+          127,
+          133,
+          134,
+          245,
+          246
+        ],
+        "PRECONDITIONS": "Complete finite initial N samples and chronological closed prices; data-hole handling is separately an engineering fail-closed choice.",
+        "RULE_ID": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "SIGNAL_DEFINITION": {
+          "data_hole_policy": "ENGINEERING_UNKNOWN_NO_SKIP_OR_IMPUTATION",
+          "pairs": [
+            [
+              13,
+              8
+            ],
+            [
+              8,
+              5
+            ],
+            [
+              5,
+              3
+            ]
+          ],
+          "recurrence": "(previous*(N-1)+median_t)/N",
+          "seed": "sum(first N medians)/N"
+        },
+        "SOURCE": "TC2",
+        "SOURCE_ID": "TC2_EN",
+        "SOURCE_SHA256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+        "execution_authority": false,
+        "source_reviewed_this_run": true,
+        "training_allowed": false
+      }
+    ],
+    "schema": "WILLIAMS_AI_RESEARCH_REQUEST_V1",
+    "snapshot": {
+      "MASTER_RULE_REGISTRY.json": "2d77141b3afe0554237e2b704d26827ed371dfda5022cd6a7831209b94f5f1b5",
+      "PRIMARY_SOURCE_PAGE_REGISTER.jsonl": "6d5adf33aed6804fc681423a169b43cd97e46e1812fcdc92175f07259271b0ee",
+      "SOURCE_CATALOG.json": "31330aaeb430b92e4a8d27c8e935b1055e599f529218385ac177c746fea68e60",
+      "review_notes.json": "bc4b4dfa2eed186d9ef72d16e540db4c18c988a14dddda020761347b5a12c6e1"
+    },
+    "source": {
+      "edition": "Second edition, Wiley 2004, ISBN 0-471-46308-6",
+      "family": "TC2",
+      "source_id": "TC2_EN",
+      "source_role": "PRIMARY_OPERATIONAL",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+    }
+  },
+  "proposal": {
+    "schema": "WILLIAMS_AI_RESEARCH_PROPOSAL_V1",
+    "request_sha256": "de77540a34cb263882db296dc54dc5050b1c84164f51423b3dc5781973cdc139",
+    "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
+    "decision": "ABSTAIN",
+    "rationale": "Hand-authored synthetic contract example. Median SMMA construction alone does not establish a source-complete market entry. No expert or model examination was run.",
+    "citations": [
+      {
+        "pdf_page": 127,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      }
+    ],
+    "authority": {
+      "execution_authority": false,
+      "can_place_orders": false,
+      "can_cancel_orders": false,
+      "can_close_positions": false,
+      "can_move_stops": false,
+      "training_allowed": false
+    }
+  },
+  "receipt": {
+    "schema": "WILLIAMS_AI_RESEARCH_RECEIPT_V1",
+    "request_sha256": "de77540a34cb263882db296dc54dc5050b1c84164f51423b3dc5781973cdc139",
+    "observation_sha256": "7561e56af5be41c40a1073de0c61e234137fde1c71d84514c13b5906ee1a74d5",
+    "proposal_sha256": "9c46854acb84da3d9e817ff95768500e599463b80158233299b037219e0f7804",
+    "decision": "ABSTAIN",
+    "disposition": "RESEARCH_ONLY_UNVERIFIED",
+    "model_rationale_untrusted": "Hand-authored synthetic contract example. Median SMMA construction alone does not establish a source-complete market entry. No expert or model examination was run.",
+    "citations": [
+      {
+        "pdf_page": 127,
+        "rule_id": "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY",
+        "source_id": "TC2_EN",
+        "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523"
+      }
+    ],
+    "semantic_entailment_verified": false,
+    "expert_gold": false,
+    "algorithm_guard_executed": false,
+    "incomplete_rule_specifications": [
+      "TC2.ALLIGATOR.MEDIAN_SMMA_DISPLAY"
+    ],
+    "required_before_any_integration": [
+      "INDEPENDENT_EXPERT_REVIEW",
+      "SOURCE_SPEC_COMPLETION",
+      "DETERMINISTIC_ALGORITHM_GUARD",
+      "SEPARATE_EXECUTION_GATES"
+    ],
+    "authority": {
+      "execution_authority": false,
+      "can_place_orders": false,
+      "can_cancel_orders": false,
+      "can_close_positions": false,
+      "can_move_stops": false,
+      "training_allowed": false
+    }
+  }
+}

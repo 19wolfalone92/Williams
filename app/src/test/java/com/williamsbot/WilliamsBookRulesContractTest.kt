@@ -96,6 +96,38 @@ class WilliamsBookRulesContractTest {
             assertNull(trail(bars,4*hour))
         }
     }
+    /**
+     * Prior book registry tested the trailing STOP and observer extractor but
+     * did NOT actually call the live TC2 WM3 pending-entry selector. Check
+     * figs 11.1D / 11.2E directly through the execution candidate function.
+     * No market orders are placed by this test.
+     */
+    @Test fun liveTc2ThirdWiseManSelectorMatchesFiveSixSevenNineClosedBarFigures() {
+        for (c in cases("fractals")) for (mirror in listOf(false,true)) {
+            val extrema=c.getJSONArray("extrema")
+            val bars=(0 until extrema.length()).map { i ->
+                val x=extrema.getDouble(i)
+                if(!mirror) WilliamsWaveBar((i+1)*hour,x+1,120.0,x,x+1,1000.0)
+                else WilliamsWaveBar((i+1)*hour,239-x,240-x,120.0,239-x,1000.0)
+            }
+            val side=if(mirror) "LONG" else "SHORT"
+            val teeth=List(bars.size) { if(mirror) 90.0 else 150.0 }
+            val live=selectWilliamsPendingFractal(side,bars,teeth,.1)
+            assertNotNull("live TC2 WM3 misses book figure "+c.getString("id"),live)
+            assertEquals(c.getString("id"),c.getInt("center"),live!!.center)
+            assertEquals(c.getString("id"),bars.lastIndex,live.confirmation)
+            assertEquals(c.getString("id"),if(mirror) 132.1 else 107.9,live.trigger,1e-9)
+            assertFalse("fractal cannot be confirmed before the last right H1 bar: "+
+                c.getString("id"),selectWilliamsPendingFractal(side,bars.dropLast(1),
+                    teeth.dropLast(1),.1)!=null)
+            val invalidTeeth=List(bars.size) {
+                if(mirror) 134.0 else 106.0
+            }
+            assertNull("must qualify above/below CURRENT Teeth at activation: "+
+                c.getString("id"),selectWilliamsPendingFractal(side,bars,invalidTeeth,.1))
+        }
+    }
+
     @Test fun ntdScannersAgreeOnLocalBaseInsteadOfOldGlobalExtremum() {
         for(c in cases("balance_line")) for(mirror in listOf(false,true)) {
             val highs=c.getJSONArray("highs")

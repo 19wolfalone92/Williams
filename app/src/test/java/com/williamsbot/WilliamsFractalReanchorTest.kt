@@ -33,11 +33,54 @@ class WilliamsFractalReanchorTest {
     @Test fun higherConfirmedShortFractalCanSupersedeLowerUnfilledShortEntry() {
         assertNotNull(find(pending("SHORT",95.0),signal("SHORT",97.0,105.0),100.0))
     }
-    @Test fun neverMoveLevelAwayOrBehindPrice() {
+    @Test fun newerCrossedLevelRevokesOldStopButNeverGrantsReentry() {
+        // A mark below the new SHORT (or above the new LONG) means the
+        // trigger has already happened. Return a CANCEL candidate for the old
+        // order; the independent raw-H1 consumption gate refuses late reentry.
         assertNull(find(pending("LONG",105.0),signal("LONG",106.0,96.0),98.0))
-        assertNull(find(pending("LONG",105.0),signal("LONG",97.0,96.0),98.0))
+        val longCrossed=find(pending("LONG",105.0),signal("LONG",97.0,96.0),98.0)
+        assertTrue(requireNotNull(longCrossed).getBoolean("new_trigger_already_crossed_at_quote"))
         assertNull(find(pending("SHORT",95.0),signal("SHORT",94.0,105.0),100.0))
-        assertNull(find(pending("SHORT",95.0),signal("SHORT",101.0,105.0),100.0))
+        val shortCrossed=find(pending("SHORT",95.0),signal("SHORT",101.0,105.0),100.0)
+        assertTrue(requireNotNull(shortCrossed).getBoolean("new_trigger_already_crossed_at_quote"))
+        assertFalse(requireNotNull(find(pending("SHORT",95.0),signal("SHORT",97.0,105.0),100.0))
+            .getBoolean("new_trigger_already_crossed_at_quote"))
+    }
+
+    @Test fun bnbDiag13AlwaysPrefersNewConfirmedWm3NotOld67053() {
+        val t=1_794_461_023_512L
+        val signals=JSONArray()
+            .put(JSONObject().put("signal_id","BNB_OLD_670_53")
+                .put("type","SHORT_FRACTAL").put("strategy_profile",williamsTc2Profile)
+                .put("role","ENTRY").put("execution_semantics","STOP_ENTRY")
+                .put("signal_bar_time_ms",1_794_337_200_000L)
+                .put("formation_at_ms",1_794_330_000_000L)
+                .put("trigger_price",670.53).put("protective_price",690.69))
+            .put(JSONObject().put("signal_id","BNB_NEW_677_80")
+                .put("type","SHORT_FRACTAL").put("strategy_profile",williamsTc2Profile)
+                .put("role","ENTRY").put("execution_semantics","STOP_ENTRY")
+                .put("signal_bar_time_ms",1_794_445_200_000L)
+                .put("formation_at_ms",1_794_438_000_000L)
+                .put("trigger_price",677.80).put("protective_price",688.04))
+        assertEquals("BNB_NEW_677_80",latestConfirmedTc2FractalId("SHORT",
+            1_794_337_200_000L,signals,t))
+        assertNull(latestConfirmedTc2FractalId("LONG",1_794_337_200_000L,signals,t))
+        assertNull(latestConfirmedTc2FractalId("SHORT",1_794_337_200_000L,
+            JSONArray().put(signals.getJSONObject(0)),t))
+    }
+
+    @Test fun newerFractalMustBeKnownFromClosedRightHandBarsAndCorrectSource() {
+        val source=signal("SHORT",97.0,105.0)
+        val arr=JSONArray().put(source)
+        val base=now-9_000_000L
+        assertEquals("new-h1-fractal",latestConfirmedTc2FractalId("SHORT",base,arr,now))
+        assertNull(latestConfirmedTc2FractalId("SHORT",base,arr,now-1_000_000L))
+        assertNull(latestConfirmedTc2FractalId("SHORT",base,
+            JSONArray().put(JSONObject(source.toString()).put("strategy_profile",williamsCourseProfile)),now))
+        assertNull(latestConfirmedTc2FractalId("SHORT",base,
+            JSONArray().put(JSONObject(source.toString()).put("protective_price",91.0)),now))
+        assertNull(latestConfirmedTc2FractalId("SHORT",base,
+            JSONArray().put(JSONObject(source.toString()).put("formation_at_ms",now+1L)),now))
     }
     @Test fun incompleteOrLookAheadFractalNeverPasses() {
         val unconfirmed=signal("LONG",101.0,96.0).put("signal_bar_time_ms",now-500L)

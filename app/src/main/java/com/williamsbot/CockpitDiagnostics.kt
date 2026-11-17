@@ -30,7 +30,7 @@ internal object CockpitDiagnostics {
         // Actual orders are still restricted by the coordinator, 90s signed
         // REST proof, real H1 candidate, risk limits and final transport guard.
         val scannerState = status.optString("scanner_state")
-        val scannerReady = scannerState in setOf("READY","RUNNING") &&
+        val scannerReady = scannerState in setOf("READY","READY_BLOCKED","RUNNING") &&
             fresh(status.optLong("scanner_last_scan_at"), now, 120_000L)
         // The available NEW exposure budget is independent of the daily loss reset.
         // Accepted STOP entries reserve capital risk even before a position opens;
@@ -684,13 +684,21 @@ internal object CockpitDiagnostics {
                 android.optLong("service_guard_age_ms",Long.MAX_VALUE)>90_000L) -> "WARNING"
             else -> "NOT_VERIFIED"
         }, "Сервис=${android?.optBoolean("foreground_service_active")}; CPU=${android?.optBoolean("cpu_wake_lock_held")}; " +
-            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс. Эти признаки не доказывают непрерывную работу с выключенным экраном.")
+            "контроль=${android?.optLong("service_guard_age_ms",-1)} мс; " +
+            "исключение из оптимизации батареи Android=${android?.optBoolean("battery_optimization_ignored")}; " +
+            "background_restricted=${android?.optBoolean("background_restricted")}; " +
+            "энергосбережение=${android?.optBoolean("power_save_mode")}. " +
+            "Если исключение=false: в настройках Williams (Debug) → Батарея выберите «Без ограничений» " +
+            "и на Samsung добавьте приложение в список «Без режима сна». " +
+            "Приложение не может самостоятельно изменить этот системный допуск. " +
+            "Текущие признаки не доказывают непрерывную работу с выключенным экраном.")
         val bootWitness=if(android!=null)
             AndroidRebootRecoveryEvidence.assess(android.optJSONObject("continuity") ?: JSONObject(),
                 android,status,now) else null
         check("AND-02", "runtime", "Восстановление после перезагрузки Android", when {
             bootWitness==null || !bootWitness.optBoolean("reboot_observed") -> "NOT_VERIFIED"
             bootWitness.optBoolean("recovery_technical_proven") -> "PASS"
+            bootWitness.optBoolean("worker_startup_observed_pending_heartbeat") -> "NOT_VERIFIED"
             bootWitness.optLong("opt_in_verified_at_ms")<=0L -> "NOT_VERIFIED"
             now-bootWitness.optLong("boot_at_ms")>120_000L -> "WARNING"
             else -> "NOT_VERIFIED"
@@ -698,6 +706,8 @@ internal object CockpitDiagnostics {
             "opt-in: ${bootWitness?.optLong("opt_in_verified_at_ms")}; " +
             "FGS: ${bootWitness?.optLong("fgs_created_at_ms")}; " +
             "worker: ${bootWitness?.optBoolean("worker_live_now")}; " +
+            "verified runtime start: ${bootWitness?.optLong("worker_startup_observed_at_ms")}; " +
+            "heartbeat pending after start: ${bootWitness?.optBoolean("worker_startup_observed_pending_heartbeat")}; " +
             "post-boot signed REST sync: ${bootWitness?.optBoolean("signed_sync_after_boot")}; " +
             "код: ${bootWitness?.optString("status")}. PASS доказывает только последовательность boot->FGS->worker->signed sync, " +
             "но НЕ непрерывный 24-часовой фон, полноту защиты STOP или готовность к новым входам.")

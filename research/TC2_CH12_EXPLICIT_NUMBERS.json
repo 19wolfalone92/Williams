@@ -1,0 +1,84 @@
+{
+  "schema": "TC2_CH12_EXPLICIT_NUMBERS_V1",
+  "source_pages": [
+    {
+      "source_id": "TC2_EN",
+      "source_sha256": "eb734089bb19e72a92e023602bf558e43b7cb20aecf77469fdfe28f8e6cd3523",
+      "pdf_pages": [
+        175,
+        176,
+        183,
+        184,
+        185
+      ]
+    },
+    {
+      "source_id": "TC2_RU_224",
+      "source_sha256": "055b7924f9a4d165294bf3e12069e74b121f6ca510f25ad310a07c94f0a6107f",
+      "pdf_pages": [
+        154,
+        155,
+        162,
+        163,
+        164
+      ]
+    },
+    {
+      "source_id": "TC2_RU_314",
+      "source_sha256": "730eb8f8049634e8bc273406387ec3c7c44166eec0bb49d5dc70d67d117b1a5a",
+      "pdf_pages": [
+        204,
+        205,
+        213,
+        214,
+        215
+      ]
+    }
+  ],
+  "gold": {
+    "profit_per_contract_usd": [
+      "4180",
+      "3910",
+      "3660",
+      "2910"
+    ],
+    "executed_quantities": [
+      1,
+      5,
+      4,
+      3
+    ],
+    "printed_weighted_profit_usd": [
+      "4180",
+      "19550",
+      "14640",
+      "8730"
+    ],
+    "printed_equal_total_usd": "14660",
+    "printed_weighted_total_usd": "47100",
+    "planned_quantities": [
+      1,
+      5,
+      4,
+      3,
+      2
+    ],
+    "fifth_tranche_in_printed_profit_table": false
+  },
+  "costco": {
+    "entry_prices_usd": [
+      "34.16",
+      "35.75",
+      "37.01"
+    ],
+    "exit_price_usd": "38.74",
+    "printed_combined_profit_usd": "9.29",
+    "prices_are_approximate": true,
+    "entry_quantities_known": false,
+    "fees_and_slippage_known": false
+  },
+  "execution_authority": false,
+  "training_allowed": false,
+  "expert_gold": false,
+  "is_backtest": false
+}

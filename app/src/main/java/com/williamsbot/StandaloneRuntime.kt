@@ -25,6 +25,8 @@ import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -118,16 +120,18 @@ internal fun smmaSeededValues(values: List<Double>, period: Int): List<Double?> 
     if (values.size < period || values.take(period).any { !it.isFinite() }) return output
     var seed = 0.0
     for (i in 0 until period) seed += values[i]
+    if (!seed.isFinite()) return output
     output[period - 1] = seed / period
     for (i in period until values.size) {
         val previous = output[i - 1] ?: continue
         if (!values[i].isFinite()) continue
-        output[i] = (previous * (period - 1) + values[i]) / period
+        output[i] = ((previous * (period - 1) + values[i]) / period).takeIf { it.isFinite() }
     }
     return output
 }
 
-/** Display-only future chart displacement. Execution paths use current-time SMMA values instead. */
+/** Chart alignment: value drawn at t was computed at t-displacement.
+ * The known tail beyond the last price is display evidence, never future OHLC. */
 internal fun shiftAlligatorForDisplay(raw: List<Double?>, displacement: Int): List<Double?> {
     require(displacement >= 0) { "Alligator displacement must be non-negative" }
     return List(raw.size) { displayIndex ->
@@ -142,7 +146,7 @@ internal fun awesomeOscillatorAt(medianPrices: List<Double>, index: Int): Double
     val fastValues = medianPrices.subList(index - 4, index + 1)
     val slowValues = medianPrices.subList(index - 33, index + 1)
     if (fastValues.any { !it.isFinite() } || slowValues.any { !it.isFinite() }) return Double.NaN
-    return fastValues.average() - slowValues.average()
+    return (fastValues.average() - slowValues.average()).takeIf { it.isFinite() } ?: Double.NaN
 }
 
 /** Accelerator Oscillator: AO minus the five-bar simple average of AO. */
@@ -773,6 +777,21 @@ internal fun lastKnownFuturesPositionsForDisplay(
     return Triple(rows, error, envelope?.second ?: 0L)
 }
 
+/**
+ * A private Futures trade event is a hint to reconcile immediately, never
+ * evidence that an entry belongs to us or that a protective STOP exists.
+ * Signed account/position/algo reconciliation remains authoritative.
+ */
+internal fun privateFuturesFillDemandsImmediateReconcile(event: JSONObject): Boolean {
+    if (event.optString("e") != "ORDER_TRADE_UPDATE") return false
+    val order = event.optJSONObject("o") ?: return false
+    val status = order.optString("X").uppercase(Locale.US)
+    if (status != "FILLED" && status != "PARTIALLY_FILLED") return false
+    if (order.optString("s").isBlank()) return false
+    val totalExecuted = order.optString("z").toBigDecimalOrNull() ?: return false
+    return totalExecuted.signum() > 0
+}
+
 internal fun shouldRetryUserStreamReconciliation(
     connected: Boolean,
     syncRequired: Boolean,
@@ -1260,9 +1279,11 @@ internal fun reflectedTc2SetupContext(
         JSONObject(originalContext)
     }
     context.optJSONObject("angulation")?.let { proof ->
-        for (key in listOf("price_slope", "jaw_slope", "teeth_slope")) {
+        for (key in listOf("price_slope", "jaw_slope", "teeth_slope",
+            "departure_price_slope","departure_jaw_slope","departure_teeth_slope")) {
             if (!proof.isNull(key) && proof.has(key)) proof.put(key, -proof.getDouble(key))
         }
+        if(proof.has("price_edge")) proof.put("price_edge","LOW")
     }
     // SHORT uses a reflected price/AO sequence. Convert BOTH colour and
     // its diagnostic reason back into actual exchange-candle coordinates.
@@ -1345,6 +1366,10 @@ internal fun williamsDiagnosticUiSnapshot(report: JSONObject): JSONObject {
         .put("diagnostic_chain_audit", report.optJSONObject("diagnostic_chain_audit") ?: JSONObject())
         .put("diagnostic_chain_comparison", report.optJSONObject("diagnostic_chain_comparison") ?: JSONObject())
         .put("futures_fill_stop_timing", report.optJSONObject("futures_fill_stop_timing") ?: JSONObject())
+        .put("tc2_recent_exit_forensics", report.optJSONObject("tc2_recent_exit_forensics") ?: JSONObject())
+        .put("tc2_book_exit_hierarchy", report.optJSONObject("tc2_book_exit_hierarchy") ?: JSONObject())
+        .put("four_book_full_chapter_coverage", report.optJSONObject("four_book_full_chapter_coverage") ?: JSONObject())
+        .put("book_causal_understanding", report.optJSONObject("book_causal_understanding") ?: JSONObject())
         .put("signed_position_stop_join", report.optJSONObject("signed_position_stop_join") ?: JSONObject())
         .put("runtime_resource_diagnostics", report.optJSONObject("runtime_resource_diagnostics") ?: JSONObject())
         .put("diagnostic_comparison", report.optJSONObject("diagnostic_comparison") ?: JSONObject())
@@ -1424,7 +1449,9 @@ private class StandaloneServer(private val context: Context) {
 
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
-        val snapshot = e().status(fast = true)
+        // Only state+execution_enabled are used below; do not build 15 per-symbol
+        // decision traces and parse the complete signed intent journal.
+        val snapshot = e().status(fast = true, includeDecisionTraces = false)
         return JSONObject()
             .put("schema", "WILLIAMS_DIAGNOSTICS_STRING_API_V1")
             .put("full_report", false)
@@ -1527,7 +1554,7 @@ private class StandaloneServer(private val context: Context) {
                 x.settings().toString()
 
             method == "GET" && path == "/api/v1/cockpit" ->
-                x.cockpit().toString()
+                x.cockpit(includeDecisionTraces = !params["compact"].equals("true", true)).toString()
 
             method == "POST" && path == "/api/v1/ui/event" ->
                 x.uiEvent(JSONObject(body)).toString()
@@ -1652,9 +1679,15 @@ private class NativeEngine(
                 beforeExposureMutation = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
                     check(RuntimeServiceState.active) { "Runtime service is not active before Futures exposure mutation" }
+                    check(privateEventInboxReadyForExposure()) {
+                        "PRIVATE_FUTURES_EVENT_INBOX_NOT_DRAINED_OR_VERIFIED"
+                    }
                 },
                 beforeExposureTransport = {
                     executionDoorBlocker(running, paused, reconcileRequired, killLatched)?.let { error(it) }
+                    check(privateEventInboxReadyForExposure()) {
+                        "PRIVATE_FUTURES_EVENT_INBOX_NOT_DRAINED_OR_VERIFIED"
+                    }
                     futuresExposureTransportBlocker(
                         RuntimeServiceState.active, RuntimeServiceState.monitorHeartbeatStale,
                         userStreamConnected, userStreamSyncRequired,
@@ -1692,6 +1725,9 @@ private class NativeEngine(
         }
     )
     private val tradingEventLoop = TradingEventLoop()
+    // Only one actor drain is queued; the SQLite inbox, not an unbounded RAM queue, owns events.
+    private val privateEventDrainScheduled = AtomicBoolean(false)
+    private val privateEventReceiveGeneration = AtomicLong(0L)
     private val executionGate = ExecutionGate()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
@@ -1755,6 +1791,16 @@ private class NativeEngine(
     )
     private val tc2ExitResearchEnqueued =
         java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    // Scheduled scanner shadow history is noncritical and independently bounded;
+    // it must not crowd out the existing TC2 open-position exit observer queue.
+    private val scannerShadowResearchExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(maxScanSymbols),
+        java.util.concurrent.ThreadFactory { task ->
+            Thread(task, "williams-scanner-shadow").apply { isDaemon = true }
+        },
+        java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
         Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
     }
@@ -1762,6 +1808,11 @@ private class NativeEngine(
     // calculations are deliberately moved off the OkHttp WebSocket callback
     // thread so a burst of kline events cannot delay depth/aggTrade handling.
     private val indicatorExecutor = Executors.newFixedThreadPool(2)
+    // One pending indicator rebuild per 15-symbol/15-frame key, not one
+    // multikilobyte closure per incoming WebSocket kline update. Closed-bar
+    // SQLite persistence below is deliberately NOT coalesced or dropped.
+    private val indicatorGeneration = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val indicatorRebuildPending = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val candleCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CandleN>>>()
     private val liveCandleCache = java.util.concurrent.ConcurrentHashMap<String, MutableList<CandleN>>()
     private val indicatorSnapshots = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
@@ -1778,6 +1829,9 @@ private class NativeEngine(
     private var marketSocket: WebSocket? = null
     private var publicSocket: WebSocket? = null
     private val orderBookCache = OrderBookCache()
+    // One depth snapshot fetch per symbol at a time. A burst of invalid
+    // delta update IDs must not spawn unlimited HTTP threads on Android.
+    private val depthResyncInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     @Volatile private var marketSocketConnected = false
     @Volatile private var marketSocketLastEventMs = 0L
     @Volatile private var marketSocketStartedMs = 0L
@@ -2251,8 +2305,18 @@ private class NativeEngine(
         )
     }
 
+    /** Read the current credential's durable inbox; missing/unreadable evidence blocks new risk. */
+    private fun privateEventInboxReadyForExposure(): Boolean {
+        val fingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrNull() ?: return false
+        val snapshot = runCatching {
+            auditStore.privateUserEventInboxSnapshot(fingerprint)
+        }.getOrNull() ?: return false
+        return privateUserEventInboxAllowsExposure(snapshot)
+    }
+
     private fun executionReady(): Boolean =
         futuresExecutionAdapterReady &&
+            privateEventInboxReadyForExposure() &&
             RuntimeServiceState.active &&
             !RuntimeServiceState.monitorHeartbeatStale &&
             campaignCoordinatorReadyForEntry() &&
@@ -2295,6 +2359,7 @@ private class NativeEngine(
             if (!marketWebSocketFresh()) add("market_websocket_disconnected_or_stale")
             if (!publicWebSocketFresh()) add("public_depth_or_bookticker_stream_disconnected_or_stale")
             if (!userStreamConnected || userStreamSyncRequired) add("futures_user_stream_disconnected_or_unsynchronized")
+            if (!privateEventInboxReadyForExposure()) add("private_futures_event_inbox_pending_or_unverified")
             if (!signedFuturesReconciliationFresh(lastRestReconcileMs, System.currentTimeMillis()))
                 add("signed_futures_account_position_stop_reconciliation_stale_or_unknown")
             if (signedStopDisplayUnverified)
@@ -3019,6 +3084,9 @@ private class NativeEngine(
         // initialize again. Execution gates remain separate and fail-closed.
         RuntimeServiceState.refreshLease?.invoke()
         RuntimeStartupEvidence.clear(context)
+        // Resume any private events that were durably received before a prior
+        // process death. The user stream remains unsynchronized until signed REST.
+        schedulePrivateEventDrain()
         return JSONObject()
             .put("started", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
@@ -3390,7 +3458,9 @@ private class NativeEngine(
         if (result == null) {
             reconcileRequired = true
             val persisted = persistSafetyFlag("reconcile_required", true)
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // Recovery transport failed: preserve the explicit monitor auto-run
+            // preference. The durable reconcile latch keeps exposure CLOSED,
+            // but shutting off account/STOP supervision here is unsafe.
             val reason = reconciliationAttempt.exceptionOrNull()?.message
                 ?: reconciliationAttempt.exceptionOrNull()?.javaClass?.simpleName
                 ?: "Futures reconciliation returned no result"
@@ -3885,15 +3955,77 @@ private class NativeEngine(
             bids = data.optJSONArray("b") ?: JSONArray(),
             asks = data.optJSONArray("a") ?: JSONArray()
         )
-        if (!ok) {
-            Thread {
-                runCatching { syncOrderBookSnapshot(symbol) }
-                    .onFailure { lastError = "L2 resync $symbol: " + (it.message ?: it.javaClass.simpleName) }
-            }.apply {
-                isDaemon = true
-                name = "williams-l2-resync-$symbol"
-                start()
+        if (!ok && depthResyncInFlight.add(symbol)) {
+            // Depth is an OBSERVER input and never proves the position/STOP.
+            // A singleflight reset allows a later genuine gap to retry after
+            // this worker completes; no exchange event or financial order lost.
+            try {
+                Thread {
+                    try {
+                        runCatching { syncOrderBookSnapshot(symbol) }
+                            .onFailure {
+                                lastError = "L2 resync $symbol: " +
+                                    (it.message ?: it.javaClass.simpleName)
+                            }
+                    } finally {
+                        depthResyncInFlight.remove(symbol)
+                    }
+                }.apply {
+                    isDaemon = true
+                    name = "williams-l2-resync-$symbol"
+                    start()
+                }
+            } catch (failure: Exception) {
+                depthResyncInFlight.remove(symbol)
+                lastError = "L2 resync worker unavailable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
             }
+        }
+    }
+
+    /**
+     * Coalesce high-frequency forming-kline indicator work to the latest snapshot.
+     * Generation is incremented while the per-key candle list is locked. A stale
+     * same-candle (same open time) analysis cannot overwrite a more recent update.
+     * The final generation check + re-enqueue closes the dequeue/update race.
+     * This is READ-ONLY: closed H1 persistence and order admission are unchanged.
+     */
+    private fun scheduleIndicatorRebuild(
+        key: String, symbol: String, frame: String, list: MutableList<CandleN>
+    ) {
+        if (!indicatorRebuildPending.add(key)) return
+        try {
+            indicatorExecutor.execute {
+                var capturedGeneration = -1L
+                try {
+                    // Bound one worker's CPU budget during a busy exchange burst;
+                    // remaining changes are requeued after releasing this key.
+                    for (pass in 0 until 2) {
+                        val snapshot = synchronized(list) {
+                            capturedGeneration = indicatorGeneration[key] ?: 0L
+                            list.toList()
+                        }
+                        runCatching {
+                            val calculated = buildIndicatorSnapshot(snapshot, symbol, frame)
+                            if (indicatorGeneration[key] == capturedGeneration) {
+                                indicatorSnapshots[key] = calculated
+                            }
+                        }.onFailure { failure ->
+                            lastError = "indicator analysis: " +
+                                (failure.message ?: failure.javaClass.simpleName)
+                        }
+                        if (indicatorGeneration[key] == capturedGeneration) break
+                    }
+                } finally {
+                    indicatorRebuildPending.remove(key)
+                    if (indicatorGeneration[key] != capturedGeneration) {
+                        scheduleIndicatorRebuild(key, symbol, frame, list)
+                    }
+                }
+            }
+        } catch (failure: java.util.concurrent.RejectedExecutionException) {
+            indicatorRebuildPending.remove(key)
+            lastError = "indicator worker unavailable; read-only cache refresh deferred"
         }
     }
 
@@ -3925,29 +4057,11 @@ private class NativeEngine(
             val snapshotCandles = list.toList()
             candleCache[key] = System.currentTimeMillis() to snapshotCandles
 
-            // Only cache maintenance happens on the WebSocket callback thread.
-            // The heavier Williams/indicator calculation runs independently.
-            indicatorExecutor.execute {
-                runCatching {
-                    val snapshot = buildIndicatorSnapshot(
-                        snapshotCandles,
-                        symbol,
-                        frame
-                    )
-                    // Do not let an older queued calculation overwrite a newer
-                    // realtime candle snapshot.
-                    val currentTime = liveCandleCache[key]
-                        ?.lastOrNull()
-                        ?.t
-                        ?: 0L
-                    if (snapshotCandles.lastOrNull()?.t ?: 0L >= currentTime) {
-                        indicatorSnapshots[key] = snapshot
-                    }
-                }.onFailure {
-                    lastError = "indicator analysis: " +
-                        (it.message ?: it.javaClass.simpleName)
-                }
-            }
+            // This candle can update high/low/volume without changing open
+            // time; compare versions, not only timestamps. Every published
+            // cache is still a copy, never a partially-mutated candle list.
+            indicatorGeneration.compute(key) { _, prior -> (prior ?: 0L) + 1L }
+            scheduleIndicatorRebuild(key, symbol, frame, list)
 
             if (k.optBoolean("x", false)) {
                 val closedCandle = MarketHistoryStore.Candle(
@@ -4688,6 +4802,15 @@ private class NativeEngine(
             return
         }
 
+        // An unsigned Binance /time pulse is independent of H1 discovery.
+        // Do not fan out fifteen 1h REST tasks against an expired UTC anchor.
+        // A stale clock cannot validate candle closure or authorize entries.
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) {
+            scannerState = "WAITING_FOR_EXCHANGE_CLOCK"
+            scannerError = "Binance UTC is not verified; independent 5s clock probe is retrying. H1 analysis deferred, entries blocked."
+            return
+        }
+
         synchronized(this) {
             val retryAfterVerifiedReconciliation = scanRetryAfterReconciliation &&
                 !futuresReconciliationRunning &&
@@ -5202,7 +5325,8 @@ private class NativeEngine(
                 executionStore.writeState("futures_day_start_equity_source_" + utcDayStartMs, baselineResult.second)
             ) {
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                // Persist a recoverable ENTRY pause, not a monitoring shutdown.
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_PERSIST_FAILED: SQLite could not durably store the reconstructed baseline"
                 return false
             }
@@ -5225,7 +5349,7 @@ private class NativeEngine(
                 baselineSourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED"
             )) {
                 paused = true
-                prefs.edit().putBoolean("auto_run", false).commit()
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
                 lastError = "FUTURES_DAILY_BASELINE_SOURCE_REPAIR_FAILED: persisted baseline is valid but provenance metadata could not be repaired"
                 return false
             }
@@ -5325,7 +5449,7 @@ private class NativeEngine(
             // it into the operator's indefinite pause or disable runtime auto-run.
             if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
                 paused=true
-                prefs.edit().putBoolean("auto_run",false).commit()
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused",true).commit()
                 lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
                 return false
             }
@@ -5828,16 +5952,38 @@ private class NativeEngine(
                 } else {
                     (trigger - summary.entryPrice) / trigger
                 }
+                // An exit order on the SAME symbol is not necessarily this
+                // campaign's exit: an old closed owner may overlap with a new
+                // independent owner. Match the exact entry-client ID and full
+                // closing (not a partial Course trim) before using its reason.
                 val exitIntent = (0 until intents.length()).mapNotNull { j -> intents.optJSONObject(j) }
                     .lastOrNull {
                         it.optString("intent_role") == "EXIT" &&
                             it.optString("symbol").equals(symbol, true) &&
+                            it.optString("entry_client_id") == clientId &&
+                            !it.optBoolean("partial_reduction", false) &&
                             it.optString("exchange_status").equals("EXIT_CONFIRMED", true) &&
                             it.optLong("created_at_ms", 0L) in startTime..closedAt
                     }
+                // This is strictly an explanatory, read-only audit of a
+                // confirmed-flat historical campaign. Missing ALGO_UPDATE,
+                // missing child order IDs, or multi-order exits stay UNKNOWN;
+                // do not infer STOP_FILLED merely from time/price proximity.
+                val stopAttribution = runCatching {
+                    val privateEvents = auditStore.recentPrivateAlgoExitEvents(symbol, closedAt)
+                        ?: JSONArray()
+                    verifiedNativeStopExitAttribution(
+                        intent, fillArray, privateEvents, startTime, closedAt)
+                }.getOrElse { error ->
+                    JSONObject().put("schema", "WILLIAMS_SIGNED_EXIT_ATTRIBUTION_V1")
+                        .put("status", "NOT_VERIFIED")
+                        .put("reason", "PRIVATE_STOP_PROOF_UNAVAILABLE:" + error.javaClass.simpleName)
+                        .put("can_place_orders", false)
+                }
                 val reason = exitIntent?.optString("reason")?.takeIf { it.isNotBlank() }
                     ?: intent.optString("close_reason").takeIf { it.isNotBlank() }
-                    ?: "EXCHANGE_RECONCILED_CLOSE"
+                    ?: if(stopAttribution.optString("status") == "VERIFIED_OWNED_PROTECTIVE_STOP_FILLED")
+                        "VERIFIED_PROTECTIVE_STOP_FILLED" else "EXCHANGE_RECONCILED_CLOSE"
                 TradeJournal.recordExchangeCompleted(
                     prefs = prefs,
                     id = "FUTURES:" + clientId,
@@ -5855,7 +6001,8 @@ private class NativeEngine(
                     reason = reason,
                     entrySnapshot = JSONObject(intent.toString()),
                     entrySlippagePct = entrySlippagePct,
-                    fillCount = summary.fillCount
+                    fillCount = summary.fillCount,
+                    exitAttribution = stopAttribution
                 )
                 futuresCampaignCoordinator.recordVerifiedCampaignResult(clientId,summary.netPnlUsdt,summary.feeKnown,summary.fillCount)
                 futuresCampaignCoordinator.markTradeJournalStatus(
@@ -7409,24 +7556,20 @@ private class NativeEngine(
         // or loss baseline becomes unknown at this point, fail closed for this entry.
         val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }.getOrElse { failure ->
             paused = true
-            prefs.edit().putBoolean("auto_run", false).commit()
+            // Unknown risk information blocks entries, NOT the read-only
+            // and protective monitor. Keep the user's auto-run opt-in intact.
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_LOSS_CHECK_FAILED: " +
                 (failure.message ?: failure.javaClass.simpleName)
             false
         }
         if (!dailyLossAllowsEntry) return rejectDecision(symbol,"DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED: "+lastError)
         if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
-        if (candidate.spreadPct !in 0.0..maxSpreadPct) return rejectDecision(symbol,"SPREAD_LIMIT: ${candidate.spreadPct} > $maxSpreadPct")
-        val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
-            lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
-                (failure.message ?: failure.javaClass.simpleName)
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-        val currentSpreadPct = (topOfBook.second - topOfBook.first) / topOfBook.first
-        if (!currentSpreadPct.isFinite() || currentSpreadPct !in 0.0..maxSpreadPct) {
-            lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
+        // TC2 submits deferred STOP_MARKET entries: the exchange executes
+        // only after its future CONTRACT_PRICE breakout. Present bid/ask cannot
+        // predict that future book and must not veto the H1 STOP placement.
+        // Immediate MARKET entries remain subject to executable quote checks
+        // after the selected signal has been classified below.
         val existing=futuresCampaignCoordinator.intentsSnapshot()
         val owned=latestEntryIntentIndex(existing,symbol)?.let { existing.optJSONObject(it) }
         if(owned!=null && campaignLifecycleStatus(owned)=="OPEN_PROTECTED") {
@@ -7606,28 +7749,50 @@ private class NativeEngine(
             lastError = "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL: no TC2 first-Wise-Man signal survived book and risk context on $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
-        // Even with no old Binance order, prefer a newer confirmed WM3 level
-        // when it has moved TOWARD current price. Do not blindly select the
-        // oldest surviving Wise-Man hypothesis high above market.
-        val currentContractPrice=futuresMarketData.price(symbol)
-        val nearestFractal = if(reanchorLock==null && baseline.strategyProfile==williamsTc2Profile) {
-            val side=campaignSignalDirection(baseline.type)
-            selectableSignals.filter { alt ->
-                alt.strategyProfile==williamsTc2Profile &&
-                    alt.type==(if(side=="LONG") "FRACTAL" else "SHORT_FRACTAL") &&
-                    alt.role=="ENTRY" && alt.signalBarTimeMs>baseline.signalBarTimeMs &&
-                    alt.protectivePrice>0 && alt.triggerPrice.isFinite() &&
-                    (if(side=="LONG") alt.triggerPrice>currentContractPrice &&
-                        alt.triggerPrice<baseline.triggerPrice && alt.protectivePrice<alt.triggerPrice
-                     else alt.triggerPrice<currentContractPrice &&
-                        alt.triggerPrice>baseline.triggerPrice && alt.protectivePrice>alt.triggerPrice)
-            }.maxByOrNull { it.signalBarTimeMs }
+        // TC2 H1 WM3: a newer CONFIRMED same-side fractal supersedes an
+        // older pivot. Previous code preferred the oldest pending fractal and
+        // only re-anchored when the new trigger was still beyond current price.
+        // If the newer breakout had already happened, that condition silently
+        // resurrected the OLD BNBUSDT 670.53 level (diag #13, 2026-11-12).
+        // The new level must instead be examined by the existing closed+RAW
+        // H1 trigger-consumption door. If already crossed, REJECT the entry;
+        // never fall back to the older level or open a MARKET order.
+        val latestFractalId = if(reanchorLock==null &&
+            baseline.strategyProfile==williamsTc2Profile &&
+            baseline.type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL") {
+            latestConfirmedTc2FractalId(campaignSignalDirection(baseline.type).orEmpty(),
+                baseline.signalBarTimeMs,JSONArray(candidate.campaignSignals.filter { possible ->
+                    possible.strategyProfile==williamsTc2Profile &&
+                        possible.role=="ENTRY" && possible.executionSemantics=="STOP_ENTRY" &&
+                        williamsProfileAllowsSource(williamsProfile,possible.strategyProfile) &&
+                        williamsH1SignalTimeEligible(possible.signalBarTimeMs,possible.type,
+                            possible.strategyProfile,contextNow)
+                }.map { candidateSignal ->
+                    JSONObject().put("signal_id",candidateSignal.signalId)
+                        .put("type",candidateSignal.type)
+                        .put("strategy_profile",candidateSignal.strategyProfile)
+                        .put("role",candidateSignal.role)
+                        .put("execution_semantics",candidateSignal.executionSemantics)
+                        .put("signal_bar_time_ms",candidateSignal.signalBarTimeMs)
+                        .put("formation_at_ms",candidateSignal.formationAtMs)
+                        .put("trigger_price",candidateSignal.triggerPrice)
+                        .put("protective_price",candidateSignal.protectivePrice)
+                }),contextNow)
         } else null
-        val signal = nearestFractal ?: baseline
-        if(nearestFractal!=null) runCatching { auditStore.recordCockpitEvent(
+        val newestFractal = latestFractalId?.let { id ->
+            selectableSignals.singleOrNull { it.signalId==id }
+        }
+        if(latestFractalId!=null && newestFractal==null) {
+            return rejectDecision(symbol,
+                "TC2_NEWER_CONFIRMED_WM3_INELIGIBLE_NO_OLD_FALLBACK: "+
+                (congestionAdmission[latestFractalId] ?: "H1_ADMISSION_NOT_PROVEN"))
+        }
+        val signal = newestFractal ?: baseline
+        if(newestFractal!=null) runCatching { auditStore.recordCockpitEvent(
             "FRACTAL_REANCHOR",symbol,campaignSignalDirection(signal.type).orEmpty(),"NO_EXISTING_ORDER",
             "old="+baseline.signalId+" @"+baseline.triggerPrice+
-                "; newest confirmed WM3="+signal.signalId+" @"+signal.triggerPrice) }
+                "; newest confirmed WM3="+signal.signalId+" @"+signal.triggerPrice+
+                "; raw H1 breakout-consumption preflight required; never rearm after breakout") }
         val correction = corrections[signal.signalId] ?: WilliamsCorrectionContext()
         val direction = when (campaignSignalDirection(signal.type)) {
             "LONG" -> NativeFuturesCampaignCoordinator.Direction.LONG
@@ -7707,6 +7872,19 @@ private class NativeEngine(
         // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
         // signal bar trigger, independent of any junior execution fractal.
         val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
+        // Only an immediate MARKET execution can be priced against the live
+        // bid/ask. For conditional STOP_MARKET the trigger is future last
+        // CONTRACT_PRICE; risk/fees/slippage are reserved independently.
+        if(marketReentry) {
+            val quote = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
+                lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
+            }
+            val blocker = futuresEntryQuoteBlocker(
+                NativeFuturesCampaignCoordinator.EntryKind.MARKET,quote.first,quote.second,maxSpreadPct)
+            if(blocker!=null) return rejectDecision(symbol,blocker)
+        }
         val reference=signal.triggerPrice
         val trigger = if(marketReentry) williamsNtdCloseEntryBound(direction.name,reference,rules.tick)
             ?: return rejectDecision(symbol,"NTD_CLOSE_BOUND_UNVERIFIED")
@@ -8086,28 +8264,54 @@ private class NativeEngine(
                     // Do not trigger extra REST traffic just to demand 180.
                     val candles = fetchCandles(symbol, "1h", 150)
                     if (candles.size < 45) throw IllegalStateException("Insufficient closed H1 candles: " + candles.size)
-                    // Forward-score existing opposite-exit paper samples on
-                    // the scanner's ALREADY FETCHED H1 candles (no extra REST).
-                    // Only run after a newly CLOSED H1 bar; this does not
-                    // participate in readiness, signal or trade execution.
-                    runCatching {
-                        val now=futuresMarketData.exchangeNowMs()
-                        val lastClosed=candles.lastOrNull { it.t+WILLIAMS_H1_MS<=now }
-                            ?.let { it.t+WILLIAMS_H1_MS } ?: 0L
-                        if(lastClosed>0L) synchronized(tc2ExitShadowLock) {
-                            val key="tc2_exit_shadow_ab_"+symbol
-                            val old=executionStore.readState(key)?.let { JSONObject(it) }
-                            if(old!=null && lastClosed>old.optLong("as_of_ms",0L)) {
-                                val next=williamsTc2ExitShadowAdvance(old,symbol,lastClosed,
-                                    candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })
-                                check(executionStore.writeState(key,next.toString())) {
-                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED" }
+                    // Observer-only historic TC2 exit study must not consume
+                    // the 60s H1 scanner budget or block trade admission on
+                    // SQLite/network. Reuse the already fetched immutable bars.
+                    // This bounded research queue may reject a sample safely;
+                    // it has NO permission to alter orders or risk gates.
+                    val shadowKey = "SCANNER_SHADOW:" + symbol
+                    if (tc2ExitResearchEnqueued.add(shadowKey)) {
+                        runCatching {
+                            scannerShadowResearchExecutor.execute {
+                                try {
+                                    runCatching {
+                                        val now = futuresMarketData.exchangeNowMs()
+                                        val lastClosed = candles.lastOrNull {
+                                            it.t + WILLIAMS_H1_MS <= now
+                                        }?.let { it.t + WILLIAMS_H1_MS } ?: 0L
+                                        if (lastClosed > 0L) synchronized(tc2ExitShadowLock) {
+                                            val key = "tc2_exit_shadow_ab_" + symbol
+                                            val oldShadow = executionStore.readState(key)
+                                                ?.let { JSONObject(it) }
+                                            if (oldShadow != null &&
+                                                lastClosed > oldShadow.optLong("as_of_ms", 0L)) {
+                                                val next = williamsTc2ExitShadowAdvance(
+                                                    oldShadow, symbol, lastClosed,
+                                                    candles.map {
+                                                        WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v)
+                                                    })
+                                                check(executionStore.writeState(key, next.toString())) {
+                                                    "TC2_SHADOW_REPLAY_DURABILITY_FAILED"
+                                                }
+                                            }
+                                        }
+                                    }.onFailure { error ->
+                                        runCatching { auditStore.recordCockpitEvent(
+                                            "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                            state="RESEARCH_UNAVAILABLE",
+                                            detail=error.javaClass.simpleName) }
+                                    }
+                                } finally {
+                                    tc2ExitResearchEnqueued.remove(shadowKey)
+                                }
                             }
+                        }.onFailure {
+                            tc2ExitResearchEnqueued.remove(shadowKey)
+                            runCatching { auditStore.recordCockpitEvent(
+                                "TC2_EXIT_SHADOW_REPLAY", symbol=symbol,
+                                state="RESEARCH_SCHEDULING_UNAVAILABLE",
+                                detail=it.javaClass.simpleName) }
                         }
-                    }.onFailure { error ->
-                        runCatching { auditStore.recordCockpitEvent("TC2_EXIT_SHADOW_REPLAY",
-                            symbol=symbol,state="RESEARCH_UNAVAILABLE",
-                            detail=error.javaClass.simpleName) }
                     }
                     stage = "ANALYSE_TC2_NTD_COURSE_H1"
                     val result = analyseBase(symbol, candles, spreads[symbol] ?: -1.0, volumes[symbol] ?: 0.0)
@@ -8197,6 +8401,11 @@ private class NativeEngine(
             coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
         val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        // A complete outage of the shared public UTC clock is a transient
+        // market-data dependency, not proof all 15 independent analyzers are
+        // broken. Never mark this as READY or use stale H1 signals.
+        val clockUnavailable = scannerAllSymbolClockOutage(coreSymbols.size, ranked.size, symbolErrors)
+        if (clockUnavailable) scanRetryAfterReconciliation = true
         // A valid read-only scan can overlap an unrelated Binance recovery
         // and be temporarily blocked by the coordinator's in-flight marker.
         // Preserve the entry fence, but recheck promptly after it finishes.
@@ -8205,6 +8414,7 @@ private class NativeEngine(
             scanRetryAfterReconciliation = true
         }
         scannerState = when {
+            clockUnavailable -> "WAITING_FOR_EXCHANGE_CLOCK"
             !completeScan && ranked.isEmpty() -> "FAILED"
             !completeScan && executionBlocker != null -> "PARTIAL_BLOCKED"
             !completeScan -> "PARTIAL"
@@ -8212,6 +8422,8 @@ private class NativeEngine(
             else -> "READY"
         }
         scannerError = when {
+            clockUnavailable -> "Binance public UTC clock expired while scanning all approved H1 series; " +
+                "the independent bounded probe will retry. All entries remain blocked."
             !completeScan && symbolErrors.isNotEmpty() ->
                 "Не удалось завершить H1-анализ: " + symbolErrors.entries
                     .sortedBy { it.key }.take(3)
@@ -8534,10 +8746,12 @@ private class NativeEngine(
         }
     }
 
+    /**
+     * The callback does only three things: immediately revoke entry freshness,
+     * durably append the raw event, and wake the single serialized inbox drainer.
+     * No order mutation or protection decision is authorized by a WS payload.
+     */
     private fun handleUserEvent(event: JSONObject) {
-        // Invalidate entry authority on receipt, before a busy serialized actor
-        // can delay applying a real fill/account update. Callback delivery itself
-        // must never be mistaken for a successful durable event application.
         if (event.optString("e") in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
                 "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT", "listenKeyExpired", "serverShutdown")) {
             synchronized(this) {
@@ -8546,23 +8760,132 @@ private class NativeEngine(
                 if (futuresStreamReconcileRunning) futuresStreamReconcilePending = true
             }
         }
-        tradingEventLoop.post {
-            try {
-                handleUserEventSerialized(event)
-            } catch (failure: Exception) {
-                val reason = "Private Futures event application failed: " +
-                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
-                userStreamSyncRequired = true
-                lastUserStreamSyncAtMs = 0L
-                userStreamLastError = reason
-                setReconcileRequired(reason)
+        val accountFingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrElse { failure ->
+            val reason = "Private Futures event cannot be account-pinned: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            lastUserStreamSyncAtMs = 0L
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_ACCOUNT_IDENTITY_FAILURE", force = true)
+            return
+        }
+        try {
+            // Write-ahead receipt: if this fails, do not pretend the event entered
+            // the serialized pipeline. Keep the stream unsynchronized and reconcile.
+            auditStore.enqueuePrivateUserEvent(event, accountFingerprint)
+        } catch (failure: Exception) {
+            val reason = "Private Futures event inbox persistence failed: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            lastUserStreamSyncAtMs = 0L
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_INBOX_WRITE_FAILURE", force = true)
+            return
+        }
+        privateEventReceiveGeneration.incrementAndGet()
+
+        // Signed REST reconciliation is requested immediately for all private
+        // account/position/order/protection changes, before the serialized actor
+        // can be delayed by a preceding backlog. WS is only a wake-up, never proof.
+        when {
+            privateFuturesFillDemandsImmediateReconcile(event) ->
+                scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)
+            privateFuturesStateEventDemandsImmediateReconcile(event) ->
+                scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_URGENT", force = true)
+        }
+        schedulePrivateEventDrain()
+    }
+
+    private fun schedulePrivateEventDrain() {
+        val accountFingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrElse { failure ->
+            userStreamSyncRequired = true
+            userStreamLastError = "Private event replay account identity unavailable: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            setReconcileRequired(userStreamLastError ?: "PRIVATE_EVENT_ACCOUNT_IDENTITY_FAILURE")
+            return
+        }
+        if (!privateEventDrainScheduled.compareAndSet(false, true)) return
+        val generationAtStart = privateEventReceiveGeneration.get()
+        try {
+            tradingEventLoop.post {
+                var failed = false
+                try {
+                    // Process one bounded batch per actor turn. If more events
+                    // remain, the finally block re-posts one drain at the tail
+                    // of the serialized queue, allowing other actor work to run.
+                    val batch = auditStore.pendingPrivateUserEvents(accountFingerprint, 64)
+                    for (record in batch) {
+                        try {
+                            val event = JSONObject(record.rawJson)
+                            // An event replayed after process death has no surviving
+                            // urgent worker. Recreate the fill wake-up before applying it.
+                            when {
+                                privateFuturesFillDemandsImmediateReconcile(event) ->
+                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_DURABLE_REPLAY", force = true)
+                                privateFuturesStateEventDemandsImmediateReconcile(event) ->
+                                    scheduleFuturesStreamReconciliation("PRIVATE_WS_STATE_DURABLE_REPLAY", force = true)
+                            }
+                            handleUserEventSerialized(event)
+                            auditStore.completePrivateUserEvent(record.eventId, accountFingerprint)
+                        } catch (failure: Exception) {
+                            failed = true
+                            runCatching {
+                                auditStore.failPrivateUserEvent(
+                                    record.eventId, accountFingerprint,
+                                    failure.message ?: failure.javaClass.simpleName
+                                )
+                            }
+                            throw failure
+                        }
+                    }
+                } catch (failure: Exception) {
+                    val reason = "Private Futures durable event replay failed: " +
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+                    userStreamSyncRequired = true
+                    lastUserStreamSyncAtMs = 0L
+                    userStreamLastError = reason
+                    setReconcileRequired(reason)
+                    scheduleFuturesStreamReconciliation("PRIVATE_EVENT_REPLAY_FAILURE", force = true)
+                } finally {
+                    privateEventDrainScheduled.set(false)
+                    val pendingCheck = runCatching {
+                        auditStore.hasPendingPrivateUserEvents(accountFingerprint)
+                    }.getOrNull()
+                    val currentGeneration = privateEventReceiveGeneration.get()
+                    if (pendingCheck == null) {
+                        // A failed inbox read is NOT equivalent to an empty inbox.
+                        // Latch reconciliation and do not spin on a broken SQLite read.
+                        val reason = "Private Futures durable inbox pending-state read failed"
+                        userStreamSyncRequired = true
+                        lastUserStreamSyncAtMs = 0L
+                        userStreamLastError = reason
+                        setReconcileRequired(reason)
+                        scheduleFuturesStreamReconciliation("PRIVATE_EVENT_INBOX_READ_FAILURE", force = true)
+                    } else if (privateEventDrainMayReschedule(
+                            pendingCheck, failed, generationAtStart, currentGeneration
+                        )) {
+                        // One batch per actor turn. Requeue at the tail so other
+                        // serialized work can run before the next bounded batch.
+                        schedulePrivateEventDrain()
+                    }
+                }
             }
+        } catch (failure: Exception) {
+            privateEventDrainScheduled.set(false)
+            val reason = "Private Futures event actor rejected inbox wake-up: " +
+                safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+            userStreamSyncRequired = true
+            userStreamLastError = reason
+            setReconcileRequired(reason)
+            scheduleFuturesStreamReconciliation("PRIVATE_EVENT_ACTOR_REJECTED", force = true)
         }
     }
 
     private fun handleUserEventSerialized(event: JSONObject) {
         lastUserEventMs = System.currentTimeMillis()
-        auditStore.recordUserEvent(event)
+        auditStore.recordUserEvent(event, rawEventAlreadyPersisted = true)
         executionAccumulator.accept(event)
 
         val eventType = event.optString("e", "unknown")
@@ -8576,8 +8899,9 @@ private class NativeEngine(
             val previous = lastUserEventTimeByType[eventType]
             if (previous != null && eventTime < previous) {
                 userStreamSyncRequired = true
-                lastError =
-                    "user ws: out-of-order $eventType event; REST resync required"
+                lastUserStreamSyncAtMs = 0L
+                lastError = "user ws: out-of-order $eventType event; REST resync required"
+                scheduleFuturesStreamReconciliation("PRIVATE_EVENT_OUT_OF_ORDER", force = true)
                 return
             }
             lastUserEventTimeByType[eventType] =
@@ -8587,7 +8911,12 @@ private class NativeEngine(
         when (eventType) {
             "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
             "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
-                scheduleFuturesStreamReconciliation(eventType)
+                // Every execution/account/protection update already requested
+                // signed reconciliation in the WebSocket callback (or durable replay).
+                // Keep this serialized actor for journal/order projection only.
+                if (!privateFuturesStateEventDemandsImmediateReconcile(event)) {
+                    scheduleFuturesStreamReconciliation(eventType)
+                }
                 return
             }
             "listenKeyExpired" -> {
@@ -9460,7 +9789,7 @@ private class NativeEngine(
         // trigger, risk approval, and exchange-side protection.
         // WM2: the trigger belongs to the third AO rising bar, not the first
         // bar found while walking backward. Super AO is independent of WM3/fractals.
-        val streak = williamsTc2ConsecutiveAoRise(candles.lastIndex, 35) { i ->
+        val streak = williamsTc2ConsecutiveAoRise(candles.lastIndex, 34) { i ->
             ao(candles, i)
         }
         if (streak >= 3) {
@@ -9654,9 +9983,14 @@ private class NativeEngine(
         if(williamsClosedH1HistoryBlocker(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)!=null) return emptyList()
         val contractPrice=futuresMarketData.price(symbol)
         val out=mutableListOf<CampaignSignalN>()
+        // Preserve the RAW closed-H1 candidates separately from those that
+        // survived age, fractal/level, and later-opposition lifecycle checks.
+        // A raw formation is never permission to send a Futures order.
+        val rawCurrent = mutableListOf<CampaignSignalN>()
         for(omitted in 0..minOf(4,bars.size-45)) {
             val prefix=bars.take(bars.size-omitted)
             val signals=editionCampaignSignals(symbol,prefix,"1h",tick,if(omitted==0) williamsUnifiedProfile else williamsExecutionProfile)
+            if (omitted == 0) rawCurrent.addAll(signals)
             out+=signals.filter { signal ->
                 if(signal.strategyProfile!=williamsTc2Profile || signal.role!="ENTRY") omitted==0 &&
                     (signal.strategyProfile!=williamsNtdProfile || signal.executionSemantics=="MARKET_ON_CLOSE" ||
@@ -9685,6 +10019,63 @@ private class NativeEngine(
         }.sortedBy { it.signalBarTimeMs }
         check(executionStore.writeState("decision_h1_parent_lifecycle_"+symbol,JSONObject()
             .put("observed_at_ms",now).put("trigger_price_basis","CONTRACT_PRICE").put("parents",lifecycle).toString())) { "H1_LIFECYCLE_PROOF_NOT_DURABLE" }
+        // Read-only explanation of a genuinely rejected TC2 signal. The raw
+        // source count can be nonzero while the qualified H1 trade count is zero
+        // (see LTCUSDT diagnostics #17). Never conflate those scopes again.
+        val qualifiedIds=valid.filter {
+            it.strategyProfile==williamsTc2Profile && it.role=="ENTRY"
+        }.map { it.signalId }.toSet()
+        val rawTc2=rawCurrent.filter { it.strategyProfile==williamsTc2Profile }
+        val decisions=JSONArray()
+        for (signal in rawCurrent.takeLast(32)) {
+            val isTc2 = signal.strategyProfile==williamsTc2Profile
+            val reason = when {
+                !isTc2 -> "OBSERVATION_ONLY_DIFFERENT_BOOK_PROFILE"
+                signal.role != "ENTRY" -> "ADDITION_REQUIRES_OWNED_CAMPAIGN"
+                !williamsH1SignalTimeEligible(signal.signalBarTimeMs,
+                    signal.type,signal.strategyProfile,now) -> "H1_SIGNAL_TIME_NOT_ELIGIBLE"
+                else -> {
+                    val blocker = runCatching { williamsH1ParentInvalidation(
+                        h1EntryParent(signal),waveBars,contractPrice,now) }
+                    when {
+                        blocker.isFailure -> "PARENT_INVALIDATION_CHECK_UNVERIFIED"
+                        blocker.getOrNull()!=null -> "PARENT_INVALIDATED:" +
+                            safeDiagnosticText(blocker.getOrNull().orEmpty())
+                        signal.signalId !in qualifiedIds ->
+                            "H1_OPPOSITION_OR_PARENT_LIFECYCLE_REJECTED"
+                        else -> "QUALIFIED_H1_SIGNAL_NOT_ORDER_AUTHORITY"
+                    }
+                }
+            }
+            decisions.put(JSONObject()
+                .put("signal_id",signal.signalId)
+                .put("source",signal.strategyProfile)
+                .put("signal_type",signal.type)
+                .put("role",signal.role)
+                .put("direction",campaignSignalDirection(signal.type) ?: "UNKNOWN")
+                .put("signal_bar_time_ms",signal.signalBarTimeMs)
+                .put("known_at_ms",signal.signalBarTimeMs+WILLIAMS_H1_MS)
+                .put("trigger_price",signal.triggerPrice)
+                .put("protective_price",signal.protectivePrice)
+                .put("qualified_for_h1_candidate",isTc2 && signal.signalId in qualifiedIds)
+                .put("reason",reason)
+                .put("can_place_orders",false))
+        }
+        val funnel=JSONObject()
+            .put("schema","WILLIAMS_H1_SOURCE_TO_TRADE_FUNNEL_V1")
+            .put("symbol",symbol)
+            .put("as_of_close_ms",bars.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L)
+            .put("observed_at_ms",now)
+            .put("raw_tc2_formations",rawTc2.size)
+            .put("qualified_tc2_h1_signals",qualifiedIds.size)
+            .put("source_decisions",decisions)
+            .put("no_order_without_execution_door",true)
+            .put("can_place_orders",false)
+        runCatching {
+            check(executionStore.writeState("decision_h1_entry_funnel_"+symbol,funnel.toString())) {
+                "H1_SOURCE_FUNNEL_OBSERVATION_NOT_DURABLE"
+            }
+        }.onFailure { lastError="H1 entry funnel observer unavailable: " + it.javaClass.simpleName }
         return valid
     }
 
@@ -10108,8 +10499,7 @@ private class NativeEngine(
         var strictSignal =
             if (campaignEngineEnabled) {
                 campaignSignals.any { williamsVerifiedNewRiskSource(it.strategyProfile) && williamsProfileAllowsSource(williamsProfile,it.strategyProfile) } &&
-                    atrPct in 0.0..0.08 &&
-                    spread <= maxSpreadPct
+                    atrPct in 0.0..0.08
             } else {
                 bullish &&
                     aoPositive &&
@@ -10513,8 +10903,9 @@ private class NativeEngine(
         // Its contained structure validates the separately labelled correction
         // mode in submitNativeFuturesCampaignEntry; it does not veto TREND entries.
         val finalSignal = if (campaignEngineEnabled) {
-            primaryDecisionSignal != null && baseCandidate.atrPct in 0.0..0.08 &&
-                baseCandidate.spreadPct in 0.0..0.0015
+            // Liquidity is a last-moment exchange gate, not an H1 structural
+            // signal attribute. A cached scanner book quote cannot erase TC2.
+            primaryDecisionSignal != null && baseCandidate.atrPct in 0.0..0.08
         } else baseCandidate.signal
         var score = (baseCandidate.score+bonus).coerceIn(0.0,100.0)
         if (!finalSignal && baseCandidate.signal) score=minOf(score,84.0)
@@ -10793,6 +11184,26 @@ private class NativeEngine(
             executionStore.readState("edition_observation_"+candidate.symbol+"_"+source)
                 ?.let { runCatching { JSONObject(it) }.getOrNull() }
         })
+        val candidateCloseMs=candidate.candles.lastOrNull()?.t?.plus(WILLIAMS_H1_MS) ?: 0L
+        // A raw source may see a formation which fails TC2 parent-lifecycle
+        // qualification. These are deliberately DIFFERENT evidence stages.
+        for (i in 0 until observations.length()) {
+            val source=observations.optJSONObject(i) ?: continue
+            source.put("evidence_scope","RAW_CLOSED_H1_BEFORE_PARENT_LIFECYCLE")
+                .put("qualified_h1_signal_count",candidate.campaignSignals.count {
+                    it.strategyProfile==source.optString("profile") })
+                .put("same_closed_h1_as_candidate",candidateCloseMs>0L &&
+                    source.optLong("as_of_close_ms")==candidateCloseMs)
+                .put("trade_authority",false)
+        }
+        val funnel=runCatching {
+            JSONObject(executionStore.readState("decision_h1_entry_funnel_"+candidate.symbol).orEmpty())
+        }.getOrNull()?.takeIf {
+            candidateCloseMs>0L && it.optLong("as_of_close_ms")==candidateCloseMs
+        } ?: JSONObject().put("schema","WILLIAMS_H1_SOURCE_TO_TRADE_FUNNEL_V1")
+            .put("status","MISSING_OR_STALE_H1_SOURCE_FUNNEL")
+            .put("can_place_orders",false)
+        trace.put("h1_entry_source_funnel",funnel)
         trace.put("edition_observations",observations)
         // Independent NTD/Course WHAT-IF history. Persist a causal H1
         // paper diary even when TC2 live execution is paused/blocked.
@@ -10879,6 +11290,15 @@ private class NativeEngine(
         })
         trace.put("observer_paper_history",observerPaper)
         val traceBooks=trace.getJSONArray("books")
+        for(j in 0 until traceBooks.length()) {
+            val book=traceBooks.getJSONObject(j)
+            val source=(0 until observations.length()).mapNotNull { observations.optJSONObject(it) }
+                .firstOrNull { it.optString("profile")==book.optString("profile") }
+            book.put("evidence_scope","QUALIFIED_H1_CONTEXT_AFTER_LIFECYCLE")
+                .put("raw_formation_count",source?.optInt("signal_count",0) ?: JSONObject.NULL)
+                .put("same_h1_source_as_candidate",source?.optBoolean("same_closed_h1_as_candidate",false)
+                    ?: false)
+        }
         for(index in 0 until observations.length()) {
             val observation=observations.getJSONObject(index)
             if(observation.optString("state")=="ANALYSIS_FAILED") for(j in 0 until traceBooks.length()) {
@@ -11365,8 +11785,10 @@ private class NativeEngine(
     }
 
     @Synchronized
-    private fun scannerSnapshot(): JSONObject =
-        JSONObject()
+    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject {
+        val candidateView = if (compactForCockpit)
+            cockpitCandidateDisplayProjection(candidates) else candidates
+        return JSONObject()
             .put("version", BuildConfig.VERSION_NAME)
             .put("cached", true)
             .put("scanning", scanning)
@@ -11392,19 +11814,20 @@ private class NativeEngine(
             .put("symbols_scanned", lastSymbolsScanned)
             .put("scan_universe", scannerUniverseLabel)
             .put("deep_wave_targets", waveTopN)
-            .put("candidates", candidates)
+            .put("candidates", candidateView)
             .put(
                 "best_candidate",
-                if (candidates.length() > 0) candidates.getJSONObject(0)
+                if (candidateView.length() > 0) candidateView.getJSONObject(0)
                 else JSONObject().put("symbol", primarySymbol)
             )
+    }
 
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) requestScan()
         return scannerSnapshot()
     }
 
-    fun status(fast: Boolean = false): JSONObject {
+    fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true): JSONObject {
         if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
@@ -11534,7 +11957,7 @@ private class NativeEngine(
             .put("last_reconciliation_result", lastReconciliationResult)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
-            .put("decision_traces",decisionTraceSnapshot())
+            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -11842,6 +12265,10 @@ private class NativeEngine(
                         .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
                         .put("signal_types", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("type") }))
+                        // Source list matches signal_types by INDEX. A generic
+                        // bullish Course hypothesis must never be drawn as an
+                        // executable TC2 WM entry on the phone.
+                        .put("signal_profiles", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("strategy_profile") }))
                         .put("fractal_up", isUpFractal(sourceCandles, i))
                         .put("fractal_down", isDownFractal(sourceCandles, i))
                 )
@@ -12266,9 +12693,12 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(): JSONObject {
-        val captured = status(fast = true)
-        val scan = scannerSnapshot()
+    fun cockpit(includeDecisionTraces: Boolean = true): JSONObject {
+        // The default complete API remains compatible for decision/market screens.
+        // Main dashboard/trades need live signed safety fields but not a costly
+        // 15-symbol replay of journal/passport/history SQLite objects every 5s.
+        val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces)
+        val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
             .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
@@ -12482,6 +12912,25 @@ private class NativeEngine(
             .put("scanner_queue_capacity",
                 scanExecutor.queue.size+scanExecutor.queue.remainingCapacity())
             .put("tc2_research_queue_size",tc2ExitResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_size",scannerShadowResearchExecutor.queue.size)
+            .put("scanner_shadow_research_queue_capacity",
+                scannerShadowResearchExecutor.queue.size +
+                    scannerShadowResearchExecutor.queue.remainingCapacity())
+            // Never label an unbounded safety-event queue "safe" merely because
+            // the scanner/research queues are bounded. Keep a real high-water mark.
+            .put("private_event_actor_queue_size",tradingEventLoop.queueDepth())
+            .put("private_event_actor_queue_peak",tradingEventLoop.peakQueueDepth())
+            .put("private_event_actor_active",tradingEventLoop.actorActive())
+            .put("private_event_drain_scheduled",privateEventDrainScheduled.get())
+            .put("private_event_receive_generation",privateEventReceiveGeneration.get())
+            .put("private_event_inbox",runCatching {
+                auditStore.privateUserEventInboxSnapshot(futuresApiKeyFingerprint(key()))
+            }.getOrElse {
+                JSONObject().put("schema","PRIVATE_USER_EVENT_INBOX_V1")
+                    .put("status","NOT_VERIFIED")
+                    .put("error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
+            })
+            .put("depth_resync_inflight_symbols",depthResyncInFlight.size)
             .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
     }
@@ -12501,22 +12950,21 @@ private class NativeEngine(
         }
         // Capture each state source once so the report does not compare different
         // moments in time and manufacture contradictions from separate status reads.
-        val statusSnapshot = status(fast = true)
+        val statusSnapshot = status(fast = true, includeDecisionTraces = false)
             .put("strategy_audit", strategyEvidence)
             .put("trade_observations", tradeEvidence)
             .put("signed_exchange_fill_forensics",JSONObject(signedFillAuditJson)
                 .put("refresh_running",signedFillAuditRunning)
                 .put("latest_refresh_requested_at_ms",signedFillAuditLastAttemptMs))
-        // The fast live status carries a large decision_traces tree, while
-        // this forensic export ALWAYS includes a richer full
-        // signal_decision_history.json independently. No diagnostic test reads
-        // the duplicate status field. Drop the duplicate reference before
-        // allocating 25-core maps, event history and report/ZIP buffers.
-        // The normal /status API remains unchanged.
-        val hadDuplicateStatusDecisionTraces=statusSnapshot.has("decision_traces")
-        statusSnapshot.remove("decision_traces")
-        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status",
-            hadDuplicateStatusDecisionTraces)
+        // Diagnostics deliberately requested status WITHOUT decision_traces:
+        // creating that multi-megabyte tree and then removing it still caused
+        // peak-heap allocation and a second full parse of persisted intents.
+        // The complete history is exported later in signal_decision_history.json.
+        // Public /status callers retain the full tree by default.
+        check(!statusSnapshot.has("decision_traces")) {
+            "Diagnostic status must not allocate duplicate decision traces"
+        }
+        statusSnapshot.put("decision_traces_deduplicated_from_diagnostic_status", true)
         statusSnapshot.put("decision_traces_full_evidence_path",
             "signal_decision_history.json")
         val coordinatorSnapshot = statusSnapshot.optJSONObject("futures_runtime") ?: JSONObject()
@@ -12552,6 +13000,8 @@ private class NativeEngine(
                 "; подтверждённые соответствия="+signedStopJoin.optInt("signed_stop_matched_count")+
                 "; неразрешённые="+signedStopJoin.optInt("unresolved_position_count")+
                 "; неоднозначные="+signedStopJoin.optInt("ambiguous_proof_count")+
+                "; совпадение стороны/количества/цены="+signedStopJoin.optInt("observed_tuple_matched_count")+
+                "; ожидают завершения сверки="+signedStopJoin.optInt("reconciliation_pending_count")+
                 ". Это наблюдательное сравнение двух кешированных signed снимков, " +
                 "НЕ допуск к новым входам и НЕ доказательство STOP с момента FILLED."))
         val scannerEvidenceSnapshot = scannerSnapshot()
@@ -12713,6 +13163,12 @@ private class NativeEngine(
         tests.put(JSONObject().put("id", "DB-01").put("name", "SQLite execution journal quick_check")
             .put("domain", "database").put("ok", sqliteHealth.optBoolean("ok"))
             .put("severity", if (sqliteHealth.optBoolean("ok")) "PASS" else "FAIL").put("detail", sqliteHealth.toString()))
+        val intentShadow = executionStore.campaignIntentShadowSnapshot()
+        tests.put(JSONObject().put("id","DB-INTENT-SHADOW-01")
+            .put("name","Campaign intent JSON ↔ normalized SQLite shadow parity")
+            .put("domain","database")
+            .put("severity",intentShadow.optString("severity","NOT_VERIFIED"))
+            .put("detail",intentShadow.toString()))
         // Diagnostic 12 captured a signed BNB STOP at 14:26:28Z while
         // the position UI was still a snapshot from 14:26:17Z. Flag this
         // explicitly: a more recent STOP observation is evidence that the
@@ -12864,6 +13320,11 @@ private class NativeEngine(
         // in signal_decision_history.json (status copy is deliberately deduplicated).
         val configurationSnapshot=diagnosticSettings()
         val sanitizedConfiguration=williamsDiagnosticConfigurationSnapshot(configurationSnapshot)
+        // Build the immutable exit evidence exactly ONCE for both the phone
+        // diagnostic and book-reasoning audit. Re-parsing JSON here previously
+        // doubled potentially large allocations near an observed OOM incident.
+        val tc2RecentExits=WilliamsTc2RecentExitForensics.summarize(
+            statusSnapshot.optJSONArray("trade_observations"))
         val completedDiagnosticReport=JSONObject()
             .put("runtime", "standalone")
             .put("created_at_ms", observedAtMs)
@@ -12871,11 +13332,19 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("futures_fill_stop_timing",fillStopTiming)
+            .put("tc2_recent_exit_forensics",tc2RecentExits)
+            .put("tc2_book_exit_hierarchy",WilliamsTc2ExitHierarchyLens.assess(
+                scannerEvidenceSnapshot,tc2RecentExits,observedAtMs))
+            .put("four_book_full_chapter_coverage",WilliamsFourBookCurriculum.assess(
+                scannerEvidenceSnapshot,observedAtMs))
+            .put("book_causal_understanding", WilliamsBookCausalUnderstanding.assess(
+                scannerEvidenceSnapshot,tc2RecentExits,observedAtMs))
             .put("signed_position_stop_join",signedStopJoin)
             .put("runtime_resource_diagnostics",resourceDiagnostics)
             .put("event_compaction", auditStore.cockpitReconciliationCompaction())
             .put("last_incident", auditStore.lastCockpitIncident() ?: JSONObject.NULL)
             .put("sqlite_health", sqliteHealth)
+            .put("futures_intent_shadow_parity",intentShadow)
             .put("unified_strategy_evidence", unifiedEvidence)
             // Full on-device historical research diary, accessible in ZIP
             // even if the scanner/UI candidate list is currently empty.

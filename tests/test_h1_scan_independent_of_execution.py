@@ -25,10 +25,13 @@ def test_ticker_or_book_metadata_outage_only_blocks_entries_not_scanning():
     assert 'runCatching { futuresMarketData.bookTickers() }' in universe
     assert '"READ_ONLY_MARKET_METADATA_PARTIAL:' in universe
     assert 'require(missing.isEmpty())' not in universe
-    # Execution still requires fresh real top of book and suitable spread.
+    # Current book spread cannot veto registration of a future H1 STOP_MARKET.
+    # Immediate MARKET is still checked with a fresh live top-of-book.
     entry=RUNTIME.split('private fun submitNativeFuturesCampaignEntryChecked(',1)[1]
+    assert 'SPREAD_LIMIT' not in entry
+    assert 'if(marketReentry)' in entry
     assert 'futuresMarketData.topOfBook(symbol)' in entry
-    assert 'SPREAD_LIMIT' in entry
+    assert 'futuresEntryQuoteBlocker(' in entry
 
 def test_chart_refetches_nonempty_but_stale_candles():
     chart=RUNTIME.split('fun klines(',1)[1].split('fun marketQuote(',1)[0]

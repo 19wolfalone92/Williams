@@ -1,0 +1,203 @@
+{
+  "schema": "TC1_SOURCE_CONFLICTS_V1",
+  "source_id": "TC1_RU",
+  "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+  "scope": "SUPPLIED_RUSSIAN_REFLOW_NOT_CERTIFIED_ORIGINAL_ENGLISH_ERRATA",
+  "conflicts": [
+    {
+      "conflict_id": "TC1.ERRATA.MIDPOINT_SIGN",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        40,
+        46
+      ],
+      "visual_evidence_pages": [
+        40,
+        46
+      ],
+      "observation": "Detailed definition assigns PLUS above the previous high; the later prose assigns MINUS to the same above-range condition.",
+      "handling": "Prefer the explicit definition only as TC1 research; keep later sentence flagged; no TC2 override.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.SQUAT_CAPTION",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        46,
+        47
+      ],
+      "visual_evidence_pages": [
+        46,
+        47
+      ],
+      "observation": "Body and plotted annotation use -13+- for the falling squat example, while its figure6-10 caption starts +13+-.",
+      "handling": "Do not derive direction from the inconsistent caption; four-window signs remain separate from price direction.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.B_TRIANGLE_DIRECTION",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        56,
+        57
+      ],
+      "visual_evidence_pages": [
+        56,
+        57
+      ],
+      "observation": "Body says a wave-b triangle exits in direction b; figure7-13 caption/drawing says continuation of a.",
+      "handling": "Keep source ambiguity; no automatic triangle-breakout entry from this reflow.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.W5_ANCHOR",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        54,
+        64,
+        65
+      ],
+      "visual_evidence_pages": [
+        64,
+        65
+      ],
+      "observation": "Detailed projection adds W1-origin-to-W3-end distance to the END of W4; page65 parenthesis instead says START of W4.",
+      "handling": "Use detailed end-of-W4 statement for research, retain typo and causal pivot uncertainty; do not move an entry to a known-later pivot.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.FIGURE_7_20_TIMEFRAME",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        62,
+        63
+      ],
+      "visual_evidence_pages": [
+        62,
+        63
+      ],
+      "observation": "Figure7-20 caption says5-minute and following discussion expects a finer view, but the placed plot repeats the15-minute figure7-19/header.",
+      "handling": "Do not certify 5-minute candles or lower-degree labels from the duplicated image; genuine lower-frame evidence is still missing.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.MACD_SUMMARY_PERIODS",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        59,
+        99,
+        100,
+        103
+      ],
+      "visual_evidence_pages": [
+        99,
+        100,
+        103
+      ],
+      "observation": "Detailed MACD is5/34/5; the summary twice calls MACD5/13/34, which are the TWR periods.",
+      "handling": "Keep TWR and MACD definitions separate; moving-average kind/price basis are not invented.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.CHF_EXIT_PRICE",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        90,
+        91
+      ],
+      "visual_evidence_pages": [
+        90,
+        91
+      ],
+      "observation": "Figure9-10 explicitly annotates sell7 at8065; body/table uses7965.",
+      "handling": "Publish two one-price arithmetic variants; neither is exchange-verified actual performance.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.SOY_ADD_PRICE",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        92
+      ],
+      "visual_evidence_pages": [
+        92
+      ],
+      "observation": "Figure9-11 explicitly annotates sell5 at654.5; body/table uses654.75.",
+      "handling": "Publish the body ledger and a separately labelled chart-entry variant, without assigning other chart extrema as fills.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.CHF_ARITHMETIC",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        90,
+        91
+      ],
+      "visual_evidence_pages": [
+        90,
+        91
+      ],
+      "observation": "Table understates first trim lot by60, substitutes hypothetical stop profit22225 for previously realized14600, and has inconsistent final loss and subtraction.",
+      "handling": "Decimal FIFO audit of explicit body prices yields gross189350; fees/fills/margin path unknown; see TC1_PRINTED_NUMBER_AUDIT.json.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    },
+    {
+      "conflict_id": "TC1.ERRATA.SOY_ARITHMETIC",
+      "source_id": "TC1_RU",
+      "source_sha256": "36f6822811088a06254009181480aa1c27af705a76960ecf0342023df803331c",
+      "pdf_pages": [
+        92,
+        93
+      ],
+      "visual_evidence_pages": [
+        92,
+        93
+      ],
+      "observation": "Initial three-contract stop risk is825 versus printed1375; subtotal and final total omit earlier realized2550.",
+      "handling": "Decimal FIFO body-price ledger yields gross37737.50; do not teach the printed totals as verified labels.",
+      "status": "VISIBLE_SOURCE_DISAGREEMENT_SINGLE_REVIEW",
+      "independent_second_review": false,
+      "execution_authority": false,
+      "training_allowed": false
+    }
+  ],
+  "independent_second_review": false,
+  "can_place_orders": false,
+  "training_allowed": false
+}

@@ -23,6 +23,7 @@ internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
     .put("mode",WILLIAMS_EXECUTION_POLICY).put("execution_profile",williamsExecutionProfile)
     .put("execution_profiles",JSONArray(williamsExecutionProfiles))
     .put("observer_profiles",JSONArray(williamsObserverProfiles)).put("one_campaign_per_symbol",true)
+    .put("symbols",williamsSymbolPolicySnapshot())
     .put("tc2_reversal_policy",WILLIAMS_TC2_REVERSAL)
     .put("tc2_reversal_requires",JSONArray(listOf("OWNED_EXIT_FILLED","SIGNED_FLAT","OLD_ORDERS_CLEANED",
         "FRESH_H1_SIGNAL","NEW_RISK_BUDGET","NEW_PROTECTIVE_STOP")))

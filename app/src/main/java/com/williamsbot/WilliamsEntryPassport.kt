@@ -47,6 +47,34 @@ internal fun williamsEntryPassportEvent(
 private fun passportObjectRows(rows:JSONArray)=
     (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
 
+/** A signed-position observation is not an exact parent/child fill receipt.
+ * In particular, an algo's saved NEW/0 response must never be rewritten to
+ * FILLED merely because the account has an owned position. Read-only only. */
+internal fun williamsEntryExecutionObservation(
+    intent:JSONObject,now:Long,clockFresh:Boolean
+):JSONObject {
+    val role=intent.optString("intent_role",intent.optString("role","ENTRY"))
+    val at=intent.optLong("last_reconciled_ms",0L)
+    val fresh=clockFresh && at>0L && now>=at && now-at<=30_000L
+    val qty=intent.optString("confirmed_position_qty").toBigDecimalOrNull()
+    val active=intent.optString("campaign_status") in setOf("OPEN_PROTECTED","POSITION_OPEN")
+    val observed=role=="ENTRY" && active && fresh && qty!=null && qty.signum()>0 &&
+        intent.optBoolean("strategy_ownership_verified",false)
+    val executed=intent.optString("executed_qty").toBigDecimalOrNull()
+    val recordedFill=intent.optString("order_status") in setOf("FILLED","PARTIALLY_FILLED") &&
+        executed!=null && executed.signum()>0
+    return JSONObject().put("schema","WILLIAMS_ENTRY_EXECUTION_OBSERVATION_V1")
+        .put("position_observation",if(observed) "OWNED_POSITION_RECONCILED" else "NOT_VERIFIED")
+        .put("confirmed_position_qty",if(observed) qty.toPlainString() else JSONObject.NULL)
+        .put("position_observed_at_ms",if(observed) at else JSONObject.NULL)
+        .put("recorded_order_status",intent.optString("order_status","UNKNOWN"))
+        .put("recorded_executed_qty",intent.opt("executed_qty") ?: JSONObject.NULL)
+        .put("order_fill_observation",if(recordedFill) "RECORDED_ORDER_FILL" else "EXACT_FILL_NOT_VERIFIED")
+        .put("exact_entry_fill_verified",false)
+        .put("observation_scope","PERSISTED_COORDINATOR_OBSERVATION_NOT_CURRENT_EXECUTION_AUTHORITY")
+        .put("can_place_orders",false).put("can_manage_stops",false)
+}
+
 /** Exact identities, not the bounded 12-row display chain, determine attribution. */
 internal fun williamsEntryPassport(
     symbol:String,execution:JSONObject?,intents:JSONArray,latestAudit:JSONObject?,
@@ -108,6 +136,11 @@ internal fun williamsEntryPassport(
         .put("identity_match",matched!=null && journalAvailable)
     if(matched==null || !journalAvailable) return out
     out.put("order",JSONObject(matched.toString()))
+    val executionObservation=williamsEntryExecutionObservation(matched,now,exchangeClockFresh)
+    out.put("execution_observation",executionObservation)
+    if(out.optString("state")=="INTENT_JOURNALED" &&
+        executionObservation.optString("position_observation")=="OWNED_POSITION_RECONCILED")
+        out.put("state","POSITION_RECONCILED")
     val parentId=matched.optString("entry_client_id")
     val owner=if(matched.optString("intent_role","ENTRY")=="ENTRY") matched else all.filter {
         it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("client_id")==parentId &&
