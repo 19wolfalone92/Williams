@@ -117,6 +117,12 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
         .joinToString("|")
 }
 
+/** Binance's numeric trade ID is stable across duplicate WS receipts even
+ * when the enclosing event and transaction timestamps are different. Never
+ * assume that an order-status update or nontrade receipt is a unique fill. */
+internal fun privateBinanceTradeHasStableId(kind:String,tradeId:String):Boolean =
+    kind=="TRADE" && tradeId.toLongOrNull()?.let { it>0L } == true
+
 /** A delayed/replayed private WS receipt is evidence, never permission to
  * rewind the durable order projection. A later signed REST reconciliation is
  * the only financial authority; this guard protects the audit timeline. */
@@ -535,6 +541,14 @@ class TradingAuditStore(context: Context) :
             )
         """.trimIndent())
 
+        // Future receipts use the same stable trade identity even when
+        // their event transaction time changes. Old database copies are
+        // handled by the read-before-insert compatibility query above.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_executions_trade_identity
+            ON executions (symbol, order_id, trade_id, execution_type)
+        """.trimIndent())
+
         db.execSQL("""
             CREATE TABLE events(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -597,6 +611,10 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_executions_trade_identity
+            ON executions (symbol, order_id, trade_id, execution_type)
+        """.trimIndent())
         h1EntryPassportSchema.forEach(db::execSQL)
         stopTrailRecoverySchema.forEach(db::execSQL)
         ensurePrivateUserEventInboxSchema(db)
@@ -1043,17 +1061,27 @@ class TradingAuditStore(context: Context) :
         execution.put("transaction_time", transactionTime)
         execution.put("raw_json", event.toString())
         val executionDb = writableDatabase
-        val executionInsert = executionDb.insertWithOnConflict(
-            "executions",
-            null,
-            execution,
-            SQLiteDatabase.CONFLICT_IGNORE
-        )
-        if (executionInsert == -1L) {
-            val persisted = executionDb.rawQuery(
-                "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+        // Historical event_key included transaction time. A replayed Binance
+        // TRADE with the same symbol/order/trade id but a DIFFERENT T would
+        // double-count the financial execution after process restart. Query
+        // the old rows as well as new rows; do not destructively migrate
+        // existing financial/audit history.
+        val alreadyKnownTrade = privateBinanceTradeHasStableId(executionType,tradeId) &&
+            executionDb.rawQuery(
+                "SELECT 1 FROM executions WHERE symbol=? AND order_id=? AND trade_id=? " +
+                    "AND execution_type='TRADE' LIMIT 1",
+                arrayOf(symbol,orderId,tradeId)
             ).use { it.moveToFirst() }
-            check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+        if (!alreadyKnownTrade) {
+            val executionInsert = executionDb.insertWithOnConflict(
+                "executions", null, execution, SQLiteDatabase.CONFLICT_IGNORE
+            )
+            if (executionInsert == -1L) {
+                val persisted = executionDb.rawQuery(
+                    "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+                ).use { it.moveToFirst() }
+                check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+            }
         }
 
         val order = ContentValues()

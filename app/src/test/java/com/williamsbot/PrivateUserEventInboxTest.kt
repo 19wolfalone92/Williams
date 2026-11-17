@@ -71,6 +71,19 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun stableFuturesTradeIdDedupesAcrossWsTimestampReplays() {
+        assertTrue(privateBinanceTradeHasStableId("TRADE","123456"))
+        assertTrue(privateBinanceTradeHasStableId("TRADE","1"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","-1"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","0"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE",""))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","unknown"))
+        assertFalse(privateBinanceTradeHasStableId("NEW","123456"))
+        assertFalse(privateBinanceTradeHasStableId("CANCELED","123456"))
+        assertFalse(privateBinanceTradeHasStableId("FILLED","123456"))
+    }
+
+    @Test
     fun replayedOrOutOfOrderWsCannotRewindDurableOrderStatusOrFill() {
         fun allow(oldTime:Long,oldId:String,oldQty:String,oldStatus:String,
             at:Long,id:String,qty:String,status:String)=privateOrderProjectionMayAdvance(
