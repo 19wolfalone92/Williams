@@ -64,7 +64,9 @@ internal fun selectWilliamsPendingFractal(
         }
         if(count<2 || rightCount<2) continue
         val confirmation=next-1
-        val trigger=if (long) p+tick else p-tick
+        // The SOURCE OHLC breakout must be exactly one Binance tick, not
+        // a binary-double increment (e.g., BTC 79524.8+0.1).
+        val trigger=williamsBookExactPriceTick(p,tick,above=long) ?: continue
         // TC2 ch11 PDF pp.147-149 and NTD ch4: the live BREAKOUT level,
         // not the historic pivot extreme, must be beyond Teeth. Evaluate
         // the still-untriggered order against the current displaced red line.
@@ -72,9 +74,11 @@ internal fun selectWilliamsPendingFractal(
                 else trigger>=teeth.last() || bars.last().c<=trigger)) continue
         if ((confirmation..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
         val stopStart=minOf(start,maxOf(0,confirmation-4))
-        val protective=if (long) (stopStart..confirmation).minOf { bars[it].l }-tick
-            else (stopStart..confirmation).maxOf { bars[it].h }+tick
-        if (!protective.isFinite() || protective<=0) continue
+        val opposite=if (long) (stopStart..confirmation).minOf { bars[it].l }
+            else (stopStart..confirmation).maxOf { bars[it].h }
+        val protective=williamsBookExactPriceTick(opposite,tick,above=!long) ?: continue
+        if (!protective.isFinite() || protective<=0 ||
+            (if (long) protective>=trigger else protective<=trigger)) continue
         return WilliamsPendingFractal(i,start,confirmation,trigger,protective,teeth.last())
     }
     return null

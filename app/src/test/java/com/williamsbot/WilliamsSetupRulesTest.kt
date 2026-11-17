@@ -46,6 +46,28 @@ class WilliamsSetupRulesTest {
         assertEquals(2,short.center)
         assertEquals(220-long.trigger,short.trigger,1e-8)
     }
+    @Test fun sourceFractalSelectorUsesDecimalExactBinanceTicksOrFailsClosed() {
+        fun make(highs:List<Double>)=highs.mapIndexed { i,x ->
+            WilliamsWaveBar(i*3_600_000L,x-1,x,x-4,x-1)
+        }
+        val highs=listOf(79521.0,79522.0,79524.8,79523.0,79522.2,79522.3)
+        val bars=make(highs)
+        val levels=selectWilliamsPendingFractal("LONG",bars,List(6){79524.0},0.1)!!
+        assertEquals(79524.9,levels.trigger,0.0)
+        assertTrue(ExecutionMath.isMultiple(levels.trigger,0.1))
+        assertTrue(ExecutionMath.isMultiple(levels.protective,0.1))
+        // No guessing on an off-grid high, even if a later order layer
+        // could round it. Unknown contract precision means no new entry.
+        val corrupted=bars.toMutableList().apply { this[2]=this[2].copy(h=79524.805) }
+        assertNull(selectWilliamsPendingFractal("LONG",corrupted,List(6){79524.0},0.1))
+        val shortBars=bars.map { it.copy(o=160000.0-it.o,
+            h=160000.0-it.l,l=160000.0-it.h,c=160000.0-it.c) }
+        val short=selectWilliamsPendingFractal("SHORT",shortBars,
+            List(6){160000.0-79524.0},0.1)!!
+        assertTrue(ExecutionMath.isMultiple(short.trigger,0.1))
+        assertTrue(ExecutionMath.isMultiple(short.protective,0.1))
+    }
+
     @Test fun plateauUsesWholeOppositeExtremeAndAConsumedLevelIsNotRearmed() {
         val highs=listOf(101.0,102.0,105.0,105.0,103.0,102.0)
         val bars=highs.mapIndexed { i,h -> WilliamsWaveBar(i*3_600_000L,h-1,h,if (i==3) 98.0 else h-5,h-1) }
