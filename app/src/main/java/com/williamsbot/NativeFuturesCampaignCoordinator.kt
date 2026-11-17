@@ -116,16 +116,20 @@ internal fun matchesConfirmedFuturesProtectiveStop(
 ): Boolean {
     if (direction != "LONG" && direction != "SHORT") return false
     if (expectedClientId.isBlank()) return false
-    // A stop on another Binance symbol or in hedge/contract-price mode cannot
-    // prove protection of this one-way MARK_PRICE campaign. Absent optional
-    // exchange fields remain tolerated for legacy test doubles; supplied fields
-    // must never conflict with the signed contract.
-    if (expectedSymbol != null &&
-        (expectedSymbol.isBlank() || order.optString("symbol") != expectedSymbol)) return false
+    // A live signed Binance STOP must prove its symbol, execution mode and
+    // exchange algo identity. An omitted field is UNKNOWN, never protection.
+    // The nullable expectedSymbol overload remains compatible with historical
+    // *offline* fixtures; the live coordinator always supplies expectedSymbol.
+    val signedProofRequired = expectedSymbol != null
+    if (signedProofRequired &&
+        (expectedSymbol.isNullOrBlank() || order.optString("symbol") != expectedSymbol ||
+            order.optString("algoId").toLongOrNull()?.let { it > 0L } != true)) return false
     val actualPositionSide = order.optString("positionSide").uppercase(Locale.US)
-    if (actualPositionSide.isNotBlank() && actualPositionSide != "BOTH") return false
+    if (actualPositionSide != "BOTH" &&
+        (signedProofRequired || actualPositionSide.isNotBlank())) return false
     val actualWorkingType = order.optString("workingType").uppercase(Locale.US)
-    if (actualWorkingType.isNotBlank() && actualWorkingType != "MARK_PRICE") return false
+    if (actualWorkingType != "MARK_PRICE" &&
+        (signedProofRequired || actualWorkingType.isNotBlank())) return false
     val expected = expectedStop.toBigDecimalOrNull() ?: return false
     val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
     if (type != "STOP_MARKET") return false
