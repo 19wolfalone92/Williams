@@ -33,8 +33,9 @@ def signal_lifecycle(signal,owner,now,snapshot_at,current):
         if status=='FILLED':return 'FILLED'
         if status=='PARTIALLY_FILLED':return 'PARTIAL_FILL'
         if status in {'NEW','ACCEPTED','WORKING'} and owner.get('campaign_status')=='ENTRY_PENDING':
-            observed=max(owner.get('last_reconciled_ms',0),owner.get('created_at_ms',0))
-            return 'BINANCE_PENDING' if 0<observed<=now and now-observed<=120_000 else 'PENDING_UNVERIFIED'
+            # A recently persisted local intent is not signed exchange evidence.
+            observed=owner.get('last_reconciled_ms',0)
+            return 'BINANCE_PENDING' if isinstance(observed,int) and 0<observed<=now and now-observed<=120_000 else 'PENDING_UNVERIFIED'
         if 'UNKNOWN' in status or status in {'TRIGGERED','PENDING'}:return 'PENDING_UNVERIFIED'
     known=signal.get('known_at_ms',0)
     if known<=0 or known>now:return 'DETECTED'
