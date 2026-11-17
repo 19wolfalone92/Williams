@@ -162,6 +162,7 @@ class ProtectionOwnershipTest {
             .put("closePosition", true)
             .put("algoStatus", "NEW")
             .put("clientAlgoId", "W2PS_BTC_current")
+            .put("algoId", "20001")
             .put("symbol", "BTCUSDT")
             .put("positionSide", "BOTH")
             .put("workingType", "MARK_PRICE")
