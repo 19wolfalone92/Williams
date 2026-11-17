@@ -1703,9 +1703,13 @@ internal class NativeFuturesCampaignCoordinator(
                 if (exchangeStatus.isBlank()) {
                     throw IllegalStateException("Entry $clientId has unknown exchange status")
                 }
+                // Signed GET of this exact entry client id, not a position/STOP
+                // refresh, is the only pending-order observation for the cockpit.
+                val entryOrderObservedAt = clock()
                 intent.put("exchange_status", exchangeStatus)
                     .put("order_status", exchangeStatus)
-                    .put("last_reconciled_ms", clock())
+                    .put("entry_order_observed_at_ms", entryOrderObservedAt)
+                    .put("last_reconciled_ms", entryOrderObservedAt)
                 when {
                     exchangeStatus in setOf("FILLED", "FINISHED") -> {
                         if (campaignLifecycleStatus(intent) != "FILL_CONFIRMATION_PENDING" ||
