@@ -140,8 +140,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": null,
@@ -162,8 +162,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": null,
@@ -184,8 +184,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": null,
@@ -206,8 +206,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": null,
@@ -228,8 +228,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": null,
@@ -250,15 +250,16 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
         "signal_id": "TC2:BTC:FRACTAL:1",
         "order_status": "NEW",
         "campaign_status": "ENTRY_PENDING",
-        "last_reconciled_ms": 1792411200000
+        "last_reconciled_ms": 1792411200000,
+        "entry_order_observed_at_ms": 1792411200000
       },
       "now": 1792411200000,
       "snapshot_at_ms": 1792411200000,
@@ -277,15 +278,16 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
         "signal_id": "TC2:BTC:FRACTAL:1",
         "order_status": "ACCEPTED",
         "campaign_status": "ENTRY_PENDING",
-        "last_reconciled_ms": 1792411200000
+        "last_reconciled_ms": 1792411200000,
+        "entry_order_observed_at_ms": 1792411200000
       },
       "now": 1792411200000,
       "snapshot_at_ms": 1792411200000,
@@ -304,8 +306,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
@@ -331,8 +333,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
@@ -358,8 +360,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
@@ -385,8 +387,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
@@ -412,8 +414,8 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
@@ -439,14 +441,42 @@
         "formation_at_ms": 1792400400000,
         "known_at_ms": 1792411200000,
         "expires_at_ms": 1792425600000,
-        "trigger": 101.0,
-        "protective_stop": 95.0,
+        "trigger": 101,
+        "protective_stop": 95,
         "strategy_profile": "TC2_THREE_WISE_MEN"
       },
       "owner": {
         "order_status": "NEW",
         "campaign_status": "ENTRY_PENDING",
         "last_reconciled_ms": 1792411079999
+      },
+      "now": 1792411200000,
+      "snapshot_at_ms": 1792411200000,
+      "current": true,
+      "state": "PENDING_UNVERIFIED"
+    },
+    {
+      "name": "fresh_account_reconciliation_does_not_prove_entry_order",
+      "signal": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "family": "FRACTAL",
+        "type": "FRACTAL",
+        "direction": "LONG",
+        "role": "ENTRY",
+        "signal_bar_time_ms": 1792407600000,
+        "formation_at_ms": 1792400400000,
+        "known_at_ms": 1792411200000,
+        "expires_at_ms": 1792425600000,
+        "trigger": 101,
+        "protective_stop": 95,
+        "strategy_profile": "TC2_THREE_WISE_MEN"
+      },
+      "owner": {
+        "signal_id": "TC2:BTC:FRACTAL:1",
+        "order_status": "NEW",
+        "campaign_status": "ENTRY_PENDING",
+        "last_reconciled_ms": 1792411200000,
+        "entry_order_observed_at_ms": 0
       },
       "now": 1792411200000,
       "snapshot_at_ms": 1792411200000,
