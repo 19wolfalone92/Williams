@@ -90,8 +90,16 @@ class ExecutionAccumulator {
         exitPriceForUnknownFee: BigDecimal? = null
     ): Snapshot? {
         if (orderId.isBlank()) return null
+        // A malformed/zero fill is not a trade. Preserve the last valid
+        // accumulator instead of silently fabricating a fill and VWAP.
+        if (eventTime <= 0L || qty.signum() <= 0 || price.signum() <= 0)
+            return snapshot(orderId)
         val state = orders.getOrPut(orderId) { Mutable(symbol = symbol) }
-        val key = "$orderId:$tradeId:$eventTime"
+        // Binance tradeId is a stable fill identity; event time may change
+        // on WS replay. Deduplicating (tradeId,time) double-counted such fills.
+        // Old anonymous -1 receipts retain the best observable time identity.
+        val key = if(tradeId.isNotBlank() && tradeId!="-1" && tradeId!="null")
+            "$orderId:TRADE:$tradeId" else "$orderId:LEGACY:$eventTime"
         if (!state.seen.add(key)) return snapshot(orderId)
 
         state.qty = state.qty.add(qty)

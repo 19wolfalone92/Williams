@@ -117,6 +117,26 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
         .joinToString("|")
 }
 
+/** A delayed/replayed private WS receipt is evidence, never permission to
+ * rewind the durable order projection. A later signed REST reconciliation is
+ * the only financial authority; this guard protects the audit timeline. */
+internal fun privateOrderProjectionMayAdvance(
+    previousAtMs:Long, previousOrderId:String, previousExecuted:String, previousStatus:String,
+    incomingAtMs:Long, incomingOrderId:String, incomingExecuted:String, incomingStatus:String
+):Boolean {
+    val previousQty=previousExecuted.toBigDecimalOrNull() ?: return false
+    val incomingQty=incomingExecuted.toBigDecimalOrNull() ?: return false
+    if(previousAtMs<0L || incomingAtMs<=0L || incomingAtMs<previousAtMs ||
+        incomingOrderId.isBlank() ||
+        (previousOrderId.isNotBlank() && previousOrderId!=incomingOrderId) ||
+        previousQty.signum()<0 || incomingQty.signum()<0 ||
+        incomingQty.compareTo(previousQty)<0 || incomingStatus.isBlank()) return false
+    val terminal=setOf("FILLED","CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH","REJECTED")
+    if(previousStatus in terminal && incomingStatus!=previousStatus) return false
+    if(previousStatus=="PARTIALLY_FILLED" && incomingStatus=="NEW") return false
+    return true
+}
+
 /**
  * Persistent exchange/order/execution/state audit trail.
  *
@@ -1053,6 +1073,26 @@ class TradingAuditStore(context: Context) :
         order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
         order.put("raw_json", event.toString())
+        // An older WS event can arrive while the actor is catching up after
+        // restart, including just before the out-of-order REST fence fires.
+        // Store its raw receipt + execution, but NEVER replace a newer order
+        // projection or regress FILLED/terminal status or executed quantity.
+        val persisted = executionDb.query(
+            "orders", arrayOf("last_event_time","order_id","executed_qty","status"),
+            "client_order_id=?", arrayOf(clientId.ifBlank { orderId }),
+            null,null,null,"1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else JSONObject()
+                .put("at",cursor.getLong(0))
+                .put("order_id",cursor.getString(1).orEmpty())
+                .put("qty",cursor.getDouble(2).toString())
+                .put("status",cursor.getString(3).orEmpty())
+        }
+        if (persisted!=null && !privateOrderProjectionMayAdvance(
+                persisted.getLong("at"),persisted.getString("order_id"),
+                persisted.getString("qty"),persisted.getString("status"),
+                executionEventTime,orderId,payload.optString("z"),status
+            )) return
         check(executionDb.insertWithOnConflict(
             "orders",
             null,

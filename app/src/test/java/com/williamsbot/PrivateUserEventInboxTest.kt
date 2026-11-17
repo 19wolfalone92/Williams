@@ -71,6 +71,29 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun replayedOrOutOfOrderWsCannotRewindDurableOrderStatusOrFill() {
+        fun allow(oldTime:Long,oldId:String,oldQty:String,oldStatus:String,
+            at:Long,id:String,qty:String,status:String)=privateOrderProjectionMayAdvance(
+            oldTime,oldId,oldQty,oldStatus,at,id,qty,status)
+        assertTrue(allow(1_000L,"42","0","NEW",2_000L,"42","0.5","PARTIALLY_FILLED"))
+        assertTrue(allow(1_000L,"42","0.5","PARTIALLY_FILLED",
+            2_000L,"42","1","FILLED"))
+        assertFalse(allow(2_000L,"42","1","FILLED",1_000L,"42","0","NEW"))
+        assertFalse(allow(2_000L,"42","1","FILLED",3_000L,"42","1","NEW"))
+        assertFalse(allow(2_000L,"42","1","FILLED",3_000L,"42","1","CANCELED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","0.2","PARTIALLY_FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","0.5","NEW"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"999","0.5","FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","bad","FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            0L,"42","0.5","FILLED"))
+    }
+
+    @Test
     fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
         assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
         assertFalse(privateEventDrainMayReschedule(null, false, 4L, 4L))

@@ -80,6 +80,37 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun stableBinanceTradeIdentityDeduplicatesChangedWsEventTime() {
+        val a=ExecutionAccumulator()
+        val first=a.acceptFill("701","BTCUSDT","42",1_000L,BigDecimal("0.1"),
+            BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+        val replay=a.acceptFill("701","BTCUSDT","42",2_000L,BigDecimal("0.1"),
+            BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+        assertEquals(first.executedQty,replay.executedQty)
+        assertEquals(first.feeUsdt,replay.feeUsdt)
+        assertEquals(1,replay.fills)
+        val second=a.acceptFill("701","BTCUSDT","43",3_000L,BigDecimal("0.2"),
+            BigDecimal("101"),BigDecimal("0.02"),"USDT")!!
+        assertEquals(2,second.fills)
+        assertEquals("0.3",second.executedQty.stripTrailingZeros().toPlainString())
+    }
+
+    @Test
+    fun invalidZeroOrNegativeWsTradeCannotCorruptFillAccumulator() {
+        val a=ExecutionAccumulator()
+        assertEquals(null,a.acceptFill("91","BTCUSDT","1",1_000L,
+            BigDecimal("-1"),BigDecimal("100")))
+        assertEquals(null,a.acceptFill("91","BTCUSDT","1",1_000L,
+            BigDecimal("1"),BigDecimal("0")))
+        assertEquals(null,a.acceptFill("91","BTCUSDT","1",0L,
+            BigDecimal("1"),BigDecimal("100")))
+        val valid=a.acceptFill("91","BTCUSDT","1",1_000L,
+            BigDecimal("1"),BigDecimal("100"))!!
+        assertEquals(1,valid.fills)
+        assertEquals("1",valid.executedQty.toPlainString())
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")
