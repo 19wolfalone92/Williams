@@ -96,7 +96,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
         assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
     }
-    @Test fun preupgradeManagementOnlyIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
+    @Test fun preupgradeRestoredSymbolIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
         for(symbol in listOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"))
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
         for(mode in listOf("UNFILLED","PARTIAL","TRIGGERING","UNKNOWN")) {
@@ -144,7 +144,9 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("PROTECTED",protectedOwner.getString("protection_status"))
             val rejected=restarted.submitPendingEntry(plan(direction).copy(symbol=symbol))
             assertFalse(rejected.getBoolean("accepted"))
-            assertTrue(rejected.getString("blocker").contains("FUTURES_SYMBOL_MANAGEMENT_ONLY"))
+            assertTrue("An open protected campaign must prevent a duplicate: $rejected",
+                rejected.getString("blocker").isNotBlank())
+            assertFalse(rejected.getString("blocker").contains("FUTURES_SYMBOL_NOT_APPROVED"))
         }
     }
     @Test fun transportGateRejectionDoesNotPersistAPhantomPendingEntryForEitherDirection() {
