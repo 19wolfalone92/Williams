@@ -7565,20 +7565,11 @@ private class NativeEngine(
         }
         if (!dailyLossAllowsEntry) return rejectDecision(symbol,"DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED: "+lastError)
         if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
-        // Historical/scanner spread is cached read-only ranking evidence, not a
-        // current Binance executable quote. Only the fresh top-of-book below
-        // may veto NEW risk. Otherwise an old wide quote can suppress TC2
-        // entries even after the exchange spread has normalized.
-        val topOfBook = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
-            lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
-                (failure.message ?: failure.javaClass.simpleName)
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
-        val currentSpreadPct = (topOfBook.second - topOfBook.first) / topOfBook.first
-        if (!currentSpreadPct.isFinite() || currentSpreadPct !in 0.0..maxSpreadPct) {
-            lastError = "FUTURES_ENTRY_SPREAD_BLOCKED: $symbol live spread=" + currentSpreadPct
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
+        // TC2 submits deferred STOP_MARKET entries: the exchange executes
+        // only after its future CONTRACT_PRICE breakout. Present bid/ask cannot
+        // predict that future book and must not veto the H1 STOP placement.
+        // Immediate MARKET entries remain subject to executable quote checks
+        // after the selected signal has been classified below.
         val existing=futuresCampaignCoordinator.intentsSnapshot()
         val owned=latestEntryIntentIndex(existing,symbol)?.let { existing.optJSONObject(it) }
         if(owned!=null && campaignLifecycleStatus(owned)=="OPEN_PROTECTED") {
@@ -7881,6 +7872,19 @@ private class NativeEngine(
         // TC2 WM1 / WM2 / WM3 and NTD / Course preserve their H1 book
         // signal bar trigger, independent of any junior execution fractal.
         val marketReentry=profitReentry(signal) && signal.executionSemantics=="MARKET_ON_CLOSE"
+        // Only an immediate MARKET execution can be priced against the live
+        // bid/ask. For conditional STOP_MARKET the trigger is future last
+        // CONTRACT_PRICE; risk/fees/slippage are reserved independently.
+        if(marketReentry) {
+            val quote = runCatching { futuresMarketData.topOfBook(symbol) }.getOrElse { failure ->
+                lastError = "FUTURES_ENTRY_TOP_OF_BOOK_FAILED: $symbol: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
+            }
+            val blocker = futuresEntryQuoteBlocker(
+                NativeFuturesCampaignCoordinator.EntryKind.MARKET,quote.first,quote.second,maxSpreadPct)
+            if(blocker!=null) return rejectDecision(symbol,blocker)
+        }
         val reference=signal.triggerPrice
         val trigger = if(marketReentry) williamsNtdCloseEntryBound(direction.name,reference,rules.tick)
             ?: return rejectDecision(symbol,"NTD_CLOSE_BOUND_UNVERIFIED")
