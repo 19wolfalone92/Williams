@@ -98,8 +98,10 @@ class FuturesFinalTransportGateTest {
         }.build()
         val adapter = BinanceUsdMFuturesTestnetAdapter("key", "secret", client)
         try { adapter.newOrder("SANTOSUSDT", "BUY", "1", false, "W2E_OUTSIDE"); fail("Unapproved order") }
-        catch (expected: FuturesExposureNotSubmittedException) {
-            assertTrue(expected.toString(), expected.message.orEmpty().contains("FUTURES_SYMBOL_NOT_APPROVED"))
+        catch (expected: IllegalArgumentException) {
+            // The fixed 15-symbol adapter rejects even before the new-risk
+            // policy boundary: this is an independent, stricter fail-closed gate.
+            assertTrue(expected.toString(), expected.message.orEmpty().contains("outside the fixed approved USD-M Futures universe"))
         }
         assertFalse(requests.any { it.method == "POST" })
     }
