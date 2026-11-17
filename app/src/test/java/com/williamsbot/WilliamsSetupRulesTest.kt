@@ -114,6 +114,32 @@ class WilliamsSetupRulesTest {
         assertNull(exactTc2ShortFractalLevels(shortBars,3*h,3*h,5*h,0.1))
     }
 
+    @Test fun offGridShortReflectionPreservesCausalGeometryButNotOrderAuthority() {
+        val h=3_600_000L
+        val lows=listOf(118.0,117.0,115.0,116.0,115.0,116.0)
+        val originals=lows.mapIndexed { i,low ->
+            WilliamsWaveBar((i+1)*h,low+2.0,low+5.0,low,low+3.0)
+        }
+        // A non-tick-aligned reflection is a valid geometric transformation,
+        // but it is NEVER an executable source-price representation.
+        val mirrorAt=220.005
+        val mirror=originals.map { it.copy(
+            o=mirrorAt-it.o,h=mirrorAt-it.l,
+            l=mirrorAt-it.h,c=mirrorAt-it.c)
+        }
+        val teeth=List(6){104.0}
+        assertNull(selectWilliamsPendingFractal("LONG",mirror,teeth,0.1))
+        val geometric=selectWilliamsPendingFractal("LONG",mirror,teeth,0.1,
+            requireSourceTickGrid=false)!!
+        assertEquals(2,geometric.center)
+        assertEquals(5,geometric.confirmation)
+        val sourceExact=exactTc2ShortFractalLevels(originals,3*h,3*h,6*h,0.1)!!
+        assertEquals(114.9,sourceExact.trigger,1e-9)
+        assertEquals(123.1,sourceExact.protective,1e-9)
+        assertEquals(sourceExact.trigger,mirrorAt-geometric.trigger,1e-9)
+        assertEquals(sourceExact.protective,mirrorAt-geometric.protective,1e-9)
+    }
+
     @Test fun superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow() {
         val h=3_600_000L
         val lows=listOf(100.0,94.0,97.0,99.0,98.0,101.0,102.0)

@@ -22,7 +22,8 @@ internal data class WilliamsPendingFractal(
 /** Latest eligible confirmed fractal, rather than an ineligible newer one
  * masking an older still-pending level. Each plateau is one extremum group. */
 internal fun selectWilliamsPendingFractal(
-    direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double
+    direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double,
+    requireSourceTickGrid:Boolean=true
 ):WilliamsPendingFractal? {
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
         !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
@@ -66,7 +67,12 @@ internal fun selectWilliamsPendingFractal(
         val confirmation=next-1
         // The SOURCE OHLC breakout must be exactly one Binance tick, not
         // a binary-double increment (e.g., BTC 79524.8+0.1).
-        val trigger=williamsBookExactPriceTick(p,tick,above=long) ?: continue
+        // SHORT scanning reflects the original exchange series around a
+        // floating anchor. Mirrored OHLC may be OFF the Binance tick grid:
+        // its geometry can be used as a candidate, never as order prices.
+        // Only ORIGINAL exchange OHLC must pass exact tick validation.
+        val trigger=williamsBookExactPriceTick(p,tick,above=long)
+            ?: if(requireSourceTickGrid) continue else if(long) p+tick else p-tick
         // TC2 ch11 PDF pp.147-149 and NTD ch4: the live BREAKOUT level,
         // not the historic pivot extreme, must be beyond Teeth. Evaluate
         // the still-untriggered order against the current displaced red line.
@@ -76,7 +82,8 @@ internal fun selectWilliamsPendingFractal(
         val stopStart=minOf(start,maxOf(0,confirmation-4))
         val opposite=if (long) (stopStart..confirmation).minOf { bars[it].l }
             else (stopStart..confirmation).maxOf { bars[it].h }
-        val protective=williamsBookExactPriceTick(opposite,tick,above=!long) ?: continue
+        val protective=williamsBookExactPriceTick(opposite,tick,above=!long)
+            ?: if(requireSourceTickGrid) continue else if(long) opposite-tick else opposite+tick
         if (!protective.isFinite() || protective<=0 ||
             (if (long) protective>=trigger else protective<=trigger)) continue
         return WilliamsPendingFractal(i,start,confirmation,trigger,protective,teeth.last())

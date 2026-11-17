@@ -9829,7 +9829,10 @@ private class NativeEngine(
         // WM3: most recent confirmed buy fractal. The pivot defines the level, but
         // the signal timestamp is the second right-hand bar close when the
         // five-bar fractal first becomes knowable. Never backdate a decision.
-        val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
+        val fractal = if(sourceExchangePrices)
+            selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
+        else selectWilliamsPendingFractal("LONG",waveBars,teethS,tick,
+            requireSourceTickGrid=false)
         if (fractal != null) {
             val exact=if(sourceExchangePrices)
                 exactTc2LongFractalLevels(waveBars,
