@@ -2389,7 +2389,7 @@ private fun MarketChartPanel(
                 InfoRow("Количественная оценка", fmt(candidate.quantScore, 2))
                 InfoRow("Оценка риска", if (candidate.riskPct > 0.0) fmt(candidate.riskPct, 2) + "%" else "—")
                 InfoRow("Прибыль / риск", if (candidate.riskReward > 0.0) fmt(candidate.riskReward, 2) else "—")
-                InfoRow("Спред / ATR", fmt(candidate.spreadPct * 100.0, 3) + "% / " + fmt(candidate.atrPct * 100.0, 3) + "%")
+                InfoRow("Спред / ATR", (if (candidate.spreadPct.isFinite() && candidate.spreadPct >= 0.0) fmt(candidate.spreadPct * 100.0, 3) + "%" else "нет данных") + " / " + fmt(candidate.atrPct * 100.0, 3) + "%")
                 }
                 InfoRow("Обнаруженный уровень формации", fmt(candidate.entryTriggerPrice))
                 InfoRow("Защита формации до допуска", fmt(candidate.entryProtectivePrice))
@@ -2475,7 +2475,7 @@ private fun CandidateCardModern(candidate: Candidate) {
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiniMetric("ПРИБЫЛЬ/РИСК", fmt(candidate.riskReward, 2))
                 MiniMetric("ATR (волат.)", fmt(candidate.atrPct * 100, 2) + "%")
-                MiniMetric("СПРЕД", fmt(candidate.spreadPct * 100, 3) + "%")
+                MiniMetric("СПРЕД", if (candidate.spreadPct.isFinite() && candidate.spreadPct >= 0.0) fmt(candidate.spreadPct * 100, 3) + "%" else "нет данных")
                 MiniMetric("СОВПАДЕНИЕ", candidate.wiseManCount.toString() + "/3")
             }
 
