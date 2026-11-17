@@ -517,9 +517,16 @@ class FuturesWilliamsScanner:
         if atr <= 0 or atr_pct > max_atr:
             return []
 
-        spread_pct = self._spread(symbol)
-        if not (spread_pct <= float(os.getenv("MAX_SPREAD_PCT", "0.0015"))):
-            return []
+        # STOP_MARKET is armed now but executes on a FUTURE contract-price
+        # breakout. Today's bid/ask cannot price that future fill, so a wide
+        # scanner quote is an observation, never a structural TC2 entry veto.
+        # Keep missing metadata visible without failing the entire H1 scan.
+        try:
+            spread_pct = self._spread(symbol)
+            if not (0 <= spread_pct < float("inf")):
+                spread_pct = -1.0
+        except Exception:
+            spread_pct = -1.0
 
         if self.interval=="1h":
             history_error=closed_h1_history_blocker(trace_bars,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
