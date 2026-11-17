@@ -79,9 +79,22 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     marginRequire(assets.map { it.optString("asset") }.toSet().size == assets.size, "DUPLICATE_ASSET")
     val usdt = assets.singleOrNull { it.optString("asset") == "USDT" }
     marginRequire(usdt != null, "USDT_ASSET")
+    val foreignIdentity = mutableListOf<String>()
     for (row in assets.filter { it.optString("asset") != "USDT" }) {
-        for (key in listOf("walletBalance", "unrealizedProfit", "initialMargin"))
-            marginRequire(marginNumber(row.opt(key), true).signum() == 0, "FOREIGN_ASSET")
+        // Under signed single-asset mode the root envelope is USDT-only;
+        // non-USDT fee-wallet balance is not collateral for our orders.
+        val foreignWallet = marginNumber(row.opt("walletBalance"), true)
+        marginRequire(foreignWallet.signum() >= 0, "FOREIGN_ASSET")
+        for (key in listOf("unrealizedProfit", "initialMargin", "positionInitialMargin",
+            "openOrderInitialMargin", "maintMargin")) {
+            if (foreignWallet.signum() != 0)
+                marginRequire(row.has(key), "FOREIGN_ASSET_UNVERIFIED")
+            if (row.has(key) || key in listOf("unrealizedProfit", "initialMargin"))
+                marginRequire(marginNumber(row.opt(key), true).signum() == 0, "FOREIGN_ASSET")
+        }
+        if (row.has("crossUnPnl"))
+            marginRequire(marginNumber(row.opt("crossUnPnl"), true).signum() == 0, "FOREIGN_ASSET")
+        foreignIdentity += JSONArray().put(row.optString("asset")).put(canonicalMargin(foreignWallet)).toString()
     }
     marginRequire((marginNumber(usdt!!.opt("walletBalance")) - wallet).abs() <= BigDecimal("0.00000001"), "USDT_WALLET")
     val assetInitial = marginNumber(usdt.opt("initialMargin"))
@@ -153,7 +166,7 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     val confirmed = maxOf(rootInitial, assetInitial, positionMargin + confirmedOrders)
     val used = maxOf(rootInitial, assetInitial, positionMargin + maxOf(confirmedOrders, pending))
     val identity = JSONArray().put(canonicalMargin(wallet)).put(JSONArray(positionIdentity.sorted()))
-        .put(JSONArray(orderIdentity.sorted())).toString()
+        .put(JSONArray(orderIdentity.sorted())).put(JSONArray(foreignIdentity.sorted())).toString()
     return HalfMarginObservation(minOf(wallet, equity), available, confirmed, used, costNotional, identity,
         byClient, symbols, positionAmounts)
 }
