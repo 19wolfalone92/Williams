@@ -107,4 +107,33 @@ class WilliamsSignalJournalStoreTest {
         assertEquals(0,store.writes)
         assertTrue(store.values.isEmpty())
     }
+    @Test fun locallyCreatedIntentIsNeverMistakenForSignedBinancePendingOrder() {
+        val store=FakeStore()
+        val symbol="BTCUSDT"
+        val signalId="local-unknown"
+        store.values["signal_timeline_${symbol}"]=JSONObject()
+            .put("signals",JSONArray().put(sourceSignal(symbol,signalId)))
+            .put("events",JSONArray()).put("snapshot_at_ms",now).toString()
+        val local=owner(symbol,signalId,"NEW")
+            .put("last_reconciled_ms",0L).put("created_at_ms",now-100L)
+        val journal=WilliamsSignalJournal(store)
+
+        var fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
+        assertEquals(0L,fact.getLong("exchange_observed_at_ms"))
+
+        // A new local creation timestamp cannot make an old signed observation fresh.
+        local.put("last_reconciled_ms",now-120_001L)
+        fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
+
+        local.put("last_reconciled_ms",now-1_000L)
+        fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("BINANCE_PENDING",fact.getString("state"))
+        assertEquals(now-1_000L,fact.getLong("exchange_observed_at_ms"))
+    }
+
 }
