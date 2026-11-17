@@ -38,6 +38,7 @@ class WilliamsSignalJournalStoreTest {
             .put("intent_role","ENTRY").put("direction","LONG")
             .put("order_status",status).put("campaign_status","ENTRY_PENDING")
             .put("last_reconciled_ms",now-1000L)
+            .put("entry_order_observed_at_ms",now-1000L)
             .put("entry_price","100").put("protective_stop","95")
 
     @Test fun unchangedSignedReconciliationNeverRewritesTheFifteenSignalTimelines() {
@@ -115,7 +116,8 @@ class WilliamsSignalJournalStoreTest {
             .put("signals",JSONArray().put(sourceSignal(symbol,signalId)))
             .put("events",JSONArray()).put("snapshot_at_ms",now).toString()
         val local=owner(symbol,signalId,"NEW")
-            .put("last_reconciled_ms",0L).put("created_at_ms",now-100L)
+            .put("last_reconciled_ms",now-100L)
+            .put("entry_order_observed_at_ms",0L).put("created_at_ms",now-100L)
         val journal=WilliamsSignalJournal(store)
 
         var fact=journal.view(symbol,JSONArray().put(local),now)
@@ -123,13 +125,16 @@ class WilliamsSignalJournalStoreTest {
         assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
         assertEquals(0L,fact.getLong("exchange_observed_at_ms"))
 
-        // A new local creation timestamp cannot make an old signed observation fresh.
-        local.put("last_reconciled_ms",now-120_001L)
+        // A freshly signed account/position/STOP refresh still does not prove
+        // that Binance holds this specific entry client id.
+        local.put("last_reconciled_ms",now-1L)
+            .put("entry_order_observed_at_ms",now-120_001L)
         fact=journal.view(symbol,JSONArray().put(local),now)
             .getJSONArray("signals").getJSONObject(0)
         assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
+        assertEquals(now-120_001L,fact.getLong("exchange_observed_at_ms"))
 
-        local.put("last_reconciled_ms",now-1_000L)
+        local.put("entry_order_observed_at_ms",now-1_000L)
         fact=journal.view(symbol,JSONArray().put(local),now)
             .getJSONArray("signals").getJSONObject(0)
         assertEquals("BINANCE_PENDING",fact.getString("state"))
