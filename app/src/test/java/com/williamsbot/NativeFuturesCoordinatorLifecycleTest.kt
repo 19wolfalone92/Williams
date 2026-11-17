@@ -2260,6 +2260,31 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun signedProtectiveStopProofFailsClosedOnMissingExchangeFields() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val stop = JSONObject()
+                .put("symbol", "BTCUSDT").put("algoId", "12345")
+                .put("clientAlgoId", "W2PS_EXACT").put("positionSide", "BOTH")
+                .put("workingType", "MARK_PRICE")
+                .put("orderType", "STOP_MARKET").put("algoStatus", "NEW")
+                .put("side", if (direction.name == "LONG") "SELL" else "BUY")
+                .put("closePosition", "true")
+                .put("triggerPrice", if (direction.name == "LONG") "95" else "105")
+            val price = stop.getString("triggerPrice")
+            assertTrue(matchesConfirmedFuturesProtectiveStop(stop, direction.name,
+                "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
+            for (field in listOf("symbol", "algoId", "positionSide", "workingType")) {
+                val missing = JSONObject(stop.toString()).apply { remove(field) }
+                assertFalse("$direction accepted STOP without signed $field",
+                    matchesConfirmedFuturesProtectiveStop(missing, direction.name,
+                        "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
+            }
+            assertFalse(matchesConfirmedFuturesProtectiveStop(
+                JSONObject(stop.toString()).put("algoId", "0"),
+                direction.name, "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
+        }
+    }
+
     @Test fun terminalStopMustMatchExactIdentityAndHaveNoTriggeredChild() {
         val corruptions:List<(JSONObject)->Unit> = listOf(
             { it.put("symbol","ETHUSDT") }, { it.put("clientAlgoId","OTHER_CAMPAIGN") },
