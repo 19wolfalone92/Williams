@@ -83,6 +83,7 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     for (row in assets.filter { it.optString("asset") != "USDT" }) {
         // Under signed single-asset mode the root envelope is USDT-only;
         // non-USDT fee-wallet balance is not collateral for our orders.
+        marginRequire(row.optString("asset").matches(Regex("[A-Z0-9]{2,20}")), "FOREIGN_ASSET_IDENTITY")
         val foreignWallet = marginNumber(row.opt("walletBalance"), true)
         marginRequire(foreignWallet.signum() >= 0, "FOREIGN_ASSET")
         for (key in listOf("unrealizedProfit", "initialMargin", "positionInitialMargin",
