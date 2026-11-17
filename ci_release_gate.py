@@ -422,7 +422,9 @@ def main() -> None:
     # red Teeth, not the raw pivot before its +1/-1 tick breakout buffer.
     # The older pivot-based release string check incorrectly forbade this fix.
     for needle in ("trigger<=teeth.last()", "trigger>=teeth.last()", "if (value==p) { start=j;count=0 }",
-                   ".minOf { bars[it].l }-tick", "bars[it].h>=trigger", "bar.h<mouth.min()"):
+                   "val trigger=williamsBookExactPriceTick(p,tick,above=long)",
+                   "val protective=williamsBookExactPriceTick(opposite,tick,above=!long)",
+                   "val confirmation=next-1", "bars[it].h>=trigger", "bar.h<mouth.min()"):
         must(setup_source,needle,"WilliamsSetupRules.kt confirmed book setup")
     must_not(setup_source, "p<=teeth.last()", "TC2 breakout-vs-formation book contract")
     teeth_source=read("app/src/main/java/com/williamsbot/WilliamsBookH1EntryPolicy.kt")
