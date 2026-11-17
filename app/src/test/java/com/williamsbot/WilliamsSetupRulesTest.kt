@@ -57,6 +57,41 @@ class WilliamsSetupRulesTest {
         val crossed=bars+WilliamsWaveBar(6*3_600_000L,103.0,106.0,102.0,104.0)
         assertNull(selectWilliamsPendingFractal("LONG",crossed,List(crossed.size){104.0},.1))
     }
+    @Test fun tc2Figure11_1DFractalConfirmsAtSixthBarDespiteEqualFifthHigh() {
+        // Original TC2 2nd edition, PDF physical p166, Fig 11.1(D):
+        // two strictly lower highs on each side; equal fifth-bar high
+        // extends confirmation to the sixth closed bar, not a veto.
+        val h=3_600_000L
+        val highs=listOf(101.0,102.0,105.0,103.0,105.0,104.0)
+        val bars=highs.mapIndexed { i,x ->
+            WilliamsWaveBar((i+1)*h,x-2.0,x,x-5.0,x-1.0)
+        }
+        assertNull(selectWilliamsPendingFractal("LONG",bars.take(5),List(5){104.0},0.1))
+        val found=selectWilliamsPendingFractal("LONG",bars,List(6){104.0},0.1)!!
+        assertEquals(2,found.center)
+        assertEquals(5,found.confirmation)
+        assertEquals(105.1,found.trigger,1e-8)
+        val exact=exactTc2LongFractalLevels(bars,3*h,3*h,6*h,0.1)!!
+        assertEquals(105.1,exact.trigger,1e-8)
+        assertEquals(found.protective,exact.protective,1e-8)
+        assertNull(exactTc2LongFractalLevels(bars,3*h,3*h,5*h,0.1))
+        // A sixth candle crossing the trigger consumes the signal.
+        val crossed=bars.toMutableList().apply {
+            this[5]=this[5].copy(h=106.0)
+        }
+        assertNull(selectWilliamsPendingFractal("LONG",crossed,List(6){104.0},0.1))
+        fun mirror(x:WilliamsWaveBar)=x.copy(o=220-x.o,h=220-x.l,l=220-x.h,c=220-x.c)
+        val shortBars=bars.map(::mirror)
+        val short=selectWilliamsPendingFractal("SHORT",shortBars,List(6){116.0},0.1)!!
+        assertEquals(2,short.center)
+        assertEquals(5,short.confirmation)
+        assertEquals(114.9,short.trigger,1e-8)
+        val shortExact=exactTc2ShortFractalLevels(shortBars,3*h,3*h,6*h,0.1)!!
+        assertEquals(short.trigger,shortExact.trigger,1e-8)
+        assertEquals(short.protective,shortExact.protective,1e-8)
+        assertNull(exactTc2ShortFractalLevels(shortBars,3*h,3*h,5*h,0.1))
+    }
+
     @Test fun superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow() {
         val h=3_600_000L
         val lows=listOf(100.0,94.0,97.0,99.0,98.0,101.0,102.0)
