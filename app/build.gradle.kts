@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // Keep this reviewed build above the 4.64.38 installer floor even when the CI run number is lower.
-val resolvedVersionCode = maxOf(46439, ciRunNumber ?: 46439)
+val resolvedVersionCode = maxOf(46440, ciRunNumber ?: 46440)
 val sourceRevision = System.getenv("GITHUB_SHA")
     ?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: "LOCAL_UNSTAMPED"
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.64.39"
+        versionName = "4.64.40"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 
