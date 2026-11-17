@@ -285,7 +285,7 @@ def test_unknown_liquidation_protects_the_fill_without_automatic_flatten(armed_r
     for symbol in ("SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT")
 ], indirect=True)
 @pytest.mark.parametrize("mode", ["UNFILLED", "PARTIAL", "TRIGGERING", "UNKNOWN"])
-def test_ten_symbol_admission_retains_every_preupgrade_pending_liability_and_its_protection(armed_runtime, monkeypatch, mode):
+def test_restored_symbol_admission_retains_every_preupgrade_pending_liability_and_its_protection(armed_runtime, monkeypatch, mode):
     bot, exchange, armed = armed_runtime
     symbol = exchange.symbol
     cid = armed["client_order_id"]
@@ -322,8 +322,12 @@ def test_ten_symbol_admission_retains_every_preupgrade_pending_liability_and_its
                and r["algoStatus"] == "NEW" for r in exchange.algos.values())
     assert sum(m == "POST" and p.endswith("algoOrder") and not data.get("closePosition")
                for m, p, data in exchange.calls) == 1
-    with pytest.raises(RuntimeError, match="FUTURES_SYMBOL_MANAGEMENT_ONLY"):
+    # The five symbols are now permitted by the symbol gate, but this bare
+    # object is not an authenticated NEW H1 TC2 signal. No order may be placed.
+    with pytest.raises(RuntimeError, match="FUTURES_ADD_ON_SIGNAL_UNVERIFIED"):
         bot._arm_add_on(owner, type("Signal", (), {"symbol": symbol})())
+    assert sum(m == "POST" and p.endswith("algoOrder") and not data.get("closePosition")
+               for m, p, data in exchange.calls) == 1
 
 
 @pytest.mark.parametrize("armed_runtime",[{"side":"BUY","course_units":3},{"side":"SELL","course_units":3}],indirect=True)
