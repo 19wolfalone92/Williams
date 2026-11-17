@@ -108,7 +108,8 @@ class SignalJournal:
             data=self._load(symbol)
             for s in data['signals']:
                 if s['signal_id']!=signal_id:continue
-                owner=dict(order_status=str(order.get('status','')),campaign_status='ENTRY_PENDING',last_reconciled_ms=now,
+                owner=dict(order_status=str(order.get('status','')),campaign_status='ENTRY_PENDING',
+                    last_reconciled_ms=now,entry_order_observed_at_ms=now,
                     client_id=str(order.get('clientOrderId','')))
                 s['exchange_observation']=owner
                 self._event(data,s,signal_lifecycle(s,owner,now,data.get('snapshot_at_ms',0),True),'EXCHANGE',reason or owner['order_status'],now)
