@@ -1007,7 +1007,8 @@ def test_android_futures_long_and_short_readiness_uses_h1_signal_not_m5_mtf_gate
     )[0]
     assert "primaryDecisionSignal != null" in final_gate
     assert "baseCandidate.atrPct in 0.0..0.08" in final_gate
-    assert "baseCandidate.spreadPct in 0.0..1.5E-3" in final_gate or "baseCandidate.spreadPct in 0.0..0.0015" in final_gate
+    # Deferred H1 STOP_MARKET does not execute at the scanner's current spread.
+    assert "baseCandidate.spreadPct" not in final_gate
     assert "htfConfirmed &&" not in final_gate
     assert "junior != null" not in final_gate
     assert "entryInsideCorrection" not in final_gate
