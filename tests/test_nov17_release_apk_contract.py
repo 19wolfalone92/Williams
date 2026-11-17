@@ -19,7 +19,7 @@ def test_version_advances_after_46438_and_uses_stable_debug_identity():
     assert (ROOT / "VERSION").read_text().strip() == "4.64.40"
     assert "VERSION = '4.64.40'" in (ROOT / "server.py").read_text()
     assert 'versionName = "4.64.40"' in gradle
-    assert 'maxOf(46439, ciRunNumber ?: 46439)' in gradle
+    assert 'maxOf(46440, ciRunNumber ?: 46440)' in gradle
     assert 'WILLIAMS_DEBUG_KEYSTORE_B64' in workflow
     assert 'EXPECTED_SIGNER_SHA256="c177bba354724c24e9668864720e9bfdb2cb545964702903a1fa306060912de9"' in workflow
     assert '"$APKSIGNER" verify --verbose "$APK"' in workflow
