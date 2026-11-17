@@ -8,17 +8,16 @@ this policy never cancels them by symbol alone.
 """
 from trading_config import DEFAULT_FUTURES_SYMBOLS
 
-SYMBOL_POLICY = "TEN_NEW_RISK_FIFTEEN_MANAGEMENT_V1"
-NEW_RISK_SYMBOLS = (
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
-)
-MANAGEMENT_SYMBOLS = DEFAULT_FUTURES_SYMBOLS
+SYMBOL_POLICY = "FIFTEEN_NEW_RISK_FIFTEEN_MANAGEMENT_V2"
+# A single approved universe: all fifteen H1-scanned USDT pairs may apply for
+# NEW risk; TC2, reconciliation, STOP and portfolio guards remain mandatory.
+NEW_RISK_SYMBOLS = tuple(DEFAULT_FUTURES_SYMBOLS)
+MANAGEMENT_SYMBOLS = tuple(DEFAULT_FUTURES_SYMBOLS)
 
 
 def new_risk_symbol_blocker(symbol):
     # Do not normalize malformed durable identity into a different symbol.
-    return None if symbol in NEW_RISK_SYMBOLS else "FUTURES_SYMBOL_MANAGEMENT_ONLY"
+    return None if symbol in NEW_RISK_SYMBOLS else "FUTURES_SYMBOL_NOT_APPROVED"
 
 
 def symbol_policy_snapshot():
