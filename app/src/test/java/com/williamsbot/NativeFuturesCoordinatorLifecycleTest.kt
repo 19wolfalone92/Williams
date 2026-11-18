@@ -438,8 +438,13 @@ class NativeFuturesCoordinatorLifecycleTest {
                             code=400;JSONObject().put("code",rejected).put("msg","simulated protective order rejection")
                         } else {
                             val id = (algos.size + 1).toString()
+                            // Binance signed POST /algoOrder includes explicit
+                            // one-way positionSide even when the POST omitted
+                            // the default BOTH parameter. Never feed an
+                            // incomplete synthetic stop to full-coverage checks.
                             val row = JSONObject(p).put("algoId", id).put("algoStatus", "NEW")
                                 .put("orderType", p.getValue("type")).put("actualOrderId", "")
+                                .put("positionSide", p["positionSide"] ?: "BOTH")
                             algos[id] = row
                             afterAlgoMutation?.invoke(request, row)
                             if(loseProtectionReply && protective) {
