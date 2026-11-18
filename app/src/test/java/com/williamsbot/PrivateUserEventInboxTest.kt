@@ -84,6 +84,31 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun durableBinanceOrderProjectionIdentityIsSymbolScopedEvenWithoutClientId() {
+        assertEquals("BTCUSDT|7",privateFuturesOrderProjectionKey("BTCUSDT","", "7"))
+        assertEquals("ETHUSDT|7",privateFuturesOrderProjectionKey("ETHUSDT","", "7"))
+        assertNotEquals(privateFuturesOrderProjectionKey("BTCUSDT","", "7"),
+            privateFuturesOrderProjectionKey("ETHUSDT","", "7"))
+        assertEquals("BTCUSDT|W2E_SHARED",privateFuturesOrderProjectionKey(
+            "BTCUSDT","W2E_SHARED","9"))
+        assertEquals("ETHUSDT|W2E_SHARED",privateFuturesOrderProjectionKey(
+            "ETHUSDT","W2E_SHARED","9"))
+        assertNotEquals(privateFuturesOrderProjectionKey("BTCUSDT","W2E_SHARED","9"),
+            privateFuturesOrderProjectionKey("ETHUSDT","W2E_SHARED","9"))
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("","old","1")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("BTCUSDT","","")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("BTCUSDT","bad|delimiter","1")
+        }
+        assertEquals("UPDATE orders SET client_order_id = symbol || '|' || client_order_id",
+            PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL)
+    }
+
+    @Test
     fun replayedOrOutOfOrderWsCannotRewindDurableOrderStatusOrFill() {
         fun allow(oldTime:Long,oldId:String,oldQty:String,oldStatus:String,
             at:Long,id:String,qty:String,status:String)=privateOrderProjectionMayAdvance(

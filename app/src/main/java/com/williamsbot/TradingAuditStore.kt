@@ -123,6 +123,28 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
 internal fun privateBinanceTradeHasStableId(kind:String,tradeId:String):Boolean =
     kind=="TRADE" && tradeId.toLongOrNull()?.let { it>0L } == true
 
+/** Binance USD-M client-order IDs and numeric order IDs are only unique within
+ * one symbol. Historical SQLite "orders" rows used a GLOBAL primary key and
+ * could overwrite BTC with an unrelated ETH order, silently corrupting the
+ * private order-status and cumulative-fill audit projection.
+ *
+ * The external client ID remains unchanged on Binance and in raw_json.
+ * Only the internal SQLite lookup key receives this symbol namespace. */
+internal fun privateFuturesOrderProjectionKey(
+    symbol:String,clientId:String,orderId:String
+):String {
+    require(symbol.matches(Regex("[A-Z0-9]{2,24}"))) { "PRIVATE_ORDER_SYMBOL_INVALID" }
+    val owner=clientId.ifBlank { orderId }
+    require(owner.isNotBlank() && !owner.contains('|')) { "PRIVATE_ORDER_IDENTITY_INVALID" }
+    return "$symbol|$owner"
+}
+
+/** A single in-place v7→v8 rewrite preserves old forensic rows (no DROP).
+ * No existing Binance client-order ID can contain '|', so a previously
+ * unscoped record cannot be mistaken for a new scoped one. */
+internal const val PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL =
+    "UPDATE orders SET client_order_id = symbol || '|' || client_order_id"
+
 /** A delayed/replayed private WS receipt is evidence, never permission to
  * rewind the durable order projection. A later signed REST reconciliation is
  * the only financial authority; this guard protects the audit timeline. */
@@ -210,7 +232,7 @@ private fun privateEventSha256(value: String): String = MessageDigest.getInstanc
     .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 7) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 8) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
@@ -611,6 +633,9 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        // SQLiteOpenHelper already holds the upgrade transaction. Preserve
+        // historical order/execution identities and do not overwrite any row.
+        if (oldVersion < 8) db.execSQL(PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL)
         db.execSQL("""
             CREATE INDEX IF NOT EXISTS idx_executions_trade_identity
             ON executions (symbol, order_id, trade_id, execution_type)
@@ -1038,6 +1063,7 @@ class TradingAuditStore(context: Context) :
         val orderId = payload.optString("i")
         if (symbol.isBlank() || orderId.isBlank()) return
         val clientId = payload.optString("c")
+        val scopedOrderKey = privateFuturesOrderProjectionKey(symbol,clientId,orderId)
         val tradeId = payload.optString("t", "-1")
         val executionType = payload.optString("x")
         val status = payload.optString("X")
@@ -1088,7 +1114,7 @@ class TradingAuditStore(context: Context) :
         }
 
         val order = ContentValues()
-        order.put("client_order_id", clientId.ifBlank { orderId })
+        order.put("client_order_id", scopedOrderKey)
         order.put("symbol", symbol)
         order.put("order_id", orderId)
         order.put("order_list_id", payload.optString("g"))
@@ -1110,7 +1136,7 @@ class TradingAuditStore(context: Context) :
         // projection or regress FILLED/terminal status or executed quantity.
         val persisted = executionDb.query(
             "orders", arrayOf("last_event_time","order_id","executed_qty","status"),
-            "client_order_id=?", arrayOf(clientId.ifBlank { orderId }),
+            "client_order_id=?", arrayOf(scopedOrderKey),
             null,null,null,"1"
         ).use { cursor ->
             if (!cursor.moveToFirst()) null else JSONObject()
