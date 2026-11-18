@@ -1,4 +1,4 @@
-"""Pin the conservative profile while TC2 figs11.1D/11.2 remain ambiguous."""
+"""Guard causal exact-source TC2 11.1D six-bar confirmation; never peek ahead."""
 import json
 from pathlib import Path
 
@@ -32,19 +32,28 @@ def test_declared_conservative_timing_and_source_identity_are_not_rewritten(case
         got = _latest_confirmed_fractal(prefix,side=side,current_teeth=case['teeth'],
             current_close=float(prefix.iloc[-1]['close']),tick_size=.1)
         expected = case['expected']
-        if expected is None or end<=expected['confirmation']:
-            assert got is None
-        else:
-            assert got is not None
-            assert got[:2] == (expected['confirmation'],expected['center'])
-            assert prefix.iloc[expected['confirmation']][f'confirmed_{prefix_name}_group_start_index'] == expected['group_start']
-            assert got[2] == expected['pivot']
-            assert got[3] == expected['protective_extreme']
-            pivots = edition_fractals([WaveBar(*b) for b in case['bars'][:end]])
-            kind = 'HIGH' if side=='LONG' else 'LOW'
-            assert any(f.kind==kind and f.center==expected['center'] and
-                f.group_start==expected['group_start'] and
-                f.confirmation==expected['confirmation'] for f in pivots)
+        if end == len(frame):
+            if expected is None:
+                assert got is None
+            else:
+                assert got is not None
+                assert got[:2] == (expected['confirmation'],expected['center'])
+                assert prefix.iloc[expected['confirmation']][f'confirmed_{prefix_name}_group_start_index'] == expected['group_start']
+                assert got[2] == expected['pivot']
+                assert got[3] == expected['protective_extreme']
+        # An earlier prefix may be an independently valid six-bar figure
+        # even if a later equal pivot changes the final centre. A finished
+        # seven/nine-bar candle must not be used to deny that past proof.
+        if got is not None:
+            confirmation, center, pivot, _, _ = got
+            assert center+2<=confirmation<end
+            assert (prefix.iloc[confirmation][f'confirmed_{prefix_name}_center_index']
+                == center)
+            assert float(prefix.iloc[center]['high' if side=='LONG' else 'low'])==pivot
+            pivots=edition_fractals([WaveBar(*row) for row in case['bars'][:end]])
+            kind='HIGH' if side=='LONG' else 'LOW'
+            assert any(f.kind==kind and f.center==center and
+                f.confirmation==confirmation for f in pivots)
 
 
 @pytest.mark.parametrize('side',['LONG','SHORT'])

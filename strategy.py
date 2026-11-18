@@ -221,11 +221,13 @@ def calculate_indicators(df, cfg):
     x.loc[x["ao_red"] & x["ac_red"], "williams_zone"] = "RED"
 
     # Williams fractals: the centre may be a plateau of adjacent equal
-    # extremes. Two bars on each side of the whole plateau must be strictly
-    # lower (up fractal) / higher (down fractal). The anchor is the LAST bar
-    # of the equal-extreme group; confirmation is the close of the second
-    # right-hand bar. Centre markers are retrospective diagnostics only;
-    # consumers must use the explicit confirmation columns for decisions.
+    # extremes. TC2 EN Fig11.1D (physical PDF166) explicitly permits
+    # a sixth confirming bar when a fifth equals the central extremum.
+    # Exactly two STRICT right flanks must be seen; right-side equality
+    # neither qualifies nor invalidates the center. Never use a seventh
+    # or ninth future bar to revoke an as-of valid six/eight-bar signal.
+    # Two strict LEFT flanks must precede the entire equal-pivot group.
+    # Centre markers are retrospective; confirmation columns are causal.
     left = max(2, int(cfg["fractal_left"]))
     right = max(2, int(cfg["fractal_right"]))
     highs = pd.to_numeric(x["high"], errors="coerce").to_numpy(dtype=float)
@@ -283,16 +285,26 @@ def calculate_indicators(df, cfg):
         # the group's last bar; this avoids duplicate pivots for one plateau.
         high_is_group_end = anchor + 1 >= n or highs[anchor + 1] != high_value
         low_is_group_end = anchor + 1 >= n or lows[anchor + 1] != low_value
-        confirmation = anchor + right
-        if confirmation >= n:
-            continue
+        def right_confirmation(values,value,high):
+            count=0
+            for j in range(anchor+1,n):
+                later=values[j]
+                if not np.isfinite(later):
+                    return None
+                if later == value:
+                    continue  # equality counts as NEITHER right-hand flank
+                if later<value if high else later>value:
+                    count+=1
+                    if count>=right:
+                        return j
+                else:
+                    return None  # strictly higher high/lower low invalidates
+            return None
 
-        if (
-            high_is_group_end
-            and high_left_ok
-            and np.isfinite(highs[anchor+1:confirmation+1]).all()
-            and (highs[anchor+1:confirmation+1] < high_value).all()
-        ):
+        high_confirmation=right_confirmation(highs,high_value,True)
+        low_confirmation=right_confirmation(lows,low_value,False)
+        if high_is_group_end and high_left_ok and high_confirmation is not None:
+            confirmation=high_confirmation
             x.iloc[anchor, x.columns.get_loc("fractal_up")] = True
             x.iloc[anchor, x.columns.get_loc("fractal_up_group_start_index")] = high_start
             x.iloc[anchor, x.columns.get_loc("fractal_up_confirmation_index")] = confirmation
@@ -302,12 +314,8 @@ def calculate_indicators(df, cfg):
             x.iloc[confirmation, x.columns.get_loc("confirmed_up_group_start_index")] = high_start
             x.iloc[confirmation, x.columns.get_loc("confirmed_up_confirmation_index")] = confirmation
 
-        if (
-            low_is_group_end
-            and low_left_ok
-            and np.isfinite(lows[anchor+1:confirmation+1]).all()
-            and (lows[anchor+1:confirmation+1] > low_value).all()
-        ):
+        if low_is_group_end and low_left_ok and low_confirmation is not None:
+            confirmation=low_confirmation
             x.iloc[anchor, x.columns.get_loc("fractal_down")] = True
             x.iloc[anchor, x.columns.get_loc("fractal_down_group_start_index")] = low_start
             x.iloc[anchor, x.columns.get_loc("fractal_down_confirmation_index")] = confirmation
