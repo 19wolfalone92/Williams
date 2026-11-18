@@ -244,6 +244,28 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun missingOrNegativeBinanceCommissionIsNeverCertifiedAsFeeFreeFill() {
+        fun update(commission:String?) = org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE").put("T",10L)
+            .put("o",org.json.JSONObject()
+                .put("s","BTCUSDT").put("i","600").put("t","11")
+                .put("x","TRADE").put("l","0.5").put("L","100").put("T",10L)
+                .put("N","USDT").apply {
+                    if(commission!=null) put("n",commission)
+                })
+        val missing=ExecutionAccumulator().accept(update(null))!!
+        assertEquals("0.5",missing.executedQty.toPlainString())
+        assertFalse("Missing n was previously silently treated as signed zero fee",
+            missing.feeKnown)
+        val malformed=ExecutionAccumulator().accept(update("unknown"))!!
+        assertFalse(malformed.feeKnown)
+        val negative=ExecutionAccumulator().accept(update("-0.01"))!!
+        assertFalse(negative.feeKnown)
+        val actualZero=ExecutionAccumulator().accept(update("0"))!!
+        assertTrue("Actual signed numeric n=0 is a known zero fee",actualZero.feeKnown)
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")

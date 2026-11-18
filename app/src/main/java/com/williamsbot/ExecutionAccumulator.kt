@@ -78,7 +78,11 @@ class ExecutionAccumulator {
             price = decimal(payload.optString("L")),
             commission = decimal(payload.optString("n")),
             commissionAsset = payload.optString("N"),
-            exitPriceForUnknownFee = exitPriceForUnknownFee
+            exitPriceForUnknownFee = exitPriceForUnknownFee,
+            // Missing/invalid Binance commission fields were previously
+            // converted to an apparent signed, fee-free fill (zero cost).
+            commissionEvidenceKnown = payload.optString("n").toBigDecimalOrNull()
+                ?.let { it.signum()>=0 } == true
         )
     }
 
@@ -92,7 +96,8 @@ class ExecutionAccumulator {
         price: BigDecimal,
         commission: BigDecimal = BigDecimal.ZERO,
         commissionAsset: String = "",
-        exitPriceForUnknownFee: BigDecimal? = null
+        exitPriceForUnknownFee: BigDecimal? = null,
+        commissionEvidenceKnown: Boolean = true
     ): Snapshot? {
         val identity=key(symbol,orderId) ?: return null
         // A malformed/zero fill is not a trade. Preserve the last valid
@@ -110,7 +115,8 @@ class ExecutionAccumulator {
         // Unknown/anonymous trade ID has no stable deduplication across
         // changed Binance WS timestamps. Position/fees are provisional
         // until independently signed REST fill history is reconciled.
-        if(!stableTradeId) state.feeKnown=false
+        if(!stableTradeId || !commissionEvidenceKnown || commission.signum()<0)
+            state.feeKnown=false
 
         state.qty = state.qty.add(qty)
         state.quote = state.quote.add(qty.multiply(price))
