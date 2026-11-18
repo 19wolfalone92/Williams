@@ -2720,12 +2720,46 @@ private class NativeEngine(
         val oldKey = key()
         val oldSecret = secret()
         val changed = oldKey != newKey || oldSecret != newSecret
+        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
+
+        if (changed && existingIdentity) {
+            // A local FLAT UI is not evidence the OLD Binance account is
+            // safe: an old STOP entry can fill after the key was switched.
+            // In addition, v7/v8 audit rows have no account fingerprint;
+            // another key would inherit unrelated executions/fees.
+            check(!auditStore.hasUnscopedHistoricalFinancialRows()) {
+                "CREDENTIAL_ROTATION_ACCOUNT_JOURNAL_UNSCOPED: export and migrate old account financial history before rotating keys"
+            }
+            check(pendingEntries.isEmpty() && positions.isEmpty()) {
+                "CREDENTIAL_ROTATION_LOCAL_EXPOSURE_UNRESOLVED"
+            }
+            val oldIntents=futuresCampaignCoordinator.intentsSnapshot()
+            check((0 until oldIntents.length()).none { index ->
+                val row=oldIntents.optJSONObject(index)
+                row==null || isEntryCampaignReserved(row)
+            }) { "CREDENTIAL_ROTATION_DURABLE_CAMPAIGN_UNRESOLVED" }
+            check(!auditStore.hasPendingPrivateUserEvents(futuresApiKeyFingerprint(oldKey))) {
+                "CREDENTIAL_ROTATION_PRIVATE_EVENT_INBOX_PENDING"
+            }
+            // Signed old-account GETs are mandatory, even while the engine
+            // is stopped. Check BOTH sides of open-order snapshots to catch
+            // a conditional order filling during the proof window.
+            val oldAdapter=BinanceUsdMFuturesTestnetAdapter(oldKey,oldSecret,http)
+            oldAdapter.serverTime()
+            oldAdapter.requireOneWayMode()
+            val first=oldAdapter.positions()
+            val standard=oldAdapter.allOpenOrders()
+            val conditional=oldAdapter.allOpenAlgoOrders()
+            val second=oldAdapter.positions()
+            check(futuresOldAccountHasNoExposure(first,standard,conditional,second)) {
+                "CREDENTIAL_ROTATION_OLD_BINANCE_ACCOUNT_NOT_SIGNED_FLAT"
+            }
+        }
 
         // Existing working identity must never be silently replaced by a
         // possibly incorrect or offline key. With an EMPTY vault, however,
         // the operator must be able to save a new encrypted credential even
         // when Binance is temporarily unreachable after phone reboot.
-        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
         var account: JSONObject? = null
         var validationError: String? = null
         try {

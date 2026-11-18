@@ -707,6 +707,18 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
     }
 
+    /** Account-free v7/v8 trade/WS journal cannot safely be reinterpreted
+     * as another Binance account's history. Until the journal is migrated to
+     * an account-scoped schema, prevent credentials rotation if ANY account-
+     * bound execution/order/trade row exists. Does not delete old records. */
+    @Synchronized
+    fun hasUnscopedHistoricalFinancialRows():Boolean =
+        readableDatabase.rawQuery(
+            "SELECT EXISTS(SELECT 1 FROM executions LIMIT 1) " +
+                "OR EXISTS(SELECT 1 FROM orders LIMIT 1) " +
+                "OR EXISTS(SELECT 1 FROM trades LIMIT 1)",null
+        ).use { it.moveToFirst() && it.getInt(0)!=0 }
+
     @Synchronized
     fun recordRestCall(
         method: String,
