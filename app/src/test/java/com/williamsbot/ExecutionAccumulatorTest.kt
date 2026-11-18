@@ -227,6 +227,23 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun anonymousOrMalformedTradeIdNeverClaimsExactFeeEvidence() {
+        for(badId in listOf("-1","0","null","", "not-a-trade")) {
+            val a=ExecutionAccumulator()
+            val first=a.acceptFill("59","BTCUSDT",badId,100L,BigDecimal("0.1"),
+                BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+            assertFalse("$badId has no stable signed identity",first.feeKnown)
+            // A byte-for-byte timestamp duplicate does not count twice.
+            val duplicate=a.acceptFill("59","BTCUSDT",badId,100L,BigDecimal("0.1"),
+                BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+            assertEquals(1,duplicate.fills)
+        }
+        val valid=ExecutionAccumulator().acceptFill("59","BTCUSDT","125",100L,
+            BigDecimal("0.1"),BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+        assertTrue(valid.feeKnown)
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")
