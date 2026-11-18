@@ -161,7 +161,8 @@ internal fun matchesTerminalUntriggeredFuturesProtectiveStop(
         order.optString("clientAlgoId") == expectedClientId &&
         order.optString("orderType").ifBlank { order.optString("type") } == "STOP_MARKET" &&
         order.optString("side") == (if (direction == "LONG") "SELL" else "BUY") &&
-        order.optString("positionSide", "BOTH") == "BOTH" &&
+        // Missing signed mode is not proof of the old STOP's ownership.
+        order.optString("positionSide") == "BOTH" &&
         order.optString("closePosition").equals("true", true) &&
         order.optString("workingType") == "MARK_PRICE" && actual.compareTo(expected) == 0 &&
         order.optString("algoStatus").uppercase(Locale.US) in setOf("CANCELED", "REJECTED", "EXPIRED") &&

@@ -27,6 +27,34 @@ internal fun annotateNativeStopFailureResolution(
  * pyramid fills. A fixed-quantity reduce-only stop bridges the close-all swap.
  * Every POST is journaled BEFORE transport; recovery never replays an unknown POST.
  */
+/** Never infer one-way position mode from an absent signed Binance field.
+ * Both the temporary reduce-only bridge and final close-all STOP require
+ * explicit exchange identity before an old protective STOP can be canceled.
+ */
+internal fun nativeReplacementStopMatchesSignedExchangeRow(
+    row:JSONObject?,symbol:String,direction:String,id:String,stop:String,
+    quantity:BigDecimal?
+):Boolean {
+    if(row==null || symbol.isBlank() || id.isBlank() ||
+        direction !in setOf("LONG","SHORT")) return false
+    val price=stop.toBigDecimalOrNull()?.takeIf { it.signum()>0 } ?: return false
+    val actual=row.optString("triggerPrice").ifBlank { row.optString("stopPrice") }
+        .toBigDecimalOrNull() ?: return false
+    return row.optString("symbol")==symbol &&
+        row.optString("clientAlgoId")==id &&
+        row.optString("positionSide")=="BOTH" &&
+        row.optString("workingType")=="MARK_PRICE" &&
+        row.optString("orderType").ifBlank { row.optString("type") }=="STOP_MARKET" &&
+        row.optString("side")==(if(direction=="LONG") "SELL" else "BUY") &&
+        row.optString("algoId").toLongOrNull()?.let { it>0L }==true &&
+        actual.compareTo(price)==0 &&
+        isActiveFuturesProtectionStatus(row.optString("algoStatus").ifBlank { row.optString("status") }) &&
+        (if(quantity==null) row.optString("closePosition").equals("true",true)
+         else !row.optString("closePosition").equals("true",true) &&
+             row.optString("reduceOnly").equals("true",true) &&
+             row.optString("quantity").toBigDecimalOrNull()?.compareTo(quantity)==0)
+}
+
 internal class FuturesNativeStopReplacement(
     private val adapter: BinanceUsdMFuturesTestnetAdapter,
     private val clock: () -> Long,
@@ -309,17 +337,8 @@ internal class FuturesNativeStopReplacement(
     }
 
     private fun matches(row: JSONObject?, symbol: String, direction: String, id: String,
-        stop: String, quantity: BigDecimal?): Boolean = row != null &&
-        row.optString("symbol") == symbol && row.optString("clientAlgoId") == id &&
-        row.optString("positionSide", "BOTH") == "BOTH" && row.optString("workingType") == "MARK_PRICE" &&
-        row.optString("orderType", row.optString("type")) == "STOP_MARKET" &&
-        row.optString("side") == (if (direction == "LONG") "SELL" else "BUY") &&
-        row.optString("algoId").toLongOrNull()?.let { it > 0L } == true &&
-        row.optString("triggerPrice", row.optString("stopPrice")).toBigDecimalOrNull()?.compareTo(stop.toBigDecimal()) == 0 &&
-        isActiveFuturesProtectionStatus(row.optString("algoStatus", row.optString("status"))) &&
-        (if (quantity == null) row.optString("closePosition").equals("true", true)
-         else !row.optString("closePosition").equals("true", true) && row.optString("reduceOnly").equals("true", true) &&
-             row.optString("quantity").toBigDecimalOrNull()?.compareTo(quantity) == 0)
+        stop: String, quantity: BigDecimal?): Boolean =
+        nativeReplacementStopMatchesSignedExchangeRow(row,symbol,direction,id,stop,quantity)
 
     private fun terminalBridge(row: JSONObject?, symbol: String, direction: String, id: String,
         stop: String, qty: BigDecimal): Boolean = row != null &&

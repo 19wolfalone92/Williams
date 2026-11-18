@@ -56,7 +56,9 @@ internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
     for (index in 0 until rows.length()) {
         val row = rows.optJSONObject(index) ?: error("Malformed Futures position row")
         val symbol = row.optString("symbol")
-        val side = row.optString("positionSide", "BOTH")
+        // A signed position with missing positionSide is an incomplete
+        // exchange snapshot, not implicitly a one-way BOTH position.
+        val side = row.optString("positionSide")
         check(symbol.isNotBlank() && side in setOf("BOTH", "LONG", "SHORT") &&
             row.optString("positionAmt").toBigDecimalOrNull() != null && identities.add(symbol to side)) {
             "Malformed or duplicate Futures position identity/amount"
