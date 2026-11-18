@@ -258,6 +258,17 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun zeroCommissionWithUnknownAssetIsNotVerifiedFinancialEvidence() {
+        val missingAsset=ExecutionAccumulator().acceptFill("99","BTCUSDT","12",100L,
+            BigDecimal("0.1"),BigDecimal("100"),BigDecimal.ZERO,"")!!
+        assertFalse(missingAsset.feeKnown)
+        val knownZero=ExecutionAccumulator().acceptFill("99","BTCUSDT","12",100L,
+            BigDecimal("0.1"),BigDecimal("100"),BigDecimal.ZERO,"USDT")!!
+        assertTrue(knownZero.feeKnown)
+        assertEquals("0",knownZero.feeUsdt.toPlainString())
+    }
+
+    @Test
     fun missingOrNegativeBinanceCommissionIsNeverCertifiedAsFeeFreeFill() {
         fun update(commission:String?) = org.json.JSONObject()
             .put("e","ORDER_TRADE_UPDATE").put("T",10L)

@@ -776,12 +776,15 @@ class TradingAuditStore(context: Context) :
         values.put("raw_json", rawJson)
         values.put("fee_usdt", feeUsdt)
         values.put("fee_known", if (feeKnown) 1 else 0)
-        writableDatabase.insertWithOnConflict(
+        // A discarded SQLite INSERT is not a recorded execution. Escalate
+        // persistent storage failures to the supervising runtime instead of
+        // silently displaying an incomplete realized-PnL history.
+        check(writableDatabase.insertWithOnConflict(
             "trades",
             null,
             values,
             SQLiteDatabase.CONFLICT_REPLACE
-        )
+        ) > 0L) { "DURABLE_TRADE_LEDGER_WRITE_FAILED" }
     }
 
     @Synchronized

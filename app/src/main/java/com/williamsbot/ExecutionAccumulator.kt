@@ -136,7 +136,8 @@ class ExecutionAccumulator {
         // Unknown/anonymous trade ID has no stable deduplication across
         // changed Binance WS timestamps. Position/fees are provisional
         // until independently signed REST fill history is reconciled.
-        if(!stableTradeId || !commissionEvidenceKnown || commission.signum()<0)
+        if(!stableTradeId || !commissionEvidenceKnown || commission.signum()<0 ||
+            commissionAsset.isBlank())
             state.feeKnown=false
 
         state.qty = state.qty.add(qty)
