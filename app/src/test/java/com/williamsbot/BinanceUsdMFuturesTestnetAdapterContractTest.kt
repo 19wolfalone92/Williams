@@ -325,6 +325,74 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
     }
 
     @Test
+    fun hedgeToOneWayMustNotMutateAccountWithUntriggeredStandardOrAlgoEntry() {
+        for(kind in listOf("STANDARD","ALGO")) {
+            var postCount=0
+            val called=mutableListOf<String>()
+            val client=OkHttpClient.Builder().addInterceptor { chain ->
+                val req=chain.request()
+                val path=req.url.encodedPath
+                called+=req.method+" "+path
+                val body=when(path) {
+                    "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                    "/fapi/v1/positionSide/dual" -> if(req.method=="POST") {
+                        postCount++
+                        """{"code":200}"""
+                    } else """{"dualSidePosition":true}"""
+                    "/fapi/v3/positionRisk" -> "[]"
+                    "/fapi/v1/openOrders" -> if(kind=="STANDARD")
+                        """[{"symbol":"BTCUSDT","orderId":"41","status":"NEW"}]""" else "[]"
+                    "/fapi/v1/openAlgoOrders" -> if(kind=="ALGO")
+                        """[{"symbol":"BTCUSDT","algoId":"77","algoStatus":"NEW"}]""" else "[]"
+                    else -> throw AssertionError("Unexpected route $path")
+                }
+                Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200)
+                    .message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            try {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",client).requireOneWayMode()
+                fail("Pending $kind entry must veto Hedge-mode mutation")
+            } catch(expected:IllegalStateException) {
+                assertTrue(expected.message.orEmpty().contains("pending standard/algo"))
+            }
+            assertEquals(0,postCount)
+            assertTrue(called.contains("GET /fapi/v1/openOrders"))
+            assertTrue(called.contains("GET /fapi/v1/openAlgoOrders"))
+        }
+    }
+
+    @Test
+    fun hedgeModeSwitchRejectsPositionAppearingBetweenSignedReads() {
+        var positionReads=0
+        var modePosts=0
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val req=chain.request()
+            val body=when(req.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> if(req.method=="POST") {
+                    modePosts++
+                    """{"code":200}"""
+                } else """{"dualSidePosition":true}"""
+                "/fapi/v3/positionRisk" -> {
+                    positionReads++
+                    if(positionReads==1) "[]" else
+                        """[{"symbol":"BTCUSDT","positionSide":"LONG","positionAmt":"0.1"}]"""
+                }
+                "/fapi/v1/openOrders","/fapi/v1/openAlgoOrders" -> "[]"
+                else -> throw AssertionError("Unexpected route ${req.url.encodedPath}")
+            }
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200)
+                .message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key","secret",client).requireOneWayMode()
+            fail("New position between signed reads must block global mode switch")
+        } catch(_:IllegalStateException) {}
+        assertEquals(2,positionReads)
+        assertEquals(0,modePosts)
+    }
+
+    @Test
     fun malformedPositionRowsNeverLookLikeAFlatAccountDuringModeChange() {
         assertTrue(!hasLiveFuturesPosition(JSONArray()))
         assertTrue(!hasLiveFuturesPosition(JSONArray().put(JSONObject().put("positionAmt", "0"))))

@@ -51,6 +51,18 @@ internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     return false
 }
 
+/** Switching Hedge→One-way is a GLOBAL account mutation, not a
+ * read-only preflight. Flat positions alone do not prove the absence of
+ * untriggered STANDARD or ALGO orders that could fill during the mode swap.
+ * Require two signed account-wide position snapshots around independent
+ * account-wide open-order reads. Exchange-side atomicity is not implied.
+ */
+internal fun futuresOneWayModeSwitchPreflight(
+    before:JSONArray,standardOpen:JSONArray,algoOpen:JSONArray,after:JSONArray
+):Boolean = standardOpen.length()==0 && algoOpen.length()==0 &&
+    !hasLiveFuturesPosition(validateFuturesPositionSnapshot(before)) &&
+    !hasLiveFuturesPosition(validateFuturesPositionSnapshot(after))
+
 internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
     val identities = mutableSetOf<Pair<String, String>>()
     for (index in 0 until rows.length()) {
@@ -301,13 +313,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
      */
     fun requireOneWayMode() {
         if (!positionMode().optBoolean("dualSidePosition", true)) return
-        val live = positions()
-        // Never interpret malformed exchange data as a flat account. A malformed row
-        // must block mode changes, because switching Hedge/One-way with live exposure
-        // can alter the semantics of subsequent exits and protective orders.
-        val hasPosition = hasLiveFuturesPosition(live)
-        check(!hasPosition) {
-            "Futures account is in Hedge Mode with live positions; flatten/reconcile manually before switching to One-way"
+        // A Hedge-mode STOP entry remains live exposure risk even if the
+        // account's current signed position size is zero. Never mutate the
+        // global position mode while such pending intent can trigger.
+        val first=positions()
+        val standard=allOpenOrders()
+        val conditional=allOpenAlgoOrders()
+        val second=positions()
+        check(futuresOneWayModeSwitchPreflight(first,standard,conditional,second)) {
+            "Hedge to One-way blocked: signed positions or pending standard/algo orders are present"
         }
         try {
             setOneWayMode()
