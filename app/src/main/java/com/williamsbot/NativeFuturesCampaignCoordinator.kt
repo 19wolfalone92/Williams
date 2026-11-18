@@ -148,6 +148,16 @@ internal fun matchesConfirmedFuturesProtectiveStop(
 /** A terminal parent is not proof of missing protection if it already spawned
  * a child order. Bind the entire former STOP identity before granting the
  * separately revalidated emergency reduction capability. */
+/** Child execution from a signed Binance order REST GET: missing one-way
+ * mode cannot be silently assumed, especially after a conditional trigger. */
+internal fun signedFuturesEntryOrderIdentityMatches(
+    order:JSONObject,symbol:String,expectedSide:String
+):Boolean = symbol.isNotBlank() && expectedSide in setOf("BUY","SELL") &&
+    order.optString("symbol")==symbol &&
+    order.optString("side")==expectedSide &&
+    order.optString("positionSide")=="BOTH" &&
+    order.optString("clientOrderId").isNotBlank()
+
 internal fun matchesTerminalUntriggeredFuturesProtectiveStop(
     order: JSONObject?, symbol: String, direction: String,
     expectedClientId: String, expectedStop: String
@@ -1249,8 +1259,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 if (execution != null) {
                     val expectedSide = if (owner.optString("direction") == "LONG") "BUY" else "SELL"
-                    check(execution.optString("symbol") == symbol && execution.optString("side") == expectedSide &&
-                        execution.optString("positionSide", "BOTH") == "BOTH" && execution.optString("clientOrderId").isNotBlank()) {
+                    check(signedFuturesEntryOrderIdentityMatches(execution,symbol,expectedSide)) {
                         "Entry matching-engine order identity/direction mismatch"
                     }
                     val actualId = execution.optString("orderId")
@@ -2848,7 +2857,7 @@ internal class NativeFuturesCampaignCoordinator(
                             check(expectedStop != null && actualStop?.compareTo(expectedStop) == 0 &&
                                 order.optString("symbol") == symbol &&
                                 order.optString("side") == (if (intent.optString("direction") == "LONG") "SELL" else "BUY") &&
-                                order.optString("positionSide", "BOTH") == "BOTH" &&
+                                order.optString("positionSide") == "BOTH" &&
                                 order.optString("workingType") == "MARK_PRICE" &&
                                 order.optString("orderType", order.optString("type")) == "STOP_MARKET" &&
                                 isActiveFuturesProtectionStatus(order.optString("algoStatus")) &&
