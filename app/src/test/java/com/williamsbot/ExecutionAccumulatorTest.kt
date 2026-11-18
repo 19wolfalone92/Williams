@@ -170,6 +170,29 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun emptyOrWrongSymbolRestoreCannotEraseUnrelatedMatchingNumericOrderId() {
+        fun event(symbol:String,tradeId:String) = org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE").put("T",1000L)
+            .put("o",org.json.JSONObject().put("s",symbol).put("i","42")
+                .put("x","TRADE").put("t",tradeId).put("T",1000L)
+                .put("l","1").put("L","100").put("n","0").put("N","USDT"))
+        val a=ExecutionAccumulator()
+        a.accept(event("BTCUSDT","111"))
+        assertNull(a.restore("42", emptyList(), "ETHUSDT"))
+        assertNotNull(a.snapshot("42","BTCUSDT"))
+        assertNull(a.restore("42",emptyList()))
+        assertNotNull(a.snapshot("42","BTCUSDT"))
+        assertNull(a.restore("42",listOf(event("ETHUSDT","222")),"BTCUSDT"))
+        assertEquals(1,a.snapshot("42","BTCUSDT")!!.fills)
+        a.restore("42", listOf(event("ETHUSDT","222")), "ETHUSDT")
+        assertEquals(1,a.snapshot("42","BTCUSDT")!!.fills)
+        assertEquals(1,a.snapshot("42","ETHUSDT")!!.fills)
+        a.restore("42",emptyList(),"BTCUSDT")
+        assertNull(a.snapshot("42","BTCUSDT"))
+        assertNotNull(a.snapshot("42","ETHUSDT"))
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")

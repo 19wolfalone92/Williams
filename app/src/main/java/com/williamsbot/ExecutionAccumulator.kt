@@ -132,13 +132,19 @@ class ExecutionAccumulator {
     }
 
     @Synchronized
-    fun restore(orderId: String, fills: List<JSONObject>): Snapshot? {
-        if(fills.isEmpty()) { clear(orderId);return null }
+    fun restore(orderId: String, fills: List<JSONObject>, symbol:String?=null): Snapshot? {
+        // A second market can have the SAME numeric Binance order ID. A
+        // missing ETH journal must NEVER erase already-restored BTC fills.
+        if(fills.isEmpty()) {
+            if(symbol!=null) clear(orderId,symbol)
+            return null // legacy caller without symbol cannot clear any data
+        }
         val payloads=fills.map { normalizedExecutionPayload(it) ?: return null }
         val symbols=payloads.map { it.optString("s") }.toSet()
         if(symbols.size!=1 || symbols.single().isBlank() ||
+            (symbol!=null && symbols.single()!=symbol) ||
             payloads.any { it.optString("i")!=orderId || it.optString("x")!="TRADE" })
-            return null // mixed-symbol replay never wipes existing financial state
+            return null // mixed/wrong-symbol replay never wipes existing state
         val identity=key(symbols.single(),orderId) ?: return null
         orders.remove(identity)
         var result: Snapshot? = null

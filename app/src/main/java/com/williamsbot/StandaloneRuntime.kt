@@ -2180,7 +2180,8 @@ private class NativeEngine(
         identities.forEach { (symbol,orderId) ->
             executionAccumulator.restore(
                 orderId,
-                auditStore.executionEvents(orderId,symbol)
+                auditStore.executionEvents(orderId,symbol),
+                symbol
             )
         }
     }
