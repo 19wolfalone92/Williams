@@ -1928,7 +1928,12 @@ internal class NativeFuturesCampaignCoordinator(
                 val ownedProtection=signedFullStops.size==1 &&
                     matchingIntent?.optBoolean("strategy_ownership_verified",false)==true &&
                     observedOwnerId.isNotBlank() &&
-                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId
+                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId &&
+                    // A foreign/legacy CONTRACT_PRICE or missing-mode STOP
+                    // may reduce risk but is NOT the bot's signed MARK_PRICE
+                    // protection contract and cannot authorize automation.
+                    signedFullStops.single().optString("positionSide")=="BOTH" &&
+                    signedFullStops.single().optString("workingType")=="MARK_PRICE"
                 val supervision=(0 until supervisionAudit.length()).mapNotNull {
                     supervisionAudit.optJSONObject(it)
                 }.singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="ACTIVE" }
@@ -2055,11 +2060,21 @@ internal class NativeFuturesCampaignCoordinator(
                             // semantics, matching side, and a fresh protective-side mark.
                             runCatching { adapter.queryAlgoOrder(symbol, protectionId) }
                             liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                            // Recovering a missing local STOP price must
+                            // not upgrade a merely active/side-matched algo
+                            // into PROTECTED. Verify signed full-position
+                            // coverage, one-way mode and MARK_PRICE first.
                             val exchangeProtection = (0 until algos.length()).mapNotNull { j ->
                                 algos.optJSONObject(j)
                             }.firstOrNull { row ->
                                 row.optString("clientAlgoId") == protectionId &&
-                                    isProtectiveStop(row, direction)
+                                    row.optString("workingType")=="MARK_PRICE" &&
+                                    row.optString("positionSide")=="BOTH" &&
+                                    liveMark?.let { mark ->
+                                        mark.isFinite() && mark>0.0 &&
+                                            isFullPositionFuturesStop(row,symbol,direction,
+                                                position.getString("positionAmt").toBigDecimal().abs(),mark)
+                                    } == true
                             }
                             val exchangeStop = exchangeProtection?.optString("triggerPrice")
                                 ?.takeIf { it.isNotBlank() }

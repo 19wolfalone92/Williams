@@ -13,7 +13,9 @@ internal fun isFullPositionFuturesStop(
 ): Boolean {
     if (direction !in setOf("LONG", "SHORT") || positionQuantity.signum() <= 0 ||
         !referencePrice.isFinite() || referencePrice <= 0.0) return false
-    if (order.optString("symbol") != symbol || order.optString("positionSide", "BOTH") != "BOTH") return false
+    // Omitting positionSide in a signed exchange record is UNKNOWN, not
+    // evidence that this is the actual one-way BOTH position.
+    if (order.optString("symbol") != symbol || order.optString("positionSide") != "BOTH") return false
     if (order.optString("orderType", order.optString("type")) != "STOP_MARKET") return false
     if (!isActiveFuturesProtectionStatus(order.optString("algoStatus").ifBlank { order.optString("status") })) return false
     if (order.optString("side") != if (direction == "LONG") "SELL" else "BUY") return false
