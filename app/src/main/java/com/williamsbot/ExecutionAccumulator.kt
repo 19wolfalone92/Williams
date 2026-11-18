@@ -117,7 +117,7 @@ class ExecutionAccumulator {
                     state.feeUsdt = state.feeUsdt.add(commission)
                 commissionAsset == symbol.removeSuffix("USDT") ->
                     state.feeUsdt = state.feeUsdt.add(commission.multiply(price))
-                commissionAsset.isBlank() -> Unit
+                commissionAsset.isBlank() -> state.feeKnown = false
                 else -> {
                     state.feeKnown = false
                     if (exitPriceForUnknownFee != null) {

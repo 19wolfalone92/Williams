@@ -157,6 +157,19 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun positiveFeeWithoutAssetMustNeverBeReportedKnown() {
+        val a=ExecutionAccumulator()
+        val first=a.acceptFill("9","BTCUSDT","17",10L,BigDecimal("1"),
+            BigDecimal("100"),BigDecimal("0.1"),"")!!
+        assertFalse(first.feeKnown)
+        assertEquals("0",first.feeUsdt.toPlainString())
+        val second=a.acceptFill("9","BTCUSDT","18",11L,BigDecimal("1"),
+            BigDecimal("110"),BigDecimal("0.1"),"USDT")!!
+        assertFalse("UNKNOWN historical fee must remain sticky",second.feeKnown)
+        assertEquals("0.1",second.feeUsdt.toPlainString())
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")

@@ -779,43 +779,32 @@ class TradingAuditStore(context: Context) :
         closedAt: Long,
         exitPrice: Double
     ): Pair<Double, Boolean> {
-        val baseAsset = symbol.removeSuffix("USDT")
-        var feeUsdt = 0.0
-        var known = true
-
-        writableDatabase.query(
+        val ledger=FuturesTradeFeeLedger(
+            if(symbol.endsWith("USDT")) symbol.removeSuffix("USDT") else "",
+            exitPrice
+        )
+        readableDatabase.query(
             "executions",
             arrayOf(
-                "commission",
-                "commission_asset",
-                "last_price",
-                "transaction_time"
+                "order_id", "trade_id", "execution_type",
+                "commission", "commission_asset", "last_price"
             ),
             "symbol=? AND transaction_time>=? AND transaction_time<=?",
-            arrayOf(
-                symbol,
-                openedAt.toString(),
-                closedAt.toString()
-            ),
-            null,
-            null,
-            "transaction_time ASC"
+            arrayOf(symbol, openedAt.toString(), closedAt.toString()),
+            null, null, "transaction_time ASC"
         ).use { cursor ->
-            while (cursor.moveToNext()) {
-                val commission = cursor.getDouble(0)
-                if (commission <= 0.0) continue
-                val asset = cursor.getString(1) ?: ""
-                val price = cursor.getDouble(2).takeIf { it > 0.0 } ?: exitPrice
-                when (asset) {
-                    "USDT" -> feeUsdt += commission
-                    baseAsset -> feeUsdt += commission * price
-                    "" -> Unit
-                    else -> known = false
-                }
+            while(cursor.moveToNext()) {
+                ledger.add(
+                    orderId=cursor.getString(0).orEmpty(),
+                    tradeId=cursor.getString(1).orEmpty(),
+                    executionType=cursor.getString(2).orEmpty(),
+                    commission=if(cursor.isNull(3)) Double.NaN else cursor.getDouble(3),
+                    commissionAsset=cursor.getString(4).orEmpty(),
+                    fillPrice=if(cursor.isNull(5)) Double.NaN else cursor.getDouble(5)
+                )
             }
         }
-
-        return feeUsdt to known
+        return ledger.result()
     }
 
     /**
