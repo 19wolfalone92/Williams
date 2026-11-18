@@ -95,6 +95,20 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun contradictorySameTradeIdDoesNotDoubleCountButRevokesFeeCertainty() {
+        val a=ExecutionAccumulator()
+        val initial=a.acceptFill("77","BTCUSDT","123",1000L,
+            BigDecimal("1"),BigDecimal("100"),BigDecimal("0.01"),"USDT")!!
+        assertTrue(initial.feeKnown)
+        val conflicting=a.acceptFill("77","BTCUSDT","123",2000L,
+            BigDecimal("1"),BigDecimal("100"),BigDecimal("0.02"),"USDT")!!
+        assertEquals(1,conflicting.fills)
+        assertEquals("1",conflicting.executedQty.toPlainString())
+        assertEquals("0.01",conflicting.feeUsdt.toPlainString())
+        assertFalse("Conflicting signed trade replay must be audited",conflicting.feeKnown)
+    }
+
+    @Test
     fun invalidZeroOrNegativeWsTradeCannotCorruptFillAccumulator() {
         val a=ExecutionAccumulator()
         assertEquals(null,a.acceptFill("91","BTCUSDT","1",1_000L,

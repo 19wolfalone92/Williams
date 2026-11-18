@@ -799,7 +799,7 @@ class TradingAuditStore(context: Context) :
             "executions",
             arrayOf(
                 "order_id", "trade_id", "execution_type",
-                "commission", "commission_asset", "last_price"
+                "commission", "commission_asset", "last_price", "raw_json"
             ),
             "symbol=? AND transaction_time>=? AND transaction_time<=?",
             arrayOf(symbol, openedAt.toString(), closedAt.toString()),
@@ -812,7 +812,11 @@ class TradingAuditStore(context: Context) :
                     executionType=cursor.getString(2).orEmpty(),
                     commission=if(cursor.isNull(3)) Double.NaN else cursor.getDouble(3),
                     commissionAsset=cursor.getString(4).orEmpty(),
-                    fillPrice=if(cursor.isNull(5)) Double.NaN else cursor.getDouble(5)
+                    fillPrice=if(cursor.isNull(5)) Double.NaN else cursor.getDouble(5),
+                    signedRawEvidenceValid=futuresTradeFeeHasCompleteRawEvidence(
+                        if(cursor.isNull(6)) null else cursor.getString(6),
+                        symbol,cursor.getString(0).orEmpty(),cursor.getString(1).orEmpty()
+                    )
                 )
             }
         }
@@ -1085,7 +1089,13 @@ class TradingAuditStore(context: Context) :
         execution.put("order_status", status)
         execution.put("last_qty", payload.optString("l").toDoubleOrNull() ?: 0.0)
         execution.put("last_price", payload.optString("L").toDoubleOrNull() ?: 0.0)
-        execution.put("commission", payload.optString("n").toDoubleOrNull() ?: 0.0)
+        // Preserve UNKNOWN, not a fictitious zero fee, if a signed receipt
+        // lacks a finite nonnegative commission. SQLite NULL is recoverable
+        // as unverified evidence during replay and historical fee estimation.
+        val privateCommission=payload.optString("n").toDoubleOrNull()
+        if(privateCommission!=null && privateCommission.isFinite() && privateCommission>=0.0)
+            execution.put("commission",privateCommission)
+        else execution.putNull("commission")
         execution.put("commission_asset", payload.optString("N"))
         execution.put("event_time", executionEventTime)
         execution.put("transaction_time", transactionTime)

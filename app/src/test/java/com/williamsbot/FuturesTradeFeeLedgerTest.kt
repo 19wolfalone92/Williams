@@ -49,6 +49,34 @@ class FuturesTradeFeeLedgerTest {
         unknownTrade.add("10","-1","TRADE",0.1,"USDT",100.0)
         assertFalse(unknownTrade.result().second)
     }
+    @Test fun rawExchangeReceiptWithMissingCommissionCannotProveHistoricalZero() {
+        fun event(fee:String?,asset:String="USDT") = org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE").put("E",100L).put("T",99L)
+            .put("o",org.json.JSONObject()
+                .put("s","BTCUSDT").put("i","77").put("t","111")
+                .put("x","TRADE").put("T",99L)
+                .put("l","0.05").put("L","100")
+                .put("N",asset).apply { if(fee!=null) put("n",fee) }).toString()
+        assertTrue(futuresTradeFeeHasCompleteRawEvidence(
+            event("0"),"BTCUSDT","77","111"))
+        assertTrue(futuresTradeFeeHasCompleteRawEvidence(
+            event("0.01"),"BTCUSDT","77","111"))
+        for(fee in listOf(null,"not_numeric","NaN","-1","Infinity")) {
+            assertFalse("$fee should fail-closed",futuresTradeFeeHasCompleteRawEvidence(
+                event(fee),"BTCUSDT","77","111"))
+        }
+        assertFalse(futuresTradeFeeHasCompleteRawEvidence(
+            event("0",""),"BTCUSDT","77","111"))
+        assertFalse(futuresTradeFeeHasCompleteRawEvidence(
+            event("0.01"),"ETHUSDT","77","111"))
+        assertFalse(futuresTradeFeeHasCompleteRawEvidence(
+            event("0.01"),"BTCUSDT","different","111"))
+        val historical=FuturesTradeFeeLedger("BTC",100.0)
+        historical.add("77","111","TRADE",0.0,"USDT",100.0,
+            signedRawEvidenceValid=false)
+        assertFalse(historical.result().second)
+    }
+
     @Test fun duplicateTradeIdInDifferentOrdersIsIndependent() {
         val ledger=FuturesTradeFeeLedger("BTC",100.0)
         ledger.add("10","42","TRADE",0.2,"USDT",100.0)

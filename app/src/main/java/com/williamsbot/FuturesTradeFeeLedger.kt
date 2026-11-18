@@ -1,5 +1,7 @@
 package com.williamsbot
 
+import org.json.JSONObject
+
 /**
  * Financial audit of historical private Futures TRADE receipts.
  *
@@ -11,6 +13,28 @@ package com.williamsbot
  *
  * This does not authorize new exposure or mutate protective STOP orders.
  */
+/** Validate the actual raw Binance TRADE, not SQLite's historically
+ * synthesized zeros (missing n was persisted as 0 in older versions).
+ * The retained raw JSON is durable evidence without any table migration. */
+internal fun futuresTradeFeeHasCompleteRawEvidence(
+    rawJson:String?, symbol:String, orderId:String, tradeId:String
+):Boolean {
+    val raw=runCatching { JSONObject(rawJson.orEmpty()) }.getOrNull() ?: return false
+    val order=normalizedExecutionPayload(raw) ?: return false
+    val commission=order.optString("n").toDoubleOrNull()
+    val quantity=order.optString("l").toDoubleOrNull()
+    val price=order.optString("L").toDoubleOrNull()
+    return order.optString("x")=="TRADE" &&
+        order.optString("s")==symbol &&
+        order.optString("i")==orderId &&
+        order.optString("t")==tradeId &&
+        order.optLong("T",0L)>0L &&
+        commission!=null && commission.isFinite() && commission>=0.0 &&
+        quantity!=null && quantity.isFinite() && quantity>0.0 &&
+        price!=null && price.isFinite() && price>0.0 &&
+        order.optString("N").isNotBlank()
+}
+
 internal class FuturesTradeFeeLedger(
     private val baseAsset:String,
     private val fallbackExitPrice:Double
@@ -23,10 +47,12 @@ internal class FuturesTradeFeeLedger(
 
     fun add(
         orderId:String,tradeId:String,executionType:String,
-        commission:Double,commissionAsset:String,fillPrice:Double
+        commission:Double,commissionAsset:String,fillPrice:Double,
+        signedRawEvidenceValid:Boolean=true
     ) {
         if(executionType!="TRADE") return
         trades++
+        if(!signedRawEvidenceValid) known=false
         val stable=if(privateBinanceTradeHasStableId(executionType,tradeId) &&
             orderId.isNotBlank()) "$orderId:$tradeId" else null
         val proof=FeeRecord(commission,commissionAsset,fillPrice)
@@ -44,7 +70,12 @@ internal class FuturesTradeFeeLedger(
             known=false
         }
         if(!commission.isFinite() || commission<0.0) { known=false;return }
-        if(commission==0.0) return
+        if(commission==0.0) {
+            // A zero amount with absent currency could be a stored default,
+            // not the signed exchange field. Never certify zero costs.
+            if(commissionAsset.isBlank()) known=false
+            return
+        }
         val usdt = when(commissionAsset) {
             "USDT" -> commission
             baseAsset -> {

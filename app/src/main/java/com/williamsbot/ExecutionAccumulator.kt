@@ -48,6 +48,10 @@ class ExecutionAccumulator {
         val fills: Int
     )
 
+    private data class FillEvidence(
+        val qty:BigDecimal,val price:BigDecimal,val commission:BigDecimal,
+        val asset:String,val commissionKnown:Boolean
+    )
     private data class Mutable(
         var symbol: String = "",
         var qty: BigDecimal = BigDecimal.ZERO,
@@ -55,7 +59,8 @@ class ExecutionAccumulator {
         var feeUsdt: BigDecimal = BigDecimal.ZERO,
         var feeKnown: Boolean = true,
         var fills: Int = 0,
-        val seen: MutableSet<String> = mutableSetOf()
+        val seen: MutableSet<String> = mutableSetOf(),
+        val fillEvidence:MutableMap<String,FillEvidence> = mutableMapOf()
     )
 
     private data class OrderKey(val symbol:String,val id:String)
@@ -111,7 +116,23 @@ class ExecutionAccumulator {
         val stableTradeId=privateBinanceTradeHasStableId("TRADE",tradeId)
         val key = if(stableTradeId) "$orderId:TRADE:$tradeId"
             else "$orderId:LEGACY:$eventTime"
-        if (!state.seen.add(key)) return snapshot(orderId,symbol)
+        if (!state.seen.add(key)) {
+            if(stableTradeId) {
+                val prior=state.fillEvidence[key]
+                // A second WS delivery of one signed trade id with conflicting
+                // qty/price/fee cannot prove the old financial estimate. Never
+                // double-credit the position; require signed REST revalidation.
+                if(prior==null || prior.qty.compareTo(qty)!=0 ||
+                    prior.price.compareTo(price)!=0 ||
+                    prior.commission.compareTo(commission)!=0 ||
+                    prior.asset!=commissionAsset ||
+                    prior.commissionKnown!=commissionEvidenceKnown)
+                    state.feeKnown=false
+            }
+            return snapshot(orderId,symbol)
+        }
+        if(stableTradeId) state.fillEvidence[key]=FillEvidence(
+            qty,price,commission,commissionAsset,commissionEvidenceKnown)
         // Unknown/anonymous trade ID has no stable deduplication across
         // changed Binance WS timestamps. Position/fees are provisional
         // until independently signed REST fill history is reconciled.
