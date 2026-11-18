@@ -1,8 +1,7 @@
 package com.williamsbot
 
 import java.math.BigDecimal
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.*
 import org.junit.Test
 
 class ExecutionAccumulatorTest {
@@ -108,6 +107,53 @@ class ExecutionAccumulatorTest {
             BigDecimal("1"),BigDecimal("100"))!!
         assertEquals(1,valid.fills)
         assertEquals("1",valid.executedQty.toPlainString())
+    }
+
+    @Test
+    fun sameNumericOrderIdAcrossSymbolsMustNeverBlendQtyVwapOrFees() {
+        val a=ExecutionAccumulator()
+        a.acceptFill("1001","BTCUSDT","31",10L,BigDecimal("0.1"),
+            BigDecimal("100"),BigDecimal("0.001"),"USDT")
+        a.acceptFill("1001","ETHUSDT","31",11L,BigDecimal("2"),
+            BigDecimal("2000"),BigDecimal("0.2"),"USDT")
+        assertNull("Unscoped order id is ambiguous",a.snapshot("1001"))
+        val btc=a.snapshot("1001","BTCUSDT")!!
+        val eth=a.snapshot("1001","ETHUSDT")!!
+        assertEquals("BTCUSDT",btc.symbol)
+        assertEquals("ETHUSDT",eth.symbol)
+        assertEquals("0.1",btc.executedQty.toPlainString())
+        assertEquals("2",eth.executedQty.toPlainString())
+        assertEquals("0.001",btc.feeUsdt.toPlainString())
+        assertEquals("0.2",eth.feeUsdt.toPlainString())
+        assertEquals(1,btc.fills)
+        assertEquals(1,eth.fills)
+        // A legacy ambiguous clear MUST NOT erase multiple symbols.
+        a.clear("1001")
+        assertNotNull(a.snapshot("1001","BTCUSDT"))
+        assertNotNull(a.snapshot("1001","ETHUSDT"))
+        a.clear("1001","BTCUSDT")
+        assertNull(a.snapshot("1001","BTCUSDT"))
+        assertEquals("ETHUSDT",a.snapshot("1001")!!.symbol)
+        assertNull(a.acceptFill("1001","","99",12L,BigDecimal("10"),BigDecimal("5")))
+    }
+
+    @Test
+    fun restoreRejectsMixedSymbolFillHistoryWithoutWipingPriorPosition() {
+        fun trade(symbol:String,id:String,qty:String) = org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE")
+            .put("T",1_000)
+            .put("o",org.json.JSONObject().put("s",symbol).put("i","41")
+                .put("x","TRADE").put("t",id).put("T",1_000)
+                .put("l",qty).put("L","100").put("n","0").put("N","USDT"))
+        val a=ExecutionAccumulator()
+        a.accept(trade("BTCUSDT","11","1"))
+        assertNull(a.restore("41",listOf(
+            trade("BTCUSDT","12","2"),trade("ETHUSDT","12","3"))))
+        assertEquals("1",a.snapshot("41","BTCUSDT")!!.executedQty.toPlainString())
+        val replay=a.restore("41",listOf(
+            trade("BTCUSDT","11","1"),trade("BTCUSDT","12","2")))!!
+        assertEquals("3",replay.executedQty.toPlainString())
+        assertNull(a.snapshot("41","ETHUSDT"))
     }
 
     @Test
