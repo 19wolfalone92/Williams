@@ -2832,33 +2832,69 @@ private class NativeEngine(
                 else "CREDENTIALS_SAVED_BUT_EXCHANGE_RECONCILIATION_REQUIRED")
     }
 
+    @Synchronized
     fun clear(): JSONObject {
         check(!running) { "Stop the Futures runtime before deleting credentials" }
-        if (key().isNotBlank() && secret().isNotBlank()) {
-            val rows = futuresCampaignCoordinator.positionsSnapshot()
-            val open = (0 until rows.length()).any { i ->
-                val row = rows.optJSONObject(i)
-                    ?: throw IllegalStateException("Malformed Binance Futures position row while validating credential deletion")
-                val amount = row.optString("positionAmt").toDoubleOrNull()
-                    ?: throw IllegalStateException("Malformed Binance Futures position amount while validating credential deletion")
-                kotlin.math.abs(amount) > 0.0
-            }
-            val intents = futuresCampaignCoordinator.intentsSnapshot()
-            val pending = (0 until intents.length()).any { i ->
-                val intent = intents.optJSONObject(i) ?: return@any true
-                isEntryCampaignReserved(intent)
-            }
-            require(!open && !pending) { "Close/reconcile every Futures position and pending intent before deleting credentials" }
+        val oldKey=key()
+        val oldSecret=secret()
+        check(oldKey.isBlank()==oldSecret.isBlank()) {
+            "CREDENTIAL_CLEAR_KEYSTORE_IDENTITY_INCOMPLETE"
         }
-        stop()
-        check(executionStore.writeRuntimeState("[]", "[]") &&
-            executionStore.writeState("futures_campaign_intents_v2", "[]")) {
+        // No local state or cached UI can assert that an old Binance STOP
+        // entry, position or private fill has disappeared. Loss of the old key
+        // MUST NOT silently delete a reserved durable campaign identity.
+        check(pendingEntries.isEmpty() && positions.isEmpty()) {
+            "CREDENTIAL_CLEAR_LOCAL_POSITION_OR_ORDER_UNRESOLVED"
+        }
+        val intents=futuresCampaignCoordinator.intentsSnapshot()
+        check((0 until intents.length()).none { i ->
+            val row=intents.optJSONObject(i)
+            row==null || isEntryCampaignReserved(row)
+        }) { "CREDENTIAL_CLEAR_DURABLE_CAMPAIGN_UNRESOLVED" }
+
+        fun verifyOldAccountFlat() {
+            if(oldKey.isBlank()) {
+                check(intents.length()==0 && !auditStore.hasUnscopedHistoricalFinancialRows()) {
+                    "CREDENTIAL_CLEAR_MISSING_OLD_KEY_WITH_UNSCOPED_HISTORY"
+                }
+                return
+            }
+            check(!auditStore.hasPendingPrivateUserEvents(futuresApiKeyFingerprint(oldKey))) {
+                "CREDENTIAL_CLEAR_PRIVATE_INBOX_PENDING"
+            }
+            val adapter=BinanceUsdMFuturesTestnetAdapter(oldKey,oldSecret,http)
+            adapter.serverTime()
+            adapter.requireOneWayMode()
+            val before=adapter.positions()
+            val standard=adapter.allOpenOrders()
+            val conditional=adapter.allOpenAlgoOrders()
+            val after=adapter.positions()
+            check(futuresOldAccountHasNoExposure(before,standard,conditional,after)) {
+                "CREDENTIAL_CLEAR_OLD_ACCOUNT_NOT_SIGNED_FLAT"
+            }
+        }
+        verifyOldAccountFlat()
+        // The old clear() IGNORED the returned stopped=false and wiped the
+        // last usable API key even after uncertain order cancellation.
+        val stopped=stop()
+        check(stopped.optBoolean("stopped",false)) {
+            "CREDENTIAL_CLEAR_RUNTIME_STOP_UNVERIFIED: "+stopped.optString("reason")
+        }
+        // Binance conditional entries can fill during shutdown: require a
+        // second independent signed account-wide proof after stop() as well.
+        verifyOldAccountFlat()
+        // Keep terminal financial campaign history and v8 execution rows as
+        // forensic evidence. Clearing credentials is not consent to delete
+        // signed fill/STOP ledger identities.
+        check(executionStore.writeRuntimeState("[]", "[]")) {
             "SQLite clear failed; persisted Futures state was preserved"
         }
-        prefs.edit().remove("api_key").remove("api_secret")
+        check(prefs.edit().remove("api_key").remove("api_secret")
             .remove("positions_json").remove("pending_entries_json")
             .remove("futures_campaign_intents_v2")
-            .putBoolean("auto_run", false).commit()
+            .putBoolean("auto_run", false).commit()) {
+            "CREDENTIAL_CLEAR_ENCRYPTED_PREFERENCES_COMMIT_FAILED"
+        }
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
