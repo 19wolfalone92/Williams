@@ -135,7 +135,7 @@ class WilliamsSetupRulesTest {
         assertEquals(5,geometric.confirmation)
         val sourceExact=exactTc2ShortFractalLevels(originals,3*h,3*h,6*h,0.1)!!
         assertEquals(114.9,sourceExact.trigger,1e-9)
-        assertEquals(123.1,sourceExact.protective,1e-9)
+        assertEquals(122.1,sourceExact.protective,1e-9) // max source HIGH within confirmed stop window
         assertEquals(sourceExact.trigger,mirrorAt-geometric.trigger,1e-9)
         assertEquals(sourceExact.protective,mirrorAt-geometric.protective,1e-9)
     }
