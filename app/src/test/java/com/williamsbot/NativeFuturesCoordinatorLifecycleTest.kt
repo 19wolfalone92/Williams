@@ -476,9 +476,14 @@ class NativeFuturesCoordinatorLifecycleTest {
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
                     quantity=(quantity.toString().toBigDecimal()+(if(p["side"]=="BUY") added else -added).toString().toBigDecimal()).toDouble()
+                    // Signed Binance GET /fapi/v1/order provides the actual
+                    // one-way positionSide. Our mock must not omit this field,
+                    // or a legitimate signed entry fill will fail the new P0
+                    // identity check because the fixture is incomplete.
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
+                        .put("positionSide","BOTH")
                     orders[id]=row
                     if(loseAdditionReply) { code=503;JSONObject().put("code",-1000).put("msg","lost addition reply") } else row
                 } else if (request.method == "POST") {
