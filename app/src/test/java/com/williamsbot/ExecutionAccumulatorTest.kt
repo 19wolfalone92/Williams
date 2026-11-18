@@ -193,6 +193,40 @@ class ExecutionAccumulatorTest {
     }
 
     @Test
+    fun rebootReplayIncludesTradeFillsEvenWithNewCancelAndExpiredStatusReceipts() {
+        fun event(exec:String,tradeId:String,qty:String,price:String)=org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE").put("E",1001L).put("T",1000L)
+            .put("o",org.json.JSONObject().put("s","BTCUSDT").put("i","902")
+                .put("x",exec).put("X",if(exec=="TRADE") "FILLED" else exec)
+                .put("t",tradeId).put("T",1000L)
+                .put("l",qty).put("L",price).put("n","0.01").put("N","USDT"))
+        val a=ExecutionAccumulator()
+        val all=listOf(event("NEW","-1","0","0"),
+            event("TRADE","45","0.1","200"),
+            event("CANCELED","-1","0","0"),
+            event("TRADE","45","0.1","200")) // same fill, new duplicate receipt
+        val state=a.restore("902",all,"BTCUSDT")!!
+        assertEquals(1,state.fills)
+        assertEquals("0.1",state.executedQty.toPlainString())
+        assertEquals("20.0",state.executedQuote.toPlainString())
+        assertEquals("0.01",state.feeUsdt.toPlainString())
+    }
+
+    @Test
+    fun malformedRebootFillIsRejectedBeforeReplacingPreviouslyValidProof() {
+        fun event(qty:String) = org.json.JSONObject()
+            .put("e","ORDER_TRADE_UPDATE").put("T",1000L)
+            .put("o",org.json.JSONObject().put("s","BTCUSDT").put("i","72")
+                .put("x","TRADE").put("t","37").put("T",1000L)
+                .put("l",qty).put("L","100").put("n","0").put("N","USDT"))
+        val a=ExecutionAccumulator()
+        assertEquals(1,a.restore("72",listOf(event("1")),"BTCUSDT")!!.fills)
+        assertNull(a.restore("72",listOf(event("1"),event("-2")),"BTCUSDT"))
+        assertEquals(1,a.snapshot("72","BTCUSDT")!!.fills)
+        assertEquals("1",a.snapshot("72","BTCUSDT")!!.executedQty.toPlainString())
+    }
+
+    @Test
     fun ignoresDuplicateExecutionEvent() {
         val a = ExecutionAccumulator()
         a.acceptFill("9","ETHUSDT","4",10,BigDecimal("1"),BigDecimal("2000"),BigDecimal("0.1"),"USDT")

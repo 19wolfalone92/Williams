@@ -143,13 +143,33 @@ class ExecutionAccumulator {
         val symbols=payloads.map { it.optString("s") }.toSet()
         if(symbols.size!=1 || symbols.single().isBlank() ||
             (symbol!=null && symbols.single()!=symbol) ||
-            payloads.any { it.optString("i")!=orderId || it.optString("x")!="TRADE" })
+            payloads.any { it.optString("i")!=orderId })
             return null // mixed/wrong-symbol replay never wipes existing state
         val identity=key(symbols.single(),orderId) ?: return null
-        orders.remove(identity)
-        var result: Snapshot? = null
-        fills.forEach { result = accept(it) }
-        return result
+        // Durable journal also includes NEW, CANCELED, EXPIRED and other
+        // order-status receipts. Those are NOT fills. Rejecting a history
+        // merely because NEW preceded TRADE discarded ALL restored fills.
+        val tradePayloads=payloads.filter { it.optString("x").uppercase()=="TRADE" }
+        if(tradePayloads.isEmpty()) {
+            if(symbol!=null) orders.remove(identity)
+            return null
+        }
+        // Validate the ENTIRE set before replacing a live in-memory state:
+        // a corrupt final row must not erase previously reconstructed fills.
+        for (fill in tradePayloads) {
+            val q=fill.optString("l").toBigDecimalOrNull()
+            val p=fill.optString("L").toBigDecimalOrNull()
+            val t=fill.optLong("T",fill.optLong("E",0L))
+            if(q==null || q.signum()<=0 || p==null || p.signum()<=0 || t<=0L)
+                return null
+        }
+        val candidate=ExecutionAccumulator()
+        for(fill in tradePayloads) {
+            if(candidate.accept(fill)==null) return null
+        }
+        val staged=candidate.orders[identity] ?: return null
+        orders[identity]=staged
+        return snapshot(orderId,symbols.single())
     }
 
     @Synchronized
