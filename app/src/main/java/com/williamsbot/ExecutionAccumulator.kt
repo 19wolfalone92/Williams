@@ -31,7 +31,8 @@ internal fun normalizedExecutionPayload(event: JSONObject): JSONObject? {
 /**
  * Persistent-friendly execution accumulator.
  *
- * Every TRADE execution is accumulated by orderId using exact decimal
+ * Every TRADE execution is scoped to the (symbol, orderId) pair.
+ * Binance Futures order IDs may overlap across independent symbols.
  * arithmetic. Cumulative quantity/quote and VWAP are derived from fills,
  * rather than trusting a single websocket message.
  */
@@ -57,13 +58,17 @@ class ExecutionAccumulator {
         val seen: MutableSet<String> = mutableSetOf()
     )
 
-    private val orders = mutableMapOf<String, Mutable>()
+    private data class OrderKey(val symbol:String,val id:String)
+    private val orders = mutableMapOf<OrderKey, Mutable>()
+    private fun key(symbol:String,orderId:String):OrderKey? =
+        if(symbol.isNotBlank() && orderId.isNotBlank()) OrderKey(symbol,orderId) else null
 
     @Synchronized
     fun accept(event: JSONObject, exitPriceForUnknownFee: BigDecimal? = null): Snapshot? {
         val payload = normalizedExecutionPayload(event) ?: return null
         val orderId = payload.optString("i").ifBlank { return null }
-        if (payload.optString("x").uppercase() != "TRADE") return snapshot(orderId)
+        if (payload.optString("x").uppercase() != "TRADE")
+            return snapshot(orderId,payload.optString("s"))
         return acceptFill(
             orderId = orderId,
             symbol = payload.optString("s"),
@@ -89,18 +94,18 @@ class ExecutionAccumulator {
         commissionAsset: String = "",
         exitPriceForUnknownFee: BigDecimal? = null
     ): Snapshot? {
-        if (orderId.isBlank()) return null
+        val identity=key(symbol,orderId) ?: return null
         // A malformed/zero fill is not a trade. Preserve the last valid
         // accumulator instead of silently fabricating a fill and VWAP.
         if (eventTime <= 0L || qty.signum() <= 0 || price.signum() <= 0)
-            return snapshot(orderId)
-        val state = orders.getOrPut(orderId) { Mutable(symbol = symbol) }
+            return snapshot(orderId,symbol)
+        val state = orders.getOrPut(identity) { Mutable(symbol = symbol) }
         // Binance tradeId is a stable fill identity; event time may change
         // on WS replay. Deduplicating (tradeId,time) double-counted such fills.
         // Old anonymous -1 receipts retain the best observable time identity.
         val key = if(tradeId.isNotBlank() && tradeId!="-1" && tradeId!="null")
             "$orderId:TRADE:$tradeId" else "$orderId:LEGACY:$eventTime"
-        if (!state.seen.add(key)) return snapshot(orderId)
+        if (!state.seen.add(key)) return snapshot(orderId,symbol)
 
         state.qty = state.qty.add(qty)
         state.quote = state.quote.add(qty.multiply(price))
@@ -123,20 +128,35 @@ class ExecutionAccumulator {
                 }
             }
         }
-        return snapshot(orderId)
+        return snapshot(orderId,symbol)
     }
 
     @Synchronized
     fun restore(orderId: String, fills: List<JSONObject>): Snapshot? {
-        orders.remove(orderId)
+        if(fills.isEmpty()) { clear(orderId);return null }
+        val payloads=fills.map { normalizedExecutionPayload(it) ?: return null }
+        val symbols=payloads.map { it.optString("s") }.toSet()
+        if(symbols.size!=1 || symbols.single().isBlank() ||
+            payloads.any { it.optString("i")!=orderId || it.optString("x")!="TRADE" })
+            return null // mixed-symbol replay never wipes existing financial state
+        val identity=key(symbols.single(),orderId) ?: return null
+        orders.remove(identity)
         var result: Snapshot? = null
         fills.forEach { result = accept(it) }
         return result
     }
 
     @Synchronized
-    fun snapshot(orderId: String): Snapshot? {
-        val state = orders[orderId] ?: return null
+    fun snapshot(orderId: String,symbol:String?=null): Snapshot? {
+        // Historical orderId-only lookups are accepted solely when unique.
+        val state = if(symbol!=null) {
+            val identity=key(symbol,orderId) ?: return null
+            orders[identity] ?: return null
+        } else {
+            val matches=orders.filterKeys { it.id==orderId }.values
+            if(matches.size!=1) return null
+            matches.single()
+        }
         val vwap =
             if (state.qty > BigDecimal.ZERO)
                 state.quote.divide(state.qty, 18, RoundingMode.HALF_UP)
@@ -154,8 +174,9 @@ class ExecutionAccumulator {
     }
 
     @Synchronized
-    fun clear(orderId: String) {
-        orders.remove(orderId)
+    fun clear(orderId: String,symbol:String?=null) {
+        if(symbol!=null) key(symbol,orderId)?.let { orders.remove(it) }
+        else orders.keys.singleOrNull { it.id==orderId }?.let { orders.remove(it) }
     }
 
     private fun decimal(value: String): BigDecimal =
