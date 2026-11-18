@@ -822,13 +822,16 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    fun executionEvents(orderId: String): List<JSONObject> {
+    fun executionEvents(orderId: String, symbol: String): List<JSONObject> {
+        require(orderId.isNotBlank() && symbol.isNotBlank()) {
+            "EXECUTION_HISTORY_REQUIRES_SYMBOL_AND_ORDER_ID"
+        }
         val rows = mutableListOf<JSONObject>()
-        writableDatabase.query(
+        readableDatabase.query(
             "executions",
             arrayOf("raw_json"),
-            "order_id=?",
-            arrayOf(orderId),
+            "order_id=? AND symbol=?",
+            arrayOf(orderId, symbol),
             null,
             null,
             "transaction_time ASC, event_time ASC"

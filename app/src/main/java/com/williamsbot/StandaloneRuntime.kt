@@ -2170,12 +2170,17 @@ private class NativeEngine(
     }
 
     private fun restoreExecutionAccumulators() {
-        val orderIds = mutableSetOf<String>()
-        positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
-        orderIds.forEach { orderId ->
+        // A Binance order ID is scoped to its SYMBOL; the previous global
+        // order-id set combined unrelated BTC/ETH fills after reboot and
+        // silently damaged position fee/VWAP reconstruction.
+        val identities=positionList().mapNotNull { position ->
+            if(position.entryOrderId.isBlank() || position.symbol.isBlank()) null
+            else position.symbol to position.entryOrderId
+        }.distinct()
+        identities.forEach { (symbol,orderId) ->
             executionAccumulator.restore(
                 orderId,
-                auditStore.executionEvents(orderId)
+                auditStore.executionEvents(orderId,symbol)
             )
         }
     }
