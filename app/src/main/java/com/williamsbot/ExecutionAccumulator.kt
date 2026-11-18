@@ -103,9 +103,14 @@ class ExecutionAccumulator {
         // Binance tradeId is a stable fill identity; event time may change
         // on WS replay. Deduplicating (tradeId,time) double-counted such fills.
         // Old anonymous -1 receipts retain the best observable time identity.
-        val key = if(tradeId.isNotBlank() && tradeId!="-1" && tradeId!="null")
-            "$orderId:TRADE:$tradeId" else "$orderId:LEGACY:$eventTime"
+        val stableTradeId=privateBinanceTradeHasStableId("TRADE",tradeId)
+        val key = if(stableTradeId) "$orderId:TRADE:$tradeId"
+            else "$orderId:LEGACY:$eventTime"
         if (!state.seen.add(key)) return snapshot(orderId,symbol)
+        // Unknown/anonymous trade ID has no stable deduplication across
+        // changed Binance WS timestamps. Position/fees are provisional
+        // until independently signed REST fill history is reconciled.
+        if(!stableTradeId) state.feeKnown=false
 
         state.qty = state.qty.add(qty)
         state.quote = state.quote.add(qty.multiply(price))
