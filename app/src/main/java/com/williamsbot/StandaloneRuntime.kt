@@ -2722,11 +2722,11 @@ private class NativeEngine(
         val changed = oldKey != newKey || oldSecret != newSecret
         val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
 
-        if (changed && existingIdentity) {
-            // A local FLAT UI is not evidence the OLD Binance account is
-            // safe: an old STOP entry can fill after the key was switched.
-            // In addition, v7/v8 audit rows have no account fingerprint;
-            // another key would inherit unrelated executions/fees.
+        if (changed) {
+            // Never let a missing/unreadable old Keystore value (oldKey="")
+            // silently reassign a still-present SQLite financial journal
+            // or a durable conditional-entry campaign to another account.
+            // Account provenance is NOT recoverable from an empty API key.
             check(!auditStore.hasUnscopedHistoricalFinancialRows()) {
                 "CREDENTIAL_ROTATION_ACCOUNT_JOURNAL_UNSCOPED: export and migrate old account financial history before rotating keys"
             }
@@ -2738,6 +2738,10 @@ private class NativeEngine(
                 val row=oldIntents.optJSONObject(index)
                 row==null || isEntryCampaignReserved(row)
             }) { "CREDENTIAL_ROTATION_DURABLE_CAMPAIGN_UNRESOLVED" }
+        }
+        if (changed && existingIdentity) {
+            // A local FLAT UI is not evidence the OLD Binance account is
+            // safe: an old STOP entry can fill after the key was switched.
             check(!auditStore.hasPendingPrivateUserEvents(futuresApiKeyFingerprint(oldKey))) {
                 "CREDENTIAL_ROTATION_PRIVATE_EVENT_INBOX_PENDING"
             }
