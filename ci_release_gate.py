@@ -103,6 +103,7 @@ def main() -> None:
     must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
     must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
     must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
+    must(cfg, "max_consecutive_losses=3,", "trading_config.py")
     for needle in (
         'market: str = "futures_usdt"',
         "futures_leverage: int = 2",
