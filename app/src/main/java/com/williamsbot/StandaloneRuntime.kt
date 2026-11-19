@@ -65,6 +65,12 @@ object StandaloneRuntime {
         return requireNotNull(server).diagnosticsReport()
     }
 
+    /** In-process bounded cockpit JSON: avoid String serialization + reparsing OOM. */
+    fun cockpitSnapshot(context: Context, includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject {
+        start(context)
+        return requireNotNull(server).cockpitSnapshot(includeDecisionTraces, selectedSymbol)
+    }
+
     fun autostart(context: Context) {
         start(context)
         server?.autostart()
@@ -114,6 +120,11 @@ object StandaloneRuntime {
  * Seed SMMA with the first-period simple average, matching the canonical Python
  * indicator implementation. Unwarmed values are null rather than guessed.
  */
+internal fun cockpitTraceSymbols(primarySymbol: String, selectedSymbol: String?): Set<String> {
+    val approved = BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS
+    return listOfNotNull(primarySymbol, selectedSymbol).filter { it in approved }.toSet()
+}
+
 internal fun smmaSeededValues(values: List<Double>, period: Int): List<Double?> {
     require(period > 0) { "SMMA period must be positive" }
     val output = MutableList<Double?>(values.size) { null }
@@ -1447,6 +1458,9 @@ private class StandaloneServer(private val context: Context) {
 
     fun diagnosticsReport(): JSONObject = e().diagnostics()
 
+    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
+        e().cockpit(includeDecisionTraces = includeDecisionTraces, selectedSymbol = selectedSymbol)
+
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
         // Only state+execution_enabled are used below; do not build 15 per-symbol
@@ -1553,8 +1567,10 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/settings" ->
                 x.settings().toString()
 
+            // Legacy String transport must never serialize the full 15-symbol trace.
+            // An actual OutOfMemoryError was observed at this route.
             method == "GET" && path == "/api/v1/cockpit" ->
-                x.cockpit(includeDecisionTraces = !params["compact"].equals("true", true)).toString()
+                x.cockpit(includeDecisionTraces = false).toString()
 
             method == "POST" && path == "/api/v1/ui/event" ->
                 x.uiEvent(JSONObject(body)).toString()
@@ -11057,13 +11073,14 @@ private class NativeEngine(
             campaignReady=campaignEngineEnabled && finalSignal,waveHierarchy=hierarchy)
     }
 
-    private fun decisionTraceSnapshot(fullHistory:Boolean=false):JSONObject {
+    private fun decisionTraceSnapshot(fullHistory:Boolean=false, selectedSymbols:Set<String>?=null):JSONObject {
         val journal=runCatching { futuresCampaignCoordinator.intentsSnapshot() }
         val intents=journal.getOrDefault(JSONArray())
         val audit=runCatching { auditStore.latestEntryPassportEvents() }
         val passportNow=futuresMarketData.cachedExchangeNowMs()
         val passportClockFresh=futuresMarketData.clockSnapshot().optBoolean("fresh",false)
-        return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.forEach { symbol ->
+        return JSONObject().apply { BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS
+            .filter { selectedSymbols == null || it in selectedSymbols }.forEach { symbol ->
             val trace=runCatching { JSONObject(executionStore.readState("decision_trace_"+symbol).orEmpty()) }
                 .getOrDefault(JSONObject().put("symbol",symbol).put("state","NOT_ANALYSED"))
             val execution=runCatching { JSONObject(executionStore.readState("decision_execution_"+symbol).orEmpty()) }.getOrNull()
@@ -11916,7 +11933,8 @@ private class NativeEngine(
         return scannerSnapshot()
     }
 
-    fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true): JSONObject {
+    fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true,
+               selectedTraceSymbols: Set<String>? = null): JSONObject {
         if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
             runCatching {
                 primaryCandles =
@@ -12046,7 +12064,7 @@ private class NativeEngine(
             .put("last_reconciliation_result", lastReconciliationResult)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
-            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }
+            .apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot(selectedSymbols = selectedTraceSymbols)) }
             .put("futures_leverage", futuresLeverageSettings.defaultLeverage)
             .put("futures_symbol_leverages", futuresLeverageSettings.resolvedJson())
             .put("futures_leverage_settings", futuresLeverageSettings.toJson())
@@ -12782,11 +12800,12 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(includeDecisionTraces: Boolean = true): JSONObject {
-        // The default complete API remains compatible for decision/market screens.
-        // Main dashboard/trades need live signed safety fields but not a costly
-        // 15-symbol replay of journal/passport/history SQLite objects every 5s.
-        val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces)
+    fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null): JSONObject {
+        // Cockpit only needs the selected chart and current primary symbol traces.
+        // The complete 15-symbol forensic history is kept in the separate ZIP.
+        val scope = if (includeDecisionTraces) cockpitTraceSymbols(primarySymbol, selectedSymbol) else null
+        val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces,
+            selectedTraceSymbols = scope)
         val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
