@@ -49,7 +49,21 @@ internal object WilliamsEntryFailureForensics {
         else -> "Inspect original local execution log and signed exchange state before attempting any new order."
     }
 
-    fun summarize(events: JSONArray?, capturedAtMs: Long): JSONObject {
+    /**
+     * An event retained in the 24h ring buffer may predate the installed APK.
+     * The last Android PACKAGE_REPLACED_OBSERVED event only bounds observations;
+     * it does NOT prove that the newly installed version executed a trade.
+     */
+    fun lastObservedPackageUpdateAt(events: JSONArray?, capturedAtMs: Long): Long {
+        if (capturedAtMs <= 0L) return 0L
+        return CockpitDiagnostics.rows(events).asSequence()
+            .filter { it.optString("code") == "PACKAGE_REPLACED_OBSERVED" }
+            .map { it.optLong("at_ms", 0L) }
+            .filter { it > 0L && it <= capturedAtMs }
+            .maxOrNull() ?: 0L
+    }
+
+    fun summarize(events: JSONArray?, capturedAtMs: Long, packageUpdateAtMs: Long = 0L): JSONObject {
         val counts = linkedMapOf<String, Int>()
         val samples = JSONArray()
         val sampleKeys = mutableSetOf<String>()
@@ -58,6 +72,10 @@ internal object WilliamsEntryFailureForensics {
         var uncertainPending = 0
         var validEvents = 0
         var latestRejectionAtMs = 0L
+        val knownUpdate = packageUpdateAtMs > 0L && packageUpdateAtMs <= capturedAtMs
+        var rejectedSinceUpdate = 0
+        var clockFailuresSinceUpdate = 0
+        var unknownSubmissionsSinceUpdate = 0
         val rows = CockpitDiagnostics.rows(events)
             .sortedByDescending { it.optLong("E") }
         for (row in rows) {
@@ -73,12 +91,19 @@ internal object WilliamsEntryFailureForensics {
             val isClockFailure = event == "COCKPIT_RECONCILIATION" &&
                 detail.contains("ok=false") && rootCause(detail) == "SIGNED_EXCHANGE_CLOCK_UNVERIFIED"
             if (event == "COCKPIT_EXECUTION" && state == "ENTRY_PENDING" &&
-                detail.contains("SUBMISSION_UNKNOWN")) uncertainPending++
+                detail.contains("SUBMISSION_UNKNOWN")) {
+                uncertainPending++
+                if (knownUpdate && at >= packageUpdateAtMs) unknownSubmissionsSinceUpdate++
+            }
             if (!isRejection && !isClockFailure) continue
             if (isRejection) {
                 rejected++
+                if (knownUpdate && at >= packageUpdateAtMs) rejectedSinceUpdate++
                 latestRejectionAtMs = maxOf(latestRejectionAtMs, at)
-            } else clockFailures++
+            } else {
+                clockFailures++
+                if (knownUpdate && at >= packageUpdateAtMs) clockFailuresSinceUpdate++
+            }
             val cause = rootCause(detail)
             counts[cause] = (counts[cause] ?: 0) + 1
             val symbol = row.optString("symbol").takeIf {
@@ -110,6 +135,17 @@ internal object WilliamsEntryFailureForensics {
             .put("clock_reconciliation_failure_count_24h", clockFailures)
             .put("submission_unknown_observation_count_24h", uncertainPending)
             .put("latest_rejected_order_response_at_ms", latestRejectionAtMs)
+            .put("last_package_update_observed_at_ms",
+                if (knownUpdate) packageUpdateAtMs else JSONObject.NULL)
+            .put("post_package_update_counts_available", knownUpdate)
+            .put("rejected_order_response_count_since_package_update",
+                if (knownUpdate) rejectedSinceUpdate else JSONObject.NULL)
+            .put("clock_failure_count_since_package_update",
+                if (knownUpdate) clockFailuresSinceUpdate else JSONObject.NULL)
+            .put("submission_unknown_count_since_package_update",
+                if (knownUpdate) unknownSubmissionsSinceUpdate else JSONObject.NULL)
+            .put("latest_rejection_predates_package_update",
+                knownUpdate && latestRejectionAtMs > 0L && latestRejectionAtMs < packageUpdateAtMs)
             .put("occurrence_counts", occurrences)
             .put("representative_failures", samples)
             .put("interpretation",
