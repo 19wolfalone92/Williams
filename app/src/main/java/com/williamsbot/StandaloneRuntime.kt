@@ -4568,7 +4568,10 @@ private class NativeEngine(
         }
 
         val sourceLimit = if (frame == sourceFrame) {
-            limit
+            // Binance's newest native kline may still be FORMING and is never
+            // accepted as a closed bar. Request two extra so a 160-closed-bar
+            // M15 audit does not remain 159 new + one stale, gapped SQLite bar.
+            (limit + 2).coerceAtMost(1000)
         } else {
             (
                 limit *
