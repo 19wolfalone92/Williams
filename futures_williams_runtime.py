@@ -841,34 +841,35 @@ class FuturesWilliamsRuntime:
         if self.max_trades_day and trades_today >= self.max_trades_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
 
-        # SQLite date('now') is UTC. Restrict the streak to the same
-        # exchange risk day and independently count EVERY negative close,
-        # not just 3 consecutive losses: the operator's daily policy is
-        # 3% drawdown OR 3 losing closed campaigns (whichever comes first).
+        # The second entry-only stop is THREE CONSECUTIVE verified losing
+        # closes, not three arbitrary losses with winning trades in between.
+        # The session is exchange UTC; after the streak reaches three, keep
+        # the entry block for the remainder of that UTC day even if an earlier
+        # protected position later exits at a profit.
         recent = self.db.conn.execute(
             "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL "
-            "AND exit_time >= date('now') ORDER BY id DESC"
+            "AND exit_time >= date('now') ORDER BY exit_time ASC, id ASC"
         ).fetchall()
         verified_pnl = []
         for row in recent:
             try:
                 value = float(row["pnl"])
             except (TypeError, ValueError):
-                return False, "FUTURES_DAILY_LOSS_TRADES_UNVERIFIED"
+                return False, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
             if not math.isfinite(value):
-                return False, "FUTURES_DAILY_LOSS_TRADES_UNVERIFIED"
+                return False, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
             verified_pnl.append(value)
-        daily_losing_trades = sum(value < 0 for value in verified_pnl)
-        if daily_losing_trades >= 3:
-            return False, f"MAX_DAILY_LOSS_TRADES reached: {daily_losing_trades}"
-        losses = 0
+        streak = 0
+        hard_pause = False
         for value in verified_pnl:
-            if value < 0:
-                losses += 1
-            else:
-                break
-        if self.max_consecutive_losses and losses >= self.max_consecutive_losses:
-            return False, f"MAX_CONSECUTIVE_LOSSES reached: {losses}"
+            streak = streak + 1 if value < 0 else 0
+            if streak >= 3:
+                hard_pause = True
+        if hard_pause:
+            return False, "MAX_CONSECUTIVE_LOSSES reached: 3"
+
+        if self.max_consecutive_losses and streak >= self.max_consecutive_losses:
+            return False, f"MAX_CONSECUTIVE_LOSSES reached: {streak}"
 
         if self.cooldown_minutes and recent and recent[0]["exit_time"]:
             try:
