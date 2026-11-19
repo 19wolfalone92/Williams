@@ -876,7 +876,10 @@ internal class NativeFuturesCampaignCoordinator(
         val setupContext: String = "",
         val reentryOwnerId:String="",
         val signalId:String="",
-        val reversalOwnerId:String=""
+        val reversalOwnerId:String="",
+        // Explicit only for book-authenticated first TC2 entries. Generic,
+        // operator and legacy callers retain their exact configured leverage.
+        val allowSafeLeverageFallback:Boolean=false
     )
 
     @Volatile var state: State = State.UNINITIALIZED
@@ -3390,8 +3393,9 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     private fun submitPendingEntryLocked(submittedPlan: EntryPlan): JSONObject = synchronized(lock) {
-        // May reduce leverage only for a flat initial TC2 entry, never raise it.
-        // The persisted intent and all exchange writes use this effective plan.
+        // An explicitly authorized *book-native* initial TC2 entry may reduce
+        // leverage, never raise it. Other callers keep their configured value.
+        // The persisted intent and every exchange write use this effective plan.
         var plan = submittedPlan
         williamsNewRiskSymbolBlocker(plan.symbol)?.let {
             return@synchronized safePreflightRejection(it)
@@ -3526,7 +3530,8 @@ internal class NativeFuturesCampaignCoordinator(
         val totalPlannedNotional = plan.quantity.toDouble() * plan.entryPrice.toDouble() +
             (if (isAddition) primary!!.getString("confirmed_position_qty").toDouble() *
                 plan.entryPrice.toDouble() else 0.0)
-        if (!isAddition && !isReversal && plan.strategyProfile == williamsTc2Profile &&
+        if (plan.allowSafeLeverageFallback && !isAddition && !isReversal &&
+            plan.strategyProfile == williamsTc2Profile &&
             plan.signalType != "OPERATOR_FORCED_DIRECTION") {
             val safer = futuresSafeEntryLeverage(
                 signedLeverageBrackets, plan.symbol, plan.leverage,
