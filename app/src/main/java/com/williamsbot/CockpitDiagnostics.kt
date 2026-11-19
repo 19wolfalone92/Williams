@@ -73,12 +73,17 @@ internal object CockpitDiagnostics {
         val dailyCap = status.optDouble("max_daily_loss_pct", Double.NaN)
         val dailyCapText = if (dailyCap.isFinite() && dailyCap > 0.0)
             String.format(java.util.Locale.US, "%.0f%%", dailyCap * 100.0) else "НЕИЗВЕСТЕН"
+        // JSONObject.NULL is not an active loss latch: optString(NULL) returns
+        // the literal text "null", which is nonblank. That previously made
+        // a verified 0/3 streak appear as a 3/3 trading suspension on screen.
+        val explicitLossStreakBlocker = (status.opt("consecutive_loss_blocker") as? String)
+            ?.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
         val resetExplanation = when {
             !status.optBoolean("consecutive_losses_available", false) ->
                 "Серия закрытий не подтверждена Binance; новые входы должны ожидать сверки."
             dailyBaselineMissing ->
                 "Не подтверждена суточная база риска Binance; новые входы должны ожидать сверки."
-            streak >= 3 || status.optString("consecutive_loss_blocker").isNotBlank() ->
+            streak >= 3 || explicitLossStreakBlocker != null ->
                 "Три подряд убыточных закрытия: новые входы заблокированы до следующей подтверждённой сессии UTC. Сопровождение сохраняется."
             else ->
                 "Текущая серия: $streak из 3 подряд убыточных закрытий. Дневной лимит: $dailyCapText. " +
