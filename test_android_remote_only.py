@@ -207,7 +207,7 @@ def test_android_daily_loss_is_rechecked_at_order_admission():
     assert "val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }" in runtime
     assert "if (!dailyLossAllowsEntry) return" in runtime
     assert "FUTURES_DAILY_LOSS_CHECK_FAILED" in runtime
-    assert 'if (lossPct >= 0.03)' in runtime
+    assert 'if (lossPct >= futuresDailyLossLimitPct)' in runtime
 
 
 def test_android_reversal_htf_gate_matches_python_campaign_contract():
@@ -383,8 +383,8 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
     assert "val maxTotalRiskPct: Double = 0.006" in main
     assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
-    assert '.put("max_daily_loss_pct", 0.03)' in runtime
-    assert "if (lossPct >= 0.03)" in runtime
+    assert '.put("max_daily_loss_pct", futuresDailyLossLimitPct)' in runtime
+    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
     assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked" in runtime
 
 

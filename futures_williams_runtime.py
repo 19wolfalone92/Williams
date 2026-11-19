@@ -694,9 +694,11 @@ class FuturesWilliamsRuntime:
         self.poll_seconds = max(5, int(os.getenv("POLL_SECONDS", "20")))
         self.risk_per_trade_pct = self.config.risk_per_trade_pct
         self.max_daily_loss_pct = self.config.max_daily_loss_pct
-        self.max_trades_day = int(os.getenv("MAX_TRADES_PER_DAY", "5"))
+        # Futures policy has NO arbitrary daily trade-count cutoff; use 3% / 3 consecutive losses.
+        self.max_trades_day = 0
         self.max_consecutive_losses = self.config.max_consecutive_losses
-        self.cooldown_minutes = self.config.cooldown_minutes
+        # A profitable exit or one/two losses may not impose an unstated 30-minute risk pause.
+        self.cooldown_minutes = 0
         self.min_risk_reward = 0.0
         self.atr_period = self.config.atr_period
         self.max_atr_pct = self.config.max_atr_pct
@@ -831,42 +833,36 @@ class FuturesWilliamsRuntime:
         return max(0.0, (capacity - reserved) / equity)
 
     def _daily_entry_guard(self):
-        """Block new risk after daily loss, loss streak or cooldown limits."""
-        from datetime import datetime, timezone
-        trades_today = int(
-            self.db.conn.execute(
-                "SELECT COUNT(*) FROM trades WHERE entry_time >= date('now')"
-            ).fetchone()[0] or 0
-        )
-        if self.max_trades_day and trades_today >= self.max_trades_day:
-            return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
-
+        """Block new risk on proven daily drawdown or three consecutive losses."""
+        # The second entry-only stop is THREE CONSECUTIVE verified losing
+        # closes, not three arbitrary losses with winning trades in between.
+        # The session is exchange UTC; after the streak reaches three, keep
+        # the entry block for the remainder of that UTC day even if an earlier
+        # protected position later exits at a profit.
         recent = self.db.conn.execute(
-            "SELECT pnl, exit_time FROM trades "
-            "WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL "
+            "AND exit_time >= date('now') ORDER BY exit_time ASC, id ASC"
         ).fetchall()
-        losses = 0
+        verified_pnl = []
         for row in recent:
-            if float(row["pnl"] or 0) < 0:
-                losses += 1
-            else:
-                break
-        if self.max_consecutive_losses and losses >= self.max_consecutive_losses:
-            return False, f"MAX_CONSECUTIVE_LOSSES reached: {losses}"
-
-        if self.cooldown_minutes and recent and recent[0]["exit_time"]:
             try:
-                stamp = datetime.fromisoformat(
-                    str(recent[0]["exit_time"]).replace("Z", "+00:00")
-                )
-                elapsed = (datetime.now(timezone.utc) - stamp).total_seconds()
-                if elapsed < self.cooldown_minutes * 60:
-                    return False, (
-                        f"COOLDOWN active: "
-                        f"{self.cooldown_minutes * 60 - elapsed:.0f}s remaining"
-                    )
-            except ValueError:
-                pass
+                value = float(row["pnl"])
+            except (TypeError, ValueError):
+                return False, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+            if not math.isfinite(value):
+                return False, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+            verified_pnl.append(value)
+        streak = 0
+        hard_pause = False
+        for value in verified_pnl:
+            streak = streak + 1 if value < 0 else 0
+            if streak >= 3:
+                hard_pause = True
+        if hard_pause:
+            return False, "MAX_CONSECUTIVE_LOSSES reached: 3"
+
+        if self.max_consecutive_losses and streak >= self.max_consecutive_losses:
+            return False, f"MAX_CONSECUTIVE_LOSSES reached: {streak}"
 
         equity = self._equity()
         unrealized = 0.0

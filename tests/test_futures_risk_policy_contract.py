@@ -16,7 +16,7 @@ def test_default_futures_profile_allows_fifteen_symbols_and_caps_daily_loss_at_t
     assert config.campaign_risk_limit_pct == 0.006
     assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 10
-    assert config.max_consecutive_losses == 2
+    assert config.max_consecutive_losses == 3
 
 
 def test_environment_cannot_raise_daily_loss_or_approved_futures_symbol_limit():
@@ -28,7 +28,8 @@ def test_environment_cannot_raise_daily_loss_or_approved_futures_symbol_limit():
 
     assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 10
-    assert config.max_consecutive_losses == 2
+    assert config.max_consecutive_losses == 3
+    assert TradingConfig.from_env({"MAX_CONSECUTIVE_LOSSES": "2"}).max_consecutive_losses == 3
 
 
 def test_operator_may_choose_a_lower_futures_slot_limit():

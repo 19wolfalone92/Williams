@@ -176,7 +176,7 @@ internal fun startupHistoryPolicy(
     "4h" -> StartupHistoryPolicy(120, 45)
     "6h" -> StartupHistoryPolicy(240, 140)
     "1d" -> StartupHistoryPolicy(90, 45)
-    "15m" -> StartupHistoryPolicy(90, 45)
+    "15m" -> StartupHistoryPolicy(160, 45) // Match the independent 160-bar M15 passport; repair older SQLite gaps.
     else -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
 }
 
@@ -1987,6 +1987,9 @@ private class NativeEngine(
     private val campaignExecutionTimeframe: String
         get() = "1h"
     private val campaignRiskLimitPct = 0.006
+    // User-approved daily entry halt. The separate 5% emergency equity kill
+    // switch stays independent and must not replace this tighter risk gate.
+    private val futuresDailyLossLimitPct = 0.03
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
@@ -2281,13 +2284,19 @@ private class NativeEngine(
     // The loss-streak UTC day must follow Binance Futures server time, not
     // the Android timezone or an ahead-of-server handset clock (-1021).
     // A stale clock fails closed for NEW entries, without stopping H1 analysis.
-    private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
-        if(!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) {
-            FuturesLossStreakDecision(false,0,false,null,"FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
-        } else evaluateFuturesLossStreak(
-            tradeRows = TradeJournal.trades(prefs),
-            nowMs = futuresMarketData.cachedExchangeNowMs()
-        )
+    private fun futuresLossStreakGuard(): FuturesLossStreakDecision {
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) {
+            return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
+        }
+        val journal = TradeJournal.tradesForRisk(prefs)
+            ?: return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_JOURNAL_UNVERIFIED")
+        val now = futuresMarketData.cachedExchangeNowMs()
+        val coordinatorIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrNull()
+            ?: return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_INTENTS_UNVERIFIED")
+        val backlog = futuresUnjournalledClosedCampaignBlocker(coordinatorIntents, journal, now)
+        if (backlog != null) return FuturesLossStreakDecision(false, 0, false, null, backlog)
+        return evaluateFuturesLossStreak(tradeRows = journal, nowMs = now)
+    }
 
     private fun dailyEntryHalt(
         nowMs:Long=futuresMarketData.cachedExchangeNowMs(),
@@ -4433,6 +4442,24 @@ private class NativeEngine(
         return futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)
     }
 
+    /** Cached candle COUNT and freshness are not proof of continuous H1/M15 data.
+     * Do not let a 160-row SQLite series with one missing interval bypass REST
+     * repair merely because its last bar is fresh. No speculative gap filling.
+     */
+    private fun cachedFixedFrameKlinesValid(candles: List<CandleN>, frame: String): Boolean {
+        if (candles.isEmpty()) return false
+        val ohlcvValid = candles.all { bar ->
+            bar.o.isFinite() && bar.h.isFinite() && bar.l.isFinite() &&
+                bar.c.isFinite() && bar.v.isFinite() && bar.o > 0.0 &&
+                bar.l > 0.0 && bar.h >= maxOf(bar.o, bar.c, bar.l) &&
+                bar.l <= minOf(bar.o, bar.c, bar.h) && bar.v >= 0.0
+        }
+        if (!ohlcvValid) return false
+        if (frame == "1M") return true // Variable-length calendar months.
+        val step = frameSeconds(frame) * 1000L
+        return futuresClosedCandleTimesContiguous(candles.map { it.t }, step)
+    }
+
     private fun fetchCandles(
         symbol: String,
         frame: String,
@@ -4449,7 +4476,8 @@ private class NativeEngine(
                 val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
-                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs) &&
+                    cachedFixedFrameKlinesValid(closed.takeLast(limit), frame)) {
                     // A WebSocket warm cache is not proof that the SQLite history
                     // journal is populated. Startup readiness checks both the live
                     // closed-bar count and persisted count; returning here without
@@ -4474,8 +4502,16 @@ private class NativeEngine(
                     val persistedCount = historyStore.count(normalizedSymbol, frame)
                     // Do not rewrite 150-180 candles into SQLite on every scan tick.
                     // Persist the initial warm cache once, then only newly closed bars.
-                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime) {
-                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L) {
+                    val sqliteRecent = if (persistedCount >= limit.toLong())
+                        historyStore.loadRecent(normalizedSymbol, frame, limit).map {
+                            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+                        } else emptyList()
+                    val sqliteHasGapsOrCorruption = sqliteRecent.isNotEmpty() &&
+                        !cachedFixedFrameKlinesValid(sqliteRecent, frame)
+                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime ||
+                        sqliteHasGapsOrCorruption) {
+                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L ||
+                            sqliteHasGapsOrCorruption) {
                             initialRows
                         } else {
                             closed.filter { it.t > persistedNewest }.map(toStored)
@@ -4499,7 +4535,8 @@ private class NativeEngine(
         val persistentCandles = persistent.map {
             CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
-        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame)) {
+        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame) &&
+            cachedFixedFrameKlinesValid(persistentCandles, frame)) {
             candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
             liveCandleCache[liveKey] = persistentCandles.toMutableList()
             return persistentCandles
@@ -4510,7 +4547,8 @@ private class NativeEngine(
         if (cached != null &&
             cached.second.size >= limit &&
             now - cached.first < scanCacheTtlMs &&
-            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs())
+            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs()) &&
+            cachedFixedFrameKlinesValid(cached.second.takeLast(limit), frame)
         ) {
             return cached.second.takeLast(limit)
         }
@@ -4530,7 +4568,10 @@ private class NativeEngine(
         }
 
         val sourceLimit = if (frame == sourceFrame) {
-            limit
+            // Binance's newest native kline may still be FORMING and is never
+            // accepted as a closed bar. Request two extra so a 160-closed-bar
+            // M15 audit does not remain 159 new + one stale, gapped SQLite bar.
+            (limit + 2).coerceAtMost(1000)
         } else {
             (
                 limit *
@@ -4585,6 +4626,12 @@ private class NativeEngine(
                     volume = volume
                 )
             }
+        }
+
+        // Never persist or accept an incomplete REST series as healed history.
+        // A short outage leaves the old SQLite evidence intact for diagnosis.
+        if (source.isNotEmpty() && !cachedFixedFrameKlinesValid(source, sourceFrame)) {
+            throw IllegalStateException("FUTURES_NATIVE_CANDLE_SEQUENCE_GAPPED_OR_INVALID: $normalizedSymbol/$sourceFrame")
         }
 
         // This is the missing persistence step diagnosed by the Log branch:
@@ -5393,7 +5440,7 @@ private class NativeEngine(
                 paused = true
                 // Distinguish an automatic, recoverable daily-baseline pause
                 // from the operator's explicit pause. Never erase either risk
-                // evidence or the original 3% daily loss limit.
+                // evidence or the 3% daily entry-loss limit.
                 check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
                     "Could not durably pause trades while the UTC baseline is unknown"
                 }
@@ -5524,7 +5571,7 @@ private class NativeEngine(
             }
             return false
         }
-        if (lossPct >= 0.03) {
+        if (lossPct >= futuresDailyLossLimitPct) {
             // A daily entry limit must expire with its UTC session. Do not turn
             // it into the operator's indefinite pause or disable runtime auto-run.
             if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
@@ -11250,6 +11297,7 @@ private class NativeEngine(
                 }
                 val closed=source.filter { it.t>0L && it.t<=passportObservedAt-ms }.takeLast(160)
                 val result=williamsMarketReading(closed,marketPhase,frame)
+                    .put("history_integrity",WilliamsHistoryIntegrity.inspect(closed,frame,passportObservedAt))
                     .put("closed_candle_count",closed.size)
                     .put("source",if(frame=="1h") "H1_CLOSED_SCANNER" else "SQLITE_CLOSED_HISTORY")
                 val lastClose=closed.lastOrNull()?.t?.plus(ms) ?: 0L
@@ -11262,6 +11310,8 @@ private class NativeEngine(
                 JSONObject().put("schema","WILLIAMS_CHART_READING_V1")
                     .put("frame",frame).put("state","HISTORY_READ_FAILED")
                     .put("error_type",failure.javaClass.simpleName)
+                    .put("history_integrity",JSONObject().put("root_cause","HISTORY_READ_FAILED")
+                        .put("read_only",true).put("can_authorize_entries",false))
                     .put("can_place_orders",false).put("can_close",false)
             }
             passports.put(frame,reading)
@@ -11741,57 +11791,9 @@ private class NativeEngine(
     }
 
 
-    private fun dailyTradeGuard(): JSONObject {
-        val start = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        val rows = TradeJournal.trades(prefs)
-        var count = 0
-        var pnl = 0.0
-        var consecutiveLosses = 0
-        var lastLossAt = 0L
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt < start || row.optString("status") != "CLOSED") continue
-            count++
-            pnl += row.optDouble("pnl", 0.0)
-        }
-        val closedToday = mutableListOf<JSONObject>()
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt >= start && row.optString("status") == "CLOSED") {
-                closedToday.add(row)
-            }
-        }
-        closedToday.sortByDescending { it.optLong("closed_at", 0L) }
-        for (row in closedToday) {
-            when (row.optString("outcome").uppercase(Locale.US)) {
-                "LOSS" -> {
-                    consecutiveLosses++
-                    if (lastLossAt == 0L) lastLossAt = row.optLong("closed_at", 0L)
-                }
-                "WIN", "BREAKEVEN" -> break
-            }
-        }
-        val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
-            System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
-        val hardPause = consecutiveLosses >= 3
-        return JSONObject()
-            .put("trades_today", count)
-            .put("daily_pnl_usdt", pnl)
-            .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
-            .put("mode", when {
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
-    }
+    // Legacy local-time dailyTradeGuard removed: it stopped trades after only
+    // two losses and was never wired to the canonical exchange-UTC Futures gate.
+    // Risk admission is owned by futuresLossStreakGuard() and dailyEntryHalt().
 
     private fun startRestDataProbe() {
         if (restProbeRunning) return
@@ -12137,7 +12139,7 @@ private class NativeEngine(
             .put("stop_loss_pct", if (firstPosition == null || firstPosition.optString("stop").toDoubleOrNull()?.let { it > 0.0 } != true) JSONObject.NULL else kotlin.math.abs((firstPosition.optString("entry").toDoubleOrNull() ?: 0.0) - (firstPosition.optString("stop").toDoubleOrNull() ?: 0.0)) / (firstPosition.optString("entry").toDoubleOrNull() ?: 1.0))
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("force_testnet_mode", forceTestnetMode)
             .put("daily_risk_baseline_source", dailyRiskBaselineSource(fast = fast))
             .put("trades_today", futuresTradesToday)
@@ -12242,7 +12244,7 @@ private class NativeEngine(
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("decision_timeframe", "1h")
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("futures_runtime", futuresRuntimeStatus)
             .put("futures_reconciliation_in_progress", reconciliationObserved)
             .put("futures_reconciliation_last_result", lastReconciliationResult)
@@ -12760,7 +12762,7 @@ private class NativeEngine(
                 "; last_symbols_scanned=" + scanObservedCount + "; age_ms=" + scannerProgressAgeMs
         )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=0.03; baseline readiness is checked separately by daily_risk_baseline")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=" + futuresDailyLossLimitPct + "; baseline readiness is checked separately by daily_risk_baseline")
         test(
             "self_heal_contract",
             "runtime",
@@ -13106,6 +13108,8 @@ private class NativeEngine(
                         .put("closed_candle_count", reading?.optInt("closed_candle_count") ?: 0)
                         .put("as_of_close_ms", reading?.optLong("as_of_close_ms") ?: 0L)
                         .put("source", reading?.optString("source") ?: "UNKNOWN")
+                        .put("history_integrity", reading?.optJSONObject("history_integrity")
+                            ?: JSONObject().put("root_cause","NOT_AVAILABLE"))
                         .put("can_place_orders", false).put("can_close", false))
                 }
             }
@@ -13418,6 +13422,11 @@ private class NativeEngine(
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
+            .put("entry_failure_forensics", WilliamsEntryFailureForensics.summarize(
+                timelineSnapshot, observedAtMs,
+                WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(
+                    statusSnapshot.optJSONObject("android_runtime")
+                        ?.optJSONObject("continuity")?.optJSONArray("events"), observedAtMs)))
             .put("futures_fill_stop_timing",fillStopTiming)
             .put("tc2_recent_exit_forensics",tc2RecentExits)
             .put("tc2_book_exit_hierarchy",WilliamsTc2ExitHierarchyLens.assess(
@@ -13793,11 +13802,11 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("max_trades_per_day", JSONObject.NULL)
             .put("max_trades_per_day_policy", "NO_FIXED_COUNT_CAP; entries remain subject to campaign risk, daily loss, and Execution Gate")
-            .put("max_consecutive_losses", 2)
-            .put("cooldown_minutes", 30)
+            .put("max_consecutive_losses", 3)
+            .put("cooldown_minutes", 0) // No unapproved auto-pause after a win or two losses
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
             .put("max_atr_pct", 0.08)

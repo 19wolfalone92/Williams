@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import java.util.Calendar
@@ -61,7 +62,7 @@ object TradeJournal {
             .put("mae_pct", 0.0)
             .put("mfe_r", 0.0)
             .put("mae_r", 0.0)
-        val all = read(prefs)
+        val all = readStrict(prefs)
         all.put(row)
         trim(all)
         write(prefs, all)
@@ -75,7 +76,7 @@ object TradeJournal {
         price: Double
     ) {
         if (price <= 0.0) return
-        val all = read(prefs)
+        val all = readStrict(prefs)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -106,7 +107,7 @@ object TradeJournal {
         reason: String,
         order: JSONObject? = null
     ) {
-        val all = read(prefs)
+        val all = readStrict(prefs)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -227,7 +228,7 @@ object TradeJournal {
             .put("fill_count", fillCount)
             .put("classification", if (complete) "exchange_reconciled" else "fees_incomplete")
             .put("post_trade_classification", if (complete) "exchange_reconciled" else "fees_incomplete")
-        val all = read(prefs)
+        val all = readStrict(prefs)
         var replaced = false
         for (i in 0 until all.length()) {
             val old = all.optJSONObject(i) ?: continue
@@ -239,8 +240,24 @@ object TradeJournal {
         }
         if (!replaced) all.put(row)
         trim(all)
-        write(prefs, all)
+        // A successful exchange-close journal MUST survive a process crash.
+        // apply() is asynchronous, so it could erase a 3-loss halt on reboot.
+        write(prefs, all, durable = true)
     }
+
+    /**
+     * Strict risk view: malformed preferences are UNKNOWN, never an empty
+     * winning day. The read-only execution guard blocks until repaired.
+     */
+    @Synchronized
+    fun tradesForRisk(prefs: SharedPreferences): JSONArray? = runCatching {
+        val src = readStrict(prefs)
+        val out = JSONArray()
+        for (i in src.length() - 1 downTo 0) {
+            out.put(src.optJSONObject(i) ?: error("Malformed trade journal row"))
+        }
+        out
+    }.getOrNull()
 
     @Synchronized
     fun trades(prefs: SharedPreferences): JSONArray {
@@ -303,12 +320,26 @@ object TradeJournal {
         return "losing_signal_needs_review"
     }
 
-    private fun read(prefs: SharedPreferences): JSONArray =
-        runCatching { JSONArray(prefs.getString(KEY, "[]") ?: "[]") }.getOrElse { JSONArray() }
+    private fun readStrict(prefs: SharedPreferences): JSONArray {
+        val raw = prefs.getString(KEY, "[]") ?: error("Trade journal unexpectedly null")
+        return JSONArray(raw)
+    }
 
-    private fun write(prefs: SharedPreferences, value: JSONArray) {
-        prefs.edit {
-            putString(KEY, value.toString())
+    // Historical user-facing stats can remain best-effort. Risk gates and all
+    // journal mutations use the strict reader and do not wipe malformed data.
+    private fun read(prefs: SharedPreferences): JSONArray =
+        runCatching { readStrict(prefs) }.getOrElse { JSONArray() }
+
+    // Unlike the KTX edit { commit = true } helper, the explicit Editor.commit()
+    // returns a boolean that a protective risk journal MUST check fail-closed.
+    @SuppressLint("UseKtx")
+    private fun write(prefs: SharedPreferences, value: JSONArray, durable: Boolean = false) {
+        if (durable) {
+            check(prefs.edit().putString(KEY, value.toString()).commit()) {
+                "FUTURES_TRADE_JOURNAL_DURABLE_COMMIT_FAILED"
+            }
+        } else {
+            prefs.edit { putString(KEY, value.toString()) }
         }
     }
 
@@ -323,6 +354,56 @@ internal fun futuresUtcDayStartMs(nowMs:Long):Long {
     return Math.floorDiv(nowMs,86_400_000L)*86_400_000L
 }
 
+/**
+ * Entry risk may not silently skip a recent, exchange-observed Futures close
+ * that has not yet been reconstructed from signed userTrades and persisted.
+ * Reconciliation, EXIT and STOP management are unaffected by this read-only gate.
+ */
+internal fun futuresUnjournalledClosedCampaignBlocker(
+    intents: JSONArray, journalRows: JSONArray, nowMs: Long
+): String? {
+    if (nowMs <= 0L) return "FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED"
+    val utcStart = futuresUtcDayStartMs(nowMs)
+    val journaledIds = (0 until journalRows.length()).mapNotNull { j ->
+        journalRows.optJSONObject(j)?.optString("id")?.takeIf { it.isNotBlank() }
+    }.toSet()
+    for (i in 0 until intents.length()) {
+        val owner = intents.optJSONObject(i)
+            ?: return "FUTURES_LOSS_STREAK_INTENTS_UNVERIFIED"
+        if (owner.optString("intent_role", "ENTRY") != "ENTRY" ||
+            campaignLifecycleStatus(owner) != "CLOSED_OR_STOPPED"
+        ) continue
+        val closedAt = maxOf(
+            owner.optLong("closed_observed_at_ms", 0L),
+            owner.optLong("confirmed_flat_at_ms", 0L)
+        )
+        val created = owner.optLong("created_at_ms", 0L)
+        if (closedAt > 0L && closedAt < utcStart && created < utcStart) continue
+        val fillQty = listOf(
+            owner.optString("actual_entry_executed_qty"),
+            owner.optString("executed_qty")
+        ).mapNotNull { it.toBigDecimalOrNull() }.any { it.signum() > 0 }
+        val fillObserved =
+            owner.optLong("fill_observed_at_ms", 0L) > 0L ||
+            owner.optLong("position_open_observed_at_ms", 0L) > 0L ||
+            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty
+        if (!fillObserved) continue
+        if (closedAt <= 0L) {
+            // A filled owner reported closed TODAY without its authenticated
+            // close timestamp cannot be omitted from that day's losing streak.
+            if (created >= utcStart) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+            continue
+        }
+        if (closedAt > nowMs) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+        val id = owner.optString("client_id")
+        if (id.isBlank()) return "FUTURES_LOSS_STREAK_ENTRY_ID_UNVERIFIED"
+        if (owner.optString("trade_journal_status") != "RECORDED" ||
+            "FUTURES:$id" !in journaledIds
+        ) return "FUTURES_LOSS_STREAK_EXCHANGE_CLOSE_UNJOURNALLED"
+    }
+    return null
+}
+
 /** Result of the entry-only Futures loss-streak circuit breaker. */
 internal data class FuturesLossStreakDecision(
     val available: Boolean,
@@ -333,23 +414,24 @@ internal data class FuturesLossStreakDecision(
 )
 
 /**
- * Evaluate only exchange-reconciled native Futures closes for the current UTC day.
- * Unknown fee/PnL on a newer closed Futures campaign fails closed: it must not be
- * silently counted as a win or skipped while calculating the loss streak.
+ * Three CONSECUTIVE verified losing Futures closes trigger an entry-only block.
+ * Intervening WIN or BREAKEVEN resets the streak. Once the limit is reached
+ * in an exchange-verified UTC day, an intervening close cannot undo that day's
+ * block. No STOP, reconciliation, or existing-position management is disabled.
+ * Daily equity drawdown >=3% is checked by a SEPARATE gate.
  */
 internal fun evaluateFuturesLossStreak(
     tradeRows: JSONArray,
     nowMs: Long,
-    maximumConsecutiveLosses: Int = 2,
+    maximumConsecutiveLosses: Int = 3,
     cooldownMs: Long = 30L * 60L * 1000L,
     hardPauseAt: Int = 3
 ): FuturesLossStreakDecision {
     if (nowMs <= 0L || maximumConsecutiveLosses <= 0 || cooldownMs < 0L ||
-        hardPauseAt <= maximumConsecutiveLosses
+        hardPauseAt < maximumConsecutiveLosses
     ) return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_CONFIG_INVALID")
 
     val dayStart = futuresUtcDayStartMs(nowMs)
-
     val closed = (0 until tradeRows.length()).mapNotNull { index ->
         tradeRows.optJSONObject(index)
     }.filter { row ->
@@ -358,43 +440,44 @@ internal fun evaluateFuturesLossStreak(
         val isNativeFutures = source == "BINANCE_USDM_USER_TRADES" || id.startsWith("FUTURES:")
         isNativeFutures && row.optString("status").equals("CLOSED", true) &&
             row.optLong("closed_at", 0L) >= dayStart && row.optLong("closed_at", 0L) <= nowMs
-    }.sortedByDescending { it.optLong("closed_at", 0L) }
+    }.sortedBy { it.optLong("closed_at", 0L) }
 
-    var losses = 0
-    var mostRecentLossAt = 0L
+    var streak = 0
+    var lastLossAt = 0L
+    var hardLimitReached = false
     for (row in closed) {
         val outcome = row.optString("outcome").trim().uppercase(Locale.US)
-        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", true) ||
-            !row.optDouble("pnl", Double.NaN).isFinite()
-        ) {
-            return FuturesLossStreakDecision(
-                false, losses, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
-            )
-        }
+        val pnl = row.optDouble("pnl", Double.NaN)
+        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", false) ||
+            (row.has("fee_known") && !row.optBoolean("fee_known", false)) ||
+            !pnl.isFinite() || (outcome == "LOSS" && pnl >= 0.0) ||
+            (outcome == "WIN" && pnl <= 0.0) ||
+            (outcome == "BREAKEVEN" && pnl != 0.0)
+        ) return FuturesLossStreakDecision(
+            false, streak, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+        )
         when (outcome) {
-            "WIN", "BREAKEVEN" -> break
             "LOSS" -> {
-                losses++
-                if (mostRecentLossAt == 0L) mostRecentLossAt = row.optLong("closed_at", 0L)
+                streak++
+                lastLossAt = row.optLong("closed_at", 0L)
+                if (streak >= hardPauseAt) hardLimitReached = true
             }
+            "WIN", "BREAKEVEN" -> streak = 0
             else -> return FuturesLossStreakDecision(
-                false, losses, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
+                false, streak, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
             )
         }
     }
 
-    if (losses >= hardPauseAt) {
-        return FuturesLossStreakDecision(
-            true, losses, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE"
+    if (hardLimitReached) return FuturesLossStreakDecision(
+        true, streak, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE"
+    )
+
+    if (streak >= maximumConsecutiveLosses && lastLossAt > 0L) {
+        val cooldownUntil = lastLossAt + cooldownMs
+        if (nowMs < cooldownUntil) return FuturesLossStreakDecision(
+            true, streak, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN"
         )
     }
-    if (losses >= maximumConsecutiveLosses && mostRecentLossAt > 0L) {
-        val cooldownUntil = mostRecentLossAt + cooldownMs
-        if (nowMs < cooldownUntil) {
-            return FuturesLossStreakDecision(
-                true, losses, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN"
-            )
-        }
-    }
-    return FuturesLossStreakDecision(true, losses, true, null, null)
+    return FuturesLossStreakDecision(true, streak, true, null, null)
 }

@@ -24,7 +24,7 @@ class TestnetForcedEntryPolicyTest {
         .put("pnl_complete", complete)
 
     @Test
-    fun futures_loss_streak_cooldown_blocks_new_entries_after_two_losses() {
+    fun futures_loss_streak_allows_new_entries_after_two_losses() {
         val now = 1792067912748L
         val rows = JSONArray()
             .put(futuresClosedTrade("newer", now - 60_000L, "LOSS", -12.0))
@@ -32,9 +32,9 @@ class TestnetForcedEntryPolicyTest {
         val decision = evaluateFuturesLossStreak(rows, now)
         assertEquals(true, decision.available)
         assertEquals(2, decision.consecutiveLosses)
-        assertEquals(false, decision.allowNewEntries)
-        assertEquals("FUTURES_CONSECUTIVE_LOSS_COOLDOWN", decision.reason)
-        assertEquals(now + (30L * 60L * 1000L) - 60_000L, decision.cooldownUntilMs)
+        assertEquals(true, decision.allowNewEntries)
+        assertNull(decision.reason)
+        assertNull(decision.cooldownUntilMs)
     }
 
     @Test

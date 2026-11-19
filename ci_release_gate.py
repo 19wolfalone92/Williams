@@ -71,7 +71,9 @@ def main() -> None:
         "DRY_RUN=true",
         "MAX_DAILY_LOSS_PCT=0.03",
         "RISK_PER_TRADE_PCT=0.0025",
-        "MAX_CONSECUTIVE_LOSSES=2",
+        "MAX_CONSECUTIVE_LOSSES=3",
+        "MAX_TRADES_PER_DAY=0",
+        "COOLDOWN_MINUTES=0",
         "BINANCE_MARKET=futures_usdt",
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
@@ -84,7 +86,7 @@ def main() -> None:
         "ALLOW_SHORT=true",
         "TAKE_PROFIT_PCT=0.0",
         "CAMPAIGN_TRAIL_BARS=5",
-        "MAX_OPEN_POSITIONS=1",
+        "MAX_OPEN_POSITIONS=10",
         "MAX_TOTAL_RISK_PCT=0.006",
         "MAX_RISK_PER_TRADE_PCT=0.0025",
     ):
@@ -103,6 +105,7 @@ def main() -> None:
     must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
     must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
     must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
+    must(cfg, "max_consecutive_losses=3,", "trading_config.py")
     for needle in (
         'market: str = "futures_usdt"',
         "futures_leverage: int = 2",
@@ -603,7 +606,7 @@ def main() -> None:
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched &&', "StandaloneRuntime.kt")
     must(legacy_runtime, 'coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'if (lossPct >= 0.03)', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'if (lossPct >= futuresDailyLossLimitPct)', "StandaloneRuntime.kt")
     must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")
 
     # UI single-source diagnosis and forced-order retirement are safety

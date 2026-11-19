@@ -16,10 +16,10 @@ def source(name):
 def test_version_advances_after_46438_and_uses_stable_debug_identity():
     gradle = (ROOT / "app/build.gradle.kts").read_text()
     workflow = (ROOT / ".github/workflows/android-apk.yml").read_text()
-    assert (ROOT / "VERSION").read_text().strip() == "4.64.41"
-    assert "VERSION = '4.64.41'" in (ROOT / "server.py").read_text()
-    assert 'versionName = "4.64.41"' in gradle
-    assert 'maxOf(46441, ciRunNumber ?: 46441)' in gradle
+    assert (ROOT / "VERSION").read_text().strip() == "4.64.46"
+    assert "VERSION = '4.64.46'" in (ROOT / "server.py").read_text()
+    assert 'versionName = "4.64.46"' in gradle
+    assert 'maxOf(46446, ciRunNumber ?: 46446)' in gradle
     assert 'WILLIAMS_DEBUG_KEYSTORE_B64' in workflow
     assert 'EXPECTED_SIGNER_SHA256="c177bba354724c24e9668864720e9bfdb2cb545964702903a1fa306060912de9"' in workflow
     assert '"$APKSIGNER" verify --verbose "$APK"' in workflow
@@ -49,9 +49,9 @@ def test_no_stale_spread_veto_on_deferred_h1_stop_but_market_quote_veto_kept():
 
 def test_trading_daily_halt_is_three_percent_with_stop_and_fees_preserved():
     runtime = source("StandaloneRuntime.kt")
-    assert "if (lossPct >= 0.03)" in runtime
+    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
     assert '"FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"' in runtime
-    assert runtime.count('put("max_daily_loss_pct", 0.03)') >= 2
+    assert runtime.count('put("max_daily_loss_pct", futuresDailyLossLimitPct)') >= 2
     assert "futuresCampaignCoordinator.cancelPendingEntries(\"DAILY_LOSS_LIMIT\")" in runtime
     assert "val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct" in runtime
     assert "val stopFraction = kotlin.math.abs(trigger - stop) / trigger" in runtime
