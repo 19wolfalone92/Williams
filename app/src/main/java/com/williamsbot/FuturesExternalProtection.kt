@@ -3,6 +3,15 @@ package com.williamsbot
 import org.json.JSONObject
 import java.math.BigDecimal
 
+/** Binance signed algo response must prove the price-protection limiter is OFF.
+ * When true, the mark-price STOP can be deferred by excessive mark/contract
+ * deviation and must not be counted as immediate exchange-side protection.
+ * Missing / null is UNKNOWN and never a protective proof.
+ */
+internal fun isBinanceUnrestrictedStopTrigger(order: JSONObject): Boolean =
+    order.opt("priceProtect") == false ||
+        order.optString("priceProtect").equals("false", ignoreCase = true)
+
 /** Exchange proof of full-position protection; this never proves strategy ownership. */
 internal fun isFullPositionFuturesStop(
     order: JSONObject,
@@ -23,6 +32,7 @@ internal fun isFullPositionFuturesStop(
     // conditional may be risk-reducing, but it is NOT proof of the signed
     // MARK_PRICE protection contract needed for automatic management.
     if (order.optString("workingType") != "MARK_PRICE") return false
+    if (!isBinanceUnrestrictedStopTrigger(order)) return false
     if (order.optString("algoId").toLongOrNull()?.let { it > 0L } != true || order.optString("clientAlgoId").isBlank()) return false
     val fullClose = order.optString("closePosition").equals("true", true)
     val reducingQuantity = order.optString("reduceOnly").equals("true", true) &&
