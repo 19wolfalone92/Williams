@@ -51,7 +51,9 @@ def test_full_trace_is_available_once_in_status_not_built_twice_for_zip():
     assert '.apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }' in source
     # Public status retains full traces, but forensic status must not eagerly
     # build them just to discard them before ZIP export.
-    assert "fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true)" in source
+    assert "fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true," in source
+    assert "selectedTraceSymbols: Set<String>? = null" in source
+    assert "decisionTraceSnapshot(selectedSymbols = selectedTraceSymbols)" in source
     assert "status(fast = true, includeDecisionTraces = false)" in diagnostic
     assert 'check(!statusSnapshot.has("decision_traces"))' in diagnostic
     assert '.put("signal_decision_history",decisionTraceSnapshot(fullHistory=true))' in diagnostic
