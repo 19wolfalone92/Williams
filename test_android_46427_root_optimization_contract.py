@@ -41,11 +41,22 @@ def test_compact_projection_keeps_every_field_read_by_android_candidate_parser()
     assert "if (original.has(field))" in PROJECTION
 
 
-def test_safety_critical_event_actor_never_drops_events_for_speed():
-    assert "LinkedBlockingQueue<Runnable>()" in EVENT_LOOP
+def test_safety_critical_event_actor_uses_durable_spool_before_bounded_ram_queue():
+    # As of 4.64.37, the private-stream inbox is SQLite-durable BEFORE
+    # scheduling. An unbounded actor queue is now an OOM hazard; the actor
+    # must explicitly reject overflow/shutdown, while the runtime retains
+    # signed-reconcile entry blocking and the pending durable receipt.
+    assert "ArrayBlockingQueue<Runnable>(maxQueuedTasks)" in EVENT_LOOP
+    assert "executor.execute(task)" in EVENT_LOOP
+    assert "if (!executor.isShutdown)" not in EVENT_LOOP
     assert "CallerRunsPolicy" not in EVENT_LOOP.split("class TradingEventLoop", 1)[1]
     assert "DiscardOldestPolicy" not in EVENT_LOOP
-    assert "executor.execute(task)" in EVENT_LOOP
+    producer = RUNTIME.split("private fun handleUserEvent(event: JSONObject)", 1)[1].split(
+        "private fun schedulePrivateEventDrain()", 1
+    )[0]
+    assert producer.index("auditStore.enqueuePrivateUserEvent(event, accountFingerprint)") < producer.index(
+        "schedulePrivateEventDrain()"
+    )
     assert "tradingEventLoop.queueDepth()" in RUNTIME
     assert 'userStreamSyncRequired = true' in RUNTIME
     assert 'scheduleFuturesStreamReconciliation("PRIVATE_WS_FILL_URGENT", force = true)' in RUNTIME
