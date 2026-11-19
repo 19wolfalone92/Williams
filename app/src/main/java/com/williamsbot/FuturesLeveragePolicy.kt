@@ -105,3 +105,29 @@ internal fun futuresLeverageBlocker(
         "FUTURES_LEVERAGE_STOP_BUFFER: isolated margin cannot cover structural stop, costs and maintenance"
     }
 }.exceptionOrNull()?.let { it.message ?: "Invalid Futures leverage brackets" }
+
+
+/**
+ * Returns the greatest safe leverage no higher than the configured cap for the
+ * EXACT planned notional and source-book stop. It never changes STOP, quantity,
+ * direction, risk allowance or a pre-existing position. This is only a
+ * candidate: the coordinator must subsequently verify signed account funds,
+ * 50% portfolio margin, Binance symbol settings and the complete STOP proof.
+ *
+ * Null means no safe choice. A corrupt/unknown Binance bracket never becomes
+ * authority to silently choose 1x.
+ */
+internal fun futuresSafeEntryLeverage(
+    brackets: Any,
+    symbol: String,
+    configuredMaximum: Int,
+    notional: Double,
+    entry: Double,
+    stop: Double
+): Int? {
+    parseFuturesLeverage(configuredMaximum)
+    if (!listOf(notional, entry, stop).all { it.isFinite() && it > 0.0 }) return null
+    return (configuredMaximum downTo 1).firstOrNull {
+        futuresLeverageBlocker(brackets, symbol, it, notional, entry, stop) == null
+    }
+}
