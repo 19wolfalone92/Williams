@@ -16,13 +16,17 @@ EVENT_LOOP = (ANDROID / "TradingEventLoop.kt").read_text("utf-8")
 COORDINATOR = (ANDROID / "NativeFuturesCampaignCoordinator.kt").read_text("utf-8")
 
 
-def test_compact_cockpit_is_opt_in_and_does_not_strip_market_decision_trace():
-    assert 'x.cockpit(includeDecisionTraces = !params["compact"].equals("true", true))' in RUNTIME
-    assert "fun cockpit(includeDecisionTraces: Boolean = true)" in RUNTIME
-    assert "status(fast = true, includeDecisionTraces = includeDecisionTraces)" in RUNTIME
+def test_cockpit_avoids_giant_string_and_scopes_details_to_selected_symbol():
+    # The old 15-symbol String route caused a confirmed Android OOM.
+    # The UI now uses a direct JSONObject envelope; diagnostics retain full history.
+    assert 'x.cockpit(includeDecisionTraces = false).toString()' in RUNTIME
+    assert 'x.status(fast = fast, includeDecisionTraces = !fast).toString()' in RUNTIME
+    assert "fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null)" in RUNTIME
+    assert "selectedTraceSymbols = scope" in RUNTIME
     assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in RUNTIME
-    assert 'val compact = tab == 0 || tab == 2' in UI
-    assert 'if (compact) "/api/v1/cockpit?compact=true"' in UI
+    assert 'val details = tab == 1 || tab == 3' in UI
+    assert 'api.cockpitSnapshot(includeDecisionTraces = details,' in UI
+    assert 'StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces, selectedSymbol)' in UI
     assert "loadAll(false, waitForLock = true)" in UI
 
 

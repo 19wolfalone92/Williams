@@ -67,12 +67,23 @@ internal object CockpitDiagnostics {
             setOf("", "UNKNOWN", "null")
         val pendingCount=intents.count { it.optString("campaign_status") in
             setOf("ENTRY_PENDING","FILL_CONFIRMATION_PENDING","EXIT_PENDING") }
-        val resetExplanation=russianLossResetExplanation(
-            consecutiveLosses=status.optInt("consecutive_losses",0),
-            utcClockReady=status.optBoolean("consecutive_losses_available",false),
-            baselineReady=!dailyBaselineMissing,
-            pendingEntries=pendingCount
-        )
+        // The previous display incorrectly said there were "no restrictions"
+        // after a UTC streak reset. Risk limits remain active with zero losses.
+        val streak = status.optInt("consecutive_losses", 0).coerceAtLeast(0)
+        val dailyCap = status.optDouble("max_daily_loss_pct", Double.NaN)
+        val dailyCapText = if (dailyCap.isFinite() && dailyCap > 0.0)
+            String.format(java.util.Locale.US, "%.0f%%", dailyCap * 100.0) else "НЕИЗВЕСТЕН"
+        val resetExplanation = when {
+            !status.optBoolean("consecutive_losses_available", false) ->
+                "Серия закрытий не подтверждена Binance; новые входы должны ожидать сверки."
+            dailyBaselineMissing ->
+                "Не подтверждена суточная база риска Binance; новые входы должны ожидать сверки."
+            streak >= 3 || status.optString("consecutive_loss_blocker").isNotBlank() ->
+                "Три подряд убыточных закрытия: новые входы заблокированы до следующей подтверждённой сессии UTC. Сопровождение сохраняется."
+            else ->
+                "Текущая серия: $streak из 3 подряд убыточных закрытий. Дневной лимит: $dailyCapText. " +
+                    "При достижении любого порога новые входы блокируются; сопровождение позиций продолжается."
+        }
         val unresolvedBookOrders=rows(coordinator.optJSONArray("external_open_orders"))
             .filter { it.optString("client_id").startsWith("W2H_") }
         val unresolvedSymbols=unresolvedBookOrders.map { it.optString("symbol") }

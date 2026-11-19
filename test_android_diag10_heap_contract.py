@@ -14,7 +14,8 @@ COORDINATOR = ROOT / "app/src/main/java/com/williamsbot/NativeFuturesCampaignCoo
 
 def test_diagnostics_skips_status_decision_trace_allocation():
     src = RUNTIME.read_text(encoding="utf-8")
-    assert "fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true)" in src
+    assert "fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true," in src
+    assert "selectedTraceSymbols: Set<String>? = null" in src
     assert '.apply { if (includeDecisionTraces) put("decision_traces",decisionTraceSnapshot()) }' in src
     assert "status(fast = true, includeDecisionTraces = false)" in src
     assert 'check(!statusSnapshot.has("decision_traces"))' in src

@@ -492,6 +492,10 @@ private class LocalRuntimeApi(context: Context) {
     /** Avoid allocating a second giant JSON String and reparsing it on Android. */
     fun diagnosticsReport(): JSONObject = StandaloneRuntime.diagnosticsReport(appContext)
 
+    /** Retain full evidence for selected charts, never all 15 per-symbol traces. */
+    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
+        StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces, selectedSymbol)
+
     fun post(path: String, body: String? = null): String =
         StandaloneRuntime.request(appContext, "POST", path, body)
 
@@ -549,11 +553,11 @@ fun WilliamsApp(context: Context) {
             val payload = withContext(Dispatchers.IO) {
                 if (scan) api.get("/api/v1/scanner?refresh=true")
                 // Keep signed safety/risk/status updates at the same 5s cadence.
-                // Only dashboard/trades omit large read-only 15-symbol decision
-                // traces. The market chart and analysis retain full provenance.
-                val compact = tab == 0 || tab == 2
-                JSONObject(api.get(if (compact) "/api/v1/cockpit?compact=true"
-                    else "/api/v1/cockpit"))
+                // The selected chart and primary symbol retain trace provenance,
+                // but the local UI no longer round-trips massive JSON via String.
+                val details = tab == 1 || tab == 3
+                api.cockpitSnapshot(includeDecisionTraces = details,
+                    selectedSymbol = if (details) selectedChartSymbol else null)
             }
             val source = payload.getJSONObject("status")
             val scanner = payload.getJSONObject("scanner")
