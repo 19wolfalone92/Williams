@@ -59,6 +59,52 @@ internal fun signedFuturesAlgoOrderGetMatches(
     order.optString("clientAlgoId") == clientAlgoId &&
     order.optString("algoId").toLongOrNull()?.let { it > 0L } == true
 
+/**
+ * A successful HTTP 200 is NOT by itself confirmation of the exact entry
+ * campaign that was submitted. A malformed or unrelated POST receipt still
+ * requires signed GET reconciliation by the durable client id; NEVER retry
+ * POST just because the body lacked an algo/order ID.
+ */
+internal fun futuresEntryPostReceiptMatches(
+    receipt: JSONObject, symbol: String, side: String, clientId: String,
+    kind: String, quantity: String, triggerPrice: String
+): Boolean {
+    if (symbol.isBlank() || clientId.isBlank() || side !in setOf("BUY","SELL") ||
+        quantity.toBigDecimalOrNull()?.signum() != 1) return false
+    val isAlgo = kind in setOf("STOP", "TAKE_PROFIT")
+    val expectedType = when (kind) {
+        "STOP" -> "STOP_MARKET"
+        "TAKE_PROFIT" -> "TAKE_PROFIT_MARKET"
+        "MARKET", "LIMIT" -> kind
+        else -> return false
+    }
+    if (receipt.optString("side") != side ||
+        receipt.optString("positionSide") != "BOTH") return false
+    return if (isAlgo) {
+        signedFuturesAlgoOrderGetMatches(receipt, symbol, clientId) &&
+            receipt.optString("algoType") == "CONDITIONAL" &&
+            receipt.optString("orderType").ifBlank { receipt.optString("type") } == expectedType &&
+            receipt.optString("algoStatus").isNotBlank() &&
+            receipt.optString("closePosition").equals("false", true) &&
+            receipt.optString("reduceOnly").equals("false", true) &&
+            receipt.optString("quantity").toBigDecimalOrNull()?.compareTo(
+                quantity.toBigDecimal()) == 0 &&
+            receipt.optString("triggerPrice").toBigDecimalOrNull()?.compareTo(
+                triggerPrice.toBigDecimalOrNull()) == 0
+    } else {
+        signedFuturesStandardOrderGetMatches(receipt, symbol, clientId) &&
+            receipt.optString("type") == expectedType &&
+            receipt.optString("status").isNotBlank() &&
+            receipt.optString("origQty").toBigDecimalOrNull()?.compareTo(
+                quantity.toBigDecimal()) == 0 &&
+            receipt.optString("executedQty").toBigDecimalOrNull()?.let {
+                it.signum() >= 0 && it <= quantity.toBigDecimal()
+            } == true &&
+            (kind == "MARKET" || receipt.optString("price").toBigDecimalOrNull()
+                ?.compareTo(triggerPrice.toBigDecimalOrNull()) == 0)
+    }
+}
+
 internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     for (index in 0 until rows.length()) {
         val row = rows.optJSONObject(index)
