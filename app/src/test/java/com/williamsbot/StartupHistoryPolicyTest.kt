@@ -15,7 +15,7 @@ class StartupHistoryPolicyTest {
     fun context_and_monitoring_frames_do_not_require_150_bars() {
         assertEquals(StartupHistoryPolicy(90, 45), startupHistoryPolicy("1d"))
         assertEquals(StartupHistoryPolicy(120, 45), startupHistoryPolicy("4h"))
-        assertEquals(StartupHistoryPolicy(90, 45), startupHistoryPolicy("15m"))
+        assertEquals(StartupHistoryPolicy(160, 45), startupHistoryPolicy("15m"))
     }
 
     @Test fun h6HasAnExplicitWarmupAndContextReadinessRequirement() {
