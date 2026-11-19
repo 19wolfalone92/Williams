@@ -3389,7 +3389,10 @@ internal class NativeFuturesCampaignCoordinator(
         return result
     }
 
-    private fun submitPendingEntryLocked(plan: EntryPlan): JSONObject = synchronized(lock) {
+    private fun submitPendingEntryLocked(submittedPlan: EntryPlan): JSONObject = synchronized(lock) {
+        // May reduce leverage only for a flat initial TC2 entry, never raise it.
+        // The persisted intent and all exchange writes use this effective plan.
+        var plan = submittedPlan
         williamsNewRiskSymbolBlocker(plan.symbol)?.let {
             return@synchronized safePreflightRejection(it)
         }
@@ -3507,6 +3510,34 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized safePreflightRejection(contractBlocker)
         }
 
+        // Binance's SIGNED leverage brackets determine whether the configured
+        // ceiling is safe for the exact (unchanged) structural stop and quantity.
+        // Adjust only an initial TC2 strategy entry on an otherwise flat symbol.
+        // Existing positions, add-ons, operator orders and reversals never have
+        // their margin configuration silently rewritten.
+        val signedLeverageBrackets = try {
+            preflightAdapter.leverageBrackets(plan.symbol)
+        } catch (failure: Exception) {
+            return@synchronized safePreflightRejection(
+                "Futures leverage limits unavailable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+            )
+        }
+        val totalPlannedNotional = plan.quantity.toDouble() * plan.entryPrice.toDouble() +
+            (if (isAddition) primary!!.getString("confirmed_position_qty").toDouble() *
+                plan.entryPrice.toDouble() else 0.0)
+        if (!isAddition && !isReversal && plan.strategyProfile == williamsTc2Profile &&
+            plan.signalType != "OPERATOR_FORCED_DIRECTION") {
+            val safer = futuresSafeEntryLeverage(
+                signedLeverageBrackets, plan.symbol, plan.leverage,
+                totalPlannedNotional, plan.entryPrice.toDouble(),
+                plan.protectiveStop.toDouble()
+            )
+            if (safer != null && safer < plan.leverage) {
+                plan = plan.copy(leverage = safer)
+            }
+        }
+
         // Defense in depth: the coordinator re-calculates the actual plan risk using
         // quantity/trigger/structural stop and a fresh exchange equity snapshot. The
         // estimate includes the same 0.10% fee allowance per side and 0.15% slippage
@@ -3524,14 +3555,13 @@ internal class NativeFuturesCampaignCoordinator(
         if (riskCheck.blocker != null) {
             return@synchronized safePreflightRejection(riskCheck.blocker)
         }
-        val leverageBlocker = try {
-            futuresLeverageBlocker(
-                preflightAdapter.leverageBrackets(plan.symbol), plan.symbol, plan.leverage,
-                riskCheck.notionalUsdt+(if(isAddition) primary!!.getString("confirmed_position_qty").toDouble()*plan.entryPrice.toDouble() else 0.0), plan.entryPrice.toDouble(), plan.protectiveStop.toDouble()
-            )
-        } catch (failure: Exception) {
-            "Futures leverage limits unavailable: " + (failure.message ?: failure.javaClass.simpleName)
-        }
+        val leverageBlocker = futuresLeverageBlocker(
+            signedLeverageBrackets, plan.symbol, plan.leverage,
+            riskCheck.notionalUsdt +
+                (if (isAddition) primary!!.getString("confirmed_position_qty").toDouble() *
+                    plan.entryPrice.toDouble() else 0.0),
+            plan.entryPrice.toDouble(), plan.protectiveStop.toDouble()
+        )
         if (leverageBlocker != null) return@synchronized safePreflightRejection(leverageBlocker)
 
         // Distinct approved symbols may hold concurrent campaigns, but each live
@@ -3641,6 +3671,9 @@ internal class NativeFuturesCampaignCoordinator(
             .put("initial_protective_stop", plan.protectiveStop)
             .put("risk_pct", plan.riskPct)
             .put("requested_leverage", plan.leverage)
+            .put("configured_leverage_cap", submittedPlan.leverage)
+            .put("leverage_auto_reduced_for_structural_stop",
+                plan.leverage < submittedPlan.leverage)
             .put("signal_type", plan.signalType).put("signal_id",plan.signalId)
             .put("entry_time_policy",entryTimePolicyProvider().toJson())
             .put("signal_bar_time_ms", plan.signalBarTimeMs)
