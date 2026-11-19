@@ -96,6 +96,29 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
         assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
     }
+    @Test fun inconsistentHttp200ReceiptMustPersistUnknownWithoutRetryingRiskyEntryPost() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            exchange.algoAcknowledgementTransform = { JSONObject().put("algoId","0")
+                .put("symbol","ETHUSDT").put("clientAlgoId","ANOTHER_USER_ORDER") }
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val attempted = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(attempted.toString(), attempted.getBoolean("accepted"))
+            assertTrue(attempted.toString(), attempted.optString("blocker")
+                .contains("ambiguous_entry_submission_reconcile_before_any_retry"))
+            val intent = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("SUBMISSION_UNKNOWN", intent.getString("order_status"))
+            assertEquals("ENTRY_PENDING", intent.getString("campaign_status"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+            // Signed read by persisted ID can recover; never send a second POST.
+            val reconciliation = coordinator.reconcile()
+            assertTrue(reconciliation.toString(), reconciliation.getBoolean("ok"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
     @Test fun preupgradeRestoredSymbolIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
         for(symbol in listOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"))
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
@@ -358,6 +381,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var failPendingQueries=false
         var beforeRequest: ((Request, Map<String, String>) -> Unit)? = null
         var afterAlgoMutation: ((Request, JSONObject) -> Unit)? = null
+        var algoAcknowledgementTransform: ((JSONObject) -> JSONObject)? = null
         var additionFraction = 1.0
         var closeFraction = 1.0
         var closeStatus = "FILLED"
@@ -445,11 +469,16 @@ class NativeFuturesCoordinatorLifecycleTest {
                             val row = JSONObject(p).put("algoId", id).put("algoStatus", "NEW")
                                 .put("orderType", p.getValue("type")).put("actualOrderId", "")
                                 .put("positionSide", p["positionSide"] ?: "BOTH")
+                                // Signed Binance POST includes these booleans.
+                                // Missing flags are UNKNOWN to the safety door.
+                                .put("closePosition", p["closePosition"] == "true")
+                                .put("reduceOnly", p["reduceOnly"] == "true")
+                                .put("priceProtect", p["priceProtect"] == "true")
                             algos[id] = row
                             afterAlgoMutation?.invoke(request, row)
                             if(loseProtectionReply && protective) {
                                 code=503;JSONObject().put("code",-1000).put("msg","lost protection reply")
-                            } else row
+                            } else algoAcknowledgementTransform?.invoke(JSONObject(row.toString())) ?: row
                         }
                     }
                     else -> {
