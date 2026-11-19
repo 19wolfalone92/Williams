@@ -176,7 +176,7 @@ internal fun startupHistoryPolicy(
     "4h" -> StartupHistoryPolicy(120, 45)
     "6h" -> StartupHistoryPolicy(240, 140)
     "1d" -> StartupHistoryPolicy(90, 45)
-    "15m" -> StartupHistoryPolicy(90, 45)
+    "15m" -> StartupHistoryPolicy(160, 45) // Match the independent 160-bar M15 passport; repair older SQLite gaps.
     else -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
 }
 
