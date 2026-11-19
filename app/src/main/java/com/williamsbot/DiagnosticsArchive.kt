@@ -191,8 +191,12 @@ object DiagnosticsArchive {
                 addJson(zip,"diagnostic_comparison.json",comparison
                     ?: org.json.JSONObject().put("status","NOT_COMPARABLE"))
                 add(zip,"START_HERE_RU.txt",buildTriageOverview(triage,comparison,
-                    report.optJSONObject("runtime_resource_diagnostics")))
+                    report.optJSONObject("runtime_resource_diagnostics"),
+                    report.optJSONObject("entry_failure_forensics")))
                 addJson(zip,"event_timeline.json",report.optJSONArray("event_timeline") ?: org.json.JSONArray())
+                addJson(zip,"entry_failure_forensics.json",
+                    report.optJSONObject("entry_failure_forensics") ?: org.json.JSONObject()
+                        .put("schema","NOT_AVAILABLE").put("read_only",true))
                 addJson(zip,"android_background_health.json",report.optJSONObject("status")
                     ?.optJSONObject("android_runtime") ?: org.json.JSONObject())
                 addJson(zip,"last_incident.json",report.optJSONObject("last_incident") ?: org.json.JSONObject())
@@ -305,12 +309,22 @@ object DiagnosticsArchive {
 
     private fun buildTriageOverview(triage: org.json.JSONObject,
         comparison: org.json.JSONObject?,
-        resources: org.json.JSONObject?): String = buildString {
+        resources: org.json.JSONObject?,
+        entryForensics: org.json.JSONObject?): String = buildString {
         appendLine("WILLIAMS BOT — КРАТКАЯ ДИАГНОСТИКА")
         appendLine("Итог компонентных проверок: ${triage.optString("overall")}")
         appendLine("Ошибки: ${triage.optInt("failed_count")}, предупреждения: ${triage.optInt("warning_count")}, непроверено: ${triage.optInt("unverified_count")}")
         appendLine("Новые входы разрешены по снимку: ${triage.optBoolean("new_entries_allowed_at_snapshot")}")
         appendLine("ВАЖНО: успех тестов НЕ означает 100% точность, верность всем книгам или испытания Binance Demo.")
+        val rejected = entryForensics?.optInt("rejected_order_response_count_24h",0) ?: 0
+        val clockFaults = entryForensics?.optInt("clock_reconciliation_failure_count_24h",0) ?: 0
+        if (rejected > 0 || clockFaults > 0) {
+            appendLine("ИСТОРИЯ ОТКАЗОВ (не текущий торговый блок): отклонённых ответов входа=$rejected, ошибок проверки времени Binance=$clockFaults.")
+            val causes = entryForensics?.optJSONObject("occurrence_counts")
+            if ((causes?.optInt("FOREIGN_ASSET_IDENTITY",0) ?: 0) > 0)
+                appendLine("ВНИМАНИЕ: зафиксирован FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET_IDENTITY. Проверьте свежий подписанный Binance account.assets; не обходите проверку маржи.")
+            appendLine("Доказательства времени, коды первопричин и частоты: entry_failure_forensics.json. Это НЕ подтверждение отсутствия ордера на бирже.")
+        }
         // Pre-capture heap PASS must not hide a later WARNING while assembling
         // the large diagnostic report (real phone diagnostic #20: 39.5% -> 81.7%).
         // Post-build pressure is informational; it cannot change trade gates.
