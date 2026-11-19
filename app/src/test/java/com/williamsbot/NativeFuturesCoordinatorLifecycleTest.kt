@@ -2330,7 +2330,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val stop = JSONObject()
                 .put("symbol", "BTCUSDT").put("algoId", "12345")
                 .put("clientAlgoId", "W2PS_EXACT").put("positionSide", "BOTH")
-                .put("workingType", "MARK_PRICE")
+                .put("workingType", "MARK_PRICE").put("priceProtect", false)
                 .put("orderType", "STOP_MARKET").put("algoStatus", "NEW")
                 .put("side", if (direction.name == "LONG") "SELL" else "BUY")
                 .put("closePosition", "true")
@@ -2625,7 +2625,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("algoStatus","NEW").put("orderType","STOP_MARKET")
                 .put("side",if(direction.name=="LONG") "SELL" else "BUY")
                 .put("positionSide","BOTH").put("workingType","MARK_PRICE")
-                .put("closePosition","true")
+                .put("priceProtect",false).put("closePosition","true")
                 .put("triggerPrice",if(direction.name=="LONG") "95" else "105")
             exchange.algos["5001"]=stop
             val newInstall=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
@@ -2759,7 +2759,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             .put("algoStatus","NEW").put("orderType","STOP_MARKET")
             .put("side",if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) "SELL" else "BUY")
             .put("positionSide","BOTH").put("workingType","MARK_PRICE")
-            .put("closePosition","true")
+            .put("priceProtect",false).put("closePosition","true")
             .put("triggerPrice",if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) "95" else "105")
         exchange.algos["5001"]=stop
         return stop
