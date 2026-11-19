@@ -69,8 +69,10 @@ internal fun futuresEntryPostReceiptMatches(
     receipt: JSONObject, symbol: String, side: String, clientId: String,
     kind: String, quantity: String, triggerPrice: String
 ): Boolean {
+    val expectedQuantity = quantity.toBigDecimalOrNull() ?: return false
+    val expectedTrigger = triggerPrice.toBigDecimalOrNull() ?: return false
     if (symbol.isBlank() || clientId.isBlank() || side !in setOf("BUY","SELL") ||
-        quantity.toBigDecimalOrNull()?.signum() != 1) return false
+        expectedQuantity.signum() != 1 || expectedTrigger.signum() != 1) return false
     val isAlgo = kind in setOf("STOP", "TAKE_PROFIT")
     val expectedType = when (kind) {
         "STOP" -> "STOP_MARKET"
@@ -88,20 +90,20 @@ internal fun futuresEntryPostReceiptMatches(
             receipt.optString("closePosition").equals("false", true) &&
             receipt.optString("reduceOnly").equals("false", true) &&
             receipt.optString("quantity").toBigDecimalOrNull()?.compareTo(
-                quantity.toBigDecimal()) == 0 &&
+                expectedQuantity) == 0 &&
             receipt.optString("triggerPrice").toBigDecimalOrNull()?.compareTo(
-                triggerPrice.toBigDecimalOrNull()) == 0
+                expectedTrigger) == 0
     } else {
         signedFuturesStandardOrderGetMatches(receipt, symbol, clientId) &&
             receipt.optString("type") == expectedType &&
             receipt.optString("status").isNotBlank() &&
             receipt.optString("origQty").toBigDecimalOrNull()?.compareTo(
-                quantity.toBigDecimal()) == 0 &&
+                expectedQuantity) == 0 &&
             receipt.optString("executedQty").toBigDecimalOrNull()?.let {
-                it.signum() >= 0 && it <= quantity.toBigDecimal()
+                it.signum() >= 0 && it <= expectedQuantity
             } == true &&
             (kind == "MARKET" || receipt.optString("price").toBigDecimalOrNull()
-                ?.compareTo(triggerPrice.toBigDecimalOrNull()) == 0)
+                ?.compareTo(expectedTrigger) == 0)
     }
 }
 
