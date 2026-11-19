@@ -86,7 +86,8 @@ internal fun futuresEntryPostReceiptMatches(
         signedFuturesAlgoOrderGetMatches(receipt, symbol, clientId) &&
             receipt.optString("algoType") == "CONDITIONAL" &&
             receipt.optString("orderType").ifBlank { receipt.optString("type") } == expectedType &&
-            receipt.optString("algoStatus").isNotBlank() &&
+            receipt.optString("algoStatus").uppercase(Locale.US) in
+                setOf("NEW","WORKING","PENDING","ACCEPTED","TRIGGERING","TRIGGERED") &&
             receipt.optString("closePosition").equals("false", true) &&
             receipt.optString("reduceOnly").equals("false", true) &&
             receipt.optString("quantity").toBigDecimalOrNull()?.compareTo(
@@ -96,7 +97,8 @@ internal fun futuresEntryPostReceiptMatches(
     } else {
         signedFuturesStandardOrderGetMatches(receipt, symbol, clientId) &&
             receipt.optString("type") == expectedType &&
-            receipt.optString("status").isNotBlank() &&
+            receipt.optString("status").uppercase(Locale.US) in
+                setOf("NEW","PARTIALLY_FILLED","FILLED") &&
             receipt.optString("origQty").toBigDecimalOrNull()?.compareTo(
                 expectedQuantity) == 0 &&
             receipt.optString("executedQty").toBigDecimalOrNull()?.let {
