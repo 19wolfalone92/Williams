@@ -99,7 +99,7 @@ class TradingConfig:
     # Canonical project policy: stop opening new campaigns at 3% daily loss OR three CONSECUTIVE losing Futures closes in one UTC day.
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 3
-    cooldown_minutes: int = 30
+    cooldown_minutes: int = 0
     max_open_positions: int = 10
 
     min_risk_reward: float = 1.5
@@ -219,7 +219,7 @@ class TradingConfig:
             max_total_risk_pct=total_risk,
             max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
             max_consecutive_losses=3,  # Fixed operator policy: neither 2 nor 4 is allowed.
-            cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
+            cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 0)),
             max_open_positions=max_positions,
             min_risk_reward=max(0.0, _float(source, "MIN_RISK_REWARD", 1.5)),
             atr_period=max(2, _int(source, "ATR_PERIOD", 14)),
