@@ -329,7 +329,8 @@ internal data class FuturesLossStreakDecision(
     val consecutiveLosses: Int,
     val allowNewEntries: Boolean,
     val cooldownUntilMs: Long?,
-    val reason: String?
+    val reason: String?,
+    val dailyLossTrades: Int = 0
 )
 
 /**
@@ -340,12 +341,12 @@ internal data class FuturesLossStreakDecision(
 internal fun evaluateFuturesLossStreak(
     tradeRows: JSONArray,
     nowMs: Long,
-    maximumConsecutiveLosses: Int = 2,
+    maximumConsecutiveLosses: Int = 3,
     cooldownMs: Long = 30L * 60L * 1000L,
     hardPauseAt: Int = 3
 ): FuturesLossStreakDecision {
     if (nowMs <= 0L || maximumConsecutiveLosses <= 0 || cooldownMs < 0L ||
-        hardPauseAt <= maximumConsecutiveLosses
+        hardPauseAt < maximumConsecutiveLosses
     ) return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_CONFIG_INVALID")
 
     val dayStart = futuresUtcDayStartMs(nowMs)
@@ -360,41 +361,58 @@ internal fun evaluateFuturesLossStreak(
             row.optLong("closed_at", 0L) >= dayStart && row.optLong("closed_at", 0L) <= nowMs
     }.sortedByDescending { it.optLong("closed_at", 0L) }
 
+    // The operator's three losing trades applies to all exchange-reconciled
+    // negative closes within the CURRENT UTC day, even if a winning trade
+    // appears between them. Consecutive-loss evidence is kept separately.
+    // Never count unverified fees/PnL as a confirmed win or loss.
+    var dailyLossTrades = 0
+    for (row in closed) {
+        val outcome = row.optString("outcome").trim().uppercase(Locale.US)
+        val pnl = row.optDouble("pnl", Double.NaN)
+        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", true) ||
+            !pnl.isFinite() || (outcome == "LOSS" && pnl >= 0.0) ||
+            (outcome == "WIN" && pnl <= 0.0)
+        ) return FuturesLossStreakDecision(
+            false, 0, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+        )
+        when (outcome) {
+            "LOSS" -> dailyLossTrades++
+            "WIN", "BREAKEVEN" -> Unit
+            else -> return FuturesLossStreakDecision(
+                false, 0, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
+            )
+        }
+    }
+
     var losses = 0
     var mostRecentLossAt = 0L
     for (row in closed) {
-        val outcome = row.optString("outcome").trim().uppercase(Locale.US)
-        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", true) ||
-            !row.optDouble("pnl", Double.NaN).isFinite()
-        ) {
-            return FuturesLossStreakDecision(
-                false, losses, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
-            )
-        }
-        when (outcome) {
+        when (row.optString("outcome").trim().uppercase(Locale.US)) {
             "WIN", "BREAKEVEN" -> break
             "LOSS" -> {
                 losses++
                 if (mostRecentLossAt == 0L) mostRecentLossAt = row.optLong("closed_at", 0L)
             }
-            else -> return FuturesLossStreakDecision(
-                false, losses, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
-            )
         }
     }
 
     if (losses >= hardPauseAt) {
         return FuturesLossStreakDecision(
-            true, losses, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE"
+            true, losses, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE", dailyLossTrades
+        )
+    }
+    if (dailyLossTrades >= hardPauseAt) {
+        return FuturesLossStreakDecision(
+            true, losses, false, null, "FUTURES_DAILY_LOSS_TRADE_LIMIT", dailyLossTrades
         )
     }
     if (losses >= maximumConsecutiveLosses && mostRecentLossAt > 0L) {
         val cooldownUntil = mostRecentLossAt + cooldownMs
         if (nowMs < cooldownUntil) {
             return FuturesLossStreakDecision(
-                true, losses, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN"
+                true, losses, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN", dailyLossTrades
             )
         }
     }
-    return FuturesLossStreakDecision(true, losses, true, null, null)
+    return FuturesLossStreakDecision(true, losses, true, null, null, dailyLossTrades)
 }
