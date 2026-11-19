@@ -329,14 +329,15 @@ internal data class FuturesLossStreakDecision(
     val consecutiveLosses: Int,
     val allowNewEntries: Boolean,
     val cooldownUntilMs: Long?,
-    val reason: String?,
-    val dailyLossTrades: Int = 0
+    val reason: String?
 )
 
 /**
- * Evaluate only exchange-reconciled native Futures closes for the current UTC day.
- * Unknown fee/PnL on a newer closed Futures campaign fails closed: it must not be
- * silently counted as a win or skipped while calculating the loss streak.
+ * Three CONSECUTIVE verified losing Futures closes trigger an entry-only block.
+ * Intervening WIN or BREAKEVEN resets the streak. Once the limit is reached
+ * in an exchange-verified UTC day, an intervening close cannot undo that day's
+ * block. No STOP, reconciliation, or existing-position management is disabled.
+ * Daily equity drawdown >=3% is checked by a SEPARATE gate.
  */
 internal fun evaluateFuturesLossStreak(
     tradeRows: JSONArray,
@@ -350,7 +351,6 @@ internal fun evaluateFuturesLossStreak(
     ) return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_CONFIG_INVALID")
 
     val dayStart = futuresUtcDayStartMs(nowMs)
-
     val closed = (0 until tradeRows.length()).mapNotNull { index ->
         tradeRows.optJSONObject(index)
     }.filter { row ->
@@ -359,13 +359,11 @@ internal fun evaluateFuturesLossStreak(
         val isNativeFutures = source == "BINANCE_USDM_USER_TRADES" || id.startsWith("FUTURES:")
         isNativeFutures && row.optString("status").equals("CLOSED", true) &&
             row.optLong("closed_at", 0L) >= dayStart && row.optLong("closed_at", 0L) <= nowMs
-    }.sortedByDescending { it.optLong("closed_at", 0L) }
+    }.sortedBy { it.optLong("closed_at", 0L) }
 
-    // The operator's three losing trades applies to all exchange-reconciled
-    // negative closes within the CURRENT UTC day, even if a winning trade
-    // appears between them. Consecutive-loss evidence is kept separately.
-    // Never count unverified fees/PnL as a confirmed win or loss.
-    var dailyLossTrades = 0
+    var streak = 0
+    var lastLossAt = 0L
+    var hardLimitReached = false
     for (row in closed) {
         val outcome = row.optString("outcome").trim().uppercase(Locale.US)
         val pnl = row.optDouble("pnl", Double.NaN)
@@ -373,46 +371,30 @@ internal fun evaluateFuturesLossStreak(
             !pnl.isFinite() || (outcome == "LOSS" && pnl >= 0.0) ||
             (outcome == "WIN" && pnl <= 0.0)
         ) return FuturesLossStreakDecision(
-            false, 0, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+            false, streak, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
         )
         when (outcome) {
-            "LOSS" -> dailyLossTrades++
-            "WIN", "BREAKEVEN" -> Unit
-            else -> return FuturesLossStreakDecision(
-                false, 0, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
-            )
-        }
-    }
-
-    var losses = 0
-    var mostRecentLossAt = 0L
-    for (row in closed) {
-        when (row.optString("outcome").trim().uppercase(Locale.US)) {
-            "WIN", "BREAKEVEN" -> break
             "LOSS" -> {
-                losses++
-                if (mostRecentLossAt == 0L) mostRecentLossAt = row.optLong("closed_at", 0L)
+                streak++
+                lastLossAt = row.optLong("closed_at", 0L)
+                if (streak >= hardPauseAt) hardLimitReached = true
             }
-        }
-    }
-
-    if (losses >= hardPauseAt) {
-        return FuturesLossStreakDecision(
-            true, losses, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE", dailyLossTrades
-        )
-    }
-    if (dailyLossTrades >= hardPauseAt) {
-        return FuturesLossStreakDecision(
-            true, losses, false, null, "FUTURES_DAILY_LOSS_TRADE_LIMIT", dailyLossTrades
-        )
-    }
-    if (losses >= maximumConsecutiveLosses && mostRecentLossAt > 0L) {
-        val cooldownUntil = mostRecentLossAt + cooldownMs
-        if (nowMs < cooldownUntil) {
-            return FuturesLossStreakDecision(
-                true, losses, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN", dailyLossTrades
+            "WIN", "BREAKEVEN" -> streak = 0
+            else -> return FuturesLossStreakDecision(
+                false, streak, false, null, "FUTURES_LOSS_STREAK_OUTCOME_UNKNOWN"
             )
         }
     }
-    return FuturesLossStreakDecision(true, losses, true, null, null, dailyLossTrades)
+
+    if (hardLimitReached) return FuturesLossStreakDecision(
+        true, streak, false, null, "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE"
+    )
+
+    if (streak >= maximumConsecutiveLosses && lastLossAt > 0L) {
+        val cooldownUntil = lastLossAt + cooldownMs
+        if (nowMs < cooldownUntil) return FuturesLossStreakDecision(
+            true, streak, false, cooldownUntil, "FUTURES_CONSECUTIVE_LOSS_COOLDOWN"
+        )
+    }
+    return FuturesLossStreakDecision(true, streak, true, null, null)
 }
