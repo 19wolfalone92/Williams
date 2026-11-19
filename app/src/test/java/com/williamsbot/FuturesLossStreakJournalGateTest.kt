@@ -36,7 +36,12 @@ class FuturesLossStreakJournalGateTest {
     }
 
     @Test fun signedFillWithPersistedJournalRowAllowsNormalStreakEvaluation() {
-        val journal=JSONArray().put(JSONObject().put("id","FUTURES:wb-abc"))
+        val journal=JSONArray().put(JSONObject()
+            .put("id","FUTURES:wb-abc")
+            .put("trade_audit_source","BINANCE_USDM_USER_TRADES")
+            .put("closed_at",close).put("status","CLOSED")
+            .put("pnl_complete",true).put("fee_known",true)
+            .put("pnl",-3.0).put("outcome","LOSS"))
         val reason=futuresUnjournalledClosedCampaignBlocker(
             JSONArray().put(owner(status="RECORDED")),journal,now)
         assertNull(reason)
@@ -52,6 +57,20 @@ class FuturesLossStreakJournalGateTest {
         val old=Instant.parse("2026-11-18T23:55:00Z").toEpochMilli()
         assertNull(futuresUnjournalledClosedCampaignBlocker(
             JSONArray().put(owner(closedAt=old)),JSONArray(),now))
+    }
+
+    @Test fun sameEntryIdFromYesterdayCannotCertifyTodaysExchangeClose() {
+        val priorDay = Instant.parse("2026-11-18T23:50:00Z").toEpochMilli()
+        val ownerClosedToday = owner(status="RECORDED", closedAt=close)
+        val journal = JSONArray().put(JSONObject()
+            .put("id","FUTURES:wb-abc")
+            .put("trade_audit_source","BINANCE_USDM_USER_TRADES")
+            .put("status","CLOSED").put("closed_at",priorDay)
+            .put("pnl_complete",true).put("fee_known",true)
+            .put("pnl",-1.0).put("outcome","LOSS"))
+        assertEquals("FUTURES_LOSS_STREAK_CLOSE_SESSION_MISMATCH",
+            futuresUnjournalledClosedCampaignBlocker(
+                JSONArray().put(ownerClosedToday), journal, now))
     }
 
     @Test fun priorUtcSessionEntryWithUnknownCloseTimeCannotSilentlySkipTodaysLosses() {
