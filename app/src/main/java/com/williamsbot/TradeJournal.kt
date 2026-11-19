@@ -383,10 +383,17 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
             owner.optString("actual_entry_executed_qty"),
             owner.optString("executed_qty")
         ).mapNotNull { it.toBigDecimalOrNull() }.any { it.signum() > 0 }
+        // A signed FILLED exchange status is independent evidence that a
+        // campaign executed, even if a crash or old migration dropped its
+        // quantity/position flags. Never count it as an unfilled cancellation.
+        val exchangeFilled = owner.optString("exchange_status")
+            .uppercase(Locale.US) == "FILLED" ||
+            owner.optString("order_status").uppercase(Locale.US) == "FILLED"
         val fillObserved =
             owner.optLong("fill_observed_at_ms", 0L) > 0L ||
             owner.optLong("position_open_observed_at_ms", 0L) > 0L ||
-            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty
+            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty ||
+            exchangeFilled
         if (!fillObserved) continue
         if (closedAt <= 0L) {
             // Cross-UTC-day case: an owner opened yesterday may close TODAY.
