@@ -11253,6 +11253,7 @@ private class NativeEngine(
                 }
                 val closed=source.filter { it.t>0L && it.t<=passportObservedAt-ms }.takeLast(160)
                 val result=williamsMarketReading(closed,marketPhase,frame)
+                    .put("history_integrity",WilliamsHistoryIntegrity.inspect(closed,frame,passportObservedAt))
                     .put("closed_candle_count",closed.size)
                     .put("source",if(frame=="1h") "H1_CLOSED_SCANNER" else "SQLITE_CLOSED_HISTORY")
                 val lastClose=closed.lastOrNull()?.t?.plus(ms) ?: 0L
@@ -11265,6 +11266,8 @@ private class NativeEngine(
                 JSONObject().put("schema","WILLIAMS_CHART_READING_V1")
                     .put("frame",frame).put("state","HISTORY_READ_FAILED")
                     .put("error_type",failure.javaClass.simpleName)
+                    .put("history_integrity",JSONObject().put("root_cause","HISTORY_READ_FAILED")
+                        .put("read_only",true).put("can_authorize_entries",false))
                     .put("can_place_orders",false).put("can_close",false)
             }
             passports.put(frame,reading)
@@ -13109,6 +13112,8 @@ private class NativeEngine(
                         .put("closed_candle_count", reading?.optInt("closed_candle_count") ?: 0)
                         .put("as_of_close_ms", reading?.optLong("as_of_close_ms") ?: 0L)
                         .put("source", reading?.optString("source") ?: "UNKNOWN")
+                        .put("history_integrity", reading?.optJSONObject("history_integrity")
+                            ?: JSONObject().put("root_cause","NOT_AVAILABLE"))
                         .put("can_place_orders", false).put("can_close", false))
                 }
             }
