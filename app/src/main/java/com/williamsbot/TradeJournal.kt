@@ -419,6 +419,16 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
         if (owner.optString("trade_journal_status") != "RECORDED" ||
             "FUTURES:$id" !in journaledIds
         ) return "FUTURES_LOSS_STREAK_EXCHANGE_CLOSE_UNJOURNALLED"
+        // A same-client journal row stamped YESTERDAY cannot certify an
+        // exchange close observed TODAY, otherwise today's losing sequence
+        // could be excluded from the UTC-day evaluator.
+        val matchingJournal = (0 until journalRows.length()).mapNotNull { index ->
+            journalRows.optJSONObject(index)
+        }.singleOrNull { it.optString("id") == "FUTURES:$id" }
+        val recordedAt = matchingJournal?.optLong("closed_at", 0L) ?: 0L
+        if (recordedAt < utcStart || recordedAt > nowMs) {
+            return "FUTURES_LOSS_STREAK_CLOSE_SESSION_MISMATCH"
+        }
     }
     return null
 }
