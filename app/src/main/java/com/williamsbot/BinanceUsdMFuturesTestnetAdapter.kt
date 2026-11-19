@@ -156,12 +156,27 @@ internal class BinanceUsdMFuturesTestnetAdapter(
      * Local/nonblocking, after rate/clock waits, including explicit -1021 retry. */
     internal var halfMarginTransportFence: ((Map<String, String>) -> Unit)? = null
     private val base = "https://demo-fapi.binance.com"
-    private val clockLock = Any()
-    @Volatile private var timeSynced: Boolean = false
-    @Volatile private var serverAnchorMs: Long = 0L
-    @Volatile private var anchorMonoNs: Long = 0L
-    @Volatile private var anchorWallMs: Long = 0L
-    @Volatile private var lastClockProbeRttMs: Long = Long.MAX_VALUE
+    // Every short-lived coordinator adapter shares only a *verified UTC sample*
+    // with the same OkHttp transport; full signed account/order reads remain fresh.
+    // A second client, a process restart or an expired/wall-jumped sample cannot
+    // inherit permission to sign. Strict 3s mutation RTT and 30s TTL are unchanged.
+    private val verifiedClock = FuturesDemoClockRegistry.forTransport(http)
+    private val clockLock = verifiedClock.lock
+    private var timeSynced: Boolean
+        get() = verifiedClock.timeSynced
+        set(value) { verifiedClock.timeSynced = value }
+    private var serverAnchorMs: Long
+        get() = verifiedClock.serverAnchorMs
+        set(value) { verifiedClock.serverAnchorMs = value }
+    private var anchorMonoNs: Long
+        get() = verifiedClock.anchorMonoNs
+        set(value) { verifiedClock.anchorMonoNs = value }
+    private var anchorWallMs: Long
+        get() = verifiedClock.anchorWallMs
+        set(value) { verifiedClock.anchorWallMs = value }
+    private var lastClockProbeRttMs: Long
+        get() = verifiedClock.lastClockProbeRttMs
+        set(value) { verifiedClock.lastClockProbeRttMs = value }
 
     private fun ensureFreshServerClock(readOnly: Boolean): Long = synchronized(clockLock) {
         val wall = System.currentTimeMillis()
