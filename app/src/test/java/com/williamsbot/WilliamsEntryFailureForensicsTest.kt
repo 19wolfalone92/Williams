@@ -43,6 +43,49 @@ class WilliamsEntryFailureForensicsTest {
         assertFalse(report.toString().contains(privateId))
     }
 
+    @Test fun oldPhoneRejectionsCannotBeMisreportedAsCurrentVersionFailures() {
+        val now = 180_000_000L
+        val update = now - 90_000L
+        val events = JSONArray()
+            .put(row("COCKPIT_ORDER_RESPONSE", update - 1000L, "UNCONFIRMED_OR_REJECTED",
+                "FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET_IDENTITY"))
+            .put(row("COCKPIT_RECONCILIATION", update - 2000L, "RECONCILE_REQUIRED",
+                "ok=false; Futures server clock probe failed", ""))
+            .put(row("COCKPIT_ORDER_RESPONSE", update + 30_000L, "UNCONFIRMED_OR_REJECTED",
+                "FUTURES_LEVERAGE_STOP_BUFFER"))
+            .put(row("COCKPIT_EXECUTION", update + 31_000L, "ENTRY_PENDING",
+                "SUBMISSION_UNKNOWN"))
+        val lifecycle = JSONArray()
+            .put(JSONObject().put("code", "PACKAGE_REPLACED_OBSERVED")
+                .put("at_ms", update - 5_000L))
+            .put(JSONObject().put("code", "PACKAGE_REPLACED_OBSERVED")
+                .put("at_ms", update))
+        val seen = WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(lifecycle, now)
+        assertEquals(update, seen)
+        val result = WilliamsEntryFailureForensics.summarize(events, now, seen)
+        assertEquals(2, result.getInt("rejected_order_response_count_24h"))
+        assertEquals(1, result.getInt("rejected_order_response_count_since_package_update"))
+        assertEquals(0, result.getInt("clock_failure_count_since_package_update"))
+        assertEquals(1, result.getInt("submission_unknown_count_since_package_update"))
+        assertTrue(result.getBoolean("post_package_update_counts_available"))
+        assertFalse(result.getBoolean("latest_rejection_predates_package_update"))
+        val beforeOnly = WilliamsEntryFailureForensics.summarize(
+            JSONArray().put(row("COCKPIT_ORDER_RESPONSE", update - 1000L,
+                "UNCONFIRMED_OR_REJECTED", "FUTURES_HALF_MARGIN_UNKNOWN")), now, update)
+        assertEquals(0, beforeOnly.getInt("rejected_order_response_count_since_package_update"))
+        assertTrue(beforeOnly.getBoolean("latest_rejection_predates_package_update"))
+        assertEquals(1, beforeOnly.getInt("rejected_order_response_count_24h"))
+    }
+
+    @Test fun absentUpdateIsNotFakeNoFailuresSinceUpdate() {
+        val data = WilliamsEntryFailureForensics.summarize(JSONArray(), 180_000_000L)
+        assertFalse(data.getBoolean("post_package_update_counts_available"))
+        assertTrue(data.isNull("rejected_order_response_count_since_package_update"))
+        assertEquals(0, WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(
+            JSONArray().put(JSONObject().put("code", "BOOT_COMPLETED_OBSERVED")
+                .put("at_ms", 180_000_000L)), 180_000_000L))
+    }
+
     @Test fun noRetainedFailuresDoesNotBecomeFalseExchangeSuccess() {
         val report=WilliamsEntryFailureForensics.summarize(JSONArray(),180_000_000L)
         assertEquals(0,report.getInt("rejected_order_response_count_24h"))
