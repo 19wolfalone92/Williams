@@ -374,8 +374,7 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
             owner.optLong("confirmed_flat_at_ms", 0L)
         )
         val created = owner.optLong("created_at_ms", 0L)
-        if (closedAt <= 0L || (closedAt < utcStart && created < utcStart)) continue
-        if (closedAt > nowMs) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+        if (closedAt > 0L && closedAt < utcStart && created < utcStart) continue
         val fillQty = listOf(
             owner.optString("actual_entry_executed_qty"),
             owner.optString("executed_qty")
@@ -385,6 +384,13 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
             owner.optLong("position_open_observed_at_ms", 0L) > 0L ||
             owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty
         if (!fillObserved) continue
+        if (closedAt <= 0L) {
+            // A filled owner reported closed TODAY without its authenticated
+            // close timestamp cannot be omitted from that day's losing streak.
+            if (created >= utcStart) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+            continue
+        }
+        if (closedAt > nowMs) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
         val id = owner.optString("client_id")
         if (id.isBlank()) return "FUTURES_LOSS_STREAK_ENTRY_ID_UNVERIFIED"
         if (owner.optString("trade_journal_status") != "RECORDED" ||
