@@ -2284,13 +2284,19 @@ private class NativeEngine(
     // The loss-streak UTC day must follow Binance Futures server time, not
     // the Android timezone or an ahead-of-server handset clock (-1021).
     // A stale clock fails closed for NEW entries, without stopping H1 analysis.
-    private fun futuresLossStreakGuard(): FuturesLossStreakDecision =
-        if(!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) {
-            FuturesLossStreakDecision(false,0,false,null,"FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
-        } else evaluateFuturesLossStreak(
-            tradeRows = TradeJournal.trades(prefs),
-            nowMs = futuresMarketData.cachedExchangeNowMs()
-        )
+    private fun futuresLossStreakGuard(): FuturesLossStreakDecision {
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false)) {
+            return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED")
+        }
+        val journal = TradeJournal.tradesForRisk(prefs)
+            ?: return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_JOURNAL_UNVERIFIED")
+        val now = futuresMarketData.cachedExchangeNowMs()
+        val coordinatorIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrNull()
+            ?: return FuturesLossStreakDecision(false, 0, false, null, "FUTURES_LOSS_STREAK_INTENTS_UNVERIFIED")
+        val backlog = futuresUnjournalledClosedCampaignBlocker(coordinatorIntents, journal, now)
+        if (backlog != null) return FuturesLossStreakDecision(false, 0, false, null, backlog)
+        return evaluateFuturesLossStreak(tradeRows = journal, nowMs = now)
+    }
 
     private fun dailyEntryHalt(
         nowMs:Long=futuresMarketData.cachedExchangeNowMs(),
