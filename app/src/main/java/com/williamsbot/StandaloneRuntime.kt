@@ -13423,7 +13423,10 @@ private class NativeEngine(
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
             .put("entry_failure_forensics", WilliamsEntryFailureForensics.summarize(
-                timelineSnapshot, observedAtMs))
+                timelineSnapshot, observedAtMs,
+                WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(
+                    statusSnapshot.optJSONObject("android_runtime")
+                        ?.optJSONObject("continuity")?.optJSONArray("events"), observedAtMs)))
             .put("futures_fill_stop_timing",fillStopTiming)
             .put("tc2_recent_exit_forensics",tc2RecentExits)
             .put("tc2_book_exit_hierarchy",WilliamsTc2ExitHierarchyLens.assess(
@@ -13803,7 +13806,7 @@ private class NativeEngine(
             .put("max_trades_per_day", JSONObject.NULL)
             .put("max_trades_per_day_policy", "NO_FIXED_COUNT_CAP; entries remain subject to campaign risk, daily loss, and Execution Gate")
             .put("max_consecutive_losses", 3)
-            .put("cooldown_minutes", 30)
+            .put("cooldown_minutes", 0) // No unapproved auto-pause after a win or two losses
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
             .put("max_atr_pct", 0.08)
