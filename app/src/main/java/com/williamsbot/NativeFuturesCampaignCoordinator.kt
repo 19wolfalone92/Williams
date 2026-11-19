@@ -130,6 +130,10 @@ internal fun matchesConfirmedFuturesProtectiveStop(
     val actualWorkingType = order.optString("workingType").uppercase(Locale.US)
     if (actualWorkingType != "MARK_PRICE" &&
         (signedProofRequired || actualWorkingType.isNotBlank())) return false
+    // Binance's conditional STOP can be delayed by price-protection divergence.
+    // Our STOP POST explicitly specifies priceProtect=false; the matching
+    // signed exchange record must prove that property before live admission.
+    if (signedProofRequired && !isBinanceUnrestrictedStopTrigger(order)) return false
     val expected = expectedStop.toBigDecimalOrNull() ?: return false
     val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
     if (type != "STOP_MARKET") return false
