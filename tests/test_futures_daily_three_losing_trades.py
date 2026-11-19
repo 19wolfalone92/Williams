@@ -19,9 +19,10 @@ def _runtime_with_closed_pnl(pnls):
     db.commit()
     runtime = FuturesWilliamsRuntime.__new__(FuturesWilliamsRuntime)
     runtime.db = SimpleNamespace(conn=db)
-    runtime.max_trades_day = 0
+    # Simulate stale legacy settings; canonical Futures risk MUST NOT use them.
+    runtime.max_trades_day = 5
     runtime.max_consecutive_losses = 3
-    runtime.cooldown_minutes = 0
+    runtime.cooldown_minutes = 30
     runtime._equity = lambda: 1000.0
     runtime.open_trades = lambda: []
     runtime.equity_breaker = SimpleNamespace(check=lambda *args: (True, None))
@@ -68,3 +69,10 @@ def test_unknown_closed_pnl_never_counts_as_verified_nonloss():
     allowed, reason = runtime._daily_entry_guard()
     assert allowed is False
     assert reason == "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
+
+
+def test_six_winning_closes_do_not_trigger_old_five_trade_or_cooldown_blocks():
+    runtime = _runtime_with_closed_pnl([1.0] * 6)
+    allowed, reason = runtime._daily_entry_guard()
+    assert allowed is True
+    assert reason is None
