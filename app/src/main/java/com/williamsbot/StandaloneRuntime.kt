@@ -1527,8 +1527,12 @@ private class StandaloneServer(private val context: Context) {
             method == "GET" && path == "/api/v1/health" ->
                 x.health().toString()
 
-            method == "GET" && path == "/api/v1/status" ->
-                x.status(fast = params["fast"].equals("true", true)).toString()
+            // Fast status is for credentials/UI acknowledgement; it must not
+            // round-trip the separate 15-symbol decision history as a String.
+            method == "GET" && path == "/api/v1/status" -> {
+                val fast = params["fast"].equals("true", true)
+                x.status(fast = fast, includeDecisionTraces = !fast).toString()
+            }
 
             method == "GET" && path == "/api/v1/market/indicators" ->
                 x.indicators(params["symbol"], params["interval"]).toString()
