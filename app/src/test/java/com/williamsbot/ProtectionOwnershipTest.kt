@@ -166,6 +166,7 @@ class ProtectionOwnershipTest {
             .put("symbol", "BTCUSDT")
             .put("positionSide", "BOTH")
             .put("workingType", "MARK_PRICE")
+            .put("priceProtect", false)
             .put("triggerPrice", "95.00")
         assertTrue(matchesConfirmedFuturesProtectiveStop(
             validLong, "LONG", "W2PS_BTC_current", "95"
@@ -189,6 +190,14 @@ class ProtectionOwnershipTest {
         ))
         assertFalse(matchesConfirmedFuturesProtectiveStop(
             JSONObject(validLong.toString()).put("workingType", "CONTRACT_PRICE"),
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).put("priceProtect", true),
+            "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
+        ))
+        assertFalse(matchesConfirmedFuturesProtectiveStop(
+            JSONObject(validLong.toString()).apply { remove("priceProtect") },
             "LONG", "W2PS_BTC_current", "95", "BTCUSDT"
         ))
         assertFalse(matchesConfirmedFuturesProtectiveStop(
@@ -231,6 +240,7 @@ class ProtectionOwnershipTest {
                 .put("clientAlgoId","W2PS_BTC_owner").put("orderType","STOP_MARKET")
                 .put("algoStatus","NEW").put("positionSide","BOTH")
                 .put("workingType","MARK_PRICE")
+                .put("priceProtect",false)
                 .put("side",if(direction=="LONG") "SELL" else "BUY")
                 .put("closePosition",true)
                 .put("triggerPrice",if(direction=="LONG") "95" else "105")
@@ -251,6 +261,14 @@ class ProtectionOwnershipTest {
             small.put("quantity","2.0")
             assertTrue(isFullPositionFuturesStop(small,"BTCUSDT",direction,
                 java.math.BigDecimal("2"),100.0))
+            // Price protection can delay a STOP during volatility;
+            // never claim an unrestricted, full-position signed Binance STOP.
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(valid.toString()).put("priceProtect",true),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(valid.toString()).apply { remove("priceProtect") },
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
             // Prior code admitted CONTRACT_PRICE as if it were the bot's
             // MARK_PRICE close-all STOP; no longer authorize unsafe adoption.
             assertFalse(isFullPositionFuturesStop(
