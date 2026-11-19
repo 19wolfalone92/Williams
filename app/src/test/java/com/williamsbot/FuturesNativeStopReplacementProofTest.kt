@@ -11,6 +11,7 @@ class FuturesNativeStopReplacementProofTest {
         .put("symbol","BTCUSDT").put("clientAlgoId","W2PS_TEST")
         .put("algoId","9001").put("algoStatus","NEW")
         .put("positionSide","BOTH").put("workingType","MARK_PRICE")
+        .put("priceProtect",false)
         .put("orderType","STOP_MARKET")
         .put("side",if(direction=="LONG") "SELL" else "BUY")
         .put("triggerPrice",if(direction=="LONG") "95" else "105")
@@ -28,7 +29,7 @@ class FuturesNativeStopReplacementProofTest {
                 assertTrue(nativeReplacementStopMatchesSignedExchangeRow(
                     original,"BTCUSDT",direction,"W2PS_TEST",stopPrice,amount))
                 for(field in listOf("positionSide","workingType","algoId",
-                    "clientAlgoId","symbol","side","triggerPrice")) {
+                    "clientAlgoId","symbol","side","triggerPrice","priceProtect")) {
                     val missing=JSONObject(original.toString()).apply { remove(field) }
                     assertFalse("$direction: missing signed $field",
                         nativeReplacementStopMatchesSignedExchangeRow(
@@ -39,6 +40,9 @@ class FuturesNativeStopReplacementProofTest {
                     "BTCUSDT",direction,"W2PS_TEST",stopPrice,amount))
                 assertFalse(nativeReplacementStopMatchesSignedExchangeRow(
                     JSONObject(original.toString()).put("workingType","CONTRACT_PRICE"),
+                    "BTCUSDT",direction,"W2PS_TEST",stopPrice,amount))
+                assertFalse(nativeReplacementStopMatchesSignedExchangeRow(
+                    JSONObject(original.toString()).put("priceProtect",true),
                     "BTCUSDT",direction,"W2PS_TEST",stopPrice,amount))
                 if(qty!=null) assertFalse(nativeReplacementStopMatchesSignedExchangeRow(
                     JSONObject(original.toString()).put("quantity","0.5"),
