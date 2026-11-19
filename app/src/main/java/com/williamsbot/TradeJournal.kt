@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import android.annotation.SuppressLint
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import java.util.Calendar
@@ -329,6 +330,9 @@ object TradeJournal {
     private fun read(prefs: SharedPreferences): JSONArray =
         runCatching { readStrict(prefs) }.getOrElse { JSONArray() }
 
+    // Unlike the KTX edit { commit = true } helper, the explicit Editor.commit()
+    // returns a boolean that a protective risk journal MUST check fail-closed.
+    @SuppressLint("UseKtx")
     private fun write(prefs: SharedPreferences, value: JSONArray, durable: Boolean = false) {
         if (durable) {
             check(prefs.edit().putString(KEY, value.toString()).commit()) {
