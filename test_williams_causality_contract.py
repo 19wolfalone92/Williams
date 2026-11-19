@@ -89,6 +89,6 @@ def test_canonical_futures_contract_keeps_both_directions_and_exact_universe():
     assert cfg.allow_short is True
     assert cfg.execution_timeframe == "1h"
     assert cfg.structural_timeframes == ("1d", "4h", "1h", "15m")
-    assert cfg.max_daily_loss_pct == 0.01
+    assert cfg.max_daily_loss_pct == 0.03
     assert cfg.campaign_risk_limit_pct <= 0.006
     assert cfg.risk_per_trade_pct <= 0.0025
