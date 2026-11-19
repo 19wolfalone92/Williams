@@ -325,7 +325,7 @@ object DiagnosticsArchive {
                 val postClock = entryForensics.optInt("clock_failure_count_since_package_update", 0)
                 appendLine("ПОСЛЕ ПОСЛЕДНЕГО ОБНОВЛЕНИЯ APK: отказов входа=$postRejected, ошибок часов=$postClock. Это только ограниченная история событий, НЕ доказательство успешной сделки.")
                 if (entryForensics.optBoolean("latest_rejection_predates_package_update", false))
-                    appendLine("Все сохранённые отказы входа относятся к ПРЕДЫДУЩЕЙ установленной версии, а не к текущей. На текущей версии результат подписанного входа НЕ подтверждён.")
+                    appendLine("Все сохранённые отказы входа произошли ДО последнего зафиксированного обновления APK. Это НЕ доказывает отсутствие той же ошибки в текущей сборке; подписанный вход на ней НЕ подтверждён.")
             } else appendLine("Время последнего обновления APK неизвестно; разделить старые и новые отказы невозможно.")
             val causes = entryForensics?.optJSONObject("occurrence_counts")
             if ((causes?.optInt("FOREIGN_ASSET_IDENTITY",0) ?: 0) > 0)
