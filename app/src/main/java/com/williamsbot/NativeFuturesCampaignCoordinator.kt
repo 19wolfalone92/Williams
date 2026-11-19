@@ -1106,7 +1106,9 @@ internal class NativeFuturesCampaignCoordinator(
             // region so the failure is recorded as the real blocker instead of
             // leaving the coordinator permanently reporting "in progress".
             val adapter = adapterFactory()
-            adapter.serverTime()
+            // The first signed GET verifies/renews exchange UTC when needed.
+            // A forced unsigned /time probe on EVERY reconciliation previously
+            // discarded still-healthy short-lived clock evidence.
             adapter.requireOneWayMode()
             adapter.account() // verifies authenticated Futures account access
             val exchangePositions = adapter.positions()
@@ -3689,7 +3691,8 @@ internal class NativeFuturesCampaignCoordinator(
         var orderSubmissionAttempted = false
         var finalContextCheckStarted = false
         try {
-            adapter.serverTime()
+            // Signed reads refresh their own verified clock; avoid duplicate
+            // /time probes before the isolated-leverage/STOP sequence.
             adapter.requireOneWayMode()
             val leverageConfirmation = if (!isAddition) adapter.ensureIsolatedLeverage(plan.symbol, plan.leverage)
                 else adapter.requireIsolatedLeverage(plan.symbol,plan.leverage)
