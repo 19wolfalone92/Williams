@@ -895,4 +895,63 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertEquals(0, signedCalls)
     }
 
+    @Test fun twoShortLivedAdaptersShareVerifiedClockOnlyOnSameTransportClient() {
+        val timeGets = java.util.concurrent.atomic.AtomicInteger()
+        val signedGets = java.util.concurrent.atomic.AtomicInteger()
+        fun transport(): OkHttpClient = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val body = when (request.url.encodedPath) {
+                "/fapi/v1/time" -> {
+                    timeGets.incrementAndGet()
+                    """{"serverTime":${System.currentTimeMillis()}}"""
+                }
+                "/fapi/v3/account" -> {
+                    signedGets.incrementAndGet()
+                    assertTrue(request.url.queryParameter("signature") != null)
+                    """{"totalMarginBalance":"990","assets":[{"asset":"USDT"}],"positions":[]}"""
+                }
+                "/fapi/v1/accountConfig" -> {
+                    signedGets.incrementAndGet()
+                    """{"canTrade":true,"dualSidePosition":false,"multiAssetsMargin":false}"""
+                }
+                else -> throw AssertionError("Unexpected signed endpoint ${request.url.encodedPath}")
+            }
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK")
+                .body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+
+        val sharedClient = transport()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", sharedClient).account()
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", sharedClient).account()
+        assertEquals("Signed account proof remains per-adapter/per-call", 4, signedGets.get())
+        assertEquals("A fresh verified unsigned time sample is shared across coordinator adapters", 1, timeGets.get())
+
+        // A different client cannot inherit a UTC sample from the first client.
+        BinanceUsdMFuturesTestnetAdapter("key", "secret", transport()).account()
+        assertEquals(2, timeGets.get())
+        assertEquals(6, signedGets.get())
+    }
+
+    @Test fun failedClockIsNeverSharedAsSigningAuthority() {
+        val probes = java.util.concurrent.atomic.AtomicInteger()
+        val signedGets = java.util.concurrent.atomic.AtomicInteger()
+        val client = OkHttpClient.Builder().addInterceptor { chain ->
+            if (chain.request().url.encodedPath == "/fapi/v1/time") {
+                probes.incrementAndGet()
+                throw java.io.IOException("Simulated offline /time endpoint")
+            }
+            signedGets.incrementAndGet()
+            throw AssertionError("No signed GET after an unverified clock")
+        }.build()
+        repeat(2) {
+            val failure = runCatching {
+                BinanceUsdMFuturesTestnetAdapter("key", "secret", client).account()
+            }.exceptionOrNull()
+            assertTrue(failure is FuturesClockSyncException)
+        }
+        assertEquals(4, probes.get())
+        assertEquals(0, signedGets.get())
+    }
+
 }
