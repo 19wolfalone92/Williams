@@ -20,6 +20,7 @@ def test_cockpit_avoids_giant_string_and_scopes_details_to_selected_symbol():
     # The old 15-symbol String route caused a confirmed Android OOM.
     # The UI now uses a direct JSONObject envelope; diagnostics retain full history.
     assert 'x.cockpit(includeDecisionTraces = false).toString()' in RUNTIME
+    assert 'x.status(fast = fast, includeDecisionTraces = !fast).toString()' in RUNTIME
     assert "fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null)" in RUNTIME
     assert "selectedTraceSymbols = scope" in RUNTIME
     assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in RUNTIME
