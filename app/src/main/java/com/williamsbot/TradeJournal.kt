@@ -383,15 +383,41 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
             owner.optString("actual_entry_executed_qty"),
             owner.optString("executed_qty")
         ).mapNotNull { it.toBigDecimalOrNull() }.any { it.signum() > 0 }
+        // A signed FILLED exchange status is independent evidence that a
+        // campaign executed, even if a crash or old migration dropped its
+        // quantity/position flags. Never count it as an unfilled cancellation.
+        val exchangeFilled = owner.optString("exchange_status")
+            .uppercase(Locale.US) == "FILLED" ||
+            owner.optString("order_status").uppercase(Locale.US) == "FILLED"
         val fillObserved =
             owner.optLong("fill_observed_at_ms", 0L) > 0L ||
             owner.optLong("position_open_observed_at_ms", 0L) > 0L ||
-            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty
+            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty ||
+            exchangeFilled
         if (!fillObserved) continue
         if (closedAt <= 0L) {
-            // A filled owner reported closed TODAY without its authenticated
-            // close timestamp cannot be omitted from that day's losing streak.
-            if (created >= utcStart) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+            // Cross-UTC-day case: an owner opened yesterday may close TODAY.
+            // Its creation date cannot prove an unknown close happened before
+            // UTC midnight. Reconstruct only from an independently persisted,
+            // complete, exchange-reconciled journal close for the exact owner.
+            // Any unjournalled/partial/malformed close must block NEW risk.
+            val ownerId = owner.optString("client_id")
+            if (ownerId.isBlank()) return "FUTURES_LOSS_STREAK_ENTRY_ID_UNVERIFIED"
+            val matchingJournal = (0 until journalRows.length()).mapNotNull {
+                journalRows.optJSONObject(it)
+            }.singleOrNull { it.optString("id") == "FUTURES:$ownerId" }
+            val journalTime = matchingJournal?.optLong("closed_at", 0L) ?: 0L
+            val signedProof = matchingJournal != null &&
+                matchingJournal.optString("trade_audit_source") == "BINANCE_USDM_USER_TRADES" &&
+                matchingJournal.optString("status") == "CLOSED" &&
+                matchingJournal.optBoolean("pnl_complete", false) &&
+                matchingJournal.optBoolean("fee_known", false) &&
+                matchingJournal.optDouble("pnl", Double.NaN).isFinite() &&
+                journalTime > 0L && journalTime <= nowMs &&
+                owner.optString("trade_journal_status") == "RECORDED"
+            if (!signedProof) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+            // The normal streak evaluator separately validates today's
+            // journal outcome and its chronological sequence.
             continue
         }
         if (closedAt > nowMs) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
@@ -400,6 +426,16 @@ internal fun futuresUnjournalledClosedCampaignBlocker(
         if (owner.optString("trade_journal_status") != "RECORDED" ||
             "FUTURES:$id" !in journaledIds
         ) return "FUTURES_LOSS_STREAK_EXCHANGE_CLOSE_UNJOURNALLED"
+        // A same-client journal row stamped YESTERDAY cannot certify an
+        // exchange close observed TODAY, otherwise today's losing sequence
+        // could be excluded from the UTC-day evaluator.
+        val matchingJournal = (0 until journalRows.length()).mapNotNull { index ->
+            journalRows.optJSONObject(index)
+        }.singleOrNull { it.optString("id") == "FUTURES:$id" }
+        val recordedAt = matchingJournal?.optLong("closed_at", 0L) ?: 0L
+        if (recordedAt < utcStart || recordedAt > nowMs) {
+            return "FUTURES_LOSS_STREAK_CLOSE_SESSION_MISMATCH"
+        }
     }
     return null
 }
