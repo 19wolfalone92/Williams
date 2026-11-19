@@ -1989,7 +1989,7 @@ private class NativeEngine(
     private val campaignRiskLimitPct = 0.006
     // User-approved daily entry halt. The separate 5% emergency equity kill
     // switch stays independent and must not replace this tighter risk gate.
-    private val futuresDailyLossLimitPct = 0.01
+    private val futuresDailyLossLimitPct = 0.03
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
@@ -5346,7 +5346,7 @@ private class NativeEngine(
         if (executionStore.readState(baselineKey) == null) {
             // Reconstruct from the full UTC-day income ledger when trades already
             // occurred. Never reset to current equity just because the local baseline
-            // disappeared: that would erase realized losses from today's 1% limit.
+            // disappeared: that would erase realized losses from today's 3% limit.
             val baselineAttempt = runCatching {
                 val positions = futuresCampaignCoordinator.positionsSnapshot()
                 val hasOpenOrUnknownPosition = (0 until positions.length()).any { index ->
@@ -5396,12 +5396,12 @@ private class NativeEngine(
                 paused = true
                 // Distinguish an automatic, recoverable daily-baseline pause
                 // from the operator's explicit pause. Never erase either risk
-                // evidence or the 1% daily entry-loss limit.
+                // evidence or the 3% daily entry-loss limit.
                 check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
                     "Could not durably pause trades while the UTC baseline is unknown"
                 }
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
-                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 1% and entries stay blocked"
+                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
                 return false
             }
             check(executionStore.writeState(baselineKey, baselineResult.first.toString()) &&
@@ -5539,7 +5539,7 @@ private class NativeEngine(
         }
         val halt=dailyEntryHalt(exchangeNowMs,true)
         if(!halt.allowNewEntries) {
-            lastError = "FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked"
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
             if(!halt.available) lastError=halt.reason
             runCatching {
                 withCampaignMutation(
@@ -12156,6 +12156,8 @@ private class NativeEngine(
                     .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
             })
             .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
+            .put("loss_trades_today", futuresLossStreakGuard().dailyLossTrades)
+            .put("max_loss_trades_per_day", 3)
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
@@ -13806,7 +13808,7 @@ private class NativeEngine(
             .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("max_trades_per_day", JSONObject.NULL)
             .put("max_trades_per_day_policy", "NO_FIXED_COUNT_CAP; entries remain subject to campaign risk, daily loss, and Execution Gate")
-            .put("max_consecutive_losses", 2)
+            .put("max_consecutive_losses", 3)
             .put("cooldown_minutes", 30)
             .put("min_risk_reward", 1.5)
             .put("atr_period", 14)
