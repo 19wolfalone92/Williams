@@ -85,6 +85,9 @@ internal fun futuresEntryPostReceiptMatches(
     return if (isAlgo) {
         signedFuturesAlgoOrderGetMatches(receipt, symbol, clientId) &&
             receipt.optString("algoType") == "CONDITIONAL" &&
+            // The TC2 H1 breakout is explicitly a CONTRACT_PRICE trigger.
+            // A response with MARK_PRICE would be a different strategy entry.
+            receipt.optString("workingType") == "CONTRACT_PRICE" &&
             receipt.optString("orderType").ifBlank { receipt.optString("type") } == expectedType &&
             receipt.optString("algoStatus").uppercase(Locale.US) in
                 setOf("NEW","WORKING","PENDING","ACCEPTED","TRIGGERING","TRIGGERED") &&
