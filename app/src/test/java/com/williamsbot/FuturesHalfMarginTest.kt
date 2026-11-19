@@ -171,6 +171,33 @@ class FuturesHalfMarginTest {
             exposure.exceptionOrNull().toString().contains("FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET"))
     }
 
+    @Test fun unrecognizedForeignAssetIdentityRevealsOnlyCodeShapeNotRawTicker() {
+        val diagnostic = futuresForeignAssetCodeShape("weird/A")
+        assertTrue(diagnostic.contains("len=7"))
+        assertTrue(diagnostic.contains("upper=1"))
+        assertTrue(diagnostic.contains("lower=5"))
+        assertTrue(diagnostic.contains("other=1"))
+        assertFalse(diagnostic.contains("weird"))
+        assertFalse(diagnostic.contains("/A"))
+        val case = cases().first()
+        val account = JSONObject(case.getJSONObject("account").toString())
+        account.getJSONArray("assets").put(
+            JSONObject().put("asset", "weird/A")
+                .put("walletBalance", "0")
+                .put("unrealizedProfit", "0")
+                .put("initialMargin", "0")
+        )
+        val config = case.getJSONObject("symbols")
+        val errors = runCatching { futuresMarginObservation(
+            account, case.getJSONObject("configuration"), case.getJSONArray("orders"),
+            config.keys().asSequence().associateWith { config.getJSONObject(it) }
+        ) }
+        val errorText = errors.exceptionOrNull().toString()
+        assertTrue(errorText.contains("FOREIGN_ASSET_IDENTITY"))
+        assertTrue(errorText.contains("non_ascii=0"))
+        assertFalse(errorText.contains("weird/A"))
+    }
+
     @Test fun aChildCannotBeClaimedByTwoParents() {
         val case = cases().single { it.getString("id") == "partial_parent_bound_to_child_once" }
         val liabilities = case.getJSONArray("liabilities")
