@@ -14,6 +14,8 @@ internal object WilliamsEntryFailureForensics {
     private const val MAX_EXAMPLES = 16
 
     private fun rootCause(detail: String): String = when {
+        detail.contains("FUTURES_ENTRY_POST_RECEIPT_IDENTITY_OR_QUANTITY_UNVERIFIED") ->
+            "BINANCE_ENTRY_POST_ACK_IDENTITY_UNKNOWN"
         // A local H1 book rule declining a consumed/unknown trigger is not
         // evidence that a submitted order was rejected by Binance.
         detail.contains("H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED") ->
@@ -38,6 +40,8 @@ internal object WilliamsEntryFailureForensics {
     }
 
     private fun nextCheck(code: String): String = when (code) {
+        "BINANCE_ENTRY_POST_ACK_IDENTITY_UNKNOWN" ->
+            "POST returned an incomplete or mismatching signed Binance order receipt. Do NOT retry POST; reconcile exact symbol/clientAlgoId or clientOrderId, open orders, fills and STOP."
         "LOCAL_H1_TRIGGER_CONSUMED_OR_UNVERIFIED" ->
             "Check prior closed H1 breakout history against its original trigger; do not replay an already consumed or unverified price trigger."
         "FOREIGN_ASSET_IDENTITY" ->
