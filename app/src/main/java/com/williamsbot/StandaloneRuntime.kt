@@ -12156,8 +12156,6 @@ private class NativeEngine(
                     .put("reset_policy","UTC_00_00_ENTRY_ONLY; OPERATOR_PAUSE_AND_KILL_UNCHANGED")
             })
             .put("consecutive_losses", futuresLossStreakGuard().consecutiveLosses)
-            .put("loss_trades_today", futuresLossStreakGuard().dailyLossTrades)
-            .put("max_loss_trades_per_day", 3)
             .put("consecutive_losses_available", futuresLossStreakGuard().available)
             .put("consecutive_loss_blocker", futuresLossStreakGuard().reason ?: JSONObject.NULL)
             .put("consecutive_loss_cooldown_until_ms", futuresLossStreakGuard().cooldownUntilMs ?: JSONObject.NULL)
