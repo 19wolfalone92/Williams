@@ -3145,7 +3145,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("POST:W2T_NATIVE_${direction.name}", operations[2])
             assertTrue(operations[3].startsWith("DELETE:W2B_"))
             val active = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", active.getString("closePosition"))
+            assertTrue(active.optBoolean("closePosition", false))
             assertFalse(active.has("quantity"))
             assertFalse(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
             // No second account-wide reconciliation is needed to expose the
@@ -3271,7 +3271,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(0, coordinator.status()
                 .getJSONArray("exchange_protection_observations").length())
             val bridge = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", bridge.getString("reduceOnly"))
+            assertTrue(bridge.optBoolean("reduceOnly", false))
             exchange.beforeRequest = null; exchange.rejectProtectionCode = null
             val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
             val posts = exchange.posts("/fapi/v1/algoOrder")
@@ -3426,7 +3426,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val reconciled = coordinator.reconcile()
             assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
             val stop = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", stop.getString("closePosition"))
+            assertTrue(stop.optBoolean("closePosition", false))
             assertTrue(isFullPositionFuturesStop(stop, "BTCUSDT", direction.name, "1.1".toBigDecimal(), exchange.mark))
             assertEquals("1.1", coordinator.intentsSnapshot().getJSONObject(0).getString("confirmed_position_qty"))
         }
