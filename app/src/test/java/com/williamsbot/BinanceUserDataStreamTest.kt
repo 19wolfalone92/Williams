@@ -268,6 +268,34 @@ class BinanceUserDataStreamTest {
         } finally { stream.stop() }
     }
 
+    @Test fun unknownPrivateEnvelopeNeverLeavesSocketReadyOrLosesSignedReconcile() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val disconnected = Collections.synchronizedList(mutableListOf<String>())
+        val events = Collections.synchronizedList(mutableListOf<JSONObject>())
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" },
+            { connected, reason -> if (!connected) disconnected += reason.orEmpty() },
+            { events += it },
+            { request, listener -> TestSocket(request).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            listener.onOpen(old, socketResponse(old.request()))
+            assertTrue(stream.isConnected())
+            // The server can return an unrecognized post-migration envelope
+            // that appears syntactically valid; pretending it was a valid
+            // heartbeat could leave an unprotected fill undiscovered.
+            listener.onMessage(old, """{"data":{"foo":"without-event-type"}}""")
+            assertFalse(stream.isConnected())
+            assertTrue(disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") })
+            org.junit.Assert.assertEquals("private_event_schema_mismatch", old.lastCloseReason)
+            assertTrue(events.isEmpty())
+            val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
+            nextListener.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+        } finally { stream.stop() }
+    }
+
     @Test fun missingHandshakeCallbackIsBoundedAndObsoleteSocketIsCancelled() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
         val stream = BinanceUserDataStream(listenKeyClient(), "wss://demo-fstream.binance.com/private/ws",
