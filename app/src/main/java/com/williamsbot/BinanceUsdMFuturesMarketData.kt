@@ -91,11 +91,24 @@ internal fun publicFuturesClockNeedsEarlyRenewal(
     anchorWallMs, anchorMonotonicNs, wallNowMs, monotonicNowNs
 ) || (monotonicNowNs - anchorMonotonicNs) / 1_000_000L >= 20_000L
 
-/** Reject slow/asymmetric or wall-clock-unstable public time probes. */
+/**
+ * Public UTC is read-only and permits an 8s bounded RTT on mobile data.
+ * Anchor at RESPONSE RECEIPT, not midpoint: it may UNDERSTATE server time
+ * by up to one RTT, but never certify a forming candle ahead of the exchange.
+ * This clock NEVER signs orders: signed mutations retain their own <=3s gate.
+ */
 internal fun publicFuturesClockSampleUsable(
     serverTimeMs: Long, monotonicRttMs: Long, wallElapsedMs: Long
-): Boolean = serverTimeMs > 0L && monotonicRttMs in 0L..3_000L &&
+): Boolean = serverTimeMs > 0L && monotonicRttMs in 0L..8_000L &&
     kotlin.math.abs(wallElapsedMs - monotonicRttMs) <= 1_000L
+
+/** Do not use a potentially delayed public time sample to select the wrong UTC risk day. */
+internal fun publicFuturesUtcDayUnambiguous(exchangeNowMs: Long, rttMs: Long): Boolean {
+    if (exchangeNowMs <= 0L || rttMs !in 0L..8_000L) return false
+    val utcDayMs = 86_400_000L
+    val phase = Math.floorMod(exchangeNowMs, utcDayMs)
+    return phase > rttMs + 1_000L && phase < utcDayMs - rttMs - 1_000L
+}
 
 /** Prevent a failed public-time endpoint from stampeding concurrent scanner/UI reads. */
 internal fun publicFuturesClockProbeDue(lastAttemptNs: Long, nowNs: Long): Boolean =
@@ -114,7 +127,7 @@ internal class BinanceUsdMFuturesMarketData(
     // retries, which can stall for >30s on a dead mobile radio. One bounded
     // unsigned GET is retried by the independent 5-second watchdog tick.
     private val clockHttp = http.newBuilder()
-        .callTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(8_500L, TimeUnit.MILLISECONDS)
         .retryOnConnectionFailure(false)
         .followRedirects(false)
         .followSslRedirects(false)
@@ -122,6 +135,7 @@ internal class BinanceUsdMFuturesMarketData(
     @Volatile private var serverOffsetMs = 0L
     @Volatile private var lastServerSyncLocalMs = 0L
     @Volatile private var lastServerSyncMonotonicNs = Long.MIN_VALUE
+    @Volatile private var lastClockSampleUncertaintyMs = Long.MAX_VALUE
     // Bounded clock-probe retries: a dead radio cannot stall every caller.
     @Volatile private var lastClockProbeAttemptNs = Long.MIN_VALUE
     // Public market-data GETs only. Signed account, STOP and recovery transport
@@ -135,7 +149,8 @@ internal class BinanceUsdMFuturesMarketData(
         val now = System.currentTimeMillis()
         val at = lastServerSyncLocalMs
         val fresh = !publicFuturesClockNeedsRefresh(
-            at, lastServerSyncMonotonicNs, now, System.nanoTime())
+            at, lastServerSyncMonotonicNs, now, System.nanoTime()) &&
+            publicFuturesUtcDayUnambiguous(now + serverOffsetMs, lastClockSampleUncertaintyMs)
         return JSONObject().put("synced_at_ms", at).put("offset_ms", serverOffsetMs)
             .put("fresh", fresh)
             .put("age_ms", if (at > 0L && now >= at) now - at else JSONObject.NULL)
@@ -173,6 +188,7 @@ internal class BinanceUsdMFuturesMarketData(
                             // Never overstate server time across an asymmetric
                             // mobile response; this may safely delay an UTC reset.
                             serverOffsetMs = remote - after
+                            lastClockSampleUncertaintyMs = rttMs
                             lastServerSyncLocalMs = after
                             lastServerSyncMonotonicNs = afterMono
                         } catch (failure: Exception) {
@@ -193,7 +209,11 @@ internal class BinanceUsdMFuturesMarketData(
                 lastServerSyncLocalMs, lastServerSyncMonotonicNs,
                 System.currentTimeMillis(), System.nanoTime())
         ) throw IOException("USD-M Futures clock expired; exchange UTC unverified")
-        return System.currentTimeMillis() + serverOffsetMs
+        val verifiedNow = System.currentTimeMillis() + serverOffsetMs
+        if (!publicFuturesUtcDayUnambiguous(verifiedNow, lastClockSampleUncertaintyMs)) {
+            throw IOException("USD-M Futures UTC risk day ambiguous within verified clock RTT; entries blocked")
+        }
+        return verifiedNow
     }
 
     /**
