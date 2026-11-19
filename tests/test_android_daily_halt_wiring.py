@@ -18,7 +18,7 @@ def test_daily_halt_is_independent_of_operator_pause_and_keeps_order_gates():
 
 
 def test_daily_halt_persists_and_only_storage_failure_pauses_runtime():
-    breach = RUNTIME.split("if (lossPct >= 0.03) {", 1)[1].split("val halt=dailyEntryHalt", 1)[0]
+    breach = RUNTIME.split("if (lossPct >= futuresDailyLossLimitPct) {", 1)[1].split("val halt=dailyEntryHalt", 1)[0]
     assert 'if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {' in breach
     assert 'FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED' in breach
     assert breach.index('paused=true') > breach.index('if(!executionStore.writeState')
