@@ -841,13 +841,29 @@ class FuturesWilliamsRuntime:
         if self.max_trades_day and trades_today >= self.max_trades_day:
             return False, f"MAX_TRADES_PER_DAY reached: {trades_today}"
 
+        # SQLite date('now') is UTC. Restrict the streak to the same
+        # exchange risk day and independently count EVERY negative close,
+        # not just 3 consecutive losses: the operator's daily policy is
+        # 3% drawdown OR 3 losing closed campaigns (whichever comes first).
         recent = self.db.conn.execute(
-            "SELECT pnl, exit_time FROM trades "
-            "WHERE exit_time IS NOT NULL ORDER BY id DESC LIMIT 20"
+            "SELECT pnl, exit_time FROM trades WHERE exit_time IS NOT NULL "
+            "AND exit_time >= date('now') ORDER BY id DESC"
         ).fetchall()
-        losses = 0
+        verified_pnl = []
         for row in recent:
-            if float(row["pnl"] or 0) < 0:
+            try:
+                value = float(row["pnl"])
+            except (TypeError, ValueError):
+                return False, "FUTURES_DAILY_LOSS_TRADES_UNVERIFIED"
+            if not math.isfinite(value):
+                return False, "FUTURES_DAILY_LOSS_TRADES_UNVERIFIED"
+            verified_pnl.append(value)
+        daily_losing_trades = sum(value < 0 for value in verified_pnl)
+        if daily_losing_trades >= 3:
+            return False, f"MAX_DAILY_LOSS_TRADES reached: {daily_losing_trades}"
+        losses = 0
+        for value in verified_pnl:
+            if value < 0:
                 losses += 1
             else:
                 break
