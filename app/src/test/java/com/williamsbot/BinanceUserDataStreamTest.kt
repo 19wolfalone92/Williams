@@ -296,6 +296,28 @@ class BinanceUserDataStreamTest {
         } finally { stream.stop() }
     }
 
+    @Test fun unrecognizedPrivateEventTypeMustNotSilentlyDiscardAChangedBinanceProtocol() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val disconnected = Collections.synchronizedList(mutableListOf<String>())
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" },
+            { connected, reason -> if (!connected) disconnected += reason.orEmpty() },
+            { },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (old, listener) = requireNotNull(sessions.poll(5L, TimeUnit.SECONDS))
+            listener.onOpen(old, socketResponse(old.request()))
+            listener.onMessage(old, """{"e":"FUTURE_UNSUPPORTED_FILL_EVENT","E":1800000000000}""")
+            assertFalse(stream.isConnected())
+            assertTrue(disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") })
+            assertTrue(old.lastCloseCode == 1000 || old.cancelled)
+            val (next, newListener) = requireNotNull(sessions.poll(5L, TimeUnit.SECONDS))
+            newListener.onOpen(next, socketResponse(next.request()))
+            assertTrue(stream.isConnected())
+        } finally { stream.stop() }
+    }
+
     @Test fun missingHandshakeCallbackIsBoundedAndObsoleteSocketIsCancelled() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
         val stream = BinanceUserDataStream(listenKeyClient(), "wss://demo-fstream.binance.com/private/ws",
