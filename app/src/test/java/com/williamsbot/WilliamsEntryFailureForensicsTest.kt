@@ -43,6 +43,27 @@ class WilliamsEntryFailureForensicsTest {
         assertFalse(report.toString().contains(privateId))
     }
 
+    @Test fun diag4_consumed_h1_breakout_is_local_safety_denial_not_unknown_exchange_response() {
+        val now = 180_000_000L
+        val events = JSONArray()
+            .put(row("COCKPIT_ORDER_RESPONSE", now - 1_000L, "UNCONFIRMED_OR_REJECTED",
+                "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED", "XRPUSDT"))
+            .put(row("COCKPIT_ORDER_RESPONSE", now - 2_000L, "UNCONFIRMED_OR_REJECTED",
+                "H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED", "SOLUSDT"))
+            .put(row("COCKPIT_ORDER_RESPONSE", now - 3_000L, "UNCONFIRMED_OR_REJECTED",
+                "FUTURES_ENTRY_CONTEXT_REJECTED: FUTURES_HALF_MARGIN_UNKNOWN:STALE", "BNBUSDT"))
+            .put(row("COCKPIT_ORDER_RESPONSE", now - 4_000L, "ACCEPTED", "", "SUIUSDT"))
+        val result = WilliamsEntryFailureForensics.summarize(events, now)
+        assertEquals(3, result.getInt("rejected_order_response_count_24h"))
+        assertEquals(2, result.getInt("local_h1_pre_submission_decline_count_24h"))
+        assertEquals(1, result.getInt("other_entry_response_rejection_count_24h"))
+        assertEquals(2, result.getJSONObject("occurrence_counts")
+            .getInt("LOCAL_H1_TRIGGER_CONSUMED_OR_UNVERIFIED"))
+        assertEquals(1, result.getJSONObject("occurrence_counts")
+            .getInt("ACCOUNT_MARGIN_PROOF_UNKNOWN"))
+        assertFalse(result.toString().contains("UNCLASSIFIED_RESPONSE"))
+    }
+
     @Test fun oldPhoneRejectionsCannotBeMisreportedAsCurrentVersionFailures() {
         val now = 180_000_000L
         val update = now - 90_000L
