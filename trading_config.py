@@ -218,7 +218,7 @@ class TradingConfig:
             campaign_risk_limit_pct=campaign_risk,
             max_total_risk_pct=total_risk,
             max_daily_loss_pct=max(0.0, min(0.03, _float(source, "MAX_DAILY_LOSS_PCT", 0.03))),
-            max_consecutive_losses=min(3, max(0, _int(source, "MAX_CONSECUTIVE_LOSSES", 3))),
+            max_consecutive_losses=3,  # Fixed operator policy: neither 2 nor 4 is allowed.
             cooldown_minutes=max(0, _int(source, "COOLDOWN_MINUTES", 30)),
             max_open_positions=max_positions,
             min_risk_reward=max(0.0, _float(source, "MIN_RISK_REWARD", 1.5)),
