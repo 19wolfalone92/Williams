@@ -14,6 +14,10 @@ internal object WilliamsEntryFailureForensics {
     private const val MAX_EXAMPLES = 16
 
     private fun rootCause(detail: String): String = when {
+        // A local H1 book rule declining a consumed/unknown trigger is not
+        // evidence that a submitted order was rejected by Binance.
+        detail.contains("H1_BOOK_BREAKOUT_WAS_ALREADY_CONSUMED_OR_HISTORY_UNVERIFIED") ->
+            "LOCAL_H1_TRIGGER_CONSUMED_OR_UNVERIFIED"
         detail.contains("FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET_IDENTITY") ->
             "FOREIGN_ASSET_IDENTITY"
         detail.contains("FUTURES_HALF_MARGIN_UNKNOWN:") ->
@@ -34,6 +38,8 @@ internal object WilliamsEntryFailureForensics {
     }
 
     private fun nextCheck(code: String): String = when (code) {
+        "LOCAL_H1_TRIGGER_CONSUMED_OR_UNVERIFIED" ->
+            "Check prior closed H1 breakout history against its original trigger; do not replay an already consumed or unverified price trigger."
         "FOREIGN_ASSET_IDENTITY" ->
             "Inspect signed account.assets asset-code shape; never treat an unknown asset as USDT collateral."
         "ACCOUNT_MARGIN_PROOF_UNKNOWN" ->
@@ -68,6 +74,7 @@ internal object WilliamsEntryFailureForensics {
         val samples = JSONArray()
         val sampleKeys = mutableSetOf<String>()
         var rejected = 0
+        var localH1Declines = 0
         var clockFailures = 0
         var uncertainPending = 0
         var validEvents = 0
@@ -98,6 +105,7 @@ internal object WilliamsEntryFailureForensics {
             if (!isRejection && !isClockFailure) continue
             if (isRejection) {
                 rejected++
+                if (rootCause(detail) == "LOCAL_H1_TRIGGER_CONSUMED_OR_UNVERIFIED") localH1Declines++
                 if (knownUpdate && at >= packageUpdateAtMs) rejectedSinceUpdate++
                 latestRejectionAtMs = maxOf(latestRejectionAtMs, at)
             } else {
@@ -132,6 +140,10 @@ internal object WilliamsEntryFailureForensics {
             .put("valid_event_count_last_24h", validEvents)
             .put("history_may_be_truncated", true)
             .put("rejected_order_response_count_24h", rejected)
+            .put("local_h1_pre_submission_decline_count_24h", localH1Declines)
+            // Remaining rejections are not proof of a Binance rejection either;
+            // they include local margin and clock safety gates.
+            .put("other_entry_response_rejection_count_24h", rejected - localH1Declines)
             .put("clock_reconciliation_failure_count_24h", clockFailures)
             .put("submission_unknown_observation_count_24h", uncertainPending)
             .put("latest_rejected_order_response_at_ms", latestRejectionAtMs)
@@ -150,6 +162,7 @@ internal object WilliamsEntryFailureForensics {
             .put("representative_failures", samples)
             .put("interpretation",
                 "An app-observed rejection is not a signed exchange non-placement receipt. " +
+                "Local H1 trigger denials are pre-submission strategy safeguards, not exchange rejections. " +
                 "A later READY snapshot does not erase historical rejections. " +
                 "An empty bounded timeline is NOT proof of correct Demo execution.")
     }
