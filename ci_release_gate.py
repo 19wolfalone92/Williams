@@ -69,7 +69,7 @@ def main() -> None:
         "TESTNET=true",
         "ALLOW_LIVE=false",
         "DRY_RUN=true",
-        "MAX_DAILY_LOSS_PCT=0.03",
+        "MAX_DAILY_LOSS_PCT=0.01",
         "RISK_PER_TRADE_PCT=0.0025",
         "MAX_CONSECUTIVE_LOSSES=2",
         "BINANCE_MARKET=futures_usdt",
@@ -99,7 +99,7 @@ def main() -> None:
     must(cfg, 'FUTURES_SYMBOL_LEVERAGES', "trading_config.py")
     must(cfg, 'FUTURES_MARGIN_TYPE must be ISOLATED', "trading_config.py")
     must(cfg, 'FUTURES_FORCE_ONE_WAY must remain enabled', "trading_config.py")
-    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.03,', "trading_config.py")
+    must(cfg, 'max_daily_loss_pct=max(0.0, min(0.01,', "trading_config.py")
     must(cfg, "futures_leverage=futures_leverage", "trading_config.py")
     must(cfg, "futures_margin_type=futures_margin_type", "trading_config.py")
     must(cfg, "futures_force_one_way=futures_force_one_way", "trading_config.py")
@@ -113,7 +113,7 @@ def main() -> None:
         'market = str(source.get("BINANCE_MARKET", "futures_usdt"))',
         'risk_key = "MAX_RISK_PER_TRADE_PCT"',
         "min(0.0025",
-        "min(0.03",
+        "min(0.01",
     ):
         must(cfg, needle, "trading_config.py")
 
@@ -144,8 +144,8 @@ def main() -> None:
         "risk_engine.py",
     )
     must(risk, "stop_price = structural_stop", "risk_engine.py")
-    must(risk, "max_daily_loss_pct: float = 0.03", "risk_engine.py")
-    must(risk, "min(0.03, raw_daily_loss)", "risk_engine.py")
+    must(risk, "max_daily_loss_pct: float = 0.01", "risk_engine.py")
+    must(risk, "min(0.01, raw_daily_loss)", "risk_engine.py")
     must_not(risk, "entry - fallback_stop_distance", "risk_engine.py")
     must_not(risk, "entry + fallback_stop_distance", "risk_engine.py")
 
@@ -603,8 +603,8 @@ def main() -> None:
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched &&', "StandaloneRuntime.kt")
     must(legacy_runtime, 'coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'if (lossPct >= 0.03)', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'if (lossPct >= futuresDailyLossLimitPct)', "StandaloneRuntime.kt")
+    must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked', "StandaloneRuntime.kt")
 
     # UI single-source diagnosis and forced-order retirement are safety
     # contracts, not merely cosmetic requests. Preserve these through merges.
@@ -660,7 +660,7 @@ def main() -> None:
     must(android, "ACTION_APPLICATION_DETAILS_SETTINGS", "MainActivity.kt")
     for needle in (
         "val riskPerTrade: Double = 0.0025",
-        "val maxDailyLoss: Double = 0.03",
+        "val maxDailyLoss: Double = 0.01",
         "val maxOpenPositions: Int = MAX_FUTURES_CAMPAIGNS",
         "val maxTotalRiskPct: Double = 0.006",
     ):
