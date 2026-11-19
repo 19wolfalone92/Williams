@@ -4102,7 +4102,7 @@ internal fun parseStatus(json: JSONObject): Status {
         maxDailyLoss =
             json.optDouble(
                 "max_daily_loss_pct",
-                0.03
+                0.01
             ),
         tradesToday =
             json.optInt("trades_today", 0),
