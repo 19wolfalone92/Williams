@@ -13418,6 +13418,8 @@ private class NativeEngine(
             .put("created_at", java.time.Instant.ofEpochMilli(observedAtMs).toString())
             .put("cockpit_readiness", cockpitReadiness)
             .put("event_timeline", timelineSnapshot)
+            .put("entry_failure_forensics", WilliamsEntryFailureForensics.summarize(
+                timelineSnapshot, observedAtMs))
             .put("futures_fill_stop_timing",fillStopTiming)
             .put("tc2_recent_exit_forensics",tc2RecentExits)
             .put("tc2_book_exit_hierarchy",WilliamsTc2ExitHierarchyLens.assess(
