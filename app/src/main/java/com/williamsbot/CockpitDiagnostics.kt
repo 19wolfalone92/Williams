@@ -673,7 +673,7 @@ internal object CockpitDiagnostics {
         val daily = status.optDouble("daily_loss_pct")
         check("RISK-03", "risk", "Суточные ограничения", when {
             baseline in setOf("", "null", "UNKNOWN") || !daily.isFinite() -> "NOT_VERIFIED"
-            daily >= status.optDouble("max_daily_loss_pct", 0.03) && ready.optBoolean("new_entries_allowed") -> "FAIL"
+            daily >= status.optDouble("max_daily_loss_pct", 0.01) && ready.optBoolean("new_entries_allowed") -> "FAIL"
             else -> "PASS"
         }, "База=$baseline; дневной убыток=$daily; превышение лимита должно блокировать вход.")
         val android = status.optJSONObject("android_runtime")
