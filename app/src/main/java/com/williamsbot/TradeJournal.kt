@@ -61,7 +61,7 @@ object TradeJournal {
             .put("mae_pct", 0.0)
             .put("mfe_r", 0.0)
             .put("mae_r", 0.0)
-        val all = read(prefs)
+        val all = readStrict(prefs)
         all.put(row)
         trim(all)
         write(prefs, all)
@@ -75,7 +75,7 @@ object TradeJournal {
         price: Double
     ) {
         if (price <= 0.0) return
-        val all = read(prefs)
+        val all = readStrict(prefs)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -106,7 +106,7 @@ object TradeJournal {
         reason: String,
         order: JSONObject? = null
     ) {
-        val all = read(prefs)
+        val all = readStrict(prefs)
         for (i in 0 until all.length()) {
             val row = all.getJSONObject(i)
             if (row.optString("symbol") != symbol || row.optString("status") != "OPEN") continue
@@ -227,7 +227,7 @@ object TradeJournal {
             .put("fill_count", fillCount)
             .put("classification", if (complete) "exchange_reconciled" else "fees_incomplete")
             .put("post_trade_classification", if (complete) "exchange_reconciled" else "fees_incomplete")
-        val all = read(prefs)
+        val all = readStrict(prefs)
         var replaced = false
         for (i in 0 until all.length()) {
             val old = all.optJSONObject(i) ?: continue
@@ -239,8 +239,24 @@ object TradeJournal {
         }
         if (!replaced) all.put(row)
         trim(all)
-        write(prefs, all)
+        // A successful exchange-close journal MUST survive a process crash.
+        // apply() is asynchronous, so it could erase a 3-loss halt on reboot.
+        write(prefs, all, durable = true)
     }
+
+    /**
+     * Strict risk view: malformed preferences are UNKNOWN, never an empty
+     * winning day. The read-only execution guard blocks until repaired.
+     */
+    @Synchronized
+    fun tradesForRisk(prefs: SharedPreferences): JSONArray? = runCatching {
+        val src = readStrict(prefs)
+        val out = JSONArray()
+        for (i in src.length() - 1 downTo 0) {
+            out.put(src.optJSONObject(i) ?: error("Malformed trade journal row"))
+        }
+        out
+    }.getOrNull()
 
     @Synchronized
     fun trades(prefs: SharedPreferences): JSONArray {
@@ -303,12 +319,23 @@ object TradeJournal {
         return "losing_signal_needs_review"
     }
 
-    private fun read(prefs: SharedPreferences): JSONArray =
-        runCatching { JSONArray(prefs.getString(KEY, "[]") ?: "[]") }.getOrElse { JSONArray() }
+    private fun readStrict(prefs: SharedPreferences): JSONArray {
+        val raw = prefs.getString(KEY, "[]") ?: error("Trade journal unexpectedly null")
+        return JSONArray(raw)
+    }
 
-    private fun write(prefs: SharedPreferences, value: JSONArray) {
-        prefs.edit {
-            putString(KEY, value.toString())
+    // Historical user-facing stats can remain best-effort. Risk gates and all
+    // journal mutations use the strict reader and do not wipe malformed data.
+    private fun read(prefs: SharedPreferences): JSONArray =
+        runCatching { readStrict(prefs) }.getOrElse { JSONArray() }
+
+    private fun write(prefs: SharedPreferences, value: JSONArray, durable: Boolean = false) {
+        if (durable) {
+            check(prefs.edit().putString(KEY, value.toString()).commit()) {
+                "FUTURES_TRADE_JOURNAL_DURABLE_COMMIT_FAILED"
+            }
+        } else {
+            prefs.edit { putString(KEY, value.toString()) }
         }
     }
 
@@ -367,9 +394,11 @@ internal fun evaluateFuturesLossStreak(
     for (row in closed) {
         val outcome = row.optString("outcome").trim().uppercase(Locale.US)
         val pnl = row.optDouble("pnl", Double.NaN)
-        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", true) ||
+        if (outcome == "UNKNOWN_FEES" || !row.optBoolean("pnl_complete", false) ||
+            (row.has("fee_known") && !row.optBoolean("fee_known", false)) ||
             !pnl.isFinite() || (outcome == "LOSS" && pnl >= 0.0) ||
-            (outcome == "WIN" && pnl <= 0.0)
+            (outcome == "WIN" && pnl <= 0.0) ||
+            (outcome == "BREAKEVEN" && pnl != 0.0)
         ) return FuturesLossStreakDecision(
             false, streak, false, null, "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
         )
