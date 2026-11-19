@@ -1,4 +1,4 @@
-"""Three verified losing Futures closes in a UTC day block new risk."""
+"""3% UTC daily equity drawdown OR three consecutive negative Futures closes block new risk."""
 import sqlite3
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -28,15 +28,36 @@ def _runtime_with_closed_pnl(pnls):
     return runtime
 
 
-def test_three_negative_closed_futures_trades_block_even_with_a_winner_between():
-    runtime = _runtime_with_closed_pnl([-1.0, 2.0, -1.0, -1.0])
+def test_three_consecutive_negative_closes_block_new_entries():
+    runtime = _runtime_with_closed_pnl([-1.0, -1.0, -1.0])
     result, reason = runtime._daily_entry_guard()
     assert result is False
-    assert reason == "MAX_DAILY_LOSS_TRADES reached: 3"
+    assert reason == "MAX_CONSECUTIVE_LOSSES reached: 3"
 
 
-def test_two_negative_closes_do_not_trigger_the_three_loss_guard():
-    runtime = _runtime_with_closed_pnl([-1.0, 2.0, -1.0])
+def test_win_between_three_daily_losses_resets_streak_and_allows_entries():
+    runtime = _runtime_with_closed_pnl([-1.0, 2.0, -1.0, -1.0])
+    allowed, reason = runtime._daily_entry_guard()
+    assert allowed is True
+    assert reason is None
+
+
+def test_breakeven_interruption_breaks_loss_streak():
+    runtime = _runtime_with_closed_pnl([-1.0, 0.0, -1.0, -1.0])
+    allowed, reason = runtime._daily_entry_guard()
+    assert allowed is True
+    assert reason is None
+
+
+def test_three_consecutive_losses_then_late_win_do_not_unlatch_same_day():
+    runtime = _runtime_with_closed_pnl([-1.0, -1.0, -1.0, 2.0])
+    allowed, reason = runtime._daily_entry_guard()
+    assert allowed is False
+    assert reason == "MAX_CONSECUTIVE_LOSSES reached: 3"
+
+
+def test_two_consecutive_losses_do_not_trigger_the_three_loss_guard():
+    runtime = _runtime_with_closed_pnl([-1.0, -1.0])
     allowed, reason = runtime._daily_entry_guard()
     assert allowed is True
     assert reason is None
@@ -46,4 +67,4 @@ def test_unknown_closed_pnl_never_counts_as_verified_nonloss():
     runtime = _runtime_with_closed_pnl([-1.0, None])
     allowed, reason = runtime._daily_entry_guard()
     assert allowed is False
-    assert reason == "FUTURES_DAILY_LOSS_TRADES_UNVERIFIED"
+    assert reason == "FUTURES_LOSS_STREAK_PNL_UNKNOWN"
