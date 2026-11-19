@@ -4,7 +4,9 @@ import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Current conservative profile, NOT certification of conflicting fig11.1D. */
+/** Causal TC2 figure 11.1D source boundary: historical seven/nine-bar
+ * final geometry may have a DIFFERENT but already-confirmed six/eight-bar
+ * prefix. Never reject a real-time valid prefix using unavailable future. */
 class WilliamsFractalSourceAmbiguityTest {
     @Test fun conservativeTimingAndOriginalIdentityMatchSharedSourceBoundaryCases() {
         val data=javaClass.classLoader!!.getResourceAsStream("tc2_fractal_source_ambiguity.json")!!
@@ -19,18 +21,29 @@ class WilliamsFractalSourceAmbiguityTest {
                 val actual=selectWilliamsPendingFractal(case.getString("side"),
                     bars.take(end),List(end){case.getDouble("teeth")},.1)
                 val expected=case.optJSONObject("expected")
-                if(expected==null || end<=expected.getInt("confirmation")) assertNull(id,actual)
-                else {
-                    assertNotNull(id,actual)
-                    assertEquals(id,expected.getInt("center"),actual!!.center)
-                    assertEquals(id,expected.getInt("group_start"),actual.groupStart)
-                    assertEquals(id,expected.getInt("confirmation"),actual.confirmation)
-                    assertEquals(id,expected.getDouble("trigger"),actual.trigger,1e-10)
-                    assertEquals(id,expected.getDouble("protective"),actual.protective,1e-10)
+                if (end==bars.size) {
+                    if(expected==null) assertNull(id,actual)
+                    else {
+                        assertNotNull(id,actual)
+                        assertEquals(id,expected.getInt("center"),actual!!.center)
+                        assertEquals(id,expected.getInt("group_start"),actual.groupStart)
+                        assertEquals(id,expected.getInt("confirmation"),actual.confirmation)
+                        assertEquals(id,expected.getDouble("trigger"),actual.trigger,1e-10)
+                        assertEquals(id,expected.getDouble("protective"),actual.protective,1e-10)
+                    }
+                }
+                // At any prefix, a candidate is only legal once its OWN
+                // two strictly lower/higher right flanks are closed. Do not
+                // compare with the final future pivot or future center.
+                if(actual!=null) {
+                    assertTrue(id,actual.confirmation<end)
+                    assertTrue(id,actual.center+2<=actual.confirmation)
+                    assertTrue(id,actual.groupStart<=actual.center)
                     val kind=if(case.getString("side")=="LONG") "HIGH" else "LOW"
                     assertTrue(id,confirmedWilliamsEditionFractals(bars.take(end)).any {
                         it.kind==kind && it.center==actual.center &&
-                            it.groupStart==actual.groupStart && it.confirmation==actual.confirmation })
+                            it.groupStart==actual.groupStart &&
+                            it.confirmation==actual.confirmation })
                 }
             }
         }

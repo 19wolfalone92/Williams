@@ -2170,12 +2170,18 @@ private class NativeEngine(
     }
 
     private fun restoreExecutionAccumulators() {
-        val orderIds = mutableSetOf<String>()
-        positionList().forEach { if (it.entryOrderId.isNotBlank()) orderIds.add(it.entryOrderId) }
-        orderIds.forEach { orderId ->
+        // A Binance order ID is scoped to its SYMBOL; the previous global
+        // order-id set combined unrelated BTC/ETH fills after reboot and
+        // silently damaged position fee/VWAP reconstruction.
+        val identities=positionList().mapNotNull { position ->
+            if(position.entryOrderId.isBlank() || position.symbol.isBlank()) null
+            else position.symbol to position.entryOrderId
+        }.distinct()
+        identities.forEach { (symbol,orderId) ->
             executionAccumulator.restore(
                 orderId,
-                auditStore.executionEvents(orderId)
+                auditStore.executionEvents(orderId,symbol),
+                symbol
             )
         }
     }
@@ -2715,12 +2721,50 @@ private class NativeEngine(
         val oldKey = key()
         val oldSecret = secret()
         val changed = oldKey != newKey || oldSecret != newSecret
+        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
+
+        if (changed) {
+            // Never let a missing/unreadable old Keystore value (oldKey="")
+            // silently reassign a still-present SQLite financial journal
+            // or a durable conditional-entry campaign to another account.
+            // Account provenance is NOT recoverable from an empty API key.
+            check(!auditStore.hasUnscopedHistoricalFinancialRows()) {
+                "CREDENTIAL_ROTATION_ACCOUNT_JOURNAL_UNSCOPED: export and migrate old account financial history before rotating keys"
+            }
+            check(pendingEntries.isEmpty() && positions.isEmpty()) {
+                "CREDENTIAL_ROTATION_LOCAL_EXPOSURE_UNRESOLVED"
+            }
+            val oldIntents=futuresCampaignCoordinator.intentsSnapshot()
+            check((0 until oldIntents.length()).none { index ->
+                val row=oldIntents.optJSONObject(index)
+                row==null || isEntryCampaignReserved(row)
+            }) { "CREDENTIAL_ROTATION_DURABLE_CAMPAIGN_UNRESOLVED" }
+        }
+        if (changed && existingIdentity) {
+            // A local FLAT UI is not evidence the OLD Binance account is
+            // safe: an old STOP entry can fill after the key was switched.
+            check(!auditStore.hasPendingPrivateUserEvents(futuresApiKeyFingerprint(oldKey))) {
+                "CREDENTIAL_ROTATION_PRIVATE_EVENT_INBOX_PENDING"
+            }
+            // Signed old-account GETs are mandatory, even while the engine
+            // is stopped. Check BOTH sides of open-order snapshots to catch
+            // a conditional order filling during the proof window.
+            val oldAdapter=BinanceUsdMFuturesTestnetAdapter(oldKey,oldSecret,http)
+            oldAdapter.serverTime()
+            oldAdapter.requireOneWayMode()
+            val first=oldAdapter.positions()
+            val standard=oldAdapter.allOpenOrders()
+            val conditional=oldAdapter.allOpenAlgoOrders()
+            val second=oldAdapter.positions()
+            check(futuresOldAccountHasNoExposure(first,standard,conditional,second)) {
+                "CREDENTIAL_ROTATION_OLD_BINANCE_ACCOUNT_NOT_SIGNED_FLAT"
+            }
+        }
 
         // Existing working identity must never be silently replaced by a
         // possibly incorrect or offline key. With an EMPTY vault, however,
         // the operator must be able to save a new encrypted credential even
         // when Binance is temporarily unreachable after phone reboot.
-        val existingIdentity = oldKey.isNotBlank() && oldSecret.isNotBlank()
         var account: JSONObject? = null
         var validationError: String? = null
         try {
@@ -2788,33 +2832,69 @@ private class NativeEngine(
                 else "CREDENTIALS_SAVED_BUT_EXCHANGE_RECONCILIATION_REQUIRED")
     }
 
+    @Synchronized
     fun clear(): JSONObject {
         check(!running) { "Stop the Futures runtime before deleting credentials" }
-        if (key().isNotBlank() && secret().isNotBlank()) {
-            val rows = futuresCampaignCoordinator.positionsSnapshot()
-            val open = (0 until rows.length()).any { i ->
-                val row = rows.optJSONObject(i)
-                    ?: throw IllegalStateException("Malformed Binance Futures position row while validating credential deletion")
-                val amount = row.optString("positionAmt").toDoubleOrNull()
-                    ?: throw IllegalStateException("Malformed Binance Futures position amount while validating credential deletion")
-                kotlin.math.abs(amount) > 0.0
-            }
-            val intents = futuresCampaignCoordinator.intentsSnapshot()
-            val pending = (0 until intents.length()).any { i ->
-                val intent = intents.optJSONObject(i) ?: return@any true
-                isEntryCampaignReserved(intent)
-            }
-            require(!open && !pending) { "Close/reconcile every Futures position and pending intent before deleting credentials" }
+        val oldKey=key()
+        val oldSecret=secret()
+        check(oldKey.isBlank()==oldSecret.isBlank()) {
+            "CREDENTIAL_CLEAR_KEYSTORE_IDENTITY_INCOMPLETE"
         }
-        stop()
-        check(executionStore.writeRuntimeState("[]", "[]") &&
-            executionStore.writeState("futures_campaign_intents_v2", "[]")) {
+        // No local state or cached UI can assert that an old Binance STOP
+        // entry, position or private fill has disappeared. Loss of the old key
+        // MUST NOT silently delete a reserved durable campaign identity.
+        check(pendingEntries.isEmpty() && positions.isEmpty()) {
+            "CREDENTIAL_CLEAR_LOCAL_POSITION_OR_ORDER_UNRESOLVED"
+        }
+        val intents=futuresCampaignCoordinator.intentsSnapshot()
+        check((0 until intents.length()).none { i ->
+            val row=intents.optJSONObject(i)
+            row==null || isEntryCampaignReserved(row)
+        }) { "CREDENTIAL_CLEAR_DURABLE_CAMPAIGN_UNRESOLVED" }
+
+        fun verifyOldAccountFlat() {
+            if(oldKey.isBlank()) {
+                check(intents.length()==0 && !auditStore.hasUnscopedHistoricalFinancialRows()) {
+                    "CREDENTIAL_CLEAR_MISSING_OLD_KEY_WITH_UNSCOPED_HISTORY"
+                }
+                return
+            }
+            check(!auditStore.hasPendingPrivateUserEvents(futuresApiKeyFingerprint(oldKey))) {
+                "CREDENTIAL_CLEAR_PRIVATE_INBOX_PENDING"
+            }
+            val adapter=BinanceUsdMFuturesTestnetAdapter(oldKey,oldSecret,http)
+            adapter.serverTime()
+            adapter.requireOneWayMode()
+            val before=adapter.positions()
+            val standard=adapter.allOpenOrders()
+            val conditional=adapter.allOpenAlgoOrders()
+            val after=adapter.positions()
+            check(futuresOldAccountHasNoExposure(before,standard,conditional,after)) {
+                "CREDENTIAL_CLEAR_OLD_ACCOUNT_NOT_SIGNED_FLAT"
+            }
+        }
+        verifyOldAccountFlat()
+        // The old clear() IGNORED the returned stopped=false and wiped the
+        // last usable API key even after uncertain order cancellation.
+        val stopped=stop()
+        check(stopped.optBoolean("stopped",false)) {
+            "CREDENTIAL_CLEAR_RUNTIME_STOP_UNVERIFIED: "+stopped.optString("reason")
+        }
+        // Binance conditional entries can fill during shutdown: require a
+        // second independent signed account-wide proof after stop() as well.
+        verifyOldAccountFlat()
+        // Keep terminal financial campaign history and v8 execution rows as
+        // forensic evidence. Clearing credentials is not consent to delete
+        // signed fill/STOP ledger identities.
+        check(executionStore.writeRuntimeState("[]", "[]")) {
             "SQLite clear failed; persisted Futures state was preserved"
         }
-        prefs.edit().remove("api_key").remove("api_secret")
+        check(prefs.edit().remove("api_key").remove("api_secret")
             .remove("positions_json").remove("pending_entries_json")
             .remove("futures_campaign_intents_v2")
-            .putBoolean("auto_run", false).commit()
+            .putBoolean("auto_run", false).commit()) {
+            "CREDENTIAL_CLEAR_ENCRYPTED_PREFERENCES_COMMIT_FAILED"
+        }
         candidates = JSONArray()
         primaryCandles = emptyList()
         scanSymbols = mutableListOf()
@@ -9829,7 +9909,10 @@ private class NativeEngine(
         // WM3: most recent confirmed buy fractal. The pivot defines the level, but
         // the signal timestamp is the second right-hand bar close when the
         // five-bar fractal first becomes knowable. Never backdate a decision.
-        val fractal = selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
+        val fractal = if(sourceExchangePrices)
+            selectWilliamsPendingFractal("LONG",waveBars,teethS,tick)
+        else selectWilliamsPendingFractal("LONG",waveBars,teethS,tick,
+            requireSourceTickGrid=false)
         if (fractal != null) {
             val exact=if(sourceExchangePrices)
                 exactTc2LongFractalLevels(waveBars,

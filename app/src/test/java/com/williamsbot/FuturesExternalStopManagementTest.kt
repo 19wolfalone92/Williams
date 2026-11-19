@@ -61,6 +61,44 @@ class FuturesExternalStopManagementTest {
         assertTrue(verifiedExternalStopManagementScope(candidate,foreign,owners).isEmpty())
     }
 
+    @Test fun unknownExternalOrderIdentityCannotGrantUnrelatedStopManagement() {
+        val owned = JSONArray().put(owner("BTCUSDT"))
+        val proof = JSONArray().put(observed("BTCUSDT"))
+        val goodForeign = JSONArray().put(JSONObject().put("symbol", "BNBUSDT"))
+        assertEquals(setOf("BTCUSDT"),
+            verifiedExternalStopManagementScope(proof, goodForeign, owned))
+        for (foreign in listOf(
+            JSONArray().put(JSONObject().put("client_id", "UNKNOWN")),
+            JSONArray().put(JSONObject().put("symbol", "")),
+            JSONArray().put("malformed"),
+            JSONArray().put(JSONObject().put("symbol", "UNREGISTEREDUSDT")),
+            JSONArray().put(JSONObject().put("symbol", "BNBUSDT")).put(JSONObject())
+        )) {
+            assertTrue("Unknown external order could belong to protected BTCUSDT",
+                verifiedExternalStopManagementScope(proof, foreign, owned).isEmpty())
+            assertTrue(verifiedQuarantineStopManagementScope(
+                proof, foreign, owned, setOf("ETHUSDT"), 1_000_000L).isEmpty())
+        }
+    }
+
+    @Test fun duplicateOrContradictoryStopObservationsNeverAuthorizeTrailing() {
+        val owned = JSONArray().put(owner("BTCUSDT"))
+        val foreign = JSONArray().put(JSONObject().put("symbol", "BNBUSDT"))
+        val good = observed("BTCUSDT")
+        assertEquals(setOf("BTCUSDT"),
+            verifiedExternalStopManagementScope(JSONArray().put(good), foreign, owned))
+        for (other in listOf(
+            observed("BTCUSDT"),
+            observed("BTCUSDT").put("stop_proof", "STOP_UNCONFIRMED"),
+            observed("BTCUSDT").put("protection_client_id", "FOREIGN_STOP")
+        )) {
+            val conflicted = JSONArray().put(good).put(other)
+            assertTrue(verifiedExternalStopManagementScope(conflicted, foreign, owned).isEmpty())
+        }
+        assertTrue(verifiedExternalStopManagementScope(
+            JSONArray().put(good).put("malformed"), foreign, owned).isEmpty())
+    }
+
     @Test fun quarantinedOtherSidePermitsOnlyFreshAuditedOwnedStopsOnUnrelatedPairs() {
         val now=1_000_000L
         val owned=owner("BTCUSDT").put("actual_risk_audit_status","PASS")

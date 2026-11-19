@@ -117,9 +117,23 @@ class WilliamsBookRulesContractTest {
             assertEquals(c.getString("id"),c.getInt("center"),live!!.center)
             assertEquals(c.getString("id"),bars.lastIndex,live.confirmation)
             assertEquals(c.getString("id"),if(mirror) 132.1 else 107.9,live.trigger,1e-9)
-            assertFalse("fractal cannot be confirmed before the last right H1 bar: "+
-                c.getString("id"),selectWilliamsPendingFractal(side,bars.dropLast(1),
-                    teeth.dropLast(1),.1)!=null)
+            // A six-bar prefix of the seven-bar book figure is IDENTICAL
+            // to a valid standalone Figure 11.1(D) six-bar formation.
+            // Rejecting that six-bar prefix only because a SEVENTH bar
+            // will arrive would be forbidden look-ahead. A later equal
+            // extreme can update the center/confirmation, not retroactively
+            // make the prior as-of geometry unknowable.
+            val prefix=selectWilliamsPendingFractal(side,bars.dropLast(1),
+                teeth.dropLast(1),.1)
+            if(prefix!=null) {
+                assertTrue(c.getString("id"),prefix.confirmation<bars.lastIndex)
+                assertTrue(c.getString("id"),prefix.center+2<=prefix.confirmation)
+                assertTrue(c.getString("id"),prefix.groupStart<=prefix.center)
+                assertTrue(c.getString("id"),confirmedWilliamsEditionFractals(
+                    bars.dropLast(1)).any { it.center==prefix.center &&
+                        it.confirmation==prefix.confirmation &&
+                        it.kind==if(mirror) "HIGH" else "LOW" })
+            }
             val invalidTeeth=List(bars.size) {
                 if(mirror) 134.0 else 106.0
             }

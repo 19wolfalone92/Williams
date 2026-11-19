@@ -24,7 +24,10 @@ internal fun williamsSignalLifecycle(s:JSONObject,owner:JSONObject?,now:Long,sna
         if(order=="FILLED") return "FILLED"
         if(order=="PARTIALLY_FILLED") return "PARTIAL_FILL"
         if(order in setOf("NEW","ACCEPTED","WORKING") && owner.optString("campaign_status")=="ENTRY_PENDING") {
-            val observed=maxOf(owner.optLong("last_reconciled_ms"),owner.optLong("created_at_ms"))
+            // Local intent creation is NOT evidence of an exchange-observed order.
+            // Other signed GETs (account, position, stop) do NOT prove this
+            // entry client id is still present. Use the order-specific GET.
+            val observed=owner.optLong("entry_order_observed_at_ms",0L)
             return if(observed>0 && now>=observed && now-observed<=120_000L) "BINANCE_PENDING" else "PENDING_UNVERIFIED"
         }
         if(order.contains("UNKNOWN") || order in setOf("TRIGGERED","PENDING")) return "PENDING_UNVERIFIED"
@@ -89,7 +92,7 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
             JSONObject(s.toString()).put("state",williamsSignalLifecycle(s,owner,now,data.optLong("snapshot_at_ms"),s.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms")))
                 .put("can_place_orders",false).apply { if(owner!=null) {
                     put("client_id",owner.optString("client_id")).put("order_status",owner.optString("order_status"))
-                    put("cancel_reason",owner.optString("cancel_reason")).put("exchange_observed_at_ms",maxOf(owner.optLong("last_reconciled_ms"),owner.optLong("created_at_ms")))
+                    put("cancel_reason",owner.optString("cancel_reason")).put("exchange_observed_at_ms",owner.optLong("entry_order_observed_at_ms",0L))
                     put("trigger",owner.optString("entry_price").toDoubleOrNull() ?: s.optDouble("trigger"))
                     put("protective_stop",owner.optString("protective_stop").toDoubleOrNull() ?: s.optDouble("protective_stop"))
                 } }

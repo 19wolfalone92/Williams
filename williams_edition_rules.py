@@ -63,6 +63,8 @@ def edition_fractals(bars: Sequence[WaveBar]) -> list[EditionFractal]:
 
     Such simultaneous extrema cannot establish chronological Hump start/signal.
     Equal highs/lows are not counted as required fingers on either side.
+    An equal right-hand extremum is skipped, NOT an invalidation; only
+    two strictly lower/higher right flanks confirm (TC2 Fig 11.1D).
     """
     if not valid_edition_bars(bars):
         return []
@@ -79,10 +81,14 @@ def edition_fractals(bars: Sequence[WaveBar]) -> list[EditionFractal]:
                 while 0<=j<len(bars) and count<2:
                     v=value(j)
                     if v==p:
-                        if step==1:
-                            ok=False;break
-                        start=j
-                        count=0  # prove two left neighbours before the whole group
+                        if step<0:
+                            start=j
+                            count=0  # prove left neighbours before the whole group
+                        # TC2 2nd ed. PDF166 Fig 11.1D: an equal extreme on
+                        # the RIGHT does not count as a strict lower/higher
+                        # flank; a sixth bar may supply the second one.
+                        # Rejecting it based on a seventh yet unseen bar
+                        # would be look-ahead.
                     elif (v>p)==(kind=="LOW"):
                         count+=1
                     else:

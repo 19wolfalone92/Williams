@@ -14,14 +14,24 @@ internal fun verifiedExternalStopManagementScope(
     durableIntents: JSONArray
 ): Set<String> {
     if (externalOrders.length()==0) return emptySet()
-    val conflictingSymbols=(0 until externalOrders.length()).mapNotNull { i ->
-        externalOrders.optJSONObject(i)?.optString("symbol")?.takeIf { it.isNotBlank() }
-    }.toSet()
+    // A malformed/unknown external order can belong to ANY symbol. Never
+    // grant even the narrow independent trailing capability from incomplete
+    // signed order identity. Do not silently mapNotNull such rows away.
+    val foreign=(0 until externalOrders.length()).map { externalOrders.optJSONObject(it) }
+    if(foreign.any { it==null || it.optString("symbol") !in APPROVED_FUTURES_SYMBOLS })
+        return emptySet()
+    val conflictingSymbols=foreign.map { it!!.getString("symbol") }.toSet()
+    // Conflicting or duplicated exchange protection observations are not a
+    // proof of unique, campaign-owned protection.
+    val proofs=(0 until protectionObservations.length()).map { protectionObservations.optJSONObject(it) }
+    if(proofs.any { it==null || it.optString("symbol").isBlank() }) return emptySet()
+    val duplicateProofs=proofs.groupingBy { it!!.getString("symbol") }.eachCount()
+        .filterValues { it!=1 }.keys
     val supported=mutableSetOf<String>()
     for(i in 0 until protectionObservations.length()) {
         val proof=protectionObservations.optJSONObject(i) ?: continue
         val symbol=proof.optString("symbol")
-        if(symbol.isBlank() || symbol in conflictingSymbols ||
+        if(symbol.isBlank() || symbol in conflictingSymbols || symbol in duplicateProofs ||
             proof.optString("stop_proof")!="OWNED_STOP_SEEN" ||
             !proof.optBoolean("strategy_ownership_verified",false) ||
             !proof.optBoolean("automatic_trailing_authorized",false)) continue

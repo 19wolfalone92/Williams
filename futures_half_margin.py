@@ -137,7 +137,10 @@ def margin_observation(account, configuration, orders, symbols):
         client = row.get("clientAlgoId" if algo else "clientOrderId")
         _require(identifier not in ("", "0", "None") and type(client) is str and bool(client), "ORDER_IDENTITY")
         identity = ("ALGO" if algo else "ORDER", symbol, identifier)
-        _require(identity not in seen_ids and client not in by_client, "DUPLICATE_ORDER")
+        # An order/client ID is only unique WITHIN its exchange symbol.
+        # Global indexing can collide across unrelated Binance markets.
+        scoped_client = (symbol, client)
+        _require(identity not in seen_ids and scoped_client not in by_client, "DUPLICATE_ORDER")
         seen_ids.add(identity)
         reduce = _flag(row, "reduceOnly")
         close = _flag(row, "closePosition") if algo else False
@@ -148,7 +151,7 @@ def margin_observation(account, configuration, orders, symbols):
         if reduce or close:
             # A signed BOTH reduceOnly/closePosition cannot increase exposure.
             order_identity.append((identity, client, row.get("side"), status, "REDUCTION"))
-            by_client[client] = {"reduction": True}
+            by_client[scoped_client] = {"reduction": True}
             continue
         quantity = _number(row.get("quantity" if algo else "origQty"))
         executed = Decimal(0) if algo else _number(row.get("executedQty"))
@@ -162,7 +165,7 @@ def margin_observation(account, configuration, orders, symbols):
         notional = (quantity - executed) * price * Decimal("1.0015")
         pending += notional / leverage
         cost_notional += notional
-        by_client[client] = {"symbol": symbol, "side": row["side"], "quantity": quantity,
+        by_client[scoped_client] = {"symbol": symbol, "side": row["side"], "quantity": quantity,
                              "executed": executed, "order_id": identifier, "algo": algo, "reduction": False}
         order_identity.append((identity, client, row["side"], status, quantity, executed,
                                _number(row.get("triggerPrice" if algo else "price")), leverage,
@@ -192,7 +195,8 @@ def assess_half_margin(first, second, proposal, liabilities=(), *, elapsed_ms=0)
     symbol = _symbol(proposal.get("symbol"))
     client = proposal.get("client_id")
     _require(type(client) is str and bool(client), "PROPOSAL_IDENTITY")
-    _require(client not in first["orders"] and client not in second["orders"], "PROPOSAL_ALREADY_PRESENT")
+    proposal_key = (symbol, client)
+    _require(proposal_key not in first["orders"] and proposal_key not in second["orders"], "PROPOSAL_ALREADY_PRESENT")
     _require(proposal.get("side") in ("BUY", "SELL"), "PROPOSAL_SIDE")
     quantity = _number(proposal.get("quantity"))
     price = _number(proposal.get("price"))
@@ -214,9 +218,11 @@ def assess_half_margin(first, second, proposal, liabilities=(), *, elapsed_ms=0)
     claimed_orders = set()
     for liability in liabilities:
         cid = liability.get("client_id")
-        _require(type(cid) is str and cid and cid not in seen, "LIABILITY_IDENTITY")
-        seen.add(cid)
-        if cid == client:
+        liability_symbol = liability.get("symbol")
+        liability_key = (liability_symbol, cid)
+        _require(type(cid) is str and cid and liability_key not in seen, "LIABILITY_IDENTITY")
+        seen.add(liability_key)
+        if liability_key == proposal_key:
             # Only the current write-before-network intent may be excluded.
             _require(liability.get("current_proposal") is True, "LIABILITY_PROPOSAL")
             continue
@@ -232,7 +238,7 @@ def assess_half_margin(first, second, proposal, liabilities=(), *, elapsed_ms=0)
             continue
         _require(status in ("NEW", "PARTIALLY_FILLED"), "LIABILITY_STATUS")
         for index, observation in enumerate((first, second)):
-            actual = observation["orders"].get(cid)
+            actual = observation["orders"].get(liability_key)
             if actual is None and liability.get("actual_order_id"):
                 children = [x for x in observation["orders"].values() if not x["reduction"]
                             and not x["algo"] and x["order_id"] == str(liability["actual_order_id"])

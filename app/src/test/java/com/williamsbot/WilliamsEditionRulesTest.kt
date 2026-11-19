@@ -5,6 +5,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsEditionRulesTest {
+    @Test fun originalTc2Figure11_1DDelayedFractalIsNotLostInEditionObserver() {
+        val highs=listOf(101.0,102.0,105.0,103.0,105.0,104.0)
+        val bars=highs.mapIndexed { i,x ->
+            WilliamsWaveBar((i+1)*3_600_000L,x-2,x,x-5,x-1)
+        }
+        assertTrue(confirmedWilliamsEditionFractals(bars.take(5)).none {
+            it.kind=="HIGH" && it.center==2
+        })
+        val found=confirmedWilliamsEditionFractals(bars).single {
+            it.kind=="HIGH" && it.center==2
+        }
+        assertEquals(5,found.confirmation)
+        assertEquals(2,found.groupStart)
+        fun mirror(x:WilliamsWaveBar)=x.copy(o=220-x.o,h=220-x.l,l=220-x.h,c=220-x.c)
+        val opposite=confirmedWilliamsEditionFractals(bars.map(::mirror)).single {
+            it.kind=="LOW" && it.center==2
+        }
+        assertEquals(5,opposite.confirmation)
+    }
+
     @Test fun ntdSourceJawRecordAndSignalBarMustUseExactExchangePriceGrid() {
         // New Trading Dimensions original PDF 103-108, figures 8-7 to 8-20:
         // a read-right-to-left base plus one outside-Jaw record may signal.

@@ -17,6 +17,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
+    @Test fun aSaturatedSignedChildOrderFillPageCannotProveProtectiveStopClosure() {
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            val req=chain.request()
+            val response=when(req.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/userTrades" -> JSONArray().apply {
+                    repeat(1000) { put(JSONObject().put("orderId",42).put("id",it+1)) }
+                }.toString()
+                else -> throw AssertionError("Unexpected request $req")
+            }
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",http)
+        val failure=runCatching { adapter.userTradesByOrder("BTCUSDT","42") }.exceptionOrNull()
+        assertTrue(failure.toString(),failure is IllegalStateException)
+        assertTrue(failure!!.message.orEmpty().contains("FUTURES_SIGNED_ORDER_TRADE_PAGE_SATURATED"))
+    }
+
+
+    @Test fun signedRestGetRequiresRequestedStandardAndAlgoOrderIdentity() {
+        val standard=JSONObject()
+            .put("symbol","BTCUSDT").put("clientOrderId","W2E_BTC_7").put("orderId","123")
+            .put("status","FILLED").put("executedQty","2")
+        assertTrue(signedFuturesStandardOrderGetMatches(standard,"BTCUSDT","W2E_BTC_7"))
+        for(changed in listOf(
+            JSONObject(standard.toString()).apply { remove("clientOrderId") },
+            JSONObject(standard.toString()).put("clientOrderId","W2E_ETH_7"),
+            JSONObject(standard.toString()).put("symbol","ETHUSDT"),
+            JSONObject(standard.toString()).put("orderId","0"),
+            JSONObject(standard.toString()).apply { remove("orderId") }
+        )) assertFalse(signedFuturesStandardOrderGetMatches(changed,"BTCUSDT","W2E_BTC_7"))
+        val algo=JSONObject().put("symbol","BTCUSDT").put("clientAlgoId","W2PS_BTC_7")
+            .put("algoId","7001").put("algoStatus","NEW").put("orderType","STOP_MARKET")
+        assertTrue(signedFuturesAlgoOrderGetMatches(algo,"BTCUSDT","W2PS_BTC_7"))
+        for(changed in listOf(
+            JSONObject(algo.toString()).apply { remove("clientAlgoId") },
+            JSONObject(algo.toString()).put("clientAlgoId","W2PS_ETH_7"),
+            JSONObject(algo.toString()).put("symbol","ETHUSDT"),
+            JSONObject(algo.toString()).put("algoId","0"),
+            JSONObject(algo.toString()).apply { remove("algoId") }
+        )) assertFalse(signedFuturesAlgoOrderGetMatches(changed,"BTCUSDT","W2PS_BTC_7"))
+    }
+
     @Test fun officialV3ShapeReadsPermissionFromSignedFuturesConfiguration() {
         for (permission in listOf(true, false)) {
             val signedPaths=mutableListOf<String>()
@@ -322,6 +366,74 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         } finally {
             assertEquals(1, orderPosts)
         }
+    }
+
+    @Test
+    fun hedgeToOneWayMustNotMutateAccountWithUntriggeredStandardOrAlgoEntry() {
+        for(kind in listOf("STANDARD","ALGO")) {
+            var postCount=0
+            val called=mutableListOf<String>()
+            val client=OkHttpClient.Builder().addInterceptor { chain ->
+                val req=chain.request()
+                val path=req.url.encodedPath
+                called+=req.method+" "+path
+                val body=when(path) {
+                    "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                    "/fapi/v1/positionSide/dual" -> if(req.method=="POST") {
+                        postCount++
+                        """{"code":200}"""
+                    } else """{"dualSidePosition":true}"""
+                    "/fapi/v3/positionRisk" -> "[]"
+                    "/fapi/v1/openOrders" -> if(kind=="STANDARD")
+                        """[{"symbol":"BTCUSDT","orderId":"41","status":"NEW"}]""" else "[]"
+                    "/fapi/v1/openAlgoOrders" -> if(kind=="ALGO")
+                        """[{"symbol":"BTCUSDT","algoId":"77","algoStatus":"NEW"}]""" else "[]"
+                    else -> throw AssertionError("Unexpected route $path")
+                }
+                Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200)
+                    .message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
+            }.build()
+            try {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",client).requireOneWayMode()
+                fail("Pending $kind entry must veto Hedge-mode mutation")
+            } catch(expected:IllegalStateException) {
+                assertTrue(expected.message.orEmpty().contains("pending standard/algo"))
+            }
+            assertEquals(0,postCount)
+            assertTrue(called.contains("GET /fapi/v1/openOrders"))
+            assertTrue(called.contains("GET /fapi/v1/openAlgoOrders"))
+        }
+    }
+
+    @Test
+    fun hedgeModeSwitchRejectsPositionAppearingBetweenSignedReads() {
+        var positionReads=0
+        var modePosts=0
+        val client=OkHttpClient.Builder().addInterceptor { chain ->
+            val req=chain.request()
+            val body=when(req.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/positionSide/dual" -> if(req.method=="POST") {
+                    modePosts++
+                    """{"code":200}"""
+                } else """{"dualSidePosition":true}"""
+                "/fapi/v3/positionRisk" -> {
+                    positionReads++
+                    if(positionReads==1) "[]" else
+                        """[{"symbol":"BTCUSDT","positionSide":"LONG","positionAmt":"0.1"}]"""
+                }
+                "/fapi/v1/openOrders","/fapi/v1/openAlgoOrders" -> "[]"
+                else -> throw AssertionError("Unexpected route ${req.url.encodedPath}")
+            }
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200)
+                .message("OK").body(body.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        try {
+            BinanceUsdMFuturesTestnetAdapter("key","secret",client).requireOneWayMode()
+            fail("New position between signed reads must block global mode switch")
+        } catch(_:IllegalStateException) {}
+        assertEquals(2,positionReads)
+        assertEquals(0,modePosts)
     }
 
     @Test

@@ -134,7 +134,11 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
         val client = row.optString(if (algo) "clientAlgoId" else "clientOrderId")
         marginRequire(identifier !in setOf("", "0", "null") && client.isNotBlank(), "ORDER_IDENTITY")
         val identity = JSONArray().put(if (algo) "ALGO" else "ORDER").put(symbol).put(identifier).toString()
-        marginRequire(seenIds.add(identity) && !byClient.containsKey(client), "DUPLICATE_ORDER")
+        // Binance identities are scoped to their symbol. The same client
+        // order ID may appear on two different markets; merging those rows
+        // could silently misbind a durable liability or block valid campaigns.
+        val scopedClient = "$symbol|$client"
+        marginRequire(seenIds.add(identity) && !byClient.containsKey(scopedClient), "DUPLICATE_ORDER")
         val reduce = marginFlag(row, "reduceOnly")
         val close = if (algo) marginFlag(row, "closePosition") else false
         val status = row.optString(if (algo) "algoStatus" else "status")
@@ -142,7 +146,7 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
         if (algo) marginRequire(row.optString("actualOrderId") in setOf("", "0"), "ALGO_CHILD_UNRESOLVED")
         if (reduce || close) {
             orderIdentity += JSONArray().put(identity).put(client).put(row.optString("side")).put(status).put("REDUCTION").toString()
-            byClient[client] = HalfMarginOrder(reduction = true)
+            byClient[scopedClient] = HalfMarginOrder(reduction = true)
             continue
         }
         val quantity = marginNumber(row.opt(if (algo) "quantity" else "origQty"))
@@ -158,7 +162,7 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
         val notional = (quantity - executed) * price * BigDecimal("1.0015")
         pending += notional.divide(leverage, marginMath)
         costNotional += notional
-        byClient[client] = HalfMarginOrder(symbol, row.getString("side"), quantity, executed, identifier, algo)
+        byClient[scopedClient] = HalfMarginOrder(symbol, row.getString("side"), quantity, executed, identifier, algo)
         orderIdentity += JSONArray().put(identity).put(client).put(row.getString("side")).put(status)
             .put(canonicalMargin(quantity)).put(canonicalMargin(executed)).put(canonicalMargin(rawPrice))
             .put(canonicalMargin(leverage)).put(config.getString("marginType")).toString()
@@ -179,7 +183,8 @@ internal fun assessFuturesHalfMargin(first: HalfMarginObservation, second: HalfM
     val symbol = marginSymbol(proposal.optString("symbol"))
     val client = proposal.optString("client_id")
     marginRequire(client.isNotBlank(), "PROPOSAL_IDENTITY")
-    marginRequire(!first.orders.containsKey(client) && !second.orders.containsKey(client), "PROPOSAL_ALREADY_PRESENT")
+    val proposalKey = "$symbol|$client"
+    marginRequire(!first.orders.containsKey(proposalKey) && !second.orders.containsKey(proposalKey), "PROPOSAL_ALREADY_PRESENT")
     marginRequire(proposal.optString("side") in setOf("BUY", "SELL"), "PROPOSAL_SIDE")
     val quantity = marginNumber(proposal.opt("quantity"))
     val price = marginNumber(proposal.opt("price"))
@@ -199,8 +204,9 @@ internal fun assessFuturesHalfMargin(first: HalfMarginObservation, second: HalfM
     val claimedOrders = mutableSetOf<Triple<String, Boolean, String>>()
     for (liability in marginRows(liabilities)) {
         val cid = liability.optString("client_id")
-        marginRequire(cid.isNotBlank() && seen.add(cid), "LIABILITY_IDENTITY")
-        if (cid == client) {
+        val liabilitySymbol = liability.optString("symbol")
+        marginRequire(cid.isNotBlank() && seen.add("$liabilitySymbol|$cid"), "LIABILITY_IDENTITY")
+        if (liabilitySymbol == symbol && cid == client) {
             marginRequire(liability.opt("current_proposal") == true, "LIABILITY_PROPOSAL")
             continue
         }
@@ -217,7 +223,7 @@ internal fun assessFuturesHalfMargin(first: HalfMarginObservation, second: HalfM
         }
         marginRequire(status in setOf("NEW", "PARTIALLY_FILLED"), "LIABILITY_STATUS")
         for ((index, observation) in listOf(first, second).withIndex()) {
-            var actual = observation.orders[cid]
+            var actual = observation.orders["$liabilitySymbol|$cid"]
             if (actual == null && liability.optString("actual_order_id").isNotBlank()) {
                 actual = observation.orders.values.singleOrNull { !it.reduction && !it.algo &&
                     it.orderId == liability.optString("actual_order_id") && it.symbol == liability.optString("symbol") }

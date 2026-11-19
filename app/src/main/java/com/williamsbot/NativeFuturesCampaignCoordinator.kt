@@ -116,16 +116,20 @@ internal fun matchesConfirmedFuturesProtectiveStop(
 ): Boolean {
     if (direction != "LONG" && direction != "SHORT") return false
     if (expectedClientId.isBlank()) return false
-    // A stop on another Binance symbol or in hedge/contract-price mode cannot
-    // prove protection of this one-way MARK_PRICE campaign. Absent optional
-    // exchange fields remain tolerated for legacy test doubles; supplied fields
-    // must never conflict with the signed contract.
-    if (expectedSymbol != null &&
-        (expectedSymbol.isBlank() || order.optString("symbol") != expectedSymbol)) return false
+    // A live signed Binance STOP must prove its symbol, execution mode and
+    // exchange algo identity. An omitted field is UNKNOWN, never protection.
+    // The nullable expectedSymbol overload remains compatible with historical
+    // *offline* fixtures; the live coordinator always supplies expectedSymbol.
+    val signedProofRequired = expectedSymbol != null
+    if (signedProofRequired &&
+        (expectedSymbol.isNullOrBlank() || order.optString("symbol") != expectedSymbol ||
+            order.optString("algoId").toLongOrNull()?.let { it > 0L } != true)) return false
     val actualPositionSide = order.optString("positionSide").uppercase(Locale.US)
-    if (actualPositionSide.isNotBlank() && actualPositionSide != "BOTH") return false
+    if (actualPositionSide != "BOTH" &&
+        (signedProofRequired || actualPositionSide.isNotBlank())) return false
     val actualWorkingType = order.optString("workingType").uppercase(Locale.US)
-    if (actualWorkingType.isNotBlank() && actualWorkingType != "MARK_PRICE") return false
+    if (actualWorkingType != "MARK_PRICE" &&
+        (signedProofRequired || actualWorkingType.isNotBlank())) return false
     val expected = expectedStop.toBigDecimalOrNull() ?: return false
     val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
     if (type != "STOP_MARKET") return false
@@ -144,6 +148,16 @@ internal fun matchesConfirmedFuturesProtectiveStop(
 /** A terminal parent is not proof of missing protection if it already spawned
  * a child order. Bind the entire former STOP identity before granting the
  * separately revalidated emergency reduction capability. */
+/** Child execution from a signed Binance order REST GET: missing one-way
+ * mode cannot be silently assumed, especially after a conditional trigger. */
+internal fun signedFuturesEntryOrderIdentityMatches(
+    order:JSONObject,symbol:String,expectedSide:String
+):Boolean = symbol.isNotBlank() && expectedSide in setOf("BUY","SELL") &&
+    order.optString("symbol")==symbol &&
+    order.optString("side")==expectedSide &&
+    order.optString("positionSide")=="BOTH" &&
+    order.optString("clientOrderId").isNotBlank()
+
 internal fun matchesTerminalUntriggeredFuturesProtectiveStop(
     order: JSONObject?, symbol: String, direction: String,
     expectedClientId: String, expectedStop: String
@@ -157,7 +171,8 @@ internal fun matchesTerminalUntriggeredFuturesProtectiveStop(
         order.optString("clientAlgoId") == expectedClientId &&
         order.optString("orderType").ifBlank { order.optString("type") } == "STOP_MARKET" &&
         order.optString("side") == (if (direction == "LONG") "SELL" else "BUY") &&
-        order.optString("positionSide", "BOTH") == "BOTH" &&
+        // Missing signed mode is not proof of the old STOP's ownership.
+        order.optString("positionSide") == "BOTH" &&
         order.optString("closePosition").equals("true", true) &&
         order.optString("workingType") == "MARK_PRICE" && actual.compareTo(expected) == 0 &&
         order.optString("algoStatus").uppercase(Locale.US) in setOf("CANCELED", "REJECTED", "EXPIRED") &&
@@ -1244,8 +1259,7 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 if (execution != null) {
                     val expectedSide = if (owner.optString("direction") == "LONG") "BUY" else "SELL"
-                    check(execution.optString("symbol") == symbol && execution.optString("side") == expectedSide &&
-                        execution.optString("positionSide", "BOTH") == "BOTH" && execution.optString("clientOrderId").isNotBlank()) {
+                    check(signedFuturesEntryOrderIdentityMatches(execution,symbol,expectedSide)) {
                         "Entry matching-engine order identity/direction mismatch"
                     }
                     val actualId = execution.optString("orderId")
@@ -1703,9 +1717,13 @@ internal class NativeFuturesCampaignCoordinator(
                 if (exchangeStatus.isBlank()) {
                     throw IllegalStateException("Entry $clientId has unknown exchange status")
                 }
+                // Signed GET of this exact entry client id, not a position/STOP
+                // refresh, is the only pending-order observation for the cockpit.
+                val entryOrderObservedAt = clock()
                 intent.put("exchange_status", exchangeStatus)
                     .put("order_status", exchangeStatus)
-                    .put("last_reconciled_ms", clock())
+                    .put("entry_order_observed_at_ms", entryOrderObservedAt)
+                    .put("last_reconciled_ms", entryOrderObservedAt)
                 when {
                     exchangeStatus in setOf("FILLED", "FINISHED") -> {
                         if (campaignLifecycleStatus(intent) != "FILL_CONFIRMATION_PENDING" ||
@@ -1920,7 +1938,12 @@ internal class NativeFuturesCampaignCoordinator(
                 val ownedProtection=signedFullStops.size==1 &&
                     matchingIntent?.optBoolean("strategy_ownership_verified",false)==true &&
                     observedOwnerId.isNotBlank() &&
-                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId
+                    signedFullStops.single().optString("clientAlgoId")==observedOwnerId &&
+                    // A foreign/legacy CONTRACT_PRICE or missing-mode STOP
+                    // may reduce risk but is NOT the bot's signed MARK_PRICE
+                    // protection contract and cannot authorize automation.
+                    signedFullStops.single().optString("positionSide")=="BOTH" &&
+                    signedFullStops.single().optString("workingType")=="MARK_PRICE"
                 val supervision=(0 until supervisionAudit.length()).mapNotNull {
                     supervisionAudit.optJSONObject(it)
                 }.singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="ACTIVE" }
@@ -2047,11 +2070,21 @@ internal class NativeFuturesCampaignCoordinator(
                             // semantics, matching side, and a fresh protective-side mark.
                             runCatching { adapter.queryAlgoOrder(symbol, protectionId) }
                             liveMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                            // Recovering a missing local STOP price must
+                            // not upgrade a merely active/side-matched algo
+                            // into PROTECTED. Verify signed full-position
+                            // coverage, one-way mode and MARK_PRICE first.
                             val exchangeProtection = (0 until algos.length()).mapNotNull { j ->
                                 algos.optJSONObject(j)
                             }.firstOrNull { row ->
                                 row.optString("clientAlgoId") == protectionId &&
-                                    isProtectiveStop(row, direction)
+                                    row.optString("workingType")=="MARK_PRICE" &&
+                                    row.optString("positionSide")=="BOTH" &&
+                                    liveMark?.let { mark ->
+                                        mark.isFinite() && mark>0.0 &&
+                                            isFullPositionFuturesStop(row,symbol,direction,
+                                                position.getString("positionAmt").toBigDecimal().abs(),mark)
+                                    } == true
                             }
                             val exchangeStop = exchangeProtection?.optString("triggerPrice")
                                 ?.takeIf { it.isNotBlank() }
@@ -2616,8 +2649,11 @@ internal class NativeFuturesCampaignCoordinator(
                         val oldClientId = old.optString("clientAlgoId")
                         if (oldClientId == confirmedClientId) continue
                         if (previousClientId.isNotBlank() && oldClientId == previousClientId) {
+                            // This is a LIVE predecessor-cancellation door:
+                            // historical/offline overload without signed symbol
+                            // must never authorize a Binance DELETE.
                             check(matchesConfirmedFuturesProtectiveStop(old, direction, previousClientId,
-                                matchingIntent.optString("previous_protective_stop"))) {
+                                matchingIntent.optString("previous_protective_stop"), expectedSymbol = symbol)) {
                                 "Tracked predecessor attributes conflict with the durable stop identity"
                             }
                             verifyNativeTrailExposure(adapter, matchingIntent)
@@ -2824,7 +2860,7 @@ internal class NativeFuturesCampaignCoordinator(
                             check(expectedStop != null && actualStop?.compareTo(expectedStop) == 0 &&
                                 order.optString("symbol") == symbol &&
                                 order.optString("side") == (if (intent.optString("direction") == "LONG") "SELL" else "BUY") &&
-                                order.optString("positionSide", "BOTH") == "BOTH" &&
+                                order.optString("positionSide") == "BOTH" &&
                                 order.optString("workingType") == "MARK_PRICE" &&
                                 order.optString("orderType", order.optString("type")) == "STOP_MARKET" &&
                                 isActiveFuturesProtectionStatus(order.optString("algoStatus")) &&
@@ -3307,7 +3343,7 @@ internal class NativeFuturesCampaignCoordinator(
         return futuresMarginObservation(account, configuration, orders, configurations)
     }
 
-    private fun halfMarginLiabilities(ledger: JSONArray, currentClientId: String): JSONArray {
+    private fun halfMarginLiabilities(ledger: JSONArray, currentSymbol: String, currentClientId: String): JSONArray {
         val result = JSONArray()
         val rows = (0 until ledger.length()).map { ledger.getJSONObject(it) }
         for (row in rows) {
@@ -3322,8 +3358,11 @@ internal class NativeFuturesCampaignCoordinator(
             if (role == "ADD_ON" && rows.any { it.optString("client_id") == row.optString("entry_client_id") &&
                     campaignLifecycleStatus(it) in TERMINAL_CAMPAIGN_STATUSES }) continue
             val cid = row.getString("client_id")
-            if (cid == currentClientId) {
-                result.put(JSONObject().put("client_id", cid).put("current_proposal", true))
+            // Binance client IDs are per-symbol: never exempt a foreign
+            // unresolved liability merely because its ID equals our proposal.
+            if (row.getString("symbol") == currentSymbol && cid == currentClientId) {
+                result.put(JSONObject().put("symbol", currentSymbol)
+                    .put("client_id", cid).put("current_proposal", true))
                 continue
             }
             val executed = row.optString("actual_entry_executed_qty", row.optString("executed_qty"))
@@ -3703,7 +3742,7 @@ internal class NativeFuturesCampaignCoordinator(
             // leverage verification and inside the same durable execution lock.
             val marginStartedNs = System.nanoTime()
             val marginFirst = halfMarginObservation(adapter, plan.symbol)
-            val marginLiabilities = halfMarginLiabilities(currentIntents, plan.clientId)
+            val marginLiabilities = halfMarginLiabilities(currentIntents, plan.symbol, plan.clientId)
             val marginSecond = halfMarginObservation(adapter, plan.symbol)
             val currentAmounts = marginSecond.positions.filterValues { it.signum() != 0 }
             check(currentAmounts.keys == openPositionRows.keys && currentAmounts.all { (symbol, amount) ->

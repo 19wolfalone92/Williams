@@ -162,6 +162,7 @@ class ProtectionOwnershipTest {
             .put("closePosition", true)
             .put("algoStatus", "NEW")
             .put("clientAlgoId", "W2PS_BTC_current")
+            .put("algoId", "20001")
             .put("symbol", "BTCUSDT")
             .put("positionSide", "BOTH")
             .put("workingType", "MARK_PRICE")
@@ -220,6 +221,48 @@ class ProtectionOwnershipTest {
         assertTrue(matchesConfirmedFuturesProtectiveStop(
             validShort, "SHORT", "W2PS_ETH_current", "105.0"
         ))
+    }
+
+    @Test
+    fun signedFullPositionStopNeedsExactExchangeIdentityAndCoverage() {
+        for(direction in listOf("LONG","SHORT")) {
+            val valid=JSONObject()
+                .put("symbol","BTCUSDT").put("algoId","700123")
+                .put("clientAlgoId","W2PS_BTC_owner").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("positionSide","BOTH")
+                .put("workingType","MARK_PRICE")
+                .put("side",if(direction=="LONG") "SELL" else "BUY")
+                .put("closePosition",true)
+                .put("triggerPrice",if(direction=="LONG") "95" else "105")
+            assertTrue(isFullPositionFuturesStop(valid,"BTCUSDT",direction,
+                java.math.BigDecimal("2"),100.0))
+            for(field in listOf("symbol","algoId","clientAlgoId","orderType",
+                    "algoStatus","positionSide","workingType","side",
+                    "closePosition","triggerPrice")) {
+                val missing=JSONObject(valid.toString()).apply { remove(field) }
+                assertFalse("$direction: missing signed field $field was accepted",
+                    isFullPositionFuturesStop(missing,"BTCUSDT",direction,
+                        java.math.BigDecimal("2"),100.0))
+            }
+            val small=JSONObject(valid.toString()).put("closePosition",false)
+                .put("reduceOnly",true).put("quantity","1.5")
+            assertFalse(isFullPositionFuturesStop(small,"BTCUSDT",direction,
+                java.math.BigDecimal("2"),100.0))
+            small.put("quantity","2.0")
+            assertTrue(isFullPositionFuturesStop(small,"BTCUSDT",direction,
+                java.math.BigDecimal("2"),100.0))
+            // Prior code admitted CONTRACT_PRICE as if it were the bot's
+            // MARK_PRICE close-all STOP; no longer authorize unsafe adoption.
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(valid.toString()).put("workingType","CONTRACT_PRICE"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(small.toString()).put("quantity","2.0001"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(small.toString()).put("quantity","999"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+        }
     }
 
     @Test

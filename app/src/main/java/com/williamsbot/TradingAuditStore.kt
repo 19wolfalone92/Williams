@@ -117,6 +117,54 @@ internal fun stopTrailDeferredFingerprint(campaignId:String, evidence:JSONObject
         .joinToString("|")
 }
 
+/** Binance's numeric trade ID is stable across duplicate WS receipts even
+ * when the enclosing event and transaction timestamps are different. Never
+ * assume that an order-status update or nontrade receipt is a unique fill. */
+internal fun privateBinanceTradeHasStableId(kind:String,tradeId:String):Boolean =
+    kind=="TRADE" && tradeId.toLongOrNull()?.let { it>0L } == true
+
+/** Binance USD-M client-order IDs and numeric order IDs are only unique within
+ * one symbol. Historical SQLite "orders" rows used a GLOBAL primary key and
+ * could overwrite BTC with an unrelated ETH order, silently corrupting the
+ * private order-status and cumulative-fill audit projection.
+ *
+ * The external client ID remains unchanged on Binance and in raw_json.
+ * Only the internal SQLite lookup key receives this symbol namespace. */
+internal fun privateFuturesOrderProjectionKey(
+    symbol:String,clientId:String,orderId:String
+):String {
+    require(symbol.matches(Regex("[A-Z0-9]{2,24}"))) { "PRIVATE_ORDER_SYMBOL_INVALID" }
+    val owner=clientId.ifBlank { orderId }
+    require(owner.isNotBlank() && !owner.contains('|')) { "PRIVATE_ORDER_IDENTITY_INVALID" }
+    return "$symbol|$owner"
+}
+
+/** A single in-place v7→v8 rewrite preserves old forensic rows (no DROP).
+ * No existing Binance client-order ID can contain '|', so a previously
+ * unscoped record cannot be mistaken for a new scoped one. */
+internal const val PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL =
+    "UPDATE orders SET client_order_id = symbol || '|' || client_order_id"
+
+/** A delayed/replayed private WS receipt is evidence, never permission to
+ * rewind the durable order projection. A later signed REST reconciliation is
+ * the only financial authority; this guard protects the audit timeline. */
+internal fun privateOrderProjectionMayAdvance(
+    previousAtMs:Long, previousOrderId:String, previousExecuted:String, previousStatus:String,
+    incomingAtMs:Long, incomingOrderId:String, incomingExecuted:String, incomingStatus:String
+):Boolean {
+    val previousQty=previousExecuted.toBigDecimalOrNull() ?: return false
+    val incomingQty=incomingExecuted.toBigDecimalOrNull() ?: return false
+    if(previousAtMs<0L || incomingAtMs<=0L || incomingAtMs<previousAtMs ||
+        incomingOrderId.isBlank() ||
+        (previousOrderId.isNotBlank() && previousOrderId!=incomingOrderId) ||
+        previousQty.signum()<0 || incomingQty.signum()<0 ||
+        incomingQty.compareTo(previousQty)<0 || incomingStatus.isBlank()) return false
+    val terminal=setOf("FILLED","CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH","REJECTED")
+    if(previousStatus in terminal && incomingStatus!=previousStatus) return false
+    if(previousStatus=="PARTIALLY_FILLED" && incomingStatus=="NEW") return false
+    return true
+}
+
 /**
  * Persistent exchange/order/execution/state audit trail.
  *
@@ -184,7 +232,7 @@ private fun privateEventSha256(value: String): String = MessageDigest.getInstanc
     .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
 class TradingAuditStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 7) {
+    SQLiteOpenHelper(context, "williams_trading_audit.db", null, 8) {
 
     private val lastCampaignObservations = mutableMapOf<String, String>()
     // Only COCKPIT_* UI projection is batch-trimmed. Signed exchange and STOP
@@ -515,6 +563,14 @@ class TradingAuditStore(context: Context) :
             )
         """.trimIndent())
 
+        // Future receipts use the same stable trade identity even when
+        // their event transaction time changes. Old database copies are
+        // handled by the read-before-insert compatibility query above.
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_executions_trade_identity
+            ON executions (symbol, order_id, trade_id, execution_type)
+        """.trimIndent())
+
         db.execSQL("""
             CREATE TABLE events(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -577,6 +633,13 @@ class TradingAuditStore(context: Context) :
         oldVersion: Int,
         newVersion: Int
     ) {
+        // SQLiteOpenHelper already holds the upgrade transaction. Preserve
+        // historical order/execution identities and do not overwrite any row.
+        if (oldVersion < 8) db.execSQL(PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL)
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS idx_executions_trade_identity
+            ON executions (symbol, order_id, trade_id, execution_type)
+        """.trimIndent())
         h1EntryPassportSchema.forEach(db::execSQL)
         stopTrailRecoverySchema.forEach(db::execSQL)
         ensurePrivateUserEventInboxSchema(db)
@@ -644,6 +707,18 @@ class TradingAuditStore(context: Context) :
         """.trimIndent())
     }
 
+    /** Account-free v7/v8 trade/WS journal cannot safely be reinterpreted
+     * as another Binance account's history. Until the journal is migrated to
+     * an account-scoped schema, prevent credentials rotation if ANY account-
+     * bound execution/order/trade row exists. Does not delete old records. */
+    @Synchronized
+    fun hasUnscopedHistoricalFinancialRows():Boolean =
+        readableDatabase.rawQuery(
+            "SELECT EXISTS(SELECT 1 FROM executions LIMIT 1) " +
+                "OR EXISTS(SELECT 1 FROM orders LIMIT 1) " +
+                "OR EXISTS(SELECT 1 FROM trades LIMIT 1)",null
+        ).use { it.moveToFirst() && it.getInt(0)!=0 }
+
     @Synchronized
     fun recordRestCall(
         method: String,
@@ -701,12 +776,15 @@ class TradingAuditStore(context: Context) :
         values.put("raw_json", rawJson)
         values.put("fee_usdt", feeUsdt)
         values.put("fee_known", if (feeKnown) 1 else 0)
-        writableDatabase.insertWithOnConflict(
+        // A discarded SQLite INSERT is not a recorded execution. Escalate
+        // persistent storage failures to the supervising runtime instead of
+        // silently displaying an incomplete realized-PnL history.
+        check(writableDatabase.insertWithOnConflict(
             "trades",
             null,
             values,
             SQLiteDatabase.CONFLICT_REPLACE
-        )
+        ) > 0L) { "DURABLE_TRADE_LEDGER_WRITE_FAILED" }
     }
 
     @Synchronized
@@ -716,43 +794,36 @@ class TradingAuditStore(context: Context) :
         closedAt: Long,
         exitPrice: Double
     ): Pair<Double, Boolean> {
-        val baseAsset = symbol.removeSuffix("USDT")
-        var feeUsdt = 0.0
-        var known = true
-
-        writableDatabase.query(
+        val ledger=FuturesTradeFeeLedger(
+            if(symbol.endsWith("USDT")) symbol.removeSuffix("USDT") else "",
+            exitPrice
+        )
+        readableDatabase.query(
             "executions",
             arrayOf(
-                "commission",
-                "commission_asset",
-                "last_price",
-                "transaction_time"
+                "order_id", "trade_id", "execution_type",
+                "commission", "commission_asset", "last_price", "raw_json"
             ),
             "symbol=? AND transaction_time>=? AND transaction_time<=?",
-            arrayOf(
-                symbol,
-                openedAt.toString(),
-                closedAt.toString()
-            ),
-            null,
-            null,
-            "transaction_time ASC"
+            arrayOf(symbol, openedAt.toString(), closedAt.toString()),
+            null, null, "transaction_time ASC"
         ).use { cursor ->
-            while (cursor.moveToNext()) {
-                val commission = cursor.getDouble(0)
-                if (commission <= 0.0) continue
-                val asset = cursor.getString(1) ?: ""
-                val price = cursor.getDouble(2).takeIf { it > 0.0 } ?: exitPrice
-                when (asset) {
-                    "USDT" -> feeUsdt += commission
-                    baseAsset -> feeUsdt += commission * price
-                    "" -> Unit
-                    else -> known = false
-                }
+            while(cursor.moveToNext()) {
+                ledger.add(
+                    orderId=cursor.getString(0).orEmpty(),
+                    tradeId=cursor.getString(1).orEmpty(),
+                    executionType=cursor.getString(2).orEmpty(),
+                    commission=if(cursor.isNull(3)) Double.NaN else cursor.getDouble(3),
+                    commissionAsset=cursor.getString(4).orEmpty(),
+                    fillPrice=if(cursor.isNull(5)) Double.NaN else cursor.getDouble(5),
+                    signedRawEvidenceValid=futuresTradeFeeHasCompleteRawEvidence(
+                        if(cursor.isNull(6)) null else cursor.getString(6),
+                        symbol,cursor.getString(0).orEmpty(),cursor.getString(1).orEmpty()
+                    )
+                )
             }
         }
-
-        return feeUsdt to known
+        return ledger.result()
     }
 
     /**
@@ -784,13 +855,16 @@ class TradingAuditStore(context: Context) :
     }
 
     @Synchronized
-    fun executionEvents(orderId: String): List<JSONObject> {
+    fun executionEvents(orderId: String, symbol: String): List<JSONObject> {
+        require(orderId.isNotBlank() && symbol.isNotBlank()) {
+            "EXECUTION_HISTORY_REQUIRES_SYMBOL_AND_ORDER_ID"
+        }
         val rows = mutableListOf<JSONObject>()
-        writableDatabase.query(
+        readableDatabase.query(
             "executions",
             arrayOf("raw_json"),
-            "order_id=?",
-            arrayOf(orderId),
+            "order_id=? AND symbol=?",
+            arrayOf(orderId, symbol),
             null,
             null,
             "transaction_time ASC, event_time ASC"
@@ -997,6 +1071,7 @@ class TradingAuditStore(context: Context) :
         val orderId = payload.optString("i")
         if (symbol.isBlank() || orderId.isBlank()) return
         val clientId = payload.optString("c")
+        val scopedOrderKey = privateFuturesOrderProjectionKey(symbol,clientId,orderId)
         val tradeId = payload.optString("t", "-1")
         val executionType = payload.optString("x")
         val status = payload.optString("X")
@@ -1017,27 +1092,43 @@ class TradingAuditStore(context: Context) :
         execution.put("order_status", status)
         execution.put("last_qty", payload.optString("l").toDoubleOrNull() ?: 0.0)
         execution.put("last_price", payload.optString("L").toDoubleOrNull() ?: 0.0)
-        execution.put("commission", payload.optString("n").toDoubleOrNull() ?: 0.0)
+        // Preserve UNKNOWN, not a fictitious zero fee, if a signed receipt
+        // lacks a finite nonnegative commission. SQLite NULL is recoverable
+        // as unverified evidence during replay and historical fee estimation.
+        val privateCommission=payload.optString("n").toDoubleOrNull()
+        if(privateCommission!=null && privateCommission.isFinite() && privateCommission>=0.0)
+            execution.put("commission",privateCommission)
+        else execution.putNull("commission")
         execution.put("commission_asset", payload.optString("N"))
         execution.put("event_time", executionEventTime)
         execution.put("transaction_time", transactionTime)
         execution.put("raw_json", event.toString())
         val executionDb = writableDatabase
-        val executionInsert = executionDb.insertWithOnConflict(
-            "executions",
-            null,
-            execution,
-            SQLiteDatabase.CONFLICT_IGNORE
-        )
-        if (executionInsert == -1L) {
-            val persisted = executionDb.rawQuery(
-                "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+        // Historical event_key included transaction time. A replayed Binance
+        // TRADE with the same symbol/order/trade id but a DIFFERENT T would
+        // double-count the financial execution after process restart. Query
+        // the old rows as well as new rows; do not destructively migrate
+        // existing financial/audit history.
+        val alreadyKnownTrade = privateBinanceTradeHasStableId(executionType,tradeId) &&
+            executionDb.rawQuery(
+                "SELECT 1 FROM executions WHERE symbol=? AND order_id=? AND trade_id=? " +
+                    "AND execution_type='TRADE' LIMIT 1",
+                arrayOf(symbol,orderId,tradeId)
             ).use { it.moveToFirst() }
-            check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+        if (!alreadyKnownTrade) {
+            val executionInsert = executionDb.insertWithOnConflict(
+                "executions", null, execution, SQLiteDatabase.CONFLICT_IGNORE
+            )
+            if (executionInsert == -1L) {
+                val persisted = executionDb.rawQuery(
+                    "SELECT 1 FROM executions WHERE event_key=? LIMIT 1", arrayOf(eventKey)
+                ).use { it.moveToFirst() }
+                check(persisted) { "PRIVATE_EVENT_EXECUTION_JOURNAL_WRITE_FAILED" }
+            }
         }
 
         val order = ContentValues()
-        order.put("client_order_id", clientId.ifBlank { orderId })
+        order.put("client_order_id", scopedOrderKey)
         order.put("symbol", symbol)
         order.put("order_id", orderId)
         order.put("order_list_id", payload.optString("g"))
@@ -1053,6 +1144,26 @@ class TradingAuditStore(context: Context) :
         order.put("last_event_time", executionEventTime)
         order.put("updated_at", System.currentTimeMillis())
         order.put("raw_json", event.toString())
+        // An older WS event can arrive while the actor is catching up after
+        // restart, including just before the out-of-order REST fence fires.
+        // Store its raw receipt + execution, but NEVER replace a newer order
+        // projection or regress FILLED/terminal status or executed quantity.
+        val persisted = executionDb.query(
+            "orders", arrayOf("last_event_time","order_id","executed_qty","status"),
+            "client_order_id=?", arrayOf(scopedOrderKey),
+            null,null,null,"1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) null else JSONObject()
+                .put("at",cursor.getLong(0))
+                .put("order_id",cursor.getString(1).orEmpty())
+                .put("qty",cursor.getDouble(2).toString())
+                .put("status",cursor.getString(3).orEmpty())
+        }
+        if (persisted!=null && !privateOrderProjectionMayAdvance(
+                persisted.getLong("at"),persisted.getString("order_id"),
+                persisted.getString("qty"),persisted.getString("status"),
+                executionEventTime,orderId,payload.optString("z"),status
+            )) return
         check(executionDb.insertWithOnConflict(
             "orders",
             null,

@@ -1495,8 +1495,13 @@ class FuturesWilliamsRuntime:
                 continue
             if cid != tags.get("pending_order_client_id"):
                 raise RuntimeError("FUTURES_HALF_MARGIN_UNKNOWN:RESERVATION_IDENTITY")
-            if cid == intent.client_order_id:
-                liabilities.append({"client_id": cid, "current_proposal": True})
+            # A client ID alone is NOT an exchange-global identity: an
+            # unrelated symbol may legitimately use the same ID. Only the
+            # exact current (symbol,clientId) intent can be excluded from
+            # the signed pending-liability budget.
+            if row["symbol"] == intent.symbol and cid == intent.client_order_id:
+                liabilities.append({"symbol": row["symbol"], "client_id": cid,
+                                    "current_proposal": True})
                 continue
             # The exact signed lookup resolves a known partial child, not an
             # inferred fill from price/time or a locally decremented reserve.

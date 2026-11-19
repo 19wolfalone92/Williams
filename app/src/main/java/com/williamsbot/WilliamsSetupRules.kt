@@ -22,7 +22,8 @@ internal data class WilliamsPendingFractal(
 /** Latest eligible confirmed fractal, rather than an ineligible newer one
  * masking an older still-pending level. Each plateau is one extremum group. */
 internal fun selectWilliamsPendingFractal(
-    direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double
+    direction:String,bars:List<WilliamsWaveBar>,teeth:List<Double>,tick:Double,
+    requireSourceTickGrid:Boolean=true
 ):WilliamsPendingFractal? {
     if (direction !in listOf("LONG","SHORT") || bars.size<5 || teeth.size!=bars.size ||
         !tick.isFinite() || tick<=0 || !teeth.last().isFinite() || teeth.last()<=0 ||
@@ -49,19 +50,43 @@ internal fun selectWilliamsPendingFractal(
             else break
             j--
         }
-        if (count<2 || !(i+1..i+2).all { if (long) extreme(it)<p else extreme(it)>p }) continue
-        val trigger=if (long) p+tick else p-tick
+        // An equal pivot on the right neither confirms nor invalidates:
+        // TC2 Fig 11.1(D) needs SIX bars if its fifth high equals
+        // the central high. Search until the second strict right flank.
+        var rightCount=0
+        var next=i+1
+        while(next in bars.indices && rightCount<2) {
+            val v=extreme(next)
+            if(v!=p) {
+                if(if(long) v<p else v>p) rightCount++
+                else break
+            }
+            next++
+        }
+        if(count<2 || rightCount<2) continue
+        val confirmation=next-1
+        // The SOURCE OHLC breakout must be exactly one Binance tick, not
+        // a binary-double increment (e.g., BTC 79524.8+0.1).
+        // SHORT scanning reflects the original exchange series around a
+        // floating anchor. Mirrored OHLC may be OFF the Binance tick grid:
+        // its geometry can be used as a candidate, never as order prices.
+        // Only ORIGINAL exchange OHLC must pass exact tick validation.
+        val trigger=williamsBookExactPriceTick(p,tick,above=long)
+            ?: if(requireSourceTickGrid) continue else if(long) p+tick else p-tick
         // TC2 ch11 PDF pp.147-149 and NTD ch4: the live BREAKOUT level,
         // not the historic pivot extreme, must be beyond Teeth. Evaluate
         // the still-untriggered order against the current displaced red line.
         if (trigger<=0 || (if (long) trigger<=teeth.last() || bars.last().c>=trigger
                 else trigger>=teeth.last() || bars.last().c<=trigger)) continue
-        if ((i+2..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
-        val stopStart=minOf(start,maxOf(0,i+2-4))
-        val protective=if (long) (stopStart..i+2).minOf { bars[it].l }-tick
-            else (stopStart..i+2).maxOf { bars[it].h }+tick
-        if (!protective.isFinite() || protective<=0) continue
-        return WilliamsPendingFractal(i,start,i+2,trigger,protective,teeth.last())
+        if ((confirmation..bars.lastIndex).any { if (long) bars[it].h>=trigger else bars[it].l<=trigger }) continue
+        val stopStart=minOf(start,maxOf(0,confirmation-4))
+        val opposite=if (long) (stopStart..confirmation).minOf { bars[it].l }
+            else (stopStart..confirmation).maxOf { bars[it].h }
+        val protective=williamsBookExactPriceTick(opposite,tick,above=!long)
+            ?: if(requireSourceTickGrid) continue else if(long) opposite-tick else opposite+tick
+        if (!protective.isFinite() || protective<=0 ||
+            (if (long) protective>=trigger else protective<=trigger)) continue
+        return WilliamsPendingFractal(i,start,confirmation,trigger,protective,teeth.last())
     }
     return null
 }
@@ -129,8 +154,14 @@ internal fun exactTc2ShortFractalLevels(
     val groupStart = uniqueIndex(groupStartAtMs)
     val confirmation = uniqueIndex(confirmationAtMs)
     if (center < 2 || groupStart < 0 || groupStart > center ||
-        confirmation != center + 2 || confirmation !in bars.indices) return null
+        confirmation < center + 2 || confirmation !in bars.indices) return null
     if (bars.take(confirmation + 1).zipWithNext().any { (a, b) -> b.t <= a.t }) return null
+    // Never turn a caller-provided later/guessed confirmation into a valid
+    // source trigger; validate the complete causally known fractal geometry.
+    if (confirmedWilliamsEditionFractals(bars.take(confirmation + 1)).none { f ->
+            f.kind=="LOW" && f.center==center && f.groupStart==groupStart &&
+                f.confirmation==confirmation
+        }) return null
     // Identical to selectWilliamsPendingFractal: preserve a long plateau
     // when it stretches further left than the ordinary five-bar window.
     val stopStart = minOf(groupStart, maxOf(0, confirmation - 4))
@@ -211,8 +242,12 @@ internal fun exactTc2LongFractalLevels(
     val groupStart=index(groupStartAtMs)
     val confirmation=index(confirmationAtMs)
     if(center<2 || groupStart<0 || groupStart>center ||
-        confirmation!=center+2 || confirmation !in bars.indices ||
+        confirmation<center+2 || confirmation !in bars.indices ||
         bars.take(confirmation+1).zipWithNext().any { (a,b)->b.t<=a.t }) return null
+    if(confirmedWilliamsEditionFractals(bars.take(confirmation+1)).none { f ->
+            f.kind=="HIGH" && f.center==center && f.groupStart==groupStart &&
+                f.confirmation==confirmation
+        }) return null
     val first=minOf(groupStart,maxOf(0,confirmation-4))
     val window=bars.subList(first,confirmation+1)
     if(window.any { !it.h.isFinite() || !it.l.isFinite() ||

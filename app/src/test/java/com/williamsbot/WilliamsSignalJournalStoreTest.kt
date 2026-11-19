@@ -38,6 +38,7 @@ class WilliamsSignalJournalStoreTest {
             .put("intent_role","ENTRY").put("direction","LONG")
             .put("order_status",status).put("campaign_status","ENTRY_PENDING")
             .put("last_reconciled_ms",now-1000L)
+            .put("entry_order_observed_at_ms",now-1000L)
             .put("entry_price","100").put("protective_stop","95")
 
     @Test fun unchangedSignedReconciliationNeverRewritesTheFifteenSignalTimelines() {
@@ -107,4 +108,37 @@ class WilliamsSignalJournalStoreTest {
         assertEquals(0,store.writes)
         assertTrue(store.values.isEmpty())
     }
+    @Test fun locallyCreatedIntentIsNeverMistakenForSignedBinancePendingOrder() {
+        val store=FakeStore()
+        val symbol="BTCUSDT"
+        val signalId="local-unknown"
+        store.values["signal_timeline_${symbol}"]=JSONObject()
+            .put("signals",JSONArray().put(sourceSignal(symbol,signalId)))
+            .put("events",JSONArray()).put("snapshot_at_ms",now).toString()
+        val local=owner(symbol,signalId,"NEW")
+            .put("last_reconciled_ms",now-100L)
+            .put("entry_order_observed_at_ms",0L).put("created_at_ms",now-100L)
+        val journal=WilliamsSignalJournal(store)
+
+        var fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
+        assertEquals(0L,fact.getLong("exchange_observed_at_ms"))
+
+        // A freshly signed account/position/STOP refresh still does not prove
+        // that Binance holds this specific entry client id.
+        local.put("last_reconciled_ms",now-1L)
+            .put("entry_order_observed_at_ms",now-120_001L)
+        fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("PENDING_UNVERIFIED",fact.getString("state"))
+        assertEquals(now-120_001L,fact.getLong("exchange_observed_at_ms"))
+
+        local.put("entry_order_observed_at_ms",now-1_000L)
+        fact=journal.view(symbol,JSONArray().put(local),now)
+            .getJSONArray("signals").getJSONObject(0)
+        assertEquals("BINANCE_PENDING",fact.getString("state"))
+        assertEquals(now-1_000L,fact.getLong("exchange_observed_at_ms"))
+    }
+
 }

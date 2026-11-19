@@ -46,6 +46,28 @@ class WilliamsSetupRulesTest {
         assertEquals(2,short.center)
         assertEquals(220-long.trigger,short.trigger,1e-8)
     }
+    @Test fun sourceFractalSelectorUsesDecimalExactBinanceTicksOrFailsClosed() {
+        fun make(highs:List<Double>)=highs.mapIndexed { i,x ->
+            WilliamsWaveBar(i*3_600_000L,x-1,x,x-4,x-1)
+        }
+        val highs=listOf(79521.0,79522.0,79524.8,79523.0,79522.2,79522.3)
+        val bars=make(highs)
+        val levels=selectWilliamsPendingFractal("LONG",bars,List(6){79524.0},0.1)!!
+        assertEquals(79524.9,levels.trigger,0.0)
+        assertTrue(ExecutionMath.isMultiple(levels.trigger,0.1))
+        assertTrue(ExecutionMath.isMultiple(levels.protective,0.1))
+        // No guessing on an off-grid high, even if a later order layer
+        // could round it. Unknown contract precision means no new entry.
+        val corrupted=bars.toMutableList().apply { this[2]=this[2].copy(h=79524.805) }
+        assertNull(selectWilliamsPendingFractal("LONG",corrupted,List(6){79524.0},0.1))
+        val shortBars=bars.map { it.copy(o=160000.0-it.o,
+            h=160000.0-it.l,l=160000.0-it.h,c=160000.0-it.c) }
+        val short=selectWilliamsPendingFractal("SHORT",shortBars,
+            List(6){160000.0-79524.0},0.1)!!
+        assertTrue(ExecutionMath.isMultiple(short.trigger,0.1))
+        assertTrue(ExecutionMath.isMultiple(short.protective,0.1))
+    }
+
     @Test fun plateauUsesWholeOppositeExtremeAndAConsumedLevelIsNotRearmed() {
         val highs=listOf(101.0,102.0,105.0,105.0,103.0,102.0)
         val bars=highs.mapIndexed { i,h -> WilliamsWaveBar(i*3_600_000L,h-1,h,if (i==3) 98.0 else h-5,h-1) }
@@ -57,6 +79,67 @@ class WilliamsSetupRulesTest {
         val crossed=bars+WilliamsWaveBar(6*3_600_000L,103.0,106.0,102.0,104.0)
         assertNull(selectWilliamsPendingFractal("LONG",crossed,List(crossed.size){104.0},.1))
     }
+    @Test fun tc2Figure11_1DFractalConfirmsAtSixthBarDespiteEqualFifthHigh() {
+        // Original TC2 2nd edition, PDF physical p166, Fig 11.1(D):
+        // two strictly lower highs on each side; equal fifth-bar high
+        // extends confirmation to the sixth closed bar, not a veto.
+        val h=3_600_000L
+        val highs=listOf(101.0,102.0,105.0,103.0,105.0,104.0)
+        val bars=highs.mapIndexed { i,x ->
+            WilliamsWaveBar((i+1)*h,x-2.0,x,x-5.0,x-1.0)
+        }
+        assertNull(selectWilliamsPendingFractal("LONG",bars.take(5),List(5){104.0},0.1))
+        val found=selectWilliamsPendingFractal("LONG",bars,List(6){104.0},0.1)!!
+        assertEquals(2,found.center)
+        assertEquals(5,found.confirmation)
+        assertEquals(105.1,found.trigger,1e-8)
+        val exact=exactTc2LongFractalLevels(bars,3*h,3*h,6*h,0.1)!!
+        assertEquals(105.1,exact.trigger,1e-8)
+        assertEquals(found.protective,exact.protective,1e-8)
+        assertNull(exactTc2LongFractalLevels(bars,3*h,3*h,5*h,0.1))
+        // A sixth candle crossing the trigger consumes the signal.
+        val crossed=bars.toMutableList().apply {
+            this[5]=this[5].copy(h=106.0)
+        }
+        assertNull(selectWilliamsPendingFractal("LONG",crossed,List(6){104.0},0.1))
+        fun mirror(x:WilliamsWaveBar)=x.copy(o=220-x.o,h=220-x.l,l=220-x.h,c=220-x.c)
+        val shortBars=bars.map(::mirror)
+        val short=selectWilliamsPendingFractal("SHORT",shortBars,List(6){116.0},0.1)!!
+        assertEquals(2,short.center)
+        assertEquals(5,short.confirmation)
+        assertEquals(114.9,short.trigger,1e-8)
+        val shortExact=exactTc2ShortFractalLevels(shortBars,3*h,3*h,6*h,0.1)!!
+        assertEquals(short.trigger,shortExact.trigger,1e-8)
+        assertEquals(short.protective,shortExact.protective,1e-8)
+        assertNull(exactTc2ShortFractalLevels(shortBars,3*h,3*h,5*h,0.1))
+    }
+
+    @Test fun offGridShortReflectionPreservesCausalGeometryButNotOrderAuthority() {
+        val h=3_600_000L
+        val lows=listOf(118.0,117.0,115.0,116.0,115.0,116.0)
+        val originals=lows.mapIndexed { i,low ->
+            WilliamsWaveBar((i+1)*h,low+2.0,low+5.0,low,low+3.0)
+        }
+        // A non-tick-aligned reflection is a valid geometric transformation,
+        // but it is NEVER an executable source-price representation.
+        val mirrorAt=220.005
+        val mirror=originals.map { it.copy(
+            o=mirrorAt-it.o,h=mirrorAt-it.l,
+            l=mirrorAt-it.h,c=mirrorAt-it.c)
+        }
+        val teeth=List(6){104.0}
+        assertNull(selectWilliamsPendingFractal("LONG",mirror,teeth,0.1))
+        val geometric=selectWilliamsPendingFractal("LONG",mirror,teeth,0.1,
+            requireSourceTickGrid=false)!!
+        assertEquals(2,geometric.center)
+        assertEquals(5,geometric.confirmation)
+        val sourceExact=exactTc2ShortFractalLevels(originals,3*h,3*h,6*h,0.1)!!
+        assertEquals(114.9,sourceExact.trigger,1e-9)
+        assertEquals(122.1,sourceExact.protective,1e-9) // max source HIGH within confirmed stop window
+        assertEquals(sourceExact.trigger,mirrorAt-geometric.trigger,1e-9)
+        assertEquals(sourceExact.protective,mirrorAt-geometric.protective,1e-9)
+    }
+
     @Test fun superAoInitialStopUsesSignalBarAndNotSubsequentTrailingWindow() {
         val h=3_600_000L
         val lows=listOf(100.0,94.0,97.0,99.0,98.0,101.0,102.0)

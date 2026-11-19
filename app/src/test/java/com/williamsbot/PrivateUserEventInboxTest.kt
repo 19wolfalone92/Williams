@@ -71,6 +71,67 @@ class PrivateUserEventInboxTest {
     }
 
     @Test
+    fun stableFuturesTradeIdDedupesAcrossWsTimestampReplays() {
+        assertTrue(privateBinanceTradeHasStableId("TRADE","123456"))
+        assertTrue(privateBinanceTradeHasStableId("TRADE","1"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","-1"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","0"))
+        assertFalse(privateBinanceTradeHasStableId("TRADE",""))
+        assertFalse(privateBinanceTradeHasStableId("TRADE","unknown"))
+        assertFalse(privateBinanceTradeHasStableId("NEW","123456"))
+        assertFalse(privateBinanceTradeHasStableId("CANCELED","123456"))
+        assertFalse(privateBinanceTradeHasStableId("FILLED","123456"))
+    }
+
+    @Test
+    fun durableBinanceOrderProjectionIdentityIsSymbolScopedEvenWithoutClientId() {
+        assertEquals("BTCUSDT|7",privateFuturesOrderProjectionKey("BTCUSDT","", "7"))
+        assertEquals("ETHUSDT|7",privateFuturesOrderProjectionKey("ETHUSDT","", "7"))
+        assertNotEquals(privateFuturesOrderProjectionKey("BTCUSDT","", "7"),
+            privateFuturesOrderProjectionKey("ETHUSDT","", "7"))
+        assertEquals("BTCUSDT|W2E_SHARED",privateFuturesOrderProjectionKey(
+            "BTCUSDT","W2E_SHARED","9"))
+        assertEquals("ETHUSDT|W2E_SHARED",privateFuturesOrderProjectionKey(
+            "ETHUSDT","W2E_SHARED","9"))
+        assertNotEquals(privateFuturesOrderProjectionKey("BTCUSDT","W2E_SHARED","9"),
+            privateFuturesOrderProjectionKey("ETHUSDT","W2E_SHARED","9"))
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("","old","1")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("BTCUSDT","","")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            privateFuturesOrderProjectionKey("BTCUSDT","bad|delimiter","1")
+        }
+        assertEquals("UPDATE orders SET client_order_id = symbol || '|' || client_order_id",
+            PRIVATE_FUTURES_ORDER_SCOPE_V8_SQL)
+    }
+
+    @Test
+    fun replayedOrOutOfOrderWsCannotRewindDurableOrderStatusOrFill() {
+        fun allow(oldTime:Long,oldId:String,oldQty:String,oldStatus:String,
+            at:Long,id:String,qty:String,status:String)=privateOrderProjectionMayAdvance(
+            oldTime,oldId,oldQty,oldStatus,at,id,qty,status)
+        assertTrue(allow(1_000L,"42","0","NEW",2_000L,"42","0.5","PARTIALLY_FILLED"))
+        assertTrue(allow(1_000L,"42","0.5","PARTIALLY_FILLED",
+            2_000L,"42","1","FILLED"))
+        assertFalse(allow(2_000L,"42","1","FILLED",1_000L,"42","0","NEW"))
+        assertFalse(allow(2_000L,"42","1","FILLED",3_000L,"42","1","NEW"))
+        assertFalse(allow(2_000L,"42","1","FILLED",3_000L,"42","1","CANCELED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","0.2","PARTIALLY_FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","0.5","NEW"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"999","0.5","FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            3_000L,"42","bad","FILLED"))
+        assertFalse(allow(2_000L,"42","0.5","PARTIALLY_FILLED",
+            0L,"42","0.5","FILLED"))
+    }
+
+    @Test
     fun failedDrainDoesNotSpinButNewReceiptOrHealthyDrainWakesIt() {
         assertFalse(privateEventDrainMayReschedule(false, false, 4L, 4L))
         assertFalse(privateEventDrainMayReschedule(null, false, 4L, 4L))

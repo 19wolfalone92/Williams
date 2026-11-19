@@ -50,7 +50,7 @@ class FuturesHalfMarginTest {
                 val observed = futuresMarginObservation(case.getJSONObject("account"), case.getJSONObject("configuration"),
                     JSONArray().put(order), result.getOrThrow())
                 assertTrue(observed.used >= BigDecimal("6009"))
-                assertEquals("SANTOSUSDT", observed.orders.getValue("external").symbol)
+                assertEquals("SANTOSUSDT", observed.orders.getValue("SANTOSUSDT|external").symbol)
                 assertNotNull(williamsNewRiskSymbolBlocker("SANTOSUSDT"))
             }
             val reads = requests.filter { it.url.encodedPath != "/fapi/v1/time" }
@@ -103,6 +103,38 @@ class FuturesHalfMarginTest {
         assertEquals(0, evaluate(cases.getValue("exact_50_percent_including_costs"))
             .getString("projected_usdt").toBigDecimal().compareTo(BigDecimal("500")))
     }
+    @Test fun sameClientIdOnDifferentSymbolsNeverOverwritesSignedOrderMargin() {
+        val case=cases().first()
+        val symbols=case.getJSONObject("symbols")
+        val configs=symbols.keys().asSequence().associateWith { symbols.getJSONObject(it) }
+        fun order(symbol:String,id:Int)=JSONObject()
+            .put("symbol",symbol).put("positionSide","BOTH")
+            .put("side","BUY").put("orderId",id).put("clientOrderId","shared")
+            .put("reduceOnly",false).put("status","NEW")
+            .put("origQty","0.01").put("executedQty","0").put("price","100")
+        val one=futuresMarginObservation(case.getJSONObject("account"),
+            case.getJSONObject("configuration"),
+            JSONArray().put(order("ETHUSDT",71)), configs)
+        val two=futuresMarginObservation(case.getJSONObject("account"),
+            case.getJSONObject("configuration"),
+            JSONArray().put(order("ETHUSDT",71)).put(order("SOLUSDT",72)), configs)
+        assertEquals(2,two.orders.size)
+        assertEquals("ETHUSDT",two.orders.getValue("ETHUSDT|shared").symbol)
+        assertEquals("SOLUSDT",two.orders.getValue("SOLUSDT|shared").symbol)
+        assertTrue(two.costNotional>one.costNotional)
+        val unresolvedForeign=JSONArray().put(JSONObject()
+            .put("symbol","SOLUSDT").put("client_id","new")
+            .put("current_proposal",true).put("status","SUBMISSION_UNKNOWN"))
+        val rejected=runCatching { assessFuturesHalfMargin(
+            futuresMarginObservation(case.getJSONObject("account"),
+                case.getJSONObject("configuration"),JSONArray(),configs),
+            futuresMarginObservation(case.getJSONObject("account"),
+                case.getJSONObject("configuration"),JSONArray(),configs),
+            case.getJSONObject("proposal"),unresolvedForeign) }
+        assertTrue(rejected.exceptionOrNull().toString(),
+            rejected.exceptionOrNull().toString().contains("LIABILITY_UNRESOLVED"))
+    }
+
     @Test fun aChildCannotBeClaimedByTwoParents() {
         val case = cases().single { it.getString("id") == "partial_parent_bound_to_child_once" }
         val liabilities = case.getJSONArray("liabilities")

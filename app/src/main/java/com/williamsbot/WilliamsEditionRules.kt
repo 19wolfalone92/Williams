@@ -74,8 +74,12 @@ internal fun williamsEditionSignalSeriesBlocker(
     return null
 }
 
-/** NTD PDF42 and Course PDF61-72. Outside bars keep both genuine fractals;
- * simultaneous extremes cannot establish an ordered Hump start/signal. */
+/** NTD PDF42 and Course PDF61-72; TC2 EN physical PDF166 Fig 11.1D.
+ * An equal HIGH/LOW on the RIGHT does not count as a lower/higher flank
+ * bar but does not invalidate the candidate: the second strict flank can
+ * arrive on bar six or later. Two strict flank bars must be observable.
+ * Outside bars keep both genuine fractals; simultaneous extremes cannot
+ * establish an ordered Hump start/signal. */
 internal fun confirmedWilliamsEditionFractals(bars:List<WilliamsWaveBar>):List<WilliamsEditionFractal> {
     if (!validWilliamsEditionBars(bars)) return emptyList()
     val out=mutableListOf<WilliamsEditionFractal>()
@@ -89,9 +93,12 @@ internal fun confirmedWilliamsEditionFractals(bars:List<WilliamsWaveBar>):List<W
             while (j in bars.indices && count<2) {
                 val v=value(j)
                 if (v==p) {
-                    if (step==1) { ok=false;break }
-                    start=j
-                    count=0 // left neighbours precede the entire equal group
+                    if (step<0) {
+                        start=j
+                        count=0 // left neighbours precede the entire equal group
+                    }
+                    // On the right, equality is not a strict flank, but
+                    // TC2 Fig 11.1(D) allows a sixth-bar confirmation.
                 } else if ((v>p)==(kind=="LOW")) count++
                 else { ok=false;break }
                 if (count==2) { if (step<0) leftStart=j else confirmation=j }

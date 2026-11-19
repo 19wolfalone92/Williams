@@ -39,6 +39,26 @@ internal class FuturesExposureNotSubmittedException(cause: Exception) :
  * permission to trade: callers must still pass execution/reconciliation/risk
  * gates before mutating orders. Never use Spot /api/v3 routes here.
  */
+
+/** Signed GET must bind to the exact (symbol, client ID) requested. Receiving
+ * HTTP 200 with an unrelated order is NOT proof of this campaign's fills. */
+internal fun signedFuturesStandardOrderGetMatches(
+    order: JSONObject, symbol: String, clientOrderId: String
+): Boolean = symbol.isNotBlank() && clientOrderId.isNotBlank() &&
+    order.optString("symbol") == symbol &&
+    order.optString("clientOrderId") == clientOrderId &&
+    order.optString("orderId").toLongOrNull()?.let { it > 0L } == true
+
+/** Algo IDs are per-order independent of standard order IDs. A signed
+ * response lacking the requested clientAlgoId must never reconcile STOP,
+ * cancel state, or an unknown child order as this campaign's own. */
+internal fun signedFuturesAlgoOrderGetMatches(
+    order: JSONObject, symbol: String, clientAlgoId: String
+): Boolean = symbol.isNotBlank() && clientAlgoId.isNotBlank() &&
+    order.optString("symbol") == symbol &&
+    order.optString("clientAlgoId") == clientAlgoId &&
+    order.optString("algoId").toLongOrNull()?.let { it > 0L } == true
+
 internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     for (index in 0 until rows.length()) {
         val row = rows.optJSONObject(index)
@@ -51,12 +71,26 @@ internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     return false
 }
 
+/** Switching Hedge→One-way is a GLOBAL account mutation, not a
+ * read-only preflight. Flat positions alone do not prove the absence of
+ * untriggered STANDARD or ALGO orders that could fill during the mode swap.
+ * Require two signed account-wide position snapshots around independent
+ * account-wide open-order reads. Exchange-side atomicity is not implied.
+ */
+internal fun futuresOneWayModeSwitchPreflight(
+    before:JSONArray,standardOpen:JSONArray,algoOpen:JSONArray,after:JSONArray
+):Boolean = standardOpen.length()==0 && algoOpen.length()==0 &&
+    !hasLiveFuturesPosition(validateFuturesPositionSnapshot(before)) &&
+    !hasLiveFuturesPosition(validateFuturesPositionSnapshot(after))
+
 internal fun validateFuturesPositionSnapshot(rows: JSONArray): JSONArray {
     val identities = mutableSetOf<Pair<String, String>>()
     for (index in 0 until rows.length()) {
         val row = rows.optJSONObject(index) ?: error("Malformed Futures position row")
         val symbol = row.optString("symbol")
-        val side = row.optString("positionSide", "BOTH")
+        // A signed position with missing positionSide is an incomplete
+        // exchange snapshot, not implicitly a one-way BOTH position.
+        val side = row.optString("positionSide")
         check(symbol.isNotBlank() && side in setOf("BOTH", "LONG", "SHORT") &&
             row.optString("positionAmt").toBigDecimalOrNull() != null && identities.add(symbol to side)) {
             "Malformed or duplicate Futures position identity/amount"
@@ -299,13 +333,15 @@ internal class BinanceUsdMFuturesTestnetAdapter(
      */
     fun requireOneWayMode() {
         if (!positionMode().optBoolean("dualSidePosition", true)) return
-        val live = positions()
-        // Never interpret malformed exchange data as a flat account. A malformed row
-        // must block mode changes, because switching Hedge/One-way with live exposure
-        // can alter the semantics of subsequent exits and protective orders.
-        val hasPosition = hasLiveFuturesPosition(live)
-        check(!hasPosition) {
-            "Futures account is in Hedge Mode with live positions; flatten/reconcile manually before switching to One-way"
+        // A Hedge-mode STOP entry remains live exposure risk even if the
+        // account's current signed position size is zero. Never mutate the
+        // global position mode while such pending intent can trigger.
+        val first=positions()
+        val standard=allOpenOrders()
+        val conditional=allOpenAlgoOrders()
+        val second=positions()
+        check(futuresOneWayModeSwitchPreflight(first,standard,conditional,second)) {
+            "Hedge to One-way blocked: signed positions or pending standard/algo orders are present"
         }
         try {
             setOneWayMode()
@@ -424,13 +460,30 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         ))
     }
 
+    /**
+     * The userTrades endpoint is limited to 1000 receipts per response and
+     * provides no complete-order guarantee when it returns a full page.
+     * A saturated receipt set must NEVER certify a protective STOP closure.
+     */
+    internal fun requireUnsaturatedFuturesOrderTradePage(rows: JSONArray): JSONArray {
+        check(rows.length() < 1000) {
+            "FUTURES_SIGNED_ORDER_TRADE_PAGE_SATURATED: incomplete exit execution evidence"
+        }
+        for (i in 0 until rows.length()) {
+            check(rows.optJSONObject(i) != null) {
+                "FUTURES_SIGNED_ORDER_TRADE_ROW_MALFORMED"
+            }
+        }
+        return rows
+    }
+
     /** Exact child-order history; do not mix a later opposite campaign into a close. */
     fun userTradesByOrder(symbol:String,orderId:String):JSONArray {
         requireSymbol(symbol)
         require(orderId.toLongOrNull()?.let { it>0L }==true)
-        return JSONArray(requestRaw("GET","/fapi/v1/userTrades",mapOf(
+        return requireUnsaturatedFuturesOrderTradePage(JSONArray(requestRaw("GET","/fapi/v1/userTrades",mapOf(
             "symbol" to symbol,"orderId" to orderId,"limit" to "1000"
-        ),signed=true))
+        ),signed=true)))
     }
 
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
@@ -504,7 +557,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun order(symbol: String, clientOrderId: String): JSONObject {
         requireSymbol(symbol)
         require(clientOrderId.isNotBlank())
-        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true)
+        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true).also {
+            check(signedFuturesStandardOrderGetMatches(it,symbol,clientOrderId)) {
+                "Futures signed order GET identity mismatch: $symbol / $clientOrderId"
+            }
+        }
     }
 
     fun orderById(symbol: String, orderId: String): JSONObject {
@@ -548,7 +605,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(clientAlgoId.isNotBlank())
         return request("GET", "/fapi/v1/algoOrder", mapOf(
             "symbol" to symbol, "clientAlgoId" to clientAlgoId
-        ), signed = true)
+        ), signed = true).also {
+            check(signedFuturesAlgoOrderGetMatches(it,symbol,clientAlgoId)) {
+                "Futures signed algo GET identity mismatch: $symbol / $clientAlgoId"
+            }
+        }
     }
 
     fun cancelAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
@@ -570,12 +631,23 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun cancelAllAlgoOrders(symbol: String) {
         val orders = openAlgoOrders(symbol)
         for (i in 0 until orders.length()) {
-            val row = orders.optJSONObject(i) ?: continue
+            // A malformed signed open-order row is never permission to
+            // declare cleanup complete after silently skipping that order.
+            val row = orders.optJSONObject(i)
+                ?: throw IOException("Malformed signed Futures algo order for $symbol at index $i")
+            if (row.optString("symbol") != symbol)
+                throw IOException("Foreign Futures algo in signed $symbol cleanup snapshot")
             val id = row.optString("algoId", "")
             val clientId = row.optString("clientAlgoId", "")
-            if (id.isNotBlank()) cancelAlgoOrderById(symbol, id)
+            if (id.toLongOrNull()?.let { it > 0L } == true) cancelAlgoOrderById(symbol, id)
             else if (clientId.isNotBlank()) cancelAlgoOrder(symbol, clientId)
             else throw IOException("Cannot safely cancel unidentified Futures algo order for $symbol")
+        }
+        // A successful DELETE response is not proof that the exchange has
+        // removed ALL conditional orders. Fail closed on any remaining row.
+        val after = openAlgoOrders(symbol)
+        check(after.length() == 0) {
+            "Signed Futures algo cleanup remains unresolved for $symbol"
         }
     }
 

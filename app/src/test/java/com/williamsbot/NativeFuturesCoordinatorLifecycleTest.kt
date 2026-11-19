@@ -438,8 +438,13 @@ class NativeFuturesCoordinatorLifecycleTest {
                             code=400;JSONObject().put("code",rejected).put("msg","simulated protective order rejection")
                         } else {
                             val id = (algos.size + 1).toString()
+                            // Binance signed POST /algoOrder includes explicit
+                            // one-way positionSide even when the POST omitted
+                            // the default BOTH parameter. Never feed an
+                            // incomplete synthetic stop to full-coverage checks.
                             val row = JSONObject(p).put("algoId", id).put("algoStatus", "NEW")
                                 .put("orderType", p.getValue("type")).put("actualOrderId", "")
+                                .put("positionSide", p["positionSide"] ?: "BOTH")
                             algos[id] = row
                             afterAlgoMutation?.invoke(request, row)
                             if(loseProtectionReply && protective) {
@@ -471,9 +476,14 @@ class NativeFuturesCoordinatorLifecycleTest {
                     val old=kotlin.math.abs(quantity)
                     entry=(entry*old+mark*added)/(old+added)
                     quantity=(quantity.toString().toBigDecimal()+(if(p["side"]=="BUY") added else -added).toString().toBigDecimal()).toDouble()
+                    // Signed Binance GET /fapi/v1/order provides the actual
+                    // one-way positionSide. Our mock must not omit this field,
+                    // or a legitimate signed entry fill will fail the new P0
+                    // identity check because the fixture is incomplete.
                     val row=JSONObject(p).put("orderId",id).put("status",if(additionFraction==1.0) "FILLED" else "PARTIALLY_FILLED")
                         .put("clientOrderId",p.getValue("newClientOrderId")).put("origQty",p.getValue("quantity"))
                         .put("executedQty",added.toString()).put("avgPrice",mark.toString())
+                        .put("positionSide","BOTH")
                     orders[id]=row
                     if(loseAdditionReply) { code=503;JSONObject().put("code",-1000).put("msg","lost addition reply") } else row
                 } else if (request.method == "POST") {
@@ -914,8 +924,12 @@ class NativeFuturesCoordinatorLifecycleTest {
             .put("strategy_profile",williamsTc2Profile).put("strategy_ownership_verified",true).put("created_at_ms",now)
         val rows=coordinator.intentsSnapshot().put(pending)
         journal.writeState("futures_campaign_intents_v2",rows.toString())
-        exchange.algos["eth-trigger"]=JSONObject().put("symbol","ETHUSDT").put("algoId","eth-trigger")
+        // Simulated signed GET must have a real positive Binance Algo ID,
+        // explicit one-way mode, and the same client identity as the journal.
+        // An arbitrary mock string is not accepted as exchange ownership.
+        exchange.algos["eth-trigger"]=JSONObject().put("symbol","ETHUSDT").put("algoId","430002")
             .put("clientAlgoId","W2E_ETH_TEST_TRIGGERING").put("side","SELL").put("algoStatus","TRIGGERING")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
             .put("orderType","STOP_MARKET").put("triggerPrice","99").put("quantity","0.1").put("actualOrderId","")
         now+=10_000
         val result=coordinator.reconcile();assertTrue(result.toString(),result.getBoolean("ok"))
@@ -2257,6 +2271,31 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(reduction.toString(),reduction.getBoolean("ok"))
             assertEquals(0.0,exchange.quantity,0.0)
             assertEquals(1,exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun signedProtectiveStopProofFailsClosedOnMissingExchangeFields() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val stop = JSONObject()
+                .put("symbol", "BTCUSDT").put("algoId", "12345")
+                .put("clientAlgoId", "W2PS_EXACT").put("positionSide", "BOTH")
+                .put("workingType", "MARK_PRICE")
+                .put("orderType", "STOP_MARKET").put("algoStatus", "NEW")
+                .put("side", if (direction.name == "LONG") "SELL" else "BUY")
+                .put("closePosition", "true")
+                .put("triggerPrice", if (direction.name == "LONG") "95" else "105")
+            val price = stop.getString("triggerPrice")
+            assertTrue(matchesConfirmedFuturesProtectiveStop(stop, direction.name,
+                "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
+            for (field in listOf("symbol", "algoId", "positionSide", "workingType")) {
+                val missing = JSONObject(stop.toString()).apply { remove(field) }
+                assertFalse("$direction accepted STOP without signed $field",
+                    matchesConfirmedFuturesProtectiveStop(missing, direction.name,
+                        "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
+            }
+            assertFalse(matchesConfirmedFuturesProtectiveStop(
+                JSONObject(stop.toString()).put("algoId", "0"),
+                direction.name, "W2PS_EXACT", price, expectedSymbol = "BTCUSDT"))
         }
     }
 
