@@ -4442,6 +4442,24 @@ private class NativeEngine(
         return futuresMarketData.isLastClosedCandleCurrent(last.t, frame, nowMs)
     }
 
+    /** Cached candle COUNT and freshness are not proof of continuous H1/M15 data.
+     * Do not let a 160-row SQLite series with one missing interval bypass REST
+     * repair merely because its last bar is fresh. No speculative gap filling.
+     */
+    private fun cachedFixedFrameKlinesValid(candles: List<CandleN>, frame: String): Boolean {
+        if (candles.isEmpty()) return false
+        val ohlcvValid = candles.all { bar ->
+            bar.o.isFinite() && bar.h.isFinite() && bar.l.isFinite() &&
+                bar.c.isFinite() && bar.v.isFinite() && bar.o > 0.0 &&
+                bar.l > 0.0 && bar.h >= maxOf(bar.o, bar.c, bar.l) &&
+                bar.l <= minOf(bar.o, bar.c, bar.h) && bar.v >= 0.0
+        }
+        if (!ohlcvValid) return false
+        if (frame == "1M") return true // Variable-length calendar months.
+        val step = frameSeconds(frame) * 1000L
+        return futuresClosedCandleTimesContiguous(candles.map { it.t }, step)
+    }
+
     private fun fetchCandles(
         symbol: String,
         frame: String,
@@ -4458,7 +4476,8 @@ private class NativeEngine(
                 val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
-                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs)) {
+                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs) &&
+                    cachedFixedFrameKlinesValid(closed.takeLast(limit), frame)) {
                     // A WebSocket warm cache is not proof that the SQLite history
                     // journal is populated. Startup readiness checks both the live
                     // closed-bar count and persisted count; returning here without
@@ -4483,8 +4502,16 @@ private class NativeEngine(
                     val persistedCount = historyStore.count(normalizedSymbol, frame)
                     // Do not rewrite 150-180 candles into SQLite on every scan tick.
                     // Persist the initial warm cache once, then only newly closed bars.
-                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime) {
-                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L) {
+                    val sqliteRecent = if (persistedCount >= limit.toLong())
+                        historyStore.loadRecent(normalizedSymbol, frame, limit).map {
+                            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+                        } else emptyList()
+                    val sqliteHasGapsOrCorruption = sqliteRecent.isNotEmpty() &&
+                        !cachedFixedFrameKlinesValid(sqliteRecent, frame)
+                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime ||
+                        sqliteHasGapsOrCorruption) {
+                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L ||
+                            sqliteHasGapsOrCorruption) {
                             initialRows
                         } else {
                             closed.filter { it.t > persistedNewest }.map(toStored)
@@ -4508,7 +4535,8 @@ private class NativeEngine(
         val persistentCandles = persistent.map {
             CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
         }
-        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame)) {
+        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame) &&
+            cachedFixedFrameKlinesValid(persistentCandles, frame)) {
             candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
             liveCandleCache[liveKey] = persistentCandles.toMutableList()
             return persistentCandles
@@ -4519,7 +4547,8 @@ private class NativeEngine(
         if (cached != null &&
             cached.second.size >= limit &&
             now - cached.first < scanCacheTtlMs &&
-            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs())
+            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs()) &&
+            cachedFixedFrameKlinesValid(cached.second.takeLast(limit), frame)
         ) {
             return cached.second.takeLast(limit)
         }
@@ -4594,6 +4623,12 @@ private class NativeEngine(
                     volume = volume
                 )
             }
+        }
+
+        // Never persist or accept an incomplete REST series as healed history.
+        // A short outage leaves the old SQLite evidence intact for diagnosis.
+        if (source.isNotEmpty() && !cachedFixedFrameKlinesValid(source, sourceFrame)) {
+            throw IllegalStateException("FUTURES_NATIVE_CANDLE_SEQUENCE_GAPPED_OR_INVALID: $normalizedSymbol/$sourceFrame")
         }
 
         // This is the missing persistence step diagnosed by the Log branch:
