@@ -924,8 +924,12 @@ class NativeFuturesCoordinatorLifecycleTest {
             .put("strategy_profile",williamsTc2Profile).put("strategy_ownership_verified",true).put("created_at_ms",now)
         val rows=coordinator.intentsSnapshot().put(pending)
         journal.writeState("futures_campaign_intents_v2",rows.toString())
-        exchange.algos["eth-trigger"]=JSONObject().put("symbol","ETHUSDT").put("algoId","eth-trigger")
+        // Simulated signed GET must have a real positive Binance Algo ID,
+        // explicit one-way mode, and the same client identity as the journal.
+        // An arbitrary mock string is not accepted as exchange ownership.
+        exchange.algos["eth-trigger"]=JSONObject().put("symbol","ETHUSDT").put("algoId","430002")
             .put("clientAlgoId","W2E_ETH_TEST_TRIGGERING").put("side","SELL").put("algoStatus","TRIGGERING")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
             .put("orderType","STOP_MARKET").put("triggerPrice","99").put("quantity","0.1").put("actualOrderId","")
         now+=10_000
         val result=coordinator.reconcile();assertTrue(result.toString(),result.getBoolean("ok"))
