@@ -8031,6 +8031,10 @@ private class NativeEngine(
             reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else "",
             referenceClose=if(marketReentry) signal.triggerPrice else 0.0,
             leverage = entryLeverage,
+            // Only this book-native initial TC2 admission may lower the
+            // configured leverage to preserve its actual structural STOP.
+            // Add-ons, reversals and manual/observer sources are not opted in.
+            allowSafeLeverageFallback = signal.strategyProfile == williamsTc2Profile,
             signalBarTimeMs = signal.signalBarTimeMs,
             signalReason = "BOOK H1 "+signal.reason+"; "+direction.name+
                 " stop-entry at H1 signal trigger (no M15 confirmation)",

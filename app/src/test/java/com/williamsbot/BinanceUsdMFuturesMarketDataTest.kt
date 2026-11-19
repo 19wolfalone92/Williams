@@ -100,10 +100,20 @@ class BinanceUsdMFuturesMarketDataTest {
     @Test
     fun slowOrWallClockUnstablePublicTimeProbeNeverCertifiesRiskClock() {
         assertTrue(publicFuturesClockSampleUsable(1_800_000_000_000L, 350L, 351L))
+        assertTrue(publicFuturesClockSampleUsable(1_800_000_000_000L, 7_500L, 7_500L))
         assertTrue(!publicFuturesClockSampleUsable(0L, 100L, 100L))
-        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 3_001L, 3_001L))
+        assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 8_001L, 8_001L))
         assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, 500L, 1_600L))
         assertTrue(!publicFuturesClockSampleUsable(1_800_000_000_000L, -1L, 0L))
+    }
+
+    @Test
+    fun delayedPublicUtcSampleCannotSelectRiskDayNearMidnight() {
+        val midnight = 1_795_046_400_000L  // UTC day boundary, not a device clock.
+        assertTrue(!publicFuturesUtcDayUnambiguous(midnight - 5_000L, 7_500L))
+        assertTrue(!publicFuturesUtcDayUnambiguous(midnight + 5_000L, 7_500L))
+        assertTrue(publicFuturesUtcDayUnambiguous(midnight + 15_000L, 7_500L))
+        assertTrue(!publicFuturesUtcDayUnambiguous(midnight + 15_000L, Long.MAX_VALUE))
     }
 
     @Test

@@ -678,6 +678,28 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun bookNativeTc2CanLowerUnsafeConfiguredLeverageButGeneric125xStaysRejected() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val coordinator = NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val native = plan(direction, 125, prefix = "W2H_").copy(
+                signalType = "FRACTAL",
+                signalId = "H1_TC2_SAFE_LEVERAGE_${direction.name}",
+                signalBarTimeMs = System.currentTimeMillis() - 3_600_000L,
+                allowSafeLeverageFallback = true
+            )
+            val admitted = coordinator.submitPendingEntry(native)
+            assertTrue(admitted.toString(), admitted.optBoolean("accepted"))
+            assertTrue(exchange.leverage in 1..124)
+            val stored = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals(125, stored.getInt("configured_leverage_cap"))
+            assertEquals(exchange.leverage, stored.getInt("requested_leverage"))
+            assertTrue(stored.getBoolean("leverage_auto_reduced_for_structural_stop"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
     @Test fun roundedSignedEntryPriceCannotLeaveFilledLongOrShortWithoutBinanceStop() {
         // Regression: a strict 1e-8 comparison against the exchange's
         // positionRisk entryPrice previously threw before STOP_MARKET POST,
