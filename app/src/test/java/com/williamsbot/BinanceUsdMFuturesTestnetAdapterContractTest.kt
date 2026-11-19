@@ -24,6 +24,7 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 .put("symbol","BTCUSDT").put("side",side).put("positionSide","BOTH")
                 .put("algoId",7001).put("clientAlgoId","W2H_BTC_REAL")
                 .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("workingType","CONTRACT_PRICE")
                 .put("algoStatus","NEW").put("closePosition",false)
                 .put("reduceOnly",false).put("quantity","1.0")
                 .put("triggerPrice","101.0")
@@ -36,6 +37,8 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 JSONObject(valid.toString()).put("algoId",""),
                 JSONObject(valid.toString()).put("positionSide","LONG"),
                 JSONObject(valid.toString()).put("orderType","TAKE_PROFIT_MARKET"),
+                JSONObject(valid.toString()).put("workingType","MARK_PRICE"),
+                JSONObject(valid.toString()).apply { remove("workingType") },
                 JSONObject(valid.toString()).put("quantity","1.001"),
                 JSONObject(valid.toString()).put("triggerPrice","100.9"),
                 JSONObject(valid.toString()).put("closePosition",true),
