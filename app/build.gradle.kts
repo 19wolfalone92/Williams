@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // Distinguish this review-only Demo clock and leverage candidate from installed 4.64.40.
-val resolvedVersionCode = maxOf(46443, ciRunNumber ?: 46443)
+val resolvedVersionCode = maxOf(46444, ciRunNumber ?: 46444)
 val sourceRevision = System.getenv("GITHUB_SHA")
     ?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: "LOCAL_UNSTAMPED"
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.64.43"
+        versionName = "4.64.44"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 
