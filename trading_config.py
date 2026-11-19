@@ -96,7 +96,7 @@ class TradingConfig:
     initial_entry_risk_pct: float = 0.002
     campaign_risk_limit_pct: float = 0.006
     max_total_risk_pct: float = 0.006
-    # Canonical project policy: stop opening new campaigns at 3% daily loss OR three losing Futures closes in one UTC day.
+    # Canonical project policy: stop opening new campaigns at 3% daily loss OR three CONSECUTIVE losing Futures closes in one UTC day.
     max_daily_loss_pct: float = 0.03
     max_consecutive_losses: int = 3
     cooldown_minutes: int = 30
