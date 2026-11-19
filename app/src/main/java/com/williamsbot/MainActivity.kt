@@ -265,7 +265,7 @@ data class Status(
     val error: String? = null,
     val binanceConfigured: Boolean = false,
     val riskPerTrade: Double = 0.0025,
-    val maxDailyLoss: Double = 0.03,
+    val maxDailyLoss: Double = 0.01,
     val tradesToday: Int = 0,
     val consecutiveLosses: Int = 0,
     val dailyPnlUsdt: Double = 0.0,
@@ -1250,7 +1250,7 @@ fun WilliamsApp(context: Context) {
                         CockpitField("Направления", "LONG и SHORT")
                         CockpitField("Решение / контекст", "H1 / H4, D1")
                         CockpitField("Резерв риска", "до 0,25% на вход / 0,60% суммарно")
-                        CockpitField("Дневной лимит убытка", "3%")
+                        CockpitField("Дневной лимит убытка", "1%")
                         Text("Параметры ограничены торговым движком. Изменение экрана графика их не меняет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                     }
                     FuturesLeverageSettingsCard(status, ::saveFuturesLeverage)
