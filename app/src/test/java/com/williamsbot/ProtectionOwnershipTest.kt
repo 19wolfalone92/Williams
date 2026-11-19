@@ -251,6 +251,17 @@ class ProtectionOwnershipTest {
             small.put("quantity","2.0")
             assertTrue(isFullPositionFuturesStop(small,"BTCUSDT",direction,
                 java.math.BigDecimal("2"),100.0))
+            // Prior code admitted CONTRACT_PRICE as if it were the bot's
+            // MARK_PRICE close-all STOP; no longer authorize unsafe adoption.
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(valid.toString()).put("workingType","CONTRACT_PRICE"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(small.toString()).put("quantity","2.0001"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
+            assertFalse(isFullPositionFuturesStop(
+                JSONObject(small.toString()).put("quantity","999"),
+                "BTCUSDT",direction,java.math.BigDecimal("2"),100.0))
         }
     }
 

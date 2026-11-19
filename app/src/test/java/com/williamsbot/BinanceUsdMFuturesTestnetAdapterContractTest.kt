@@ -17,6 +17,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
+    @Test fun signedRestGetRequiresRequestedStandardAndAlgoOrderIdentity() {
+        val standard=JSONObject()
+            .put("symbol","BTCUSDT").put("clientOrderId","W2E_BTC_7").put("orderId","123")
+            .put("status","FILLED").put("executedQty","2")
+        assertTrue(signedFuturesStandardOrderGetMatches(standard,"BTCUSDT","W2E_BTC_7"))
+        for(changed in listOf(
+            JSONObject(standard.toString()).apply { remove("clientOrderId") },
+            JSONObject(standard.toString()).put("clientOrderId","W2E_ETH_7"),
+            JSONObject(standard.toString()).put("symbol","ETHUSDT"),
+            JSONObject(standard.toString()).put("orderId","0"),
+            JSONObject(standard.toString()).apply { remove("orderId") }
+        )) assertFalse(signedFuturesStandardOrderGetMatches(changed,"BTCUSDT","W2E_BTC_7"))
+        val algo=JSONObject().put("symbol","BTCUSDT").put("clientAlgoId","W2PS_BTC_7")
+            .put("algoId","7001").put("algoStatus","NEW").put("orderType","STOP_MARKET")
+        assertTrue(signedFuturesAlgoOrderGetMatches(algo,"BTCUSDT","W2PS_BTC_7"))
+        for(changed in listOf(
+            JSONObject(algo.toString()).apply { remove("clientAlgoId") },
+            JSONObject(algo.toString()).put("clientAlgoId","W2PS_ETH_7"),
+            JSONObject(algo.toString()).put("symbol","ETHUSDT"),
+            JSONObject(algo.toString()).put("algoId","0"),
+            JSONObject(algo.toString()).apply { remove("algoId") }
+        )) assertFalse(signedFuturesAlgoOrderGetMatches(changed,"BTCUSDT","W2PS_BTC_7"))
+    }
+
     @Test fun officialV3ShapeReadsPermissionFromSignedFuturesConfiguration() {
         for (permission in listOf(true, false)) {
             val signedPaths=mutableListOf<String>()

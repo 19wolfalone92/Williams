@@ -301,7 +301,7 @@ internal class FuturesNativeStopReplacement(
         val amount = row.getString("positionAmt").toBigDecimal()
         val entry = row.optString("entryPrice").toDoubleOrNull()
         val expectedEntry = tx.getString("entry_price").toDouble()
-        check(row.optString("positionSide", "BOTH") == "BOTH" &&
+        check(row.optString("positionSide") == "BOTH" &&
             (amount.signum() > 0) == (owner.getString("direction") == "LONG") &&
             amount.abs().compareTo(tx.getString("quantity").toBigDecimal()) == 0 &&
             entry != null && entry.isFinite() && expectedEntry.isFinite() && expectedEntry > 0 &&

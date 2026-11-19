@@ -39,6 +39,26 @@ internal class FuturesExposureNotSubmittedException(cause: Exception) :
  * permission to trade: callers must still pass execution/reconciliation/risk
  * gates before mutating orders. Never use Spot /api/v3 routes here.
  */
+
+/** Signed GET must bind to the exact (symbol, client ID) requested. Receiving
+ * HTTP 200 with an unrelated order is NOT proof of this campaign's fills. */
+internal fun signedFuturesStandardOrderGetMatches(
+    order: JSONObject, symbol: String, clientOrderId: String
+): Boolean = symbol.isNotBlank() && clientOrderId.isNotBlank() &&
+    order.optString("symbol") == symbol &&
+    order.optString("clientOrderId") == clientOrderId &&
+    order.optString("orderId").toLongOrNull()?.let { it > 0L } == true
+
+/** Algo IDs are per-order independent of standard order IDs. A signed
+ * response lacking the requested clientAlgoId must never reconcile STOP,
+ * cancel state, or an unknown child order as this campaign's own. */
+internal fun signedFuturesAlgoOrderGetMatches(
+    order: JSONObject, symbol: String, clientAlgoId: String
+): Boolean = symbol.isNotBlank() && clientAlgoId.isNotBlank() &&
+    order.optString("symbol") == symbol &&
+    order.optString("clientAlgoId") == clientAlgoId &&
+    order.optString("algoId").toLongOrNull()?.let { it > 0L } == true
+
 internal fun hasLiveFuturesPosition(rows: JSONArray): Boolean {
     for (index in 0 until rows.length()) {
         val row = rows.optJSONObject(index)
@@ -520,7 +540,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun order(symbol: String, clientOrderId: String): JSONObject {
         requireSymbol(symbol)
         require(clientOrderId.isNotBlank())
-        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true)
+        return request("GET", "/fapi/v1/order", mapOf("symbol" to symbol, "origClientOrderId" to clientOrderId), signed = true).also {
+            check(signedFuturesStandardOrderGetMatches(it,symbol,clientOrderId)) {
+                "Futures signed order GET identity mismatch: $symbol / $clientOrderId"
+            }
+        }
     }
 
     fun orderById(symbol: String, orderId: String): JSONObject {
@@ -564,7 +588,11 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         require(clientAlgoId.isNotBlank())
         return request("GET", "/fapi/v1/algoOrder", mapOf(
             "symbol" to symbol, "clientAlgoId" to clientAlgoId
-        ), signed = true)
+        ), signed = true).also {
+            check(signedFuturesAlgoOrderGetMatches(it,symbol,clientAlgoId)) {
+                "Futures signed algo GET identity mismatch: $symbol / $clientAlgoId"
+            }
+        }
     }
 
     fun cancelAlgoOrder(symbol: String, clientAlgoId: String): JSONObject {
@@ -586,12 +614,23 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     fun cancelAllAlgoOrders(symbol: String) {
         val orders = openAlgoOrders(symbol)
         for (i in 0 until orders.length()) {
-            val row = orders.optJSONObject(i) ?: continue
+            // A malformed signed open-order row is never permission to
+            // declare cleanup complete after silently skipping that order.
+            val row = orders.optJSONObject(i)
+                ?: throw IOException("Malformed signed Futures algo order for $symbol at index $i")
+            if (row.optString("symbol") != symbol)
+                throw IOException("Foreign Futures algo in signed $symbol cleanup snapshot")
             val id = row.optString("algoId", "")
             val clientId = row.optString("clientAlgoId", "")
-            if (id.isNotBlank()) cancelAlgoOrderById(symbol, id)
+            if (id.toLongOrNull()?.let { it > 0L } == true) cancelAlgoOrderById(symbol, id)
             else if (clientId.isNotBlank()) cancelAlgoOrder(symbol, clientId)
             else throw IOException("Cannot safely cancel unidentified Futures algo order for $symbol")
+        }
+        // A successful DELETE response is not proof that the exchange has
+        // removed ALL conditional orders. Fail closed on any remaining row.
+        val after = openAlgoOrders(symbol)
+        check(after.length() == 0) {
+            "Signed Futures algo cleanup remains unresolved for $symbol"
         }
     }
 
