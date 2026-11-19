@@ -114,3 +114,24 @@ def test_foreign_unresolved_liability_sharing_new_proposal_id_is_not_skipped():
                           'current_proposal':True,'status':'SUBMISSION_UNKNOWN'}]
     with pytest.raises(HalfMarginUnknown,match='LIABILITY_UNRESOLVED'):
         evaluate(case)
+
+def test_exchange_single_letter_asset_parity_and_no_unverified_collateral():
+    """Cross-runtime regression: Binance can list a single-letter asset.
+
+    An unrelated zero-balance asset is never a USDT liability; unknown
+    collateral or bogus identity must still fail closed.
+    """
+    case = copy.deepcopy(CASES[0])
+    base = evaluate(case)
+    row = {'asset': 'A', 'walletBalance': '0',
+           'unrealizedProfit': '0', 'initialMargin': '0'}
+    case['account']['assets'].append(row)
+    assert evaluate(case)['projected_usdt'] == base['projected_usdt']
+    row['asset'] = '123'
+    with pytest.raises(HalfMarginUnknown, match='FOREIGN_ASSET_IDENTITY'):
+        evaluate(case)
+    row['asset'] = 'A'
+    row['initialMargin'] = '0.1'
+    with pytest.raises(HalfMarginUnknown, match='FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET'):
+        evaluate(case)
+
