@@ -1987,6 +1987,9 @@ private class NativeEngine(
     private val campaignExecutionTimeframe: String
         get() = "1h"
     private val campaignRiskLimitPct = 0.006
+    // User-approved daily entry halt. The separate 5% emergency equity kill
+    // switch stays independent and must not replace this tighter risk gate.
+    private val futuresDailyLossLimitPct = 0.01
     private val campaignInitialRiskPct = 0.002
     private val campaignAddRiskCapPct = 0.002
     private val campaignTrailBars: Int
@@ -5343,7 +5346,7 @@ private class NativeEngine(
         if (executionStore.readState(baselineKey) == null) {
             // Reconstruct from the full UTC-day income ledger when trades already
             // occurred. Never reset to current equity just because the local baseline
-            // disappeared: that would erase realized losses from today's 3% limit.
+            // disappeared: that would erase realized losses from today's 1% limit.
             val baselineAttempt = runCatching {
                 val positions = futuresCampaignCoordinator.positionsSnapshot()
                 val hasOpenOrUnknownPosition = (0 until positions.length()).any { index ->
@@ -5393,12 +5396,12 @@ private class NativeEngine(
                 paused = true
                 // Distinguish an automatic, recoverable daily-baseline pause
                 // from the operator's explicit pause. Never erase either risk
-                // evidence or the original 3% daily loss limit.
+                // evidence or the 1% daily entry-loss limit.
                 check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
                     "Could not durably pause trades while the UTC baseline is unknown"
                 }
                 lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
-                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
+                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 1% and entries stay blocked"
                 return false
             }
             check(executionStore.writeState(baselineKey, baselineResult.first.toString()) &&
@@ -5524,7 +5527,7 @@ private class NativeEngine(
             }
             return false
         }
-        if (lossPct >= 0.03) {
+        if (lossPct >= futuresDailyLossLimitPct) {
             // A daily entry limit must expire with its UTC session. Do not turn
             // it into the operator's indefinite pause or disable runtime auto-run.
             if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
@@ -5536,7 +5539,7 @@ private class NativeEngine(
         }
         val halt=dailyEntryHalt(exchangeNowMs,true)
         if(!halt.allowNewEntries) {
-            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked"
             if(!halt.available) lastError=halt.reason
             runCatching {
                 withCampaignMutation(
@@ -12137,7 +12140,7 @@ private class NativeEngine(
             .put("stop_loss_pct", if (firstPosition == null || firstPosition.optString("stop").toDoubleOrNull()?.let { it > 0.0 } != true) JSONObject.NULL else kotlin.math.abs((firstPosition.optString("entry").toDoubleOrNull() ?: 0.0) - (firstPosition.optString("stop").toDoubleOrNull() ?: 0.0)) / (firstPosition.optString("entry").toDoubleOrNull() ?: 1.0))
             .put("take_profit_pct", if (campaignEngineEnabled) 0.0 else 0.04)
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("force_testnet_mode", forceTestnetMode)
             .put("daily_risk_baseline_source", dailyRiskBaselineSource(fast = fast))
             .put("trades_today", futuresTradesToday)
@@ -12242,7 +12245,7 @@ private class NativeEngine(
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET")
             .put("execution_mode", "AUTONOMOUS_ANDROID")
             .put("decision_timeframe", "1h")
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("futures_runtime", futuresRuntimeStatus)
             .put("futures_reconciliation_in_progress", reconciliationObserved)
             .put("futures_reconciliation_last_result", lastReconciliationResult)
@@ -12760,7 +12763,7 @@ private class NativeEngine(
                 "; last_symbols_scanned=" + scanObservedCount + "; age_ms=" + scannerProgressAgeMs
         )
         test("state_machine", "runtime", stateMachine.state.name.isNotBlank(), "FAIL", "fsm_state=" + stateMachine.state.name)
-        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=0.03; baseline readiness is checked separately by daily_risk_baseline")
+        test("risk_limits", "risk", maxRiskPerTradePct > 0.0 && maxRiskPerTradePct <= 0.0025 && maxTotalRiskPct <= 0.006, "FAIL", "CONFIGURATION ONLY; per_trade=" + maxRiskPerTradePct + "; total=" + maxTotalRiskPct + "; daily_loss_limit=" + futuresDailyLossLimitPct + "; baseline readiness is checked separately by daily_risk_baseline")
         test(
             "self_heal_contract",
             "runtime",
@@ -13795,7 +13798,7 @@ private class NativeEngine(
             .put("futures_execution_adapter_ready", futuresExecutionAdapterReady)
             .put("execution_block_reason", "Entries require reconciled Futures account, fresh H1 market data, risk approval, and exchange-confirmed protection")
             .put("risk_per_trade_pct", maxRiskPerTradePct)
-            .put("max_daily_loss_pct", 0.03)
+            .put("max_daily_loss_pct", futuresDailyLossLimitPct)
             .put("max_trades_per_day", JSONObject.NULL)
             .put("max_trades_per_day_policy", "NO_FIXED_COUNT_CAP; entries remain subject to campaign risk, daily loss, and Execution Gate")
             .put("max_consecutive_losses", 2)
