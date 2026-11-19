@@ -71,4 +71,21 @@ class FuturesLeveragePolicyTest {
             assertNotNull(risk(10.0, 1.0).blocker)
         }
     }
+    @Test fun wideTc2StructuralStopUsesSafeLeverageBelowUserMaximumWithoutMovingStop() {
+        val entry = 0.33012
+        val bookStop = 0.27839
+        val notional = 37.0 * entry
+        val signedBrackets = JSONObject("""{"symbol":"TRXUSDT","brackets":[
+            {"notionalFloor":0,"notionalCap":100000,"initialLeverage":125,"maintMarginRatio":0.005}
+        ]}""")
+        assertTrue(futuresLeverageBlocker(signedBrackets, "TRXUSDT", 10, notional, entry, bookStop)!!
+            .contains("FUTURES_LEVERAGE_STOP_BUFFER"))
+        val selected = futuresSafeEntryLeverage(signedBrackets, "TRXUSDT", 10, notional, entry, bookStop)
+        assertEquals(5, selected)
+        assertNull(futuresLeverageBlocker(signedBrackets, "TRXUSDT", selected!!, notional, entry, bookStop))
+        assertEquals(2, futuresSafeEntryLeverage(signedBrackets, "TRXUSDT", 2, notional, entry, bookStop))
+        assertNull(futuresSafeEntryLeverage(JSONObject(), "TRXUSDT", 10, notional, entry, bookStop))
+        assertNull(futuresSafeEntryLeverage(signedBrackets, "TRXUSDT", 10, Double.NaN, entry, bookStop))
+    }
+
 }
