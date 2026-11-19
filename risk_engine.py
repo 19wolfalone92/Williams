@@ -54,7 +54,7 @@ class RiskEngine:
         balance_quote: float,
         risk_per_trade_pct: float = 0.0025,
         max_position_fraction: float = 0.25,
-        max_daily_loss_pct: float = 0.01,
+        max_daily_loss_pct: float = 0.03,
         min_rr: float = 1.5,
         max_atr_pct: float = 0.08,
         fee_buffer_per_side_pct: float = 0.001,
@@ -75,7 +75,7 @@ class RiskEngine:
         )
         raw_daily_loss = float(max_daily_loss_pct)
         self.max_daily_loss_pct = (
-            max(0.0, min(0.01, raw_daily_loss))
+            max(0.0, min(0.03, raw_daily_loss))
             if math.isfinite(raw_daily_loss) else 0.0
         )
         self.min_rr = float(min_rr)
