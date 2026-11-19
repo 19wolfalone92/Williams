@@ -37,7 +37,7 @@ def test_per_symbol_settings_survive_configuration_and_do_not_change_risk_caps()
     assert [config.leverage_for(s) for s in DEFAULT_FUTURES_SYMBOLS] == list(range(1, 16))
     assert config.risk_per_trade_pct == 0.0025
     assert config.max_total_risk_pct == 0.006
-    assert config.max_daily_loss_pct == 0.03
+    assert config.max_daily_loss_pct == 0.01
     inherited = TradingConfig.from_env({"FUTURES_LEVERAGE": "5", "FUTURES_SYMBOL_LEVERAGES": "btcUSDT:3"})
     assert inherited.leverage_for("BTCUSDT") == 3
     assert inherited.leverage_for("ETHUSDT") == 5
