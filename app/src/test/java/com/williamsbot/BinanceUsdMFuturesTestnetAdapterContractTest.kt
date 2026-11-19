@@ -40,6 +40,9 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
                 JSONObject(valid.toString()).put("triggerPrice","100.9"),
                 JSONObject(valid.toString()).put("closePosition",true),
                 JSONObject(valid.toString()).apply { remove("algoStatus") },
+                JSONObject(valid.toString()).put("algoStatus", JSONObject.NULL),
+                JSONObject(valid.toString()).put("algoStatus", "REJECTED"),
+                JSONObject(valid.toString()).put("algoStatus", "FINISHED"),
                 JSONObject()
             )) assertFalse("unexpected accepted algo POST receipt: $bad",matches(bad))
         }
@@ -59,6 +62,9 @@ class BinanceUsdMFuturesTestnetAdapterContractTest {
         assertFalse(matches(JSONObject(valid.toString()).put("clientOrderId","OTHER")))
         assertFalse(matches(JSONObject(valid.toString()).apply { remove("orderId") }))
         assertFalse(matches(JSONObject(valid.toString()).apply { remove("executedQty") }))
+        assertFalse(matches(JSONObject(valid.toString()).put("status", JSONObject.NULL)))
+        assertFalse(matches(JSONObject(valid.toString()).put("status", "REJECTED")))
+        assertFalse(matches(JSONObject(valid.toString()).put("status", "CANCELED")))
     }
 
     @Test fun aSaturatedSignedChildOrderFillPageCannotProveProtectiveStopClosure() {
