@@ -35,11 +35,12 @@ class TradingEventLoopTest {
         val started = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
         val performed = Collections.synchronizedList(mutableListOf<Int>())
-        loop.post { started.countDown(); release.await(); performed += 0 }
+        val finished = java.util.concurrent.CountDownLatch(3)
+        loop.post { started.countDown(); release.await(); performed += 0; finished.countDown() }
         org.junit.Assert.assertTrue(started.await(2L, java.util.concurrent.TimeUnit.SECONDS))
         try {
-            loop.post { performed += 1 }
-            loop.post { performed += 2 }
+            loop.post { performed += 1; finished.countDown() }
+            loop.post { performed += 2; finished.countDown() }
             assertEquals(2, loop.queueDepth())
             try {
                 loop.post { performed += 3 }
@@ -47,6 +48,7 @@ class TradingEventLoopTest {
             } catch (_: java.util.concurrent.RejectedExecutionException) { }
             assertEquals(2, loop.queueDepth())
         } finally { release.countDown() }
+        org.junit.Assert.assertTrue(finished.await(5L, java.util.concurrent.TimeUnit.SECONDS))
         loop.call { Unit }
         assertEquals(listOf(0, 1, 2), performed)
         loop.close()
