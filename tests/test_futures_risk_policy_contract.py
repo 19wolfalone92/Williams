@@ -2,7 +2,7 @@
 from trading_config import DEFAULT_FUTURES_SYMBOLS, DEFAULT_STRUCTURAL_TFS, TradingConfig
 
 
-def test_default_futures_profile_allows_fifteen_symbols_and_caps_daily_loss_at_one_percent():
+def test_default_futures_profile_allows_fifteen_symbols_and_caps_daily_loss_at_three_percent():
     config = TradingConfig.from_env({})
 
     assert config.market == "futures_usdt"
@@ -14,9 +14,9 @@ def test_default_futures_profile_allows_fifteen_symbols_and_caps_daily_loss_at_o
     assert config.allow_short is True
     assert config.initial_entry_risk_pct == 0.002
     assert config.campaign_risk_limit_pct == 0.006
-    assert config.max_daily_loss_pct == 0.01
+    assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 10
-    assert config.max_consecutive_losses == 2
+    assert config.max_consecutive_losses == 3
 
 
 def test_environment_cannot_raise_daily_loss_or_approved_futures_symbol_limit():
@@ -26,9 +26,9 @@ def test_environment_cannot_raise_daily_loss_or_approved_futures_symbol_limit():
         "MAX_CONSECUTIVE_LOSSES": "10",
     })
 
-    assert config.max_daily_loss_pct == 0.01
+    assert config.max_daily_loss_pct == 0.03
     assert config.max_open_positions == 10
-    assert config.max_consecutive_losses == 2
+    assert config.max_consecutive_losses == 3
 
 
 def test_operator_may_choose_a_lower_futures_slot_limit():
