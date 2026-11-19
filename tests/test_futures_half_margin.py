@@ -87,8 +87,30 @@ def test_bulk_symbol_reads_keep_external_liabilities_and_reject_ambiguous_identi
                    'origQty':'120','executedQty':'0','price':'100'}
             observed=margin_observation(case['account'],case['configuration'],[order],result)
             assert observed['used'] >= Decimal('6009')
-            assert observed['orders']['external']['symbol']=='SANTOSUSDT'
+            assert observed['orders'][('SANTOSUSDT','external')]['symbol']=='SANTOSUSDT'
         assert len(calls)==(1 if fault=='object_config' else 2)
         assert calls[0]==('GET','/fapi/v1/symbolConfig',None,True)
         if len(calls)>1:assert calls[1]==('GET','/fapi/v1/premiumIndex',None,False)
     finally:client.session.close()
+
+
+def test_two_symbols_may_share_binance_client_id_without_merging_margin():
+    case = copy.deepcopy(CASES[0])
+    def order(symbol, order_id):
+        return {'symbol':symbol,'positionSide':'BOTH','side':'BUY','orderId':order_id,
+                'clientOrderId':'shared','reduceOnly':False,'status':'NEW',
+                'origQty':'0.01','executedQty':'0','price':'100'}
+    one = margin_observation(case['account'],case['configuration'],
+                             [order('ETHUSDT',71)],case['symbols'])
+    two = margin_observation(case['account'],case['configuration'],
+                             [order('ETHUSDT',71),order('SOLUSDT',72)],case['symbols'])
+    assert two['orders'][('ETHUSDT','shared')]['symbol']=='ETHUSDT'
+    assert two['orders'][('SOLUSDT','shared')]['symbol']=='SOLUSDT'
+    assert two['cost_notional'] > one['cost_notional']
+
+def test_foreign_unresolved_liability_sharing_new_proposal_id_is_not_skipped():
+    case=copy.deepcopy(CASES[0])
+    case['liabilities']=[{'symbol':'SOLUSDT','client_id':'new',
+                          'current_proposal':True,'status':'SUBMISSION_UNKNOWN'}]
+    with pytest.raises(HalfMarginUnknown,match='LIABILITY_UNRESOLVED'):
+        evaluate(case)

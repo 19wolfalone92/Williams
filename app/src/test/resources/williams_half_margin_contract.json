@@ -2086,6 +2086,7 @@
       },
       "liabilities": [
         {
+          "symbol": "ETHUSDT",
           "client_id": "new",
           "current_proposal": true
         }

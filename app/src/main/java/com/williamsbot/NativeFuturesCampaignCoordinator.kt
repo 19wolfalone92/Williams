@@ -2649,8 +2649,11 @@ internal class NativeFuturesCampaignCoordinator(
                         val oldClientId = old.optString("clientAlgoId")
                         if (oldClientId == confirmedClientId) continue
                         if (previousClientId.isNotBlank() && oldClientId == previousClientId) {
+                            // This is a LIVE predecessor-cancellation door:
+                            // historical/offline overload without signed symbol
+                            // must never authorize a Binance DELETE.
                             check(matchesConfirmedFuturesProtectiveStop(old, direction, previousClientId,
-                                matchingIntent.optString("previous_protective_stop"))) {
+                                matchingIntent.optString("previous_protective_stop"), expectedSymbol = symbol)) {
                                 "Tracked predecessor attributes conflict with the durable stop identity"
                             }
                             verifyNativeTrailExposure(adapter, matchingIntent)
