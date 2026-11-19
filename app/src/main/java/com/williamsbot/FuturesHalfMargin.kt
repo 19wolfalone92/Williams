@@ -11,6 +11,20 @@ import java.math.MathContext
  */
 private val marginMath = MathContext(28)
 private val marginZero = BigDecimal.ZERO
+/**
+ * Redacted evidence for a malformed signed foreign asset identity.
+ * No wallet amount, account ID, credential or raw ticker is ever embedded.
+ * Format is stable for comparing Android packages without weakening the
+ * conservative account-wide 50% margin admission policy.
+ */
+internal fun futuresForeignAssetCodeShape(code: String): String =
+    "len=${code.length};upper=${code.count { it in 'A'..'Z' }};" +
+        "lower=${code.count { it in 'a'..'z' }};" +
+        "digits=${code.count { it in '0'..'9' }};" +
+        "spaces=${code.count { it.isWhitespace() }};" +
+        "other=${code.count { !it.isLetterOrDigit() && !it.isWhitespace() }};" +
+        "non_ascii=${code.count { it.code > 127 }}"
+
 private fun marginRequire(ok: Boolean, detail: String) {
     check(ok) { "FUTURES_HALF_MARGIN_UNKNOWN:$detail" }
 }
@@ -88,8 +102,11 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
         // Match Python's ASCII-alphanumeric isupper() predicate precisely:
         // digits alone are NOT an asset identity. This only validates the
         // asset code; every collateral/margin invariant remains fail-closed.
-        marginRequire(foreignAsset.matches(Regex("[A-Z0-9]+")) &&
-            foreignAsset.any { it in 'A'..'Z' }, "FOREIGN_ASSET_IDENTITY")
+        if (!foreignAsset.matches(Regex("[A-Z0-9]+")) ||
+            foreignAsset.none { it in 'A'..'Z' }) {
+            error("FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET_IDENTITY;" +
+                futuresForeignAssetCodeShape(foreignAsset))
+        }
         val foreignWallet = marginNumber(row.opt("walletBalance"), true)
         marginRequire(foreignWallet.signum() >= 0, "FOREIGN_ASSET")
         for (key in listOf("unrealizedProfit", "initialMargin", "positionInitialMargin",
