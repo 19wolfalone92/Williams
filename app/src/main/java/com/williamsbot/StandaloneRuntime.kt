@@ -11753,57 +11753,9 @@ private class NativeEngine(
     }
 
 
-    private fun dailyTradeGuard(): JSONObject {
-        val start = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-        val rows = TradeJournal.trades(prefs)
-        var count = 0
-        var pnl = 0.0
-        var consecutiveLosses = 0
-        var lastLossAt = 0L
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt < start || row.optString("status") != "CLOSED") continue
-            count++
-            pnl += row.optDouble("pnl", 0.0)
-        }
-        val closedToday = mutableListOf<JSONObject>()
-        for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val closedAt = row.optLong("closed_at", 0L)
-            if (closedAt >= start && row.optString("status") == "CLOSED") {
-                closedToday.add(row)
-            }
-        }
-        closedToday.sortByDescending { it.optLong("closed_at", 0L) }
-        for (row in closedToday) {
-            when (row.optString("outcome").uppercase(Locale.US)) {
-                "LOSS" -> {
-                    consecutiveLosses++
-                    if (lastLossAt == 0L) lastLossAt = row.optLong("closed_at", 0L)
-                }
-                "WIN", "BREAKEVEN" -> break
-            }
-        }
-        val cooldown = consecutiveLosses >= 2 && lastLossAt > 0L &&
-            System.currentTimeMillis() - lastLossAt < 30L * 60L * 1000L
-        val hardPause = consecutiveLosses >= 3
-        return JSONObject()
-            .put("trades_today", count)
-            .put("daily_pnl_usdt", pnl)
-            .put("consecutive_losses", consecutiveLosses)
-            .put("allow", !cooldown && !hardPause)
-            .put("mode", when {
-                hardPause -> "PAUSED"
-                cooldown -> "COOLDOWN"
-                else -> "ACTIVE"
-            })
-    }
+    // Legacy local-time dailyTradeGuard removed: it stopped trades after only
+    // two losses and was never wired to the canonical exchange-UTC Futures gate.
+    // Risk admission is owned by futuresLossStreakGuard() and dailyEntryHalt().
 
     private fun startRestDataProbe() {
         if (restProbeRunning) return
