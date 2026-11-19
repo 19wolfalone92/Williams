@@ -377,15 +377,15 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
 
     assert "val riskPerTrade: Double = 0.0025" in main
-    assert "val maxDailyLoss: Double = 0.01" in main
+    assert "val maxDailyLoss: Double = 0.03" in main
     assert "val maxOpenPositions: Int = MAX_FUTURES_CAMPAIGNS" in main
     assert "get() = MAX_FUTURES_CAMPAIGNS" in runtime
     assert "val maxTotalRiskPct: Double = 0.006" in main
-    assert '"max_daily_loss_pct",\n                0.01' in main
+    assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
     assert '.put("max_daily_loss_pct", futuresDailyLossLimitPct)' in runtime
     assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
-    assert "FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked" in runtime
 
 
 def test_android_diagnostics_do_not_fake_self_heal_readiness():
