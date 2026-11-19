@@ -350,6 +350,50 @@ internal fun futuresUtcDayStartMs(nowMs:Long):Long {
     return Math.floorDiv(nowMs,86_400_000L)*86_400_000L
 }
 
+/**
+ * Entry risk may not silently skip a recent, exchange-observed Futures close
+ * that has not yet been reconstructed from signed userTrades and persisted.
+ * Reconciliation, EXIT and STOP management are unaffected by this read-only gate.
+ */
+internal fun futuresUnjournalledClosedCampaignBlocker(
+    intents: JSONArray, journalRows: JSONArray, nowMs: Long
+): String? {
+    if (nowMs <= 0L) return "FUTURES_LOSS_STREAK_UTC_CLOCK_UNVERIFIED"
+    val utcStart = futuresUtcDayStartMs(nowMs)
+    val journaledIds = (0 until journalRows.length()).mapNotNull { j ->
+        journalRows.optJSONObject(j)?.optString("id")?.takeIf { it.isNotBlank() }
+    }.toSet()
+    for (i in 0 until intents.length()) {
+        val owner = intents.optJSONObject(i)
+            ?: return "FUTURES_LOSS_STREAK_INTENTS_UNVERIFIED"
+        if (owner.optString("intent_role", "ENTRY") != "ENTRY" ||
+            campaignLifecycleStatus(owner) != "CLOSED_OR_STOPPED"
+        ) continue
+        val closedAt = maxOf(
+            owner.optLong("closed_observed_at_ms", 0L),
+            owner.optLong("confirmed_flat_at_ms", 0L)
+        )
+        val created = owner.optLong("created_at_ms", 0L)
+        if (closedAt <= 0L || (closedAt < utcStart && created < utcStart)) continue
+        if (closedAt > nowMs) return "FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED"
+        val fillQty = listOf(
+            owner.optString("actual_entry_executed_qty"),
+            owner.optString("executed_qty")
+        ).mapNotNull { it.toBigDecimalOrNull() }.any { it.signum() > 0 }
+        val fillObserved =
+            owner.optLong("fill_observed_at_ms", 0L) > 0L ||
+            owner.optLong("position_open_observed_at_ms", 0L) > 0L ||
+            owner.optDouble("actual_entry_price", 0.0) > 0.0 || fillQty
+        if (!fillObserved) continue
+        val id = owner.optString("client_id")
+        if (id.isBlank()) return "FUTURES_LOSS_STREAK_ENTRY_ID_UNVERIFIED"
+        if (owner.optString("trade_journal_status") != "RECORDED" ||
+            "FUTURES:$id" !in journaledIds
+        ) return "FUTURES_LOSS_STREAK_EXCHANGE_CLOSE_UNJOURNALLED"
+    }
+    return null
+}
+
 /** Result of the entry-only Futures loss-streak circuit breaker. */
 internal data class FuturesLossStreakDecision(
     val available: Boolean,
