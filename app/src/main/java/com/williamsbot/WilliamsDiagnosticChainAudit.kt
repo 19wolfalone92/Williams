@@ -32,7 +32,7 @@ internal object WilliamsDiagnosticChainAudit {
             listOf("local_runtime_dispatch","self_heal_contract","user_stream_reconciliation_lifecycle","state_machine"),
             listOf("ANDROID_PROCESS"),"foreground lease, generation, worker heartbeat and safe recovery"),
         Core("SQLITE_JOURNAL","SQLite · состояние и журнал",
-            listOf("DB-01","history_lifecycle","HIST-01"),
+            listOf("DB-01","DB-INTENT-SHADOW-01","history_lifecycle","HIST-01"),
             listOf("ANDROID_PROCESS"),"quick_check, durability, no recreated intent after restart"),
         Core("EXCHANGE_CLOCK","Binance · время и TTL",
             listOf("signed_futures_reconciliation_freshness"),
