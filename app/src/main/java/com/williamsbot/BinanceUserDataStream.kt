@@ -26,6 +26,12 @@ import java.util.concurrent.atomic.AtomicReference
 internal const val FUTURES_USER_STREAM_EVENT_FILTER =
     "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired"
 
+/** A private stream protocol drift is not a valid heartbeat/position proof. */
+internal fun recognizedFuturesPrivateEventType(type: String): Boolean =
+    type in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+        "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+        "listenKeyExpired", "serverShutdown")
+
 /** Return true when the Futures private stream must be re-established. */
 internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean =
     event.optString("e") in setOf("listenKeyExpired", "serverShutdown")
@@ -203,7 +209,7 @@ class BinanceUserDataStream(
                                 return
                             }
                             val event = message.optJSONObject("data") ?: message
-                            if (event.has("e")) {
+                            if (event.has("e") && recognizedFuturesPrivateEventType(event.optString("e"))) {
                                 runCatching { onEvent(event) }
                                     .onFailure {
                                         connected = false
