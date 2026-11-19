@@ -23,6 +23,7 @@ class FuturesLossStreakUtcResetTest {
         val blocked=evaluateFuturesLossStreak(trades,before)
         assertEquals("FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE",blocked.reason)
         assertEquals(3,blocked.consecutiveLosses)
+        assertEquals(3,blocked.dailyLossTrades)
         assertFalse(blocked.allowNewEntries)
         val reset=evaluateFuturesLossStreak(trades,after)
         assertTrue(reset.available)
@@ -34,16 +35,44 @@ class FuturesLossStreakUtcResetTest {
             futuresUtcDayStartMs(after))
     }
 
-    @Test fun recentSameDayLossesStillBlockWithVerifiedUtcClock() {
+    @Test fun twoConfirmedSameDayLossesAreNotTheThreeTradeBlock() {
         val trades=JSONArray()
             .put(row("2026-10-20T06:00:00Z"))
             .put(row("2026-10-20T06:03:00Z"))
         val now=Instant.parse("2026-10-20T06:10:00Z").toEpochMilli()
         val dec=evaluateFuturesLossStreak(trades,now)
-        assertEquals("FUTURES_CONSECUTIVE_LOSS_COOLDOWN",dec.reason)
-        assertFalse(dec.allowNewEntries)
-        assertEquals(Instant.parse("2026-10-20T06:33:00Z").toEpochMilli(),
-            dec.cooldownUntilMs)
+        assertTrue(dec.available)
+        assertTrue(dec.allowNewEntries)
+        assertEquals(2,dec.dailyLossTrades)
+        assertEquals(2,dec.consecutiveLosses)
+        assertNull(dec.reason)
+        assertNull(dec.cooldownUntilMs)
+    }
+
+    @Test fun threeLossesAcrossOneUtcDayBlockEvenWithWinBetween() {
+        val trades=JSONArray()
+            .put(row("2026-10-20T06:00:00Z", "LOSS"))
+            .put(row("2026-10-20T07:00:00Z", "WIN"))
+            .put(row("2026-10-20T08:00:00Z", "LOSS"))
+            .put(row("2026-10-20T09:00:00Z", "LOSS"))
+        val before=Instant.parse("2026-10-20T09:01:00Z").toEpochMilli()
+        val blocked=evaluateFuturesLossStreak(trades,before)
+        assertFalse(blocked.allowNewEntries)
+        assertEquals(3,blocked.dailyLossTrades)
+        assertEquals(2,blocked.consecutiveLosses)
+        assertEquals("FUTURES_DAILY_LOSS_TRADE_LIMIT",blocked.reason)
+        val next=Instant.parse("2026-10-21T00:01:00Z").toEpochMilli()
+        val reset=evaluateFuturesLossStreak(trades,next)
+        assertEquals(0,reset.dailyLossTrades)
+        assertTrue(reset.allowNewEntries)
+    }
+
+    @Test fun contradictoryLossOutcomeAndPnlAreNeverCountedAsVerifiedLosses() {
+        val rows=JSONArray().put(row("2026-10-20T09:00:00Z","LOSS").put("pnl", 1.0))
+        val decision=evaluateFuturesLossStreak(rows,Instant.parse("2026-10-20T09:20:00Z").toEpochMilli())
+        assertFalse(decision.available)
+        assertFalse(decision.allowNewEntries)
+        assertEquals("FUTURES_LOSS_STREAK_PNL_UNKNOWN",decision.reason)
     }
 
     @Test fun unknownCurrentDayFuturesPnLStillFailsClosed() {
