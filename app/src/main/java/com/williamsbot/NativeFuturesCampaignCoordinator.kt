@@ -3531,8 +3531,8 @@ internal class NativeFuturesCampaignCoordinator(
             (if (isAddition) primary!!.getString("confirmed_position_qty").toDouble() *
                 plan.entryPrice.toDouble() else 0.0)
         if (plan.allowSafeLeverageFallback && !isAddition && !isReversal &&
-            plan.strategyProfile == williamsTc2Profile &&
-            plan.signalType != "OPERATOR_FORCED_DIRECTION") {
+            plan.strategyProfile == williamsTc2Profile && plan.signalId.isNotBlank() &&
+            plan.signalBarTimeMs > 0L && plan.signalType != "OPERATOR_FORCED_DIRECTION") {
             val safer = futuresSafeEntryLeverage(
                 signedLeverageBrackets, plan.symbol, plan.leverage,
                 totalPlannedNotional, plan.entryPrice.toDouble(),
