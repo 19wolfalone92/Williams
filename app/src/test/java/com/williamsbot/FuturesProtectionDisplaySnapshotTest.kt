@@ -17,7 +17,7 @@ class FuturesProtectionDisplaySnapshotTest {
             .put("algoId", "123").put("clientAlgoId", "W2PS_BNB_owner")
             .put("orderType", "STOP_MARKET").put("algoStatus", "NEW")
             .put("side", if (direction == "LONG") "SELL" else "BUY")
-            .put("workingType", "MARK_PRICE").put("closePosition", true)
+            .put("workingType", "MARK_PRICE").put("priceProtect", false).put("closePosition", true)
             .put("triggerPrice", if (direction == "LONG") "742.67" else "760.00")
         var orders = JSONArray().put(order)
         var symbolScopedReads = 0
@@ -105,11 +105,11 @@ class FuturesProtectionDisplaySnapshotTest {
         val bnbStop=JSONObject().put("symbol","BNBUSDT").put("positionSide","BOTH")
             .put("algoId",123L).put("clientAlgoId","BNB_STOP").put("orderType","STOP_MARKET")
             .put("algoStatus","NEW").put("side","SELL").put("workingType","MARK_PRICE")
-            .put("closePosition",true).put("triggerPrice","742.67")
+            .put("priceProtect",false).put("closePosition",true).put("triggerPrice","742.67")
         val ethStop=JSONObject().put("symbol","ETHUSDT").put("positionSide","BOTH")
             .put("algoId",456L).put("clientAlgoId","ETH_STOP").put("orderType","STOP_MARKET")
             .put("algoStatus","NEW").put("side","BUY").put("workingType","MARK_PRICE")
-            .put("closePosition",true).put("triggerPrice","2341.45")
+            .put("priceProtect",false).put("closePosition",true).put("triggerPrice","2341.45")
         val requested=mutableListOf<String>()
         val stops=mapOf("BNBUSDT" to bnbStop,"ETHUSDT" to ethStop)
         fun snapshot(readStop:(String)->JSONArray):FuturesProtectionDisplaySnapshot =
