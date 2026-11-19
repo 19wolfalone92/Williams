@@ -111,6 +111,19 @@ class WilliamsDiagnosticChainAuditTest {
         assertEquals("UNKNOWN_NEW_CORE",report.getJSONArray("unmapped_check_ids").getString(0))
     }
 
+    @Test fun intentShadowParityCheckBelongsToSqliteCoreRatherThanUnmappedChecks() {
+        val report = audit(JSONArray().put(JSONObject()
+            .put("id","DB-INTENT-SHADOW-01").put("severity","PASS")))
+        val sqlite = core(report,"SQLITE_JOURNAL")
+        val mapped = sqlite.getJSONArray("check_evidence")
+        assertTrue((0 until mapped.length()).any {
+            mapped.getJSONObject(it).optString("id") == "DB-INTENT-SHADOW-01"
+        })
+        assertFalse(findingIds(report).contains("UNMAPPED_DIAGNOSTIC_TEST_IDS"))
+        assertEquals(0, report.getJSONArray("unmapped_check_ids").length())
+        assertFalse(report.getBoolean("e2e_demo_certified"))
+    }
+
     @Test fun eventTraceNeverEchoesRawPrivatePayloadOrApiIdentifiers() {
         val secret="NeverDisplayBinanceKeyFromUserEvent"
         val events=JSONArray().put(JSONObject()
