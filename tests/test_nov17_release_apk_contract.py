@@ -47,11 +47,11 @@ def test_no_stale_spread_veto_on_deferred_h1_stop_but_market_quote_veto_kept():
     assert "if(kind != NativeFuturesCampaignCoordinator.EntryKind.MARKET)" in policy
 
 
-def test_trading_daily_halt_is_three_percent_with_stop_and_fees_preserved():
+def test_trading_daily_halt_is_one_percent_with_stop_and_fees_preserved():
     runtime = source("StandaloneRuntime.kt")
-    assert "if (lossPct >= 0.03)" in runtime
-    assert '"FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"' in runtime
-    assert runtime.count('put("max_daily_loss_pct", 0.03)') >= 2
+    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
+    assert '"FUTURES_DAILY_LOSS_LIMIT: 1% reached; new entries blocked"' in runtime
+    assert runtime.count('put("max_daily_loss_pct", futuresDailyLossLimitPct)') >= 2
     assert "futuresCampaignCoordinator.cancelPendingEntries(\"DAILY_LOSS_LIMIT\")" in runtime
     assert "val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct" in runtime
     assert "val stopFraction = kotlin.math.abs(trigger - stop) / trigger" in runtime
