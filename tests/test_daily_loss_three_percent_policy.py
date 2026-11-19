@@ -15,6 +15,7 @@ def test_python_daily_loss_cap_is_three_percent_and_cannot_be_raised():
     assert TradingConfig.from_env({"MAX_DAILY_LOSS_PCT": "0.005"}).max_daily_loss_pct == 0.005
     assert TradingConfig.from_env({}).max_consecutive_losses == 3
     assert TradingConfig.from_env({"MAX_CONSECUTIVE_LOSSES": "99"}).max_consecutive_losses == 3
+    assert TradingConfig.from_env({"MAX_CONSECUTIVE_LOSSES": "2"}).max_consecutive_losses == 3
 
 
 def test_android_entry_halt_and_three_loss_guard_match_canonical_policy():
