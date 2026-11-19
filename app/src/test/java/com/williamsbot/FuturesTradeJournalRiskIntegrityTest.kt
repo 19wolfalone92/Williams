@@ -47,7 +47,7 @@ class FuturesTradeJournalRiskIntegrityTest {
         assertFalse(fees.allowNewEntries)
         assertEquals("FUTURES_LOSS_STREAK_PNL_UNKNOWN",fees.reason)
         val incomplete=evaluateFuturesLossStreak(
-            JSONArray().put(raw("LOSS",-4.0).remove("pnl_complete")),now)
+            JSONArray().put(raw("LOSS",-4.0).apply { remove("pnl_complete") }),now)
         assertFalse(incomplete.allowNewEntries)
         assertEquals("FUTURES_LOSS_STREAK_PNL_UNKNOWN",incomplete.reason)
     }
