@@ -833,8 +833,7 @@ class FuturesWilliamsRuntime:
         return max(0.0, (capacity - reserved) / equity)
 
     def _daily_entry_guard(self):
-        """Block new risk only on exchange-proved daily loss / three consecutive losses."""
-        from datetime import datetime, timezone
+        """Block new risk on proven daily drawdown or three consecutive losses."""
         # The second entry-only stop is THREE CONSECUTIVE verified losing
         # closes, not three arbitrary losses with winning trades in between.
         # The session is exchange UTC; after the streak reaches three, keep
