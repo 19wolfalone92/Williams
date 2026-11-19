@@ -140,6 +140,9 @@ internal class BinanceUsdMFuturesTestnetAdapter(
 ) {
     // Application-level retry rules must also govern OkHttp's transparent retries
     // and redirects. A replayed POST can create duplicate exposure after a lost reply.
+    // Preserve the caller's transport identity: .newBuilder().build() below
+    // creates a distinct client on every adapter construction.
+    private val clockTransportIdentity = http
     private val http = http.newBuilder()
         // Android runtime shares a 45s read timeout with long-lived WebSockets.
         // The financial REST adapter must NOT inherit an unbounded total call
@@ -160,7 +163,7 @@ internal class BinanceUsdMFuturesTestnetAdapter(
     // with the same OkHttp transport; full signed account/order reads remain fresh.
     // A second client, a process restart or an expired/wall-jumped sample cannot
     // inherit permission to sign. Strict 3s mutation RTT and 30s TTL are unchanged.
-    private val verifiedClock = FuturesDemoClockRegistry.forTransport(http)
+    private val verifiedClock = FuturesDemoClockRegistry.forTransport(clockTransportIdentity)
     private val clockLock = verifiedClock.lock
     private var timeSynced: Boolean
         get() = verifiedClock.timeSynced
