@@ -265,7 +265,7 @@ data class Status(
     val error: String? = null,
     val binanceConfigured: Boolean = false,
     val riskPerTrade: Double = 0.0025,
-    val maxDailyLoss: Double = 0.01,
+    val maxDailyLoss: Double = 0.03,
     val tradesToday: Int = 0,
     val consecutiveLosses: Int = 0,
     val dailyPnlUsdt: Double = 0.0,
@@ -1250,7 +1250,7 @@ fun WilliamsApp(context: Context) {
                         CockpitField("Направления", "LONG и SHORT")
                         CockpitField("Решение / контекст", "H1 / H4, D1")
                         CockpitField("Резерв риска", "до 0,25% на вход / 0,60% суммарно")
-                        CockpitField("Дневной лимит убытка", "1%")
+                        CockpitField("Дневной лимит убытка", "3%")
                         Text("Параметры ограничены торговым движком. Изменение экрана графика их не меняет.", style = MaterialTheme.typography.bodySmall, color = AppColors.textMuted)
                     }
                     FuturesLeverageSettingsCard(status, ::saveFuturesLeverage)
@@ -3274,7 +3274,7 @@ private fun SettingsScreen(
                     InfoRow("Риск на сделку", fmt(status.riskPerTrade * 100, 1) + "%")
                     InfoRow("Дневной лимит убытка", fmt(status.maxDailyLoss * 100, 1) + "%")
                     InfoRow("Ограничение количества сделок", "динамический")
-                    InfoRow("Серия убытков", "${status.consecutiveLosses} подряд • защитное ограничение определяет Runtime")
+                    InfoRow("Серия убытков", "${status.consecutiveLosses} подряд • блокировка после 3 убыточных сделок за UTC-день")
                     InfoRow("Интервал сканирования", "определяется движком")
                     Text("Это состояние конфигурации, не команда разрешить торговлю. " +
                         "Если новые входы ограничены, причина отображается на экране диагностики.",
@@ -4102,7 +4102,7 @@ internal fun parseStatus(json: JSONObject): Status {
         maxDailyLoss =
             json.optDouble(
                 "max_daily_loss_pct",
-                0.01
+                0.03
             ),
         tradesToday =
             json.optInt("trades_today", 0),
