@@ -17,6 +17,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
+    @Test fun http200AlgoEntryAcknowledgementMustMatchExactBinanceCampaign() {
+        for (direction in listOf("LONG","SHORT")) {
+            val side = if (direction=="LONG") "BUY" else "SELL"
+            val valid = JSONObject()
+                .put("symbol","BTCUSDT").put("side",side).put("positionSide","BOTH")
+                .put("algoId",7001).put("clientAlgoId","W2H_BTC_REAL")
+                .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("closePosition",false)
+                .put("reduceOnly",false).put("quantity","1.0")
+                .put("triggerPrice","101.0")
+            fun matches(row: JSONObject) = futuresEntryPostReceiptMatches(
+                row,"BTCUSDT",side,"W2H_BTC_REAL","STOP","1","101")
+            assertTrue(matches(valid))
+            for (bad in listOf(
+                JSONObject(valid.toString()).put("symbol","ETHUSDT"),
+                JSONObject(valid.toString()).put("clientAlgoId","UNRELATED"),
+                JSONObject(valid.toString()).put("algoId",""),
+                JSONObject(valid.toString()).put("positionSide","LONG"),
+                JSONObject(valid.toString()).put("orderType","TAKE_PROFIT_MARKET"),
+                JSONObject(valid.toString()).put("quantity","1.001"),
+                JSONObject(valid.toString()).put("triggerPrice","100.9"),
+                JSONObject(valid.toString()).put("closePosition",true),
+                JSONObject(valid.toString()).apply { remove("algoStatus") },
+                JSONObject()
+            )) assertFalse("unexpected accepted algo POST receipt: $bad",matches(bad))
+        }
+    }
+
+    @Test fun marketPostReceiptRequiresActualExecutedAndOrderIdentity() {
+        val valid = JSONObject().put("symbol","BTCUSDT").put("side","SELL")
+            .put("positionSide","BOTH").put("orderId",1234)
+            .put("clientOrderId","W2V_SHORT").put("type","MARKET")
+            .put("status","FILLED").put("origQty","2")
+            .put("executedQty","2")
+        fun matches(row: JSONObject) = futuresEntryPostReceiptMatches(
+            row,"BTCUSDT","SELL","W2V_SHORT","MARKET","2","100")
+        assertTrue(matches(valid))
+        assertFalse(matches(JSONObject(valid.toString()).put("executedQty","2.01")))
+        assertFalse(matches(JSONObject(valid.toString()).put("side","BUY")))
+        assertFalse(matches(JSONObject(valid.toString()).put("clientOrderId","OTHER")))
+        assertFalse(matches(JSONObject(valid.toString()).apply { remove("orderId") }))
+        assertFalse(matches(JSONObject(valid.toString()).apply { remove("executedQty") }))
+    }
+
     @Test fun aSaturatedSignedChildOrderFillPageCannotProveProtectiveStopClosure() {
         val http=OkHttpClient.Builder().addInterceptor { chain ->
             val req=chain.request()
