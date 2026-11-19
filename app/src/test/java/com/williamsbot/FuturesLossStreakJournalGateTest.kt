@@ -54,6 +54,51 @@ class FuturesLossStreakJournalGateTest {
             JSONArray().put(owner(closedAt=old)),JSONArray(),now))
     }
 
+    @Test fun priorUtcSessionEntryWithUnknownCloseTimeCannotSilentlySkipTodaysLosses() {
+        val openedYesterday = Instant.parse("2026-11-18T18:00:00Z").toEpochMilli()
+        val oldFill = Instant.parse("2026-11-18T18:10:00Z").toEpochMilli()
+        val unresolved = owner(status="RETRY", closedAt=0L)
+            .put("created_at_ms", openedYesterday)
+            .put("fill_observed_at_ms", oldFill)
+        assertEquals("FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED",
+            futuresUnjournalledClosedCampaignBlocker(
+                JSONArray().put(unresolved), JSONArray(), now))
+    }
+
+    @Test fun authenticatedCrossDayCloseJournalProvesItsSessionEvenWhenOwnerTimestampMissing() {
+        val openedYesterday = Instant.parse("2026-11-18T18:00:00Z").toEpochMilli()
+        val actualToday = Instant.parse("2026-11-19T09:00:00Z").toEpochMilli()
+        val unresolved = owner(status="RECORDED", closedAt=0L)
+            .put("created_at_ms", openedYesterday)
+            .put("fill_observed_at_ms", openedYesterday + 10_000L)
+        val journal = JSONArray().put(JSONObject()
+            .put("id","FUTURES:wb-abc")
+            .put("trade_audit_source","BINANCE_USDM_USER_TRADES")
+            .put("status","CLOSED").put("closed_at",actualToday)
+            .put("pnl_complete",true).put("fee_known",true)
+            .put("pnl",-5.0).put("outcome","LOSS"))
+        assertNull(futuresUnjournalledClosedCampaignBlocker(
+            JSONArray().put(unresolved),journal,now))
+        val streak = evaluateFuturesLossStreak(journal,now)
+        assertEquals(1,streak.consecutiveLosses)
+        assertTrue(streak.allowNewEntries)
+    }
+
+    @Test fun partialOrUnverifiedCrossDayJournalCannotProveCloseTime() {
+        val unresolved = owner(status="RECORDED", closedAt=0L)
+            .put("created_at_ms", Instant.parse("2026-11-18T18:00:00Z").toEpochMilli())
+        val incomplete = JSONArray().put(JSONObject()
+            .put("id","FUTURES:wb-abc")
+            .put("trade_audit_source","BINANCE_USDM_USER_TRADES")
+            .put("status","CLOSED")
+            .put("closed_at", Instant.parse("2026-11-19T10:00:00Z").toEpochMilli())
+            .put("pnl_complete",false).put("fee_known",false)
+            .put("pnl",-1.0))
+        assertEquals("FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED",
+            futuresUnjournalledClosedCampaignBlocker(
+                JSONArray().put(unresolved),incomplete,now))
+    }
+
     @Test fun futureCloseTimeCannotAuthorizeRisk() {
         val future=now+60000L
         assertEquals("FUTURES_LOSS_STREAK_CLOSE_TIME_UNVERIFIED",
