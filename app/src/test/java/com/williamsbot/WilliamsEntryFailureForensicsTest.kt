@@ -81,7 +81,7 @@ class WilliamsEntryFailureForensicsTest {
         val data = WilliamsEntryFailureForensics.summarize(JSONArray(), 180_000_000L)
         assertFalse(data.getBoolean("post_package_update_counts_available"))
         assertTrue(data.isNull("rejected_order_response_count_since_package_update"))
-        assertEquals(0, WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(
+        assertEquals(0L, WilliamsEntryFailureForensics.lastObservedPackageUpdateAt(
             JSONArray().put(JSONObject().put("code", "BOOT_COMPLETED_OBSERVED")
                 .put("at_ms", 180_000_000L)), 180_000_000L))
     }
