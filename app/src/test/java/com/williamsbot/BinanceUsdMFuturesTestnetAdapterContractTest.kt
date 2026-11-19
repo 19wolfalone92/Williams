@@ -17,6 +17,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BinanceUsdMFuturesTestnetAdapterContractTest {
+    @Test fun aSaturatedSignedChildOrderFillPageCannotProveProtectiveStopClosure() {
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            val req=chain.request()
+            val response=when(req.url.encodedPath) {
+                "/fapi/v1/time" -> """{"serverTime":${System.currentTimeMillis()}}"""
+                "/fapi/v1/userTrades" -> JSONArray().apply {
+                    repeat(1000) { put(JSONObject().put("orderId",42).put("id",it+1)) }
+                }.toString()
+                else -> throw AssertionError("Unexpected request $req")
+            }
+            Response.Builder().request(req).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(response.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val adapter=BinanceUsdMFuturesTestnetAdapter("key","secret",http)
+        val failure=runCatching { adapter.userTradesByOrder("BTCUSDT","42") }.exceptionOrNull()
+        assertTrue(failure.toString(),failure is IllegalStateException)
+        assertTrue(failure!!.message.orEmpty().contains("FUTURES_SIGNED_ORDER_TRADE_PAGE_SATURATED"))
+    }
+
+
     @Test fun signedRestGetRequiresRequestedStandardAndAlgoOrderIdentity() {
         val standard=JSONObject()
             .put("symbol","BTCUSDT").put("clientOrderId","W2E_BTC_7").put("orderId","123")

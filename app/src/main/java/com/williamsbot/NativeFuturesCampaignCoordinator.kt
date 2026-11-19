@@ -3343,7 +3343,7 @@ internal class NativeFuturesCampaignCoordinator(
         return futuresMarginObservation(account, configuration, orders, configurations)
     }
 
-    private fun halfMarginLiabilities(ledger: JSONArray, currentClientId: String): JSONArray {
+    private fun halfMarginLiabilities(ledger: JSONArray, currentSymbol: String, currentClientId: String): JSONArray {
         val result = JSONArray()
         val rows = (0 until ledger.length()).map { ledger.getJSONObject(it) }
         for (row in rows) {
@@ -3358,8 +3358,11 @@ internal class NativeFuturesCampaignCoordinator(
             if (role == "ADD_ON" && rows.any { it.optString("client_id") == row.optString("entry_client_id") &&
                     campaignLifecycleStatus(it) in TERMINAL_CAMPAIGN_STATUSES }) continue
             val cid = row.getString("client_id")
-            if (cid == currentClientId) {
-                result.put(JSONObject().put("client_id", cid).put("current_proposal", true))
+            // Binance client IDs are per-symbol: never exempt a foreign
+            // unresolved liability merely because its ID equals our proposal.
+            if (row.getString("symbol") == currentSymbol && cid == currentClientId) {
+                result.put(JSONObject().put("symbol", currentSymbol)
+                    .put("client_id", cid).put("current_proposal", true))
                 continue
             }
             val executed = row.optString("actual_entry_executed_qty", row.optString("executed_qty"))
@@ -3739,7 +3742,7 @@ internal class NativeFuturesCampaignCoordinator(
             // leverage verification and inside the same durable execution lock.
             val marginStartedNs = System.nanoTime()
             val marginFirst = halfMarginObservation(adapter, plan.symbol)
-            val marginLiabilities = halfMarginLiabilities(currentIntents, plan.clientId)
+            val marginLiabilities = halfMarginLiabilities(currentIntents, plan.symbol, plan.clientId)
             val marginSecond = halfMarginObservation(adapter, plan.symbol)
             val currentAmounts = marginSecond.positions.filterValues { it.signum() != 0 }
             check(currentAmounts.keys == openPositionRows.keys && currentAmounts.all { (symbol, amount) ->

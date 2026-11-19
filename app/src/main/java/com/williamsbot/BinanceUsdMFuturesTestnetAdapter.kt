@@ -460,13 +460,30 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         ))
     }
 
+    /**
+     * The userTrades endpoint is limited to 1000 receipts per response and
+     * provides no complete-order guarantee when it returns a full page.
+     * A saturated receipt set must NEVER certify a protective STOP closure.
+     */
+    internal fun requireUnsaturatedFuturesOrderTradePage(rows: JSONArray): JSONArray {
+        check(rows.length() < 1000) {
+            "FUTURES_SIGNED_ORDER_TRADE_PAGE_SATURATED: incomplete exit execution evidence"
+        }
+        for (i in 0 until rows.length()) {
+            check(rows.optJSONObject(i) != null) {
+                "FUTURES_SIGNED_ORDER_TRADE_ROW_MALFORMED"
+            }
+        }
+        return rows
+    }
+
     /** Exact child-order history; do not mix a later opposite campaign into a close. */
     fun userTradesByOrder(symbol:String,orderId:String):JSONArray {
         requireSymbol(symbol)
         require(orderId.toLongOrNull()?.let { it>0L }==true)
-        return JSONArray(requestRaw("GET","/fapi/v1/userTrades",mapOf(
+        return requireUnsaturatedFuturesOrderTradePage(JSONArray(requestRaw("GET","/fapi/v1/userTrades",mapOf(
             "symbol" to symbol,"orderId" to orderId,"limit" to "1000"
-        ),signed=true))
+        ),signed=true)))
     }
 
     fun incomeHistory(startTime: Long, endTime: Long = System.currentTimeMillis()): JSONArray {
