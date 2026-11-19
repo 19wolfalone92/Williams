@@ -228,14 +228,23 @@ class BinanceUserDataStream(
                                     webSocket.close(1000, "Futures private stream $reason; reconnect")
                                     closed.countDown()
                                 }
-                            } else if (message.has("code") || message.has("error")) {
+                            } else {
+                                // This private endpoint has no subscription ACK messages:
+                                // a frame lacking a recognized event envelope is NOT a
+                                // successful account notification. Treat malformed nested
+                                // "data" objects and unknown protocol frames as possible
+                                // dropped financial updates; never leave a stale READY latch.
+                                val detail = if (message.has("code") || message.has("error"))
+                                    "PRIVATE_STREAM_EXCHANGE_ERROR_CODE:" + message.optInt("code", -1)
+                                else "PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE"
                                 connected = false
-                                val detail = "PRIVATE_STREAM_EXCHANGE_ERROR_CODE:" +
-                                    message.optInt("code", -1)
                                 reconnectCause.compareAndSet(null, detail)
                                 onConnection(false, detail)
                                 closed.countDown()
-                                webSocket.close(1011, "exchange_error")
+                                // Always send a fixed, valid client close code and reason;
+                                // raw event text may contain credential material.
+                                runCatching { webSocket.close(1000, "private_event_schema_mismatch") }
+                                    .onFailure { webSocket.cancel() }
                             }
                         }
 
