@@ -72,6 +72,8 @@ def main() -> None:
         "MAX_DAILY_LOSS_PCT=0.03",
         "RISK_PER_TRADE_PCT=0.0025",
         "MAX_CONSECUTIVE_LOSSES=3",
+        "MAX_TRADES_PER_DAY=0",
+        "COOLDOWN_MINUTES=0",
         "BINANCE_MARKET=futures_usdt",
         "FUTURES_LEVERAGE=2",
         "FUTURES_MARGIN_TYPE=ISOLATED",
@@ -84,7 +86,7 @@ def main() -> None:
         "ALLOW_SHORT=true",
         "TAKE_PROFIT_PCT=0.0",
         "CAMPAIGN_TRAIL_BARS=5",
-        "MAX_OPEN_POSITIONS=1",
+        "MAX_OPEN_POSITIONS=10",
         "MAX_TOTAL_RISK_PCT=0.006",
         "MAX_RISK_PER_TRADE_PCT=0.0025",
     ):
