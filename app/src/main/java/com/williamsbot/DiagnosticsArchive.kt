@@ -320,6 +320,13 @@ object DiagnosticsArchive {
         val clockFaults = entryForensics?.optInt("clock_reconciliation_failure_count_24h",0) ?: 0
         if (rejected > 0 || clockFaults > 0) {
             appendLine("ИСТОРИЯ ОТКАЗОВ (не текущий торговый блок): отклонённых ответов входа=$rejected, ошибок проверки времени Binance=$clockFaults.")
+            if (entryForensics?.optBoolean("post_package_update_counts_available", false) == true) {
+                val postRejected = entryForensics.optInt("rejected_order_response_count_since_package_update", 0)
+                val postClock = entryForensics.optInt("clock_failure_count_since_package_update", 0)
+                appendLine("ПОСЛЕ ПОСЛЕДНЕГО ОБНОВЛЕНИЯ APK: отказов входа=$postRejected, ошибок часов=$postClock. Это только ограниченная история событий, НЕ доказательство успешной сделки.")
+                if (entryForensics.optBoolean("latest_rejection_predates_package_update", false))
+                    appendLine("Все сохранённые отказы входа относятся к ПРЕДЫДУЩЕЙ установленной версии, а не к текущей. На текущей версии результат подписанного входа НЕ подтверждён.")
+            } else appendLine("Время последнего обновления APK неизвестно; разделить старые и новые отказы невозможно.")
             val causes = entryForensics?.optJSONObject("occurrence_counts")
             if ((causes?.optInt("FOREIGN_ASSET_IDENTITY",0) ?: 0) > 0)
                 appendLine("ВНИМАНИЕ: зафиксирован FUTURES_HALF_MARGIN_UNKNOWN:FOREIGN_ASSET_IDENTITY. Проверьте свежий подписанный Binance account.assets; не обходите проверку маржи.")
