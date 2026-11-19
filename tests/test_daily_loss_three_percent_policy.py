@@ -1,6 +1,6 @@
 """Regression for user-approved Williams Bot risk policy.
 
-3% of the verified UTC daily risk baseline OR three exchange-reconciled
+3% of the verified UTC daily risk baseline OR three CONSECUTIVE exchange-reconciled
 negative Futures closes in one UTC day block *new entries*. Neither change
 waives the independent 5% emergency equity latch or signed STOP safety.
 """
@@ -26,8 +26,9 @@ def test_android_entry_halt_and_three_loss_guard_match_canonical_policy():
     assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
     assert runtime.count('.put("max_daily_loss_pct", futuresDailyLossLimitPct)') == 3
     assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached" in runtime
-    assert '.put("max_loss_trades_per_day", 3)' in runtime
+    assert '.put("max_consecutive_losses", 3)' in runtime
+    assert "FUTURES_DAILY_LOSS_TRADE_LIMIT" not in journal
     assert "maximumConsecutiveLosses: Int = 3" in journal
     assert "hardPauseAt: Int = 3" in journal
-    assert "dailyLossTrades >= hardPauseAt" in journal
-    assert "FUTURES_DAILY_LOSS_TRADE_LIMIT" in journal
+    assert "if (streak >= hardPauseAt) hardLimitReached = true" in journal
+    assert "FUTURES_CONSECUTIVE_LOSS_HARD_PAUSE" in journal
