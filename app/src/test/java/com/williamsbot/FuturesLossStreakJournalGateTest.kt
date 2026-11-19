@@ -59,6 +59,16 @@ class FuturesLossStreakJournalGateTest {
             JSONArray().put(owner(closedAt=old)),JSONArray(),now))
     }
 
+    @Test fun signedFilledStatusCannotBeIgnoredWhenRecoveredFillFieldsAreMissing() {
+        val recovered = owner(status="NO_FILLED_TRADES",seenFill=false)
+            .put("exchange_status","FILLED")
+            .put("order_status","FILLED")
+            .put("created_at_ms",close-60_000L)
+        assertEquals("FUTURES_LOSS_STREAK_EXCHANGE_CLOSE_UNJOURNALLED",
+            futuresUnjournalledClosedCampaignBlocker(
+                JSONArray().put(recovered),JSONArray(),now))
+    }
+
     @Test fun sameEntryIdFromYesterdayCannotCertifyTodaysExchangeClose() {
         val priorDay = Instant.parse("2026-11-18T23:50:00Z").toEpochMilli()
         val ownerClosedToday = owner(status="RECORDED", closedAt=close)
