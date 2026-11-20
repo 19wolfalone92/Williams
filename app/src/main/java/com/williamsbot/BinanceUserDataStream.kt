@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicReference
  * ACCOUNT_UPDATE/ORDER_TRADE_UPDATE delivery while the WebSocket itself appears open.
  */
 internal const val FUTURES_USER_STREAM_EVENT_FILTER =
-    "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired"
+    "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/TRADE_LITE/MARGIN_CALL/STRATEGY_UPDATE/GRID_UPDATE/listenKeyExpired/serverShutdown"
 
 /** A private stream protocol drift is not a valid heartbeat/position proof. */
 internal fun recognizedFuturesPrivateEventType(type: String): Boolean =
