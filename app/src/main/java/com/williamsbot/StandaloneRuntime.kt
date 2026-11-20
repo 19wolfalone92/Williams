@@ -531,6 +531,33 @@ internal fun signedFuturesReconciliationFresh(
     maximumAgeMs > 0L && nowMs - lastSuccessfulAtMs <= maximumAgeMs
 
 /**
+ * A slow successful signed sweep must not instantly schedule the next full
+ * sweep solely because its first GET was >3s ago. For READY/OPEN_PROTECTED,
+ * periodic cadence starts at successful completion instead.
+ *
+ * This is BACKGROUND scheduling only: signed risk-admission freshness retains
+ * its original first-GET timestamp, and urgent private WS updates bypass the
+ * caller's defer branch. Pending-fill/exit and unsafe states remain aggressive.
+ */
+internal fun shouldDeferNativeFuturesPeriodicReconciliation(
+    state: NativeFuturesCampaignCoordinator.State,
+    signedSnapshotStartedAtMs: Long,
+    lastSuccessfulCompletedAtMs: Long,
+    nowMs: Long,
+    minimumIntervalMs: Long
+): Boolean {
+    if (minimumIntervalMs <= 0L ||
+        !signedFuturesReconciliationFresh(signedSnapshotStartedAtMs, nowMs)
+    ) return false
+    val anchor = when (state) {
+        NativeFuturesCampaignCoordinator.State.READY,
+        NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED -> lastSuccessfulCompletedAtMs
+        else -> signedSnapshotStartedAtMs
+    }
+    return anchor > 0L && nowMs >= anchor && nowMs - anchor < minimumIntervalMs
+}
+
+/**
  * A read-only scanner may identify a valid H1 setup near the 90s signed REST
  * expiry. Reserve enough time for the final network/H1/STOP checks by asking
  * for a NEW signed account-wide reconciliation in advance, never by extending
@@ -2093,6 +2120,7 @@ private class NativeEngine(
     @Volatile private var lastRestReconcileMs = 0L
     @Volatile private var lastReconciliationAttemptAtMs = 0L
     @Volatile private var lastReconciliationCompletedAtMs = 0L
+    @Volatile private var lastSuccessfulReconciliationCompletedAtMs = 0L
     @Volatile private var lastReconciliationResult = "NEVER_RUN"
     @Volatile private var lastReconciliationLockWaitMs = 0L
     @Volatile private var lastReconciliationLockWaitFailure: String? = null
@@ -2689,6 +2717,7 @@ private class NativeEngine(
             .put("futures_reconciliation_in_progress", activeReconciliation)
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
+            .put("last_successful_reconciliation_completed_at_ms", lastSuccessfulReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
             .put("last_reconciliation_lock_wait_ms", lastReconciliationLockWaitMs)
             .put("last_reconciliation_lock_wait_failure", lastReconciliationLockWaitFailure ?: JSONObject.NULL)
@@ -5333,6 +5362,7 @@ private class NativeEngine(
                 // Completion time must not make an old account/position snapshot
                 // look fresh after slow history queries or STOP maintenance.
                 lastRestReconcileMs = result.optLong("exchange_snapshot_started_at_ms", 0L)
+                lastSuccessfulReconciliationCompletedAtMs = System.currentTimeMillis()
                 lastReconciliationResult = "SUCCESS"
             } else {
                 lastReconciliationResult = "BLOCKED: " +
@@ -6215,13 +6245,16 @@ private class NativeEngine(
         val lastSuccessfulReconcile = lastRestReconcileMs
         val privateStreamSynchronized = userStreamConnected && !userStreamSyncRequired
         if (!reconcileRequired && privateStreamSynchronized &&
-            minimumReconcileIntervalMs > 0L && lastSuccessfulReconcile > 0L &&
-            nowMs >= lastSuccessfulReconcile &&
-            nowMs - lastSuccessfulReconcile < minimumReconcileIntervalMs
+            shouldDeferNativeFuturesPeriodicReconciliation(
+                priorState, lastSuccessfulReconcile,
+                lastSuccessfulReconciliationCompletedAtMs, nowMs,
+                minimumReconcileIntervalMs
+            )
         ) {
-            // Private WS trade/account events schedule immediate reconciliation. This
-            // fallback cadence prevents the 1-second market scanner issuing a full
-            // signed account/open-order/algo-order reconciliation on every pass.
+            // PRIVATE_WS_FILL_URGENT and other WS updates set syncRequired, bypassing
+            // this fallback. A slow protected-state reconciliation no longer
+            // immediately self-repeats solely because its first GET was >3s ago.
+            // Signed risk-admission freshness still starts at the first GET.
             runCatching { journalClosedNativeFuturesTrades() }
             return true
         }
@@ -12103,6 +12136,7 @@ private class NativeEngine(
             .put("futures_reconciliation_in_progress", reconciliationObserved)
             .put("last_reconciliation_attempt_at_ms", lastReconciliationAttemptAtMs)
             .put("last_reconciliation_completed_at_ms", lastReconciliationCompletedAtMs)
+            .put("last_successful_reconciliation_completed_at_ms", lastSuccessfulReconciliationCompletedAtMs)
             .put("last_reconciliation_result", lastReconciliationResult)
              .put("execution_policy",williamsExecutionPolicySnapshot()).put("strategy_profile",williamsProfile)
             .put("entry_time_policy",entryTimePolicy.toJson())
