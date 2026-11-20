@@ -30,6 +30,9 @@ internal const val FUTURES_USER_STREAM_EVENT_FILTER =
 internal fun recognizedFuturesPrivateEventType(type: String): Boolean =
     type in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
         "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+        // Documented Futures events must not be treated as protocol drift.
+        // Every one of these still forces an independent signed REST reconcile.
+        "TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE",
         "listenKeyExpired", "serverShutdown")
 
 /** Return true when the Futures private stream must be re-established. */
