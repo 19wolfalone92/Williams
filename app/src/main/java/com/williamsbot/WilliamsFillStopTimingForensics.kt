@@ -27,6 +27,11 @@ internal object WilliamsFillStopTimingForensics {
         }
         valid.sortBy { it.optLong("E") }
         val observations=JSONArray()
+        // A 150-event ring may lose the original entry FILLED but retain
+        // a later exit FILLED. Zero slow observations cannot erase P0 evidence.
+        val firstRetainedAtMs=valid.firstOrNull()?.optLong("E",0L) ?: 0L
+        val lastRetainedAtMs=valid.lastOrNull()?.optLong("E",0L) ?: 0L
+        val ringMayBeTruncated=events.length()>=150
         var slowCount=0
         var missingCount=0
         var possibleExitCount=0
@@ -140,7 +145,13 @@ internal object WilliamsFillStopTimingForensics {
             .put("window_ms",WINDOW_MS)
             .put("retained_timeline_event_count",events.length())
             .put("window_valid_event_count",valid.size)
-            .put("retained_event_limit_may_truncate_history",events.length()>=150)
+            .put("retained_event_limit_may_truncate_history",ringMayBeTruncated)
+            .put("retained_first_event_at_ms",
+                if(firstRetainedAtMs>0L) firstRetainedAtMs else JSONObject.NULL)
+            .put("retained_last_event_at_ms",
+                if(lastRetainedAtMs>0L) lastRetainedAtMs else JSONObject.NULL)
+            .put("earlier_delayed_fills_not_excluded",ringMayBeTruncated)
+            .put("zero_observed_slow_fills_proves_prior_delay_fixed",false)
             .put("fill_event_count",seenFills)
             .put("audited_fill_limit",12)
             .put("observed_slow_confirmation_count",slowCount)
@@ -162,7 +173,9 @@ internal object WilliamsFillStopTimingForensics {
                 "not the authenticated exchange creation timestamps. " +
                 "A FILLED event may close an existing position: preceding EXIT_PENDING " +
                 "is only an unsigned role hint. Partial fills and overlapping orders " +
-                "require signed client-order-id chain receipts. Never infer an unprotected " +
-                "interval or submit a duplicate STOP from this report.")
+                "require signed client-order-id chain receipts. The 150-event ring " +
+                "may hide earlier opening fill delays; zero observed slow fills " +
+                "never proves that an earlier delay was fixed. Never infer an " +
+                "unprotected interval or submit a duplicate STOP from this report.")
     }
 }
