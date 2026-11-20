@@ -41,6 +41,49 @@ class WilliamsFillStopTimingForensicsTest {
             report.getJSONArray("observations").getJSONObject(0).getString("status"))
     }
 
+    @Test fun diag5_suiExchangeExitFillIsNotMistakenForUnprotectedInitialEntry() {
+        // Diagnostic #5: SUI SHORT was already protected and EXIT_PENDING
+        // before a BUY/close FILLED; the previous symbol-only heuristic
+        // incorrectly demanded a second initial STOP following this exit.
+        val events=JSONArray()
+            .put(event(fillAt-5_500L,"COCKPIT_EXECUTION","EXIT_PENDING",
+                "Post-change audit=NOT_VERIFIED; protection_status=PROTECTED", "SUIUSDT"))
+            .put(event(fillAt-5_450L,"COCKPIT_EXECUTION","ENTRY_PENDING",
+                "Post-change audit=WARNING; exchange_status=SUBMISSION_UNKNOWN", "SUIUSDT"))
+            .put(event(fillAt,"COCKPIT_USER_WS","ORDER_TRADE_UPDATE",
+                "status=FILLED; executed_qty=77.9", "SUIUSDT"))
+            .put(event(fillAt+15_900L,"COCKPIT_EXECUTION","CLOSED_OR_STOPPED",
+                "Post-change audit=PASS; protection_status=PROTECTED", "SUIUSDT"))
+        val report=WilliamsFillStopTimingForensics.analyze(events,now)
+        assertEquals(1, report.getInt("fill_event_count"))
+        assertEquals(1, report.getInt("possible_exit_fill_count"))
+        assertEquals(0, report.getInt("observed_slow_confirmation_count"))
+        assertEquals(1, report.getInt("unlinked_or_ambiguous_fill_count"))
+        val row=report.getJSONArray("observations").getJSONObject(0)
+        assertEquals("AMBIGUOUS_EXIT_PENDING_BEFORE_FILL",row.getString("status"))
+        assertEquals("MIXED_ENTRY_EXIT_PENDING_NO_SIGNED_ORDER_ID",row.getString("role_hint"))
+        assertTrue(row.isNull("fill_to_protected_audit_ms"))
+        assertFalse(row.getBoolean("authenticated_exchange_timing_verified"))
+    }
+
+    @Test fun diag5_ltcEntryFillAfterEarlierPendingEntryStillRequiresStopTimingProof() {
+        val events=JSONArray()
+            .put(event(fillAt-20_000L,"COCKPIT_EXECUTION","ENTRY_PENDING",
+                "Post-change audit=PASS; protection_status=NOT_SUBMITTED", "LTCUSDT"))
+            .put(event(fillAt,"COCKPIT_USER_WS","ORDER_TRADE_UPDATE",
+                "status=FILLED; executed_qty=1.778", "LTCUSDT"))
+            .put(event(fillAt+15_357L,"COCKPIT_USER_WS","ALGO_UPDATE",
+                "status=NEW", "LTCUSDT"))
+            .put(event(fillAt+19_741L,"COCKPIT_EXECUTION","OPEN_PROTECTED",
+                "Post-change audit=PASS; protection_status=PROTECTED", "LTCUSDT"))
+        val report=WilliamsFillStopTimingForensics.analyze(events,now)
+        assertEquals(0,report.getInt("possible_exit_fill_count"))
+        assertEquals(1,report.getInt("observed_slow_confirmation_count"))
+        assertEquals(19_741L,report.getLong("max_fill_to_protected_audit_ms"))
+        assertEquals("WARNING_OBSERVED_SLOW_PROTECTION_CONFIRMATION",
+            report.getJSONArray("observations").getJSONObject(0).getString("status"))
+    }
+
     @Test fun competingSameSymbolFillsCannotBeAttributedToUnidentifiedStop() {
         val events=JSONArray()
             .put(event(fillAt,"COCKPIT_USER_WS","ORDER_TRADE_UPDATE",
@@ -64,6 +107,33 @@ class WilliamsFillStopTimingForensicsTest {
                 "status=FILLED"))
         val report=WilliamsFillStopTimingForensics.analyze(events,now)
         assertEquals(0,report.getInt("fill_event_count"))
+        assertEquals("NOT_VERIFIED",report.getString("severity"))
+    }
+
+    @Test fun diag6_ringDiscardedRealDelayedEntryButRetainedExitDoesNotClaimFix() {
+        // Diagnostic #6 retained only the 150 newest cockpit events starting
+        // AFTER the LTC opening fill and its 19.741s delayed protection.
+        val events=JSONArray()
+        val oldest=fillAt-5_000L
+        for(i in 0 until 146) {
+            events.put(event(oldest+i,"COCKPIT_UI","NAVIGATE","screen=1",""))
+        }
+        events.put(event(fillAt-4_785L,"COCKPIT_EXECUTION","EXIT_PENDING",
+            "Post-change audit=NOT_VERIFIED; protection_status=PROTECTED","LTCUSDT"))
+        events.put(event(fillAt-4_770L,"COCKPIT_EXECUTION","ENTRY_PENDING",
+            "exchange_status=SUBMISSION_UNKNOWN","LTCUSDT"))
+        events.put(event(fillAt,"COCKPIT_USER_WS","ORDER_TRADE_UPDATE",
+            "status=FILLED; executed_qty=1.778","LTCUSDT"))
+        events.put(event(fillAt+15_530L,"COCKPIT_EXECUTION","CLOSED_OR_STOPPED",
+            "Post-change audit=PASS; protection_status=PROTECTED","LTCUSDT"))
+        val report=WilliamsFillStopTimingForensics.analyze(events,now)
+        assertEquals(150,report.getInt("retained_timeline_event_count"))
+        assertTrue(report.getBoolean("retained_event_limit_may_truncate_history"))
+        assertTrue(report.getBoolean("earlier_delayed_fills_not_excluded"))
+        assertFalse(report.getBoolean("zero_observed_slow_fills_proves_prior_delay_fixed"))
+        assertEquals(oldest,report.getLong("retained_first_event_at_ms"))
+        assertEquals(1,report.getInt("possible_exit_fill_count"))
+        assertEquals(0,report.getInt("observed_slow_confirmation_count"))
         assertEquals("NOT_VERIFIED",report.getString("severity"))
     }
 

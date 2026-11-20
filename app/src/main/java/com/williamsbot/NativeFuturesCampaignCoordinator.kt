@@ -2507,6 +2507,12 @@ internal class NativeFuturesCampaignCoordinator(
                     val confirmedAt = clock()
                     matchingIntent.put("campaign_status", "OPEN_PROTECTED")
                         .put("protection_status", "PROTECTED")
+                        // Timestamp of the FIRST successful signed STOP lookup
+                        // on this campaign (not Binance's actual STOP creation).
+                        // Retain across later reconciliations for latency audit.
+                        .put("first_signed_stop_observed_at_ms",
+                            matchingIntent.optLong("first_signed_stop_observed_at_ms", 0L)
+                                .takeIf { it > 0L } ?: confirmedAt)
                         .put("protection_client_id", confirmedClientId)
                         .put("protective_stop", confirmedStop)
                         .put("actual_entry_price", positionEntry.toString())
@@ -4893,6 +4899,16 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("liquidation_stop_gap_pct", item.opt("liquidation_stop_gap_pct") ?: JSONObject.NULL)
                     .put("liquidation_guard_audited_at_ms", item.opt("liquidation_guard_audited_at_ms") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
+                    // The conditional parent may still say NEW / 0 while its
+                    // exact Binance matching-engine child has already filled.
+                    // Export both separate cached receipts: presentation only,
+                    // never admission, stop mutation or exact-fill certification.
+                    .put("actual_entry_order_id_present",
+                        item.optString("actual_entry_order_id").isNotBlank())
+                    .put("actual_entry_order_status",
+                        item.opt("actual_entry_order_status") ?: JSONObject.NULL)
+                    .put("actual_entry_executed_qty",
+                        item.opt("actual_entry_executed_qty") ?: JSONObject.NULL)
                     .put("confirmed_position_qty", item.opt("confirmed_position_qty") ?: JSONObject.NULL)
                     // Last completed position observation stays a fact during
                     // the next refresh; this projection never grants admission.
@@ -4910,6 +4926,13 @@ internal class NativeFuturesCampaignCoordinator(
                     // Report journal protection fields separately from live exchange proof.
                     // Consumers must not interpret this persisted field alone as protection.
                     .put("protection_status", item.optString("protection_status", "UNKNOWN"))
+                    // Historical per-campaign timing. A signed Binance GET
+                    // still cannot prove when the order was created/executable.
+                    .put("protection_attempt_at_ms",
+                        item.optLong("protection_attempt_at_ms", 0L).takeIf { it > 0L } ?: JSONObject.NULL)
+                    .put("first_signed_stop_observed_at_ms",
+                        item.optLong("first_signed_stop_observed_at_ms", 0L).takeIf { it > 0L } ?: JSONObject.NULL)
+                    .put("protection_post_attempted", item.optBoolean("protection_post_attempted", false))
                     .put("persisted_protective_stop", item.optString("protective_stop")
                         .toDoubleOrNull()?.takeIf { it.isFinite() && it > 0.0 } ?: JSONObject.NULL)
                     .put("initial_protective_stop", item.optString("initial_protective_stop")

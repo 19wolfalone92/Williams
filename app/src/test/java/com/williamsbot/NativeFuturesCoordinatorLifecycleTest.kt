@@ -814,6 +814,16 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
             val owner=coordinator.intentsSnapshot().getJSONObject(0)
             assertEquals("PROTECTED",owner.getString("protection_status"))
+            // A signed exchange stop observation is NOT a Binance creation
+            // timestamp; retain the first observed instant across refreshes.
+            val firstSignedStop = owner.getLong("first_signed_stop_observed_at_ms")
+            assertTrue(firstSignedStop > 0L)
+            val diagnostic = coordinator.status().getJSONArray("pending_intent_details").getJSONObject(0)
+            assertEquals(firstSignedStop, diagnostic.getLong("first_signed_stop_observed_at_ms"))
+            assertTrue(diagnostic.getLong("protection_attempt_at_ms") > 0L)
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(firstSignedStop, coordinator.intentsSnapshot().getJSONObject(0)
+                .getLong("first_signed_stop_observed_at_ms"))
             assertEquals(bookId,owner.getString("client_id"))
             assertTrue(owner.getString("protection_client_id").isNotBlank())
             assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
@@ -2610,6 +2620,46 @@ class NativeFuturesCoordinatorLifecycleTest {
                 assertEquals(1, exchange.algos.values.count { it.optBoolean("closePosition") })
                 assertEquals(0, exchange.posts("/fapi/v1/order"))
             }
+        }
+    }
+
+    @Test fun partialFillLostStopReplyAndCoordinatorRestartPreserveSingleProtectiveOrderBothDirections() {
+        // Combined P0 fault scenario, not merely separate unit tests:
+        // a PARTIALLY_FILLED conditional child leaves a remainder to cancel;
+        // STOP POST succeeds on the modeled exchange but its reply is lost;
+        // a fresh coordinator must adopt ONLY the exact already-placed stop.
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill(fraction = 0.4, childClientId = "SIGNED_CHILD_ONLY")
+            exchange.loseProtectionReply = true
+
+            val uncertain = coordinator.reconcile()
+            assertFalse(uncertain.toString(), uncertain.optBoolean("ok"))
+            val pending = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("SUBMISSION_UNKNOWN", pending.optString("protection_status"))
+            assertTrue(pending.optString("protection_client_id").isNotBlank())
+            assertEquals("CANCELED", exchange.orders.getValue("42").getString("status"))
+            val postsAfterLostReply = exchange.posts("/fapi/v1/algoOrder")
+            assertEquals(1, exchange.algos.values.count {
+                it.optString("closePosition") == "true" && it.optString("algoStatus") == "NEW"
+            })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+
+            val recovered = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val resolved = recovered.reconcile()
+            assertTrue(resolved.toString(), resolved.optBoolean("ok"))
+            assertEquals("OPEN_PROTECTED", recovered.state.name)
+            assertEquals("PROTECTED", recovered.intentsSnapshot().getJSONObject(0)
+                .optString("protection_status"))
+            assertEquals(postsAfterLostReply, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(1, exchange.algos.values.count {
+                it.optString("closePosition") == "true" && it.optString("algoStatus") == "NEW"
+            })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
         }
     }
 
