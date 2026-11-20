@@ -310,7 +310,11 @@ def main() -> None:
     must(read("app/src/main/java/com/williamsbot/BinanceUserDataStream.kt"), '&events=" + EVENT_TYPES', "BinanceUserDataStream.kt")
     futures_user_stream_contract = read("app/src/main/java/com/williamsbot/BinanceUserDataStream.kt")
     must(futures_user_stream_contract, "FUTURES_USER_STREAM_EVENT_FILTER", "BinanceUserDataStream.kt")
-    must(futures_user_stream_contract, "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired", "BinanceUserDataStream.kt")
+    must(futures_user_stream_contract, "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/TRADE_LITE/MARGIN_CALL/STRATEGY_UPDATE/GRID_UPDATE/listenKeyExpired/serverShutdown", "BinanceUserDataStream.kt")
+    must(futures_user_stream_contract, "recognizedFuturesPrivateEventType", "BinanceUserDataStream.kt known protocol")
+    for known_private_event in ("TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE"):
+        must(futures_user_stream_contract, known_private_event, "BinanceUserDataStream.kt known event")
+    must(futures_user_stream_contract, "PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE", "BinanceUserDataStream.kt fail-closed unknown")
     must_not(futures_user_stream_contract, "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE", "BinanceUserDataStream.kt")
     must(legacy_runtime, "marketWebSocketFresh()", "StandaloneRuntime.kt")
     must(legacy_runtime, "publicWebSocketFresh()", "StandaloneRuntime.kt")
