@@ -49,19 +49,23 @@ internal object WilliamsFillStopTimingForensics {
             // as an entry missing its initial STOP. Detect the most recent
             // matching-symbol lifecycle context, but NEVER claim that this
             // supplies a signed child-order or client-order ID.
-            var recentLifecycleState=""
+            var sawRecentExitPending=false
+            var sawRecentEntryPending=false
             for (priorIndex in pos-1 downTo 0) {
                 val prior=valid[priorIndex]
                 if (filledAt-prior.optLong("E")>5L*60L*1000L) break
                 if (prior.optString("symbol")!=symbol ||
                     prior.optString("e")!="COCKPIT_EXECUTION") continue
-                val priorState=prior.optString("state")
-                if (priorState in setOf("ENTRY_PENDING","EXIT_PENDING")) {
-                    recentLifecycleState=priorState
-                    break
+                // On the actual SUI EXIT the cockpit emitted EXIT_PENDING
+                // followed 16 ms later by a generic ENTRY_PENDING for the
+                // UNKNOWN-reply exit intent. Do not let that generic label
+                // erase evidence of a potentially closing fill.
+                when(prior.optString("state")) {
+                    "EXIT_PENDING" -> sawRecentExitPending=true
+                    "ENTRY_PENDING" -> sawRecentEntryPending=true
                 }
             }
-            val possibleExitFill=recentLifecycleState=="EXIT_PENDING"
+            val possibleExitFill=sawRecentExitPending
             if(possibleExitFill) {
                 possibleExitCount++
                 missingCount++
