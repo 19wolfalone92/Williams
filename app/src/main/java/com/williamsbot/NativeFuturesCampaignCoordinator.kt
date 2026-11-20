@@ -130,6 +130,10 @@ internal fun matchesConfirmedFuturesProtectiveStop(
     val actualWorkingType = order.optString("workingType").uppercase(Locale.US)
     if (actualWorkingType != "MARK_PRICE" &&
         (signedProofRequired || actualWorkingType.isNotBlank())) return false
+    // Binance's conditional STOP can be delayed by price-protection divergence.
+    // Our STOP POST explicitly specifies priceProtect=false; the matching
+    // signed exchange record must prove that property before live admission.
+    if (signedProofRequired && !isBinanceUnrestrictedStopTrigger(order)) return false
     val expected = expectedStop.toBigDecimalOrNull() ?: return false
     val type = order.optString("type", order.optString("orderType")).uppercase(Locale.US)
     if (type != "STOP_MARKET") return false
@@ -3856,8 +3860,21 @@ internal class NativeFuturesCampaignCoordinator(
                     clientOrderId = plan.clientId
                 )
             }
+            // HTTP 200 is not evidence that the response belongs to THIS
+            // signed order. Persist an uncertain intent and reconcile via the
+            // exact client ID when the receipt lacks/mismatches Binance identity.
+            // POST has already been attempted: no speculative retry is allowed.
+            check(futuresEntryPostReceiptMatches(
+                receipt = result,
+                symbol = plan.symbol,
+                side = if(plan.direction == Direction.LONG) "BUY" else "SELL",
+                clientId = plan.clientId,
+                kind = plan.kind.name,
+                quantity = plan.quantity,
+                triggerPrice = plan.entryPrice
+            )) { "FUTURES_ENTRY_POST_RECEIPT_IDENTITY_OR_QUANTITY_UNVERIFIED" }
             val orderStatus = result.optString("status").ifBlank {
-                result.optString("algoStatus", "NEW")
+                result.optString("algoStatus")
             }.uppercase(Locale.US)
             intent.put("exchange_status", orderStatus)
                 .put("order_status", orderStatus)

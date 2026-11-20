@@ -24,6 +24,53 @@ class PrivateFuturesFillUrgencyTest {
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("PARTIALLY_FILLED", "-1")))
     }
 
+    @Test fun tradeLiteOnlyWakesImmediateSignedReconciliationForAnActualFill() {
+        val valid = JSONObject().put("e", "TRADE_LITE").put("s", "BTCUSDT")
+            .put("l", "0.002").put("i", 777L).put("c", "external-client")
+        assertTrue(privateFuturesFillDemandsImmediateReconcile(valid))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "0")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "-1")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "NaN")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("s", "")))
+        // A trade hint is never itself proof of STOP or filled position.
+        assertTrue(privateFuturesStateEventDemandsImmediateReconcile(valid))
+    }
+
+    @Test fun documentedRiskEventsRequireSignedResyncWithoutCreatingAnEntry() {
+        for (name in listOf("MARGIN_CALL", "GRID_UPDATE", "STRATEGY_UPDATE",
+            "TRADE_LITE")) {
+            assertTrue(privateFuturesStateEventDemandsImmediateReconcile(
+                JSONObject().put("e", name).put("E", 1700000000000L)))
+        }
+        assertFalse(privateFuturesStateEventDemandsImmediateReconcile(
+            JSONObject().put("e", "UNRECOGNIZED_FUTURES_MESSAGE")))
+    }
+
+    @Test fun finiteActorBackpressureRetriesDurablePrivateInboxWithoutNewSocketEvent() {
+        assertTrue(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 1_000L,
+            lastAttemptElapsedMs = 0L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = true, nowElapsedMs = 20_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 9_999L,
+            lastAttemptElapsedMs = 1_000L))
+        assertTrue(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 11_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = false, drainScheduled = false, nowElapsedMs = 11_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 500L,
+            lastAttemptElapsedMs = 12_000L))
+    }
+
     @Test fun brokenOrUnrelatedEventsNeverAuthorizeUrgentPath() {
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "NaN")))
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "0.08", "")))

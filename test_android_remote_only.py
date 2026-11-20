@@ -456,7 +456,9 @@ def test_android_private_futures_stream_uses_supported_event_query_delimiters():
     assert 'endpoint = "wss://demo-fstream.binance.com/private/ws"' in runtime
     assert '"&events=" + EVENT_TYPES' in user_stream
     assert "FUTURES_USER_STREAM_EVENT_FILTER" in user_stream
-    assert '"ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired"' in user_stream
+    assert '"ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/TRADE_LITE/MARGIN_CALL/STRATEGY_UPDATE/GRID_UPDATE/listenKeyExpired/serverShutdown"' in user_stream
+    assert "recognizedFuturesPrivateEventType" in user_stream
+    assert "PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE" in user_stream
     assert "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE" in user_stream
     assert "ORDER_TRADE_UPDATE,ACCOUNT_UPDATE,ALGO_UPDATE" not in user_stream
 

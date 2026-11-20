@@ -794,6 +794,13 @@ internal fun lastKnownFuturesPositionsForDisplay(
  * Signed account/position/algo reconciliation remains authoritative.
  */
 internal fun privateFuturesFillDemandsImmediateReconcile(event: JSONObject): Boolean {
+    if (event.optString("e") == "TRADE_LITE") {
+        // Binance publishes TRADE_LITE before the heavier order update.
+        // This is a lower-latency wake-up only: quantity and client identity
+        // must still be independently confirmed by signed REST.
+        if (event.optString("s").isBlank()) return false
+        return event.optString("l").toBigDecimalOrNull()?.signum() == 1
+    }
     if (event.optString("e") != "ORDER_TRADE_UPDATE") return false
     val order = event.optJSONObject("o") ?: return false
     val status = order.optString("X").uppercase(Locale.US)
@@ -1748,6 +1755,9 @@ private class NativeEngine(
     // Only one actor drain is queued; the SQLite inbox, not an unbounded RAM queue, owns events.
     private val privateEventDrainScheduled = AtomicBoolean(false)
     private val privateEventReceiveGeneration = AtomicLong(0L)
+    // Monitoring-worker monotonic timestamp; bounded retry for a durable
+    // inbox whose wake-up was rejected by the finite financial actor queue.
+    private var lastDurableInboxDrainRetryElapsedMs = 0L
     private val executionGate = ExecutionGate()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
@@ -3114,6 +3124,31 @@ private class NativeEngine(
                     lastWorkerLoopElapsedMs=android.os.SystemClock.elapsedRealtime()
                     try {
                         repairStaleMarketStreams()
+                        // If the bounded financial actor rejected a wake-up, SQLite
+                        // still contains the pending event. Do not depend on a
+                        // FUTURE private WS message to resume that durable work.
+                        // Read-only retry runs at most once per ten seconds and
+                        // never makes an unsigned order-state assertion.
+                        val elapsedForInbox = android.os.SystemClock.elapsedRealtime()
+                        if (shouldRetryDurablePrivateInboxDrain(
+                                active = running,
+                                drainScheduled = privateEventDrainScheduled.get(),
+                                nowElapsedMs = elapsedForInbox,
+                                lastAttemptElapsedMs = lastDurableInboxDrainRetryElapsedMs
+                            )) {
+                            lastDurableInboxDrainRetryElapsedMs = elapsedForInbox
+                            val fingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrNull()
+                            if (fingerprint != null) {
+                                val pending = runCatching {
+                                    auditStore.hasPendingPrivateUserEvents(fingerprint)
+                                }.getOrNull()
+                                if (pending == true) schedulePrivateEventDrain()
+                                if (pending == null) {
+                                    userStreamSyncRequired = true
+                                    setReconcileRequired("PRIVATE_INBOX_PENDING_CHECK_FAILED")
+                                }
+                            }
+                        }
                         // A connected private stream can still be unsynchronized after a
                         // transient REST/Execution-Door failure. Retry reconciliation with
                         // bounded backoff instead of leaving the runtime permanently blocked
@@ -8904,7 +8939,9 @@ private class NativeEngine(
      */
     private fun handleUserEvent(event: JSONObject) {
         if (event.optString("e") in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
-                "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT", "listenKeyExpired", "serverShutdown")) {
+                "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+                "TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE",
+                "listenKeyExpired", "serverShutdown")) {
             synchronized(this) {
                 userStreamSyncRequired = true
                 lastUserStreamSyncAtMs = 0L
@@ -9061,7 +9098,8 @@ private class NativeEngine(
 
         when (eventType) {
             "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
-            "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT" -> {
+            "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+            "TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE" -> {
                 // Every execution/account/protection update already requested
                 // signed reconciliation in the WebSocket callback (or durable replay).
                 // Keep this serialized actor for journal/order projection only.

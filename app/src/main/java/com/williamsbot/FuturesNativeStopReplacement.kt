@@ -44,6 +44,9 @@ internal fun nativeReplacementStopMatchesSignedExchangeRow(
         row.optString("clientAlgoId")==id &&
         row.optString("positionSide")=="BOTH" &&
         row.optString("workingType")=="MARK_PRICE" &&
+        // A bridge STOP with Binance priceProtect=true may be delayed at
+        // trigger time; it cannot authorize cancellation of the original.
+        isBinanceUnrestrictedStopTrigger(row) &&
         row.optString("orderType").ifBlank { row.optString("type") }=="STOP_MARKET" &&
         row.optString("side")==(if(direction=="LONG") "SELL" else "BUY") &&
         row.optString("algoId").toLongOrNull()?.let { it>0L }==true &&

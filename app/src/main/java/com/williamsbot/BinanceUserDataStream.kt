@@ -24,7 +24,16 @@ import java.util.concurrent.atomic.AtomicReference
  * ACCOUNT_UPDATE/ORDER_TRADE_UPDATE delivery while the WebSocket itself appears open.
  */
 internal const val FUTURES_USER_STREAM_EVENT_FILTER =
-    "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/listenKeyExpired"
+    "ORDER_TRADE_UPDATE/ACCOUNT_UPDATE/ALGO_UPDATE/ACCOUNT_CONFIG_UPDATE/CONDITIONAL_ORDER_TRIGGER_REJECT/TRADE_LITE/MARGIN_CALL/STRATEGY_UPDATE/GRID_UPDATE/listenKeyExpired/serverShutdown"
+
+/** A private stream protocol drift is not a valid heartbeat/position proof. */
+internal fun recognizedFuturesPrivateEventType(type: String): Boolean =
+    type in setOf("ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
+        "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+        // Documented Futures events must not be treated as protocol drift.
+        // Every one of these still forces an independent signed REST reconcile.
+        "TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE",
+        "listenKeyExpired", "serverShutdown")
 
 /** Return true when the Futures private stream must be re-established. */
 internal fun shouldReconnectFuturesUserStream(event: JSONObject): Boolean =
@@ -203,7 +212,7 @@ class BinanceUserDataStream(
                                 return
                             }
                             val event = message.optJSONObject("data") ?: message
-                            if (event.has("e")) {
+                            if (event.has("e") && recognizedFuturesPrivateEventType(event.optString("e"))) {
                                 runCatching { onEvent(event) }
                                     .onFailure {
                                         connected = false
@@ -228,14 +237,23 @@ class BinanceUserDataStream(
                                     webSocket.close(1000, "Futures private stream $reason; reconnect")
                                     closed.countDown()
                                 }
-                            } else if (message.has("code") || message.has("error")) {
+                            } else {
+                                // This private endpoint has no subscription ACK messages:
+                                // a frame lacking a recognized event envelope is NOT a
+                                // successful account notification. Treat malformed nested
+                                // "data" objects and unknown protocol frames as possible
+                                // dropped financial updates; never leave a stale READY latch.
+                                val detail = if (message.has("code") || message.has("error"))
+                                    "PRIVATE_STREAM_EXCHANGE_ERROR_CODE:" + message.optInt("code", -1)
+                                else "PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE"
                                 connected = false
-                                val detail = "PRIVATE_STREAM_EXCHANGE_ERROR_CODE:" +
-                                    message.optInt("code", -1)
                                 reconnectCause.compareAndSet(null, detail)
                                 onConnection(false, detail)
                                 closed.countDown()
-                                webSocket.close(1011, "exchange_error")
+                                // Always send a fixed, valid client close code and reason;
+                                // raw event text may contain credential material.
+                                runCatching { webSocket.close(1000, "private_event_schema_mismatch") }
+                                    .onFailure { webSocket.cancel() }
                             }
                         }
 

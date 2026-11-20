@@ -96,6 +96,29 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
         assertTrue(coordinator.submitPendingEntry(plan(exchange.direction)).getBoolean("accepted"))
     }
+    @Test fun inconsistentHttp200ReceiptMustPersistUnknownWithoutRetryingRiskyEntryPost() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val exchange = Exchange(direction)
+            exchange.algoAcknowledgementTransform = { JSONObject().put("algoId","0")
+                .put("symbol","ETHUSDT").put("clientAlgoId","ANOTHER_USER_ORDER") }
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val attempted = coordinator.submitPendingEntry(plan(direction))
+            assertFalse(attempted.toString(), attempted.getBoolean("accepted"))
+            assertTrue(attempted.toString(), attempted.optString("blocker")
+                .contains("ambiguous_entry_submission_reconcile_before_any_retry"))
+            val intent = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("SUBMISSION_UNKNOWN", intent.getString("order_status"))
+            assertEquals("ENTRY_PENDING", intent.getString("campaign_status"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+            // Signed read by persisted ID can recover; never send a second POST.
+            val reconciliation = coordinator.reconcile()
+            assertTrue(reconciliation.toString(), reconciliation.getBoolean("ok"))
+            assertEquals(1, exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
     @Test fun preupgradeRestoredSymbolIntentsKeepIdentityReservationAndOwnedStopAcrossRestart() {
         for(symbol in listOf("SUIUSDT","NEARUSDT","DOTUSDT","TRXUSDT","BCHUSDT"))
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
@@ -358,6 +381,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var failPendingQueries=false
         var beforeRequest: ((Request, Map<String, String>) -> Unit)? = null
         var afterAlgoMutation: ((Request, JSONObject) -> Unit)? = null
+        var algoAcknowledgementTransform: ((JSONObject) -> JSONObject)? = null
         var additionFraction = 1.0
         var closeFraction = 1.0
         var closeStatus = "FILLED"
@@ -445,11 +469,16 @@ class NativeFuturesCoordinatorLifecycleTest {
                             val row = JSONObject(p).put("algoId", id).put("algoStatus", "NEW")
                                 .put("orderType", p.getValue("type")).put("actualOrderId", "")
                                 .put("positionSide", p["positionSide"] ?: "BOTH")
+                                // Signed Binance POST includes these booleans.
+                                // Missing flags are UNKNOWN to the safety door.
+                                .put("closePosition", p["closePosition"] == "true")
+                                .put("reduceOnly", p["reduceOnly"] == "true")
+                                .put("priceProtect", p["priceProtect"] == "true")
                             algos[id] = row
                             afterAlgoMutation?.invoke(request, row)
                             if(loseProtectionReply && protective) {
                                 code=503;JSONObject().put("code",-1000).put("msg","lost protection reply")
-                            } else row
+                            } else algoAcknowledgementTransform?.invoke(JSONObject(row.toString())) ?: row
                         }
                     }
                     else -> {
@@ -2301,7 +2330,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val stop = JSONObject()
                 .put("symbol", "BTCUSDT").put("algoId", "12345")
                 .put("clientAlgoId", "W2PS_EXACT").put("positionSide", "BOTH")
-                .put("workingType", "MARK_PRICE")
+                .put("workingType", "MARK_PRICE").put("priceProtect", false)
                 .put("orderType", "STOP_MARKET").put("algoStatus", "NEW")
                 .put("side", if (direction.name == "LONG") "SELL" else "BUY")
                 .put("closePosition", "true")
@@ -2596,7 +2625,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("algoStatus","NEW").put("orderType","STOP_MARKET")
                 .put("side",if(direction.name=="LONG") "SELL" else "BUY")
                 .put("positionSide","BOTH").put("workingType","MARK_PRICE")
-                .put("closePosition","true")
+                .put("priceProtect",false).put("closePosition","true")
                 .put("triggerPrice",if(direction.name=="LONG") "95" else "105")
             exchange.algos["5001"]=stop
             val newInstall=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
@@ -2730,7 +2759,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             .put("algoStatus","NEW").put("orderType","STOP_MARKET")
             .put("side",if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) "SELL" else "BUY")
             .put("positionSide","BOTH").put("workingType","MARK_PRICE")
-            .put("closePosition","true")
+            .put("priceProtect",false).put("closePosition","true")
             .put("triggerPrice",if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) "95" else "105")
         exchange.algos["5001"]=stop
         return stop
@@ -3116,7 +3145,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("POST:W2T_NATIVE_${direction.name}", operations[2])
             assertTrue(operations[3].startsWith("DELETE:W2B_"))
             val active = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", active.getString("closePosition"))
+            assertTrue(active.optBoolean("closePosition", false))
             assertFalse(active.has("quantity"))
             assertFalse(coordinator.intentsSnapshot().getJSONObject(0).has("native_stop_replacement"))
             // No second account-wide reconciliation is needed to expose the
@@ -3242,7 +3271,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(0, coordinator.status()
                 .getJSONArray("exchange_protection_observations").length())
             val bridge = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", bridge.getString("reduceOnly"))
+            assertTrue(bridge.optBoolean("reduceOnly", false))
             exchange.beforeRequest = null; exchange.rejectProtectionCode = null
             val restarted = NativeFuturesCampaignCoordinator(journal, clock = { now }) { exchange.adapter() }
             val posts = exchange.posts("/fapi/v1/algoOrder")
@@ -3397,7 +3426,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             val reconciled = coordinator.reconcile()
             assertTrue(reconciled.toString(), reconciled.getBoolean("ok"))
             val stop = exchange.algos.values.single { it.optString("algoStatus") == "NEW" }
-            assertEquals("true", stop.getString("closePosition"))
+            assertTrue(stop.optBoolean("closePosition", false))
             assertTrue(isFullPositionFuturesStop(stop, "BTCUSDT", direction.name, "1.1".toBigDecimal(), exchange.mark))
             assertEquals("1.1", coordinator.intentsSnapshot().getJSONObject(0).getString("confirmed_position_qty"))
         }
