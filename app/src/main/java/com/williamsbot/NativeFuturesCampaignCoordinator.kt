@@ -4899,6 +4899,16 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("liquidation_stop_gap_pct", item.opt("liquidation_stop_gap_pct") ?: JSONObject.NULL)
                     .put("liquidation_guard_audited_at_ms", item.opt("liquidation_guard_audited_at_ms") ?: JSONObject.NULL)
                     .put("executed_qty", item.opt("executed_qty") ?: JSONObject.NULL)
+                    // The conditional parent may still say NEW / 0 while its
+                    // exact Binance matching-engine child has already filled.
+                    // Export both separate cached receipts: presentation only,
+                    // never admission, stop mutation or exact-fill certification.
+                    .put("actual_entry_order_id_present",
+                        item.optString("actual_entry_order_id").isNotBlank())
+                    .put("actual_entry_order_status",
+                        item.opt("actual_entry_order_status") ?: JSONObject.NULL)
+                    .put("actual_entry_executed_qty",
+                        item.opt("actual_entry_executed_qty") ?: JSONObject.NULL)
                     .put("confirmed_position_qty", item.opt("confirmed_position_qty") ?: JSONObject.NULL)
                     // Last completed position observation stays a fact during
                     // the next refresh; this projection never grants admission.
