@@ -50,6 +50,27 @@ class PrivateFuturesFillUrgencyTest {
             JSONObject().put("e", "UNRECOGNIZED_FUTURES_MESSAGE")))
     }
 
+    @Test fun finiteActorBackpressureRetriesDurablePrivateInboxWithoutNewSocketEvent() {
+        assertTrue(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 1_000L,
+            lastAttemptElapsedMs = 0L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = true, nowElapsedMs = 20_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 9_999L,
+            lastAttemptElapsedMs = 1_000L))
+        assertTrue(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 11_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = false, drainScheduled = false, nowElapsedMs = 11_000L,
+            lastAttemptElapsedMs = 1_000L))
+        assertFalse(shouldRetryDurablePrivateInboxDrain(
+            active = true, drainScheduled = false, nowElapsedMs = 500L,
+            lastAttemptElapsedMs = 12_000L))
+    }
+
     @Test fun brokenOrUnrelatedEventsNeverAuthorizeUrgentPath() {
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "NaN")))
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "0.08", "")))
