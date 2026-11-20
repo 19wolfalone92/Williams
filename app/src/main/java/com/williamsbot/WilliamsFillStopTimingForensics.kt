@@ -29,6 +29,7 @@ internal object WilliamsFillStopTimingForensics {
         val observations=JSONArray()
         var slowCount=0
         var missingCount=0
+        var possibleExitCount=0
         var seenFills=0
         var maxFillToAlgoMs=0L
         var maxFillToProtectedMs=0L
@@ -43,6 +44,39 @@ internal object WilliamsFillStopTimingForensics {
             seenFills++
             if(observations.length()>=12) continue
             val filledAt=event.optLong("E")
+            // A WS FILLED is a fill of *some* order, not automatically an
+            // ENTRY. A reduce-only exit on SUIUSDT was previously reported
+            // as an entry missing its initial STOP. Detect the most recent
+            // matching-symbol lifecycle context, but NEVER claim that this
+            // supplies a signed child-order or client-order ID.
+            var recentLifecycleState=""
+            for (priorIndex in pos-1 downTo 0) {
+                val prior=valid[priorIndex]
+                if (filledAt-prior.optLong("E")>5L*60L*1000L) break
+                if (prior.optString("symbol")!=symbol ||
+                    prior.optString("e")!="COCKPIT_EXECUTION") continue
+                val priorState=prior.optString("state")
+                if (priorState in setOf("ENTRY_PENDING","EXIT_PENDING")) {
+                    recentLifecycleState=priorState
+                    break
+                }
+            }
+            val possibleExitFill=recentLifecycleState=="EXIT_PENDING"
+            if(possibleExitFill) {
+                possibleExitCount++
+                missingCount++
+                observations.put(JSONObject()
+                    .put("symbol",symbol).put("fill_event_at_ms",filledAt)
+                    .put("first_new_algo_ws_at_ms",JSONObject.NULL)
+                    .put("post_change_protected_audit_at_ms",JSONObject.NULL)
+                    .put("fill_to_algo_ws_ms",JSONObject.NULL)
+                    .put("fill_to_protected_audit_ms",JSONObject.NULL)
+                    .put("status","AMBIGUOUS_EXIT_PENDING_BEFORE_FILL")
+                    .put("role_hint","RECENT_EXIT_PENDING_NOT_SIGNED_ORDER_ID")
+                    .put("correlation","SYMBOL_AND_EVENT_SEQUENCE_ONLY")
+                    .put("authenticated_exchange_timing_verified",false))
+                continue
+            }
             var algoNewAt=0L
             var protectedAt=0L
             var competingFill=false
@@ -105,6 +139,7 @@ internal object WilliamsFillStopTimingForensics {
             .put("audited_fill_limit",12)
             .put("observed_slow_confirmation_count",slowCount)
             .put("unlinked_or_ambiguous_fill_count",missingCount)
+            .put("possible_exit_fill_count",possibleExitCount)
             .put("warn_threshold_ms",SLOW_PROTECTION_WARNING_MS)
             .put("max_fill_to_algo_ws_ms",
                 if(maxFillToAlgoMs>0L) maxFillToAlgoMs else JSONObject.NULL)
@@ -119,7 +154,8 @@ internal object WilliamsFillStopTimingForensics {
             .put("independent_signed_protective_stop_placement_timing_verified",false)
             .put("note","The first app-observed algo NEW and OPEN_PROTECTED are " +
                 "not the authenticated exchange creation timestamps. " +
-                "Partial fills, absent events and same-symbol overlapping orders " +
+                "A FILLED event may close an existing position: preceding EXIT_PENDING " +
+                "is only an unsigned role hint. Partial fills and overlapping orders " +
                 "require signed client-order-id chain receipts. Never infer an unprotected " +
                 "interval or submit a duplicate STOP from this report.")
     }
