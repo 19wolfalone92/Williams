@@ -814,6 +814,16 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
             val owner=coordinator.intentsSnapshot().getJSONObject(0)
             assertEquals("PROTECTED",owner.getString("protection_status"))
+            // A signed exchange stop observation is NOT a Binance creation
+            // timestamp; retain the first observed instant across refreshes.
+            val firstSignedStop = owner.getLong("first_signed_stop_observed_at_ms")
+            assertTrue(firstSignedStop > 0L)
+            val diagnostic = coordinator.status().getJSONArray("pending_intent_details").getJSONObject(0)
+            assertEquals(firstSignedStop, diagnostic.getLong("first_signed_stop_observed_at_ms"))
+            assertTrue(diagnostic.getLong("protection_attempt_at_ms") > 0L)
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertEquals(firstSignedStop, coordinator.intentsSnapshot().getJSONObject(0)
+                .getLong("first_signed_stop_observed_at_ms"))
             assertEquals(bookId,owner.getString("client_id"))
             assertTrue(owner.getString("protection_client_id").isNotBlank())
             assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
