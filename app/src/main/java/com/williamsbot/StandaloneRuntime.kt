@@ -1755,6 +1755,9 @@ private class NativeEngine(
     // Only one actor drain is queued; the SQLite inbox, not an unbounded RAM queue, owns events.
     private val privateEventDrainScheduled = AtomicBoolean(false)
     private val privateEventReceiveGeneration = AtomicLong(0L)
+    // Monitoring-worker monotonic timestamp; bounded retry for a durable
+    // inbox whose wake-up was rejected by the finite financial actor queue.
+    private var lastDurableInboxDrainRetryElapsedMs = 0L
     private val executionGate = ExecutionGate()
     private val executionExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "williams-execution-io").apply { isDaemon = true }
@@ -3121,6 +3124,31 @@ private class NativeEngine(
                     lastWorkerLoopElapsedMs=android.os.SystemClock.elapsedRealtime()
                     try {
                         repairStaleMarketStreams()
+                        // If the bounded financial actor rejected a wake-up, SQLite
+                        // still contains the pending event. Do not depend on a
+                        // FUTURE private WS message to resume that durable work.
+                        // Read-only retry runs at most once per ten seconds and
+                        // never makes an unsigned order-state assertion.
+                        val elapsedForInbox = android.os.SystemClock.elapsedRealtime()
+                        if (shouldRetryDurablePrivateInboxDrain(
+                                active = running,
+                                drainScheduled = privateEventDrainScheduled.get(),
+                                nowElapsedMs = elapsedForInbox,
+                                lastAttemptElapsedMs = lastDurableInboxDrainRetryElapsedMs
+                            )) {
+                            lastDurableInboxDrainRetryElapsedMs = elapsedForInbox
+                            val fingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrNull()
+                            if (fingerprint != null) {
+                                val pending = runCatching {
+                                    auditStore.hasPendingPrivateUserEvents(fingerprint)
+                                }.getOrNull()
+                                if (pending == true) schedulePrivateEventDrain()
+                                if (pending == null) {
+                                    userStreamSyncRequired = true
+                                    setReconcileRequired("PRIVATE_INBOX_PENDING_CHECK_FAILED")
+                                }
+                            }
+                        }
                         // A connected private stream can still be unsynchronized after a
                         // transient REST/Execution-Door failure. Retry reconciliation with
                         // bounded backoff instead of leaving the runtime permanently blocked
