@@ -50,8 +50,6 @@ class WilliamsFillStopTimingForensicsTest {
                 "Post-change audit=NOT_VERIFIED; protection_status=PROTECTED", "SUIUSDT"))
             .put(event(fillAt-5_450L,"COCKPIT_EXECUTION","ENTRY_PENDING",
                 "Post-change audit=WARNING; exchange_status=SUBMISSION_UNKNOWN", "SUIUSDT"))
-            .put(event(fillAt-5_400L,"COCKPIT_EXECUTION","EXIT_PENDING",
-                "Post-change audit=NOT_VERIFIED; protection_status=PROTECTED", "SUIUSDT"))
             .put(event(fillAt,"COCKPIT_USER_WS","ORDER_TRADE_UPDATE",
                 "status=FILLED; executed_qty=77.9", "SUIUSDT"))
             .put(event(fillAt+15_900L,"COCKPIT_EXECUTION","CLOSED_OR_STOPPED",
@@ -63,7 +61,7 @@ class WilliamsFillStopTimingForensicsTest {
         assertEquals(1, report.getInt("unlinked_or_ambiguous_fill_count"))
         val row=report.getJSONArray("observations").getJSONObject(0)
         assertEquals("AMBIGUOUS_EXIT_PENDING_BEFORE_FILL",row.getString("status"))
-        assertEquals("RECENT_EXIT_PENDING_NOT_SIGNED_ORDER_ID",row.getString("role_hint"))
+        assertEquals("MIXED_ENTRY_EXIT_PENDING_NO_SIGNED_ORDER_ID",row.getString("role_hint"))
         assertTrue(row.isNull("fill_to_protected_audit_ms"))
         assertFalse(row.getBoolean("authenticated_exchange_timing_verified"))
     }
