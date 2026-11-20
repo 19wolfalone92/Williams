@@ -76,7 +76,9 @@ internal object WilliamsFillStopTimingForensics {
                     .put("fill_to_algo_ws_ms",JSONObject.NULL)
                     .put("fill_to_protected_audit_ms",JSONObject.NULL)
                     .put("status","AMBIGUOUS_EXIT_PENDING_BEFORE_FILL")
-                    .put("role_hint","RECENT_EXIT_PENDING_NOT_SIGNED_ORDER_ID")
+                    .put("role_hint",if(sawRecentEntryPending)
+                        "MIXED_ENTRY_EXIT_PENDING_NO_SIGNED_ORDER_ID"
+                        else "RECENT_EXIT_PENDING_NOT_SIGNED_ORDER_ID")
                     .put("correlation","SYMBOL_AND_EVENT_SEQUENCE_ONLY")
                     .put("authenticated_exchange_timing_verified",false))
                 continue
