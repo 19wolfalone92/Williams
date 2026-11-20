@@ -13293,6 +13293,8 @@ private class NativeEngine(
                 " мс="+fillStopTiming.optInt("observed_slow_confirmation_count") +
                 "; отсутствуют/неоднозначны="+
                 fillStopTiming.optInt("unlinked_or_ambiguous_fill_count") +
+                "; возможных исполнений ВЫХОДА="+
+                fillStopTiming.optInt("possible_exit_fill_count") +
                 ". Время событий из bounded device audit, не биржевой SLA. " +
                 "По одной паре и времени нельзя подтвердить соответствие clientAlgoId; " +
                 "подписанные защитные STOP сверяются независимо."))
