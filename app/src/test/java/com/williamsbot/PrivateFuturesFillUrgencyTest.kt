@@ -24,6 +24,32 @@ class PrivateFuturesFillUrgencyTest {
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("PARTIALLY_FILLED", "-1")))
     }
 
+    @Test fun tradeLiteOnlyWakesImmediateSignedReconciliationForAnActualFill() {
+        val valid = JSONObject().put("e", "TRADE_LITE").put("s", "BTCUSDT")
+            .put("l", "0.002").put("i", 777L).put("c", "external-client")
+        assertTrue(privateFuturesFillDemandsImmediateReconcile(valid))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "0")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "-1")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("l", "NaN")))
+        assertFalse(privateFuturesFillDemandsImmediateReconcile(
+            JSONObject(valid.toString()).put("s", "")))
+        // A trade hint is never itself proof of STOP or filled position.
+        assertTrue(privateFuturesStateEventDemandsImmediateReconcile(valid))
+    }
+
+    @Test fun documentedRiskEventsRequireSignedResyncWithoutCreatingAnEntry() {
+        for (name in listOf("MARGIN_CALL", "GRID_UPDATE", "STRATEGY_UPDATE",
+            "TRADE_LITE")) {
+            assertTrue(privateFuturesStateEventDemandsImmediateReconcile(
+                JSONObject().put("e", name).put("E", 1700000000000L)))
+        }
+        assertFalse(privateFuturesStateEventDemandsImmediateReconcile(
+            JSONObject().put("e", "UNRECOGNIZED_FUTURES_MESSAGE")))
+    }
+
     @Test fun brokenOrUnrelatedEventsNeverAuthorizeUrgentPath() {
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "NaN")))
         assertFalse(privateFuturesFillDemandsImmediateReconcile(order("FILLED", "0.08", "")))
