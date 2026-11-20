@@ -49,6 +49,51 @@ class WilliamsEntryPassportTest {
         assertEquals("0",row.getString("executed_qty"))
     }
 
+    @Test fun diag7_btcConditionalParentNewZeroAndExactSignedChildAreSeparateObservations() {
+        val row=owner().put("order_status","NEW").put("executed_qty","0")
+            .put("confirmed_position_qty","0.0014")
+            .put("actual_entry_order_id","123456")
+            .put("actual_entry_order_status","FILLED")
+            .put("actual_entry_executed_qty","0.0014")
+        val o=williamsEntryExecutionObservation(row,now,true)
+        assertEquals("OWNED_POSITION_RECONCILED",o.getString("position_observation"))
+        assertEquals("NEW",o.getString("recorded_order_status"))
+        assertEquals("0",o.getString("recorded_executed_qty"))
+        assertTrue(o.getBoolean("matching_engine_child_order_id_present"))
+        assertEquals("FILLED",o.getString("matching_engine_child_order_status"))
+        assertEquals("0.0014",o.getString("matching_engine_child_executed_qty"))
+        assertEquals("CACHED_EXACT_CHILD_SIGNED_GET_RECORDED",
+            o.getString("matching_engine_child_observation"))
+        assertTrue(o.getBoolean("parent_new_zero_with_recorded_child_fill"))
+        // A durable cached signed order row does not certify live fill/STOP timing
+        // and can never authorize an order without fresh coordinator controls.
+        assertFalse(o.getBoolean("exact_entry_fill_verified"))
+        assertFalse(o.getBoolean("child_snapshot_is_current_execution_authority"))
+        assertFalse(o.getBoolean("can_place_orders"))
+        assertFalse(o.getBoolean("can_manage_stops"))
+        assertEquals("NEW",row.getString("order_status"))
+        assertEquals("0",row.getString("executed_qty"))
+    }
+
+    @Test fun diag7_missingOrZeroSignedChildCannotBeInferredFromOpenPosition() {
+        val row=owner().put("order_status","NEW").put("executed_qty","0")
+            .put("confirmed_position_qty","0.0014")
+            .put("actual_entry_order_status","FILLED")
+            .put("actual_entry_executed_qty","0.0014")
+        for (bad in listOf(
+            JSONObject(row.toString()),
+            JSONObject(row.toString()).put("actual_entry_order_id","123").put("actual_entry_executed_qty","0"),
+            JSONObject(row.toString()).put("actual_entry_order_id","123").put("actual_entry_order_status","NEW"),
+            JSONObject(row.toString()).put("actual_entry_order_id","123").put("actual_entry_executed_qty","NaN")
+        )) {
+            val evidence=williamsEntryExecutionObservation(bad,now,true)
+            assertEquals("CHILD_FILL_NOT_VERIFIED",
+                evidence.getString("matching_engine_child_observation"))
+            assertFalse(evidence.getBoolean("parent_new_zero_with_recorded_child_fill"))
+            assertFalse(evidence.getBoolean("exact_entry_fill_verified"))
+        }
+    }
+
     @Test fun oldUnownedClosedOrParentQuantityCannotBecomeAnEntryFill() {
         val row=owner().put("order_status","NEW").put("executed_qty","0")
             .put("confirmed_position_qty","329")
