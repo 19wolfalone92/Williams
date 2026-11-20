@@ -63,14 +63,33 @@ internal fun williamsEntryExecutionObservation(
     val executed=intent.optString("executed_qty").toBigDecimalOrNull()
     val recordedFill=intent.optString("order_status") in setOf("FILLED","PARTIALLY_FILLED") &&
         executed!=null && executed.signum()>0
+    // A conditional ALGO parent's stored NEW/0 is NOT the matching-engine
+    // child. The signed GET of the exact child order is cached separately in
+    // actual_entry_* by the coordinator. Display those distinct facts without
+    // rewriting parent status or granting any fresh execution authority.
+    val childOrderIdPresent=intent.optString("actual_entry_order_id").isNotBlank()
+    val childStatus=intent.optString("actual_entry_order_status").uppercase()
+    val childQty=intent.optString("actual_entry_executed_qty").toBigDecimalOrNull()
+    val childExecutionRecorded=childOrderIdPresent &&
+        childStatus in setOf("PARTIALLY_FILLED","FILLED","CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH") &&
+        childQty!=null && childQty.signum()>0
     return JSONObject().put("schema","WILLIAMS_ENTRY_EXECUTION_OBSERVATION_V1")
         .put("position_observation",if(observed) "OWNED_POSITION_RECONCILED" else "NOT_VERIFIED")
         .put("confirmed_position_qty",if(observed) qty.toPlainString() else JSONObject.NULL)
         .put("position_observed_at_ms",if(observed) at else JSONObject.NULL)
         .put("recorded_order_status",intent.optString("order_status","UNKNOWN"))
         .put("recorded_executed_qty",intent.opt("executed_qty") ?: JSONObject.NULL)
+        .put("matching_engine_child_order_id_present",childOrderIdPresent)
+        .put("matching_engine_child_order_status",if(childStatus.isNotBlank()) childStatus else JSONObject.NULL)
+        .put("matching_engine_child_executed_qty",
+            if(childQty!=null && childQty.signum()>=0) childQty.toPlainString() else JSONObject.NULL)
+        .put("matching_engine_child_observation",if(childExecutionRecorded)
+            "CACHED_EXACT_CHILD_SIGNED_GET_RECORDED" else "CHILD_FILL_NOT_VERIFIED")
+        .put("parent_new_zero_with_recorded_child_fill",
+            intent.optString("order_status")=="NEW" && executed?.signum()==0 && childExecutionRecorded)
         .put("order_fill_observation",if(recordedFill) "RECORDED_ORDER_FILL" else "EXACT_FILL_NOT_VERIFIED")
         .put("exact_entry_fill_verified",false)
+        .put("child_snapshot_is_current_execution_authority",false)
         .put("observation_scope","PERSISTED_COORDINATOR_OBSERVATION_NOT_CURRENT_EXECUTION_AUTHORITY")
         .put("can_place_orders",false).put("can_manage_stops",false)
 }
