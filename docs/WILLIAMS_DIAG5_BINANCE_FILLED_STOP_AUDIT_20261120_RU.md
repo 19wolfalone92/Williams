@@ -56,3 +56,17 @@
 
 **Изменение исходников:** read-only `WilliamsFillStopTimingForensics` теперь экспортирует `retained_first_event_at_ms`, `retained_last_event_at_ms`, `earlier_delayed_fills_not_excluded` и `zero_observed_slow_fills_proves_prior_delay_fixed=false`; тест воспроизводит 150-событийный цензурированный журнал и LTC exit. Прямая цепочка Binance STOP/Execution Door не изменена. Физическая Demo-проверка остаётся **NOT_VERIFIED**.
 
+## 7. Диагностика №7 — BTC реально открыт, подписанный STOP наблюдается; parent NEW/0 ≠ matching-engine child
+
+Источник: ZIP `Williams_Diagnostics (7).zip`, 20.11.2026 17:44:52.969 UTC, диагностический контракт 15. Установлен **старый** APK `4.64.46-debug` (исходный `7996c53e`, НЕ текущая ветка). 79 проверок: 66 PASS, 2 WARNING, 11 NOT_VERIFIED, 0 FAIL. Уменьшение NOT_VERIFIED — преимущественно появление позиции и доказательства STOP, не закрытие P0 FILLED→STOP SLA.
+
+- Signed Binance: **BTCUSDT SHORT** `-0.0014`, фактический entry `61335.9`, MARK `59083.5`, один signed close-all STOP `62465.6`, идентичный W2PS clientAlgoId и `OWNED_STOP_SEEN`; текущий unrealized `+3.15336 USDT`. В signed position/stop join совпадают symbol/side/qty/stop, но во время диагностики шла очередная сверка `READING_OPEN_ALGO_ORDERS`; поэтому её итог `NOT_VERIFIED_COORDINATOR_RECONCILING` и новых входов не допускают. Не отменять подтверждённый STOP из-за такого snapshot race.
+- В durable intent условный parent всё ещё `order_status=NEW`, `executed_qty=0`, хотя signed position `0.0014`, protected, а отдельно в coordinator уже сохраняется signed `actual_entry_order_id`, `actual_entry_executed_qty`, `actual_entry_order_status` от точного matching-engine child. **Не подменять** parent receipt статусом FILLED. Новая **read-only** детализация паспорта и ZIP разделяет parent и cached child, с явным `exact_entry_fill_verified=false`, `can_place_orders=false`. Полная signed цепочка execution vs parent actualOrderId должна оставаться задачей физической приёмки.
+- Историческая проблема: вход BNBUSDT LONG/WM1 в 17:07 UTC закончился `SIGNED_RECONCILIATION_STALE_BEFORE_ENTRY` после `SUBMISSION_UNKNOWN`, затем `REJECTED`. Это запрет небезопасного входа, **не** доказательство отказа Binance или исполнения. Приёмка должна проверить, что в реальном Demo нет такого ордера, по exact ID, не по строковому статусу.
+- Private WS подключён, 42 private events обработаны, backlog=0, rate weight=3180/6000 (53%), heap 107.8/268.4MB. Однако последний signed user stream refresh занял **24.934 s**. Длительность цикла и торговый STOP SLA — разные величины.
+- Android: 7 process exits в истории (4 package update, 3 unexpected, один исторический OOM/CRASH), foreground после boot наблюдался. Это не 24h экран-off/Doze сертификат.
+- FILLED→STOP коррелятор видит 150 событий, **0 FILLED**, журнал цензурирован: исходная 19.741s задержка LTC из ZIP №5 **не отменена**.
+- Сохранены без изменений управление риском, ограничения `3% / 3 подряд`, выполнение Binance и подписанный stop flow. Никаких новых POST/DELETE бирже с диагностикой не делается.
+
+Изменения к ZIP №7: read-only `matching_engine_child_* ` в `williamsEntryExecutionObservation()`, `actual_entry_* ` в intent diagnostics; тесты на один signed FILLED matching child при исходном parent NEW/0 и на несуществующий/нулевой child. Без завершённого CI **не считать сборку принятой**.
+
