@@ -296,6 +296,28 @@ class BinanceUserDataStreamTest {
         } finally { stream.stop() }
     }
 
+    @Test fun documentedBinanceRiskAndTradeLiteEventsAreForwardedWithoutSpuriousReconnect() {
+        val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
+        val events = Collections.synchronizedList(mutableListOf<String>())
+        val stream = BinanceUserDataStream(listenKeyClient(),
+            "wss://demo-fstream.binance.com/private/ws", { "key" },
+            { _, _ -> }, { events += it.optString("e") },
+            { req, listener -> TestSocket(req).also { sessions.put(it to listener) } })
+        try {
+            stream.start()
+            val (socket, listener) = requireNotNull(sessions.poll(5L, TimeUnit.SECONDS))
+            listener.onOpen(socket, socketResponse(socket.request()))
+            for (name in listOf("MARGIN_CALL", "TRADE_LITE", "STRATEGY_UPDATE",
+                "GRID_UPDATE")) {
+                listener.onMessage(socket, """{"e":"$name","E":1795150000000,"s":"BTCUSDT"}""")
+                assertTrue("Unexpected disconnect on $name", stream.isConnected())
+            }
+            org.junit.Assert.assertEquals(listOf("MARGIN_CALL", "TRADE_LITE",
+                "STRATEGY_UPDATE", "GRID_UPDATE"), events.toList())
+            org.junit.Assert.assertEquals(0, socket.lastCloseCode)
+        } finally { stream.stop() }
+    }
+
     @Test fun unrecognizedPrivateEventTypeMustNotSilentlyDiscardAChangedBinanceProtocol() {
         val sessions = LinkedBlockingQueue<Pair<TestSocket, WebSocketListener>>()
         val disconnected = Collections.synchronizedList(mutableListOf<String>())
