@@ -6,7 +6,8 @@ import org.json.JSONObject
 internal fun privateFuturesStateEventDemandsImmediateReconcile(event: JSONObject): Boolean =
     event.optString("e") in setOf(
         "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE", "ALGO_UPDATE",
-        "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT"
+        "ACCOUNT_CONFIG_UPDATE", "CONDITIONAL_ORDER_TRIGGER_REJECT",
+        "TRADE_LITE", "MARGIN_CALL", "STRATEGY_UPDATE", "GRID_UPDATE"
     )
 
 /** New-risk admission is fail-closed until this credential's durable private-event inbox is empty. */
