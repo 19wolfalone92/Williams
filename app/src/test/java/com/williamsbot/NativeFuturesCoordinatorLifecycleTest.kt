@@ -3913,4 +3913,46 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun diag9EmergencyStopPostNeedsFreshExposureAndForeignBookProofBeforeProtected() {
+        for (mode in listOf("FLAT_AFTER_POST", "REVERSED_AFTER_POST",
+            "NEW_FOREIGN_ALGO_AFTER_POST")) {
+            val journal = Journal()
+            val (_, exchange) = open(NativeFuturesCampaignCoordinator.Direction.SHORT, journal = journal)
+            exchange.quantity = -exchange.quantity
+            exchange.mark = 102.0
+            exchange.algos.clear()
+            val beforeStopPosts = exchange.posts("/fapi/v1/algoOrder")
+            exchange.afterAlgoMutation = { request, row ->
+                if (request.method == "POST" && row.optString("orderType") == "STOP_MARKET" &&
+                    row.optString("closePosition") == "true") {
+                    when (mode) {
+                        "FLAT_AFTER_POST" -> exchange.quantity = 0.0
+                        "REVERSED_AFTER_POST" -> exchange.quantity = -exchange.quantity
+                        "NEW_FOREIGN_ALGO_AFTER_POST" ->
+                            exchange.algos["905"] = JSONObject().put("symbol", "BTCUSDT")
+                                .put("algoId", "905").put("clientAlgoId", "aos_raced_entry")
+                                .put("algoType", "CONDITIONAL")
+                                .put("orderType", "STOP_MARKET").put("side", "BUY")
+                                .put("positionSide", "BOTH").put("workingType", "CONTRACT_PRICE")
+                                .put("closePosition", false).put("reduceOnly", false)
+                                .put("quantity", "1").put("triggerPrice", "105")
+                                .put("algoStatus", "NEW")
+                    }
+                }
+            }
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.setStructuralStopRecoveryProvider { _, _, _, _, _ ->
+                RecoveredStructuralStop("95", .002)
+            }
+            val result = coordinator.reconcile()
+            assertFalse("$mode: $result", result.getBoolean("ok"))
+            assertEquals(beforeStopPosts + 1, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val emergency = coordinator.intentsSnapshot().getJSONObject(1)
+            assertEquals("SUBMISSION_UNKNOWN", emergency.getString("protection_status"))
+            assertNotEquals("OPEN_PROTECTED", emergency.getString("campaign_status"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
 }
