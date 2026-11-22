@@ -315,6 +315,37 @@ class NativeFuturesCoordinatorLifecycleTest {
             "manual_price_protected_stop_handoff_v1_ETHUSDT")).optString("phase"))
     }
 
+    @Test fun auditP0BinanceDefinitiveStopConflictRetainsHumanProtectionWithoutRetryStorm() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=manual
+        exchange.rejectProtectionCode=-4130
+        val journal=Journal()
+        val handoff=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis,"mock-demo-account-key-fingerprint")
+        val first=handoff.advance("ETHUSDT")
+        assertEquals(first.toString(),"STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED",
+            first.getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("POST_DEFINITIVELY_REJECTED",JSONObject(journal.readState(
+            "manual_price_protected_stop_handoff_v1_ETHUSDT")).getString("phase"))
+        val restarted=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis,"mock-demo-account-key-fingerprint")
+        assertEquals("STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED",
+            restarted.advance("ETHUSDT").getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+        assertEquals("NEW",manual.getString("algoStatus"))
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
