@@ -119,8 +119,12 @@ internal class FuturesPriceProtectedStopHandoff(
         if(s.algos.size!=1) return null
         val row=s.algos.single()
         return row.takeIf {
-            isSignedPriceProtectedExternalContractStopForObservation(
-                it,s.position.getString("symbol"),s.direction,s.quantity,s.contract)
+            // A STOP already spawning an actual matching-engine child MUST
+            // never be treated as a resting manual STOP safe to cancel.
+            it.has("actualOrderId") && !it.isNull("actualOrderId") &&
+                it.optString("actualOrderId") in setOf("","0") &&
+                isSignedPriceProtectedExternalContractStopForObservation(
+                    it,s.position.getString("symbol"),s.direction,s.quantity,s.contract)
         }
     }
 
@@ -150,15 +154,33 @@ internal class FuturesPriceProtectedStopHandoff(
         val s=snapshot(symbol)
         val now=clock()
         check(now>0L) { "$symbol HANDOFF_CLOCK_INVALID" }
+        var tx=existing
         if(existing?.optString("phase")=="DONE") {
-            // Prior success is historical evidence, not durable ownership
-            // of a new or changed Binance position.
-            val valid=samePosition(s,existing) && s.algos.size==1 &&
+            // DONE is a historical completed campaign, not a perpetual
+            // lock on ETHUSDT. If Binance later shows a UNIQUE new manual
+            // STOP on a different exposure, preserve the exact old DONE
+            // record in a separate journal key BEFORE replacing the active
+            // handoff journal. Never manufacture strategy ENTRY ownership.
+            val stillProtected=samePosition(s,existing) && s.algos.size==1 &&
                 validNewStop(s,existing,s.algos.single())
-            return status(if(valid) "ALREADY_EXCHANGE_PROTECTED" else "HISTORICAL_HANDOFF_CHANGED")
+            if(stillProtected) return status("ALREADY_EXCHANGE_PROTECTED")
+            val later=manualStop(s)
+                ?: return status("HISTORICAL_HANDOFF_CHANGED")
+            val laterId=later.optString("algoId")
+            if(laterId.isBlank() || laterId==existing.optString("old_algo_id") ||
+                laterId==existing.optString("new_algo_id"))
+                return status("HISTORICAL_HANDOFF_IDENTITY_REUSED")
+            val archiveKey="manual_price_protected_stop_handoff_archive_v1_${symbol}_${existing.optString("old_algo_id")}"
+            val historical=existing.toString()
+            val archived=store.readState(archiveKey)
+            if(archived!=null && archived!=historical)
+                return status("HISTORICAL_HANDOFF_ARCHIVE_CONFLICT")
+            if(archived==null) persist(archiveKey,existing)
+            // A crash before preparing the next journal retains DONE and
+            // an idempotent archive. The next run can safely retry.
+            tx=null
         }
 
-        var tx=existing
         if(tx==null) {
             val old=manualStop(s) ?: return status("NOT_UNIQUE_SIGNED_MANUAL_PRICE_PROTECTED_STOP")
             val trigger=old.optString("triggerPrice").ifBlank { old.optString("stopPrice") }
