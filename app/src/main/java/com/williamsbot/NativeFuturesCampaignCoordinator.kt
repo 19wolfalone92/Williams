@@ -1852,6 +1852,7 @@ internal class NativeFuturesCampaignCoordinator(
                     trigger.stripTrailingZeros().toPlainString(),
                     row.optString("priceProtect")).joinToString("|")
             }
+            val recoveredForeignOrderBookBySymbol = mutableMapOf<String,String>()
             val protectiveOrdersBySymbol = mutableMapOf<String, JSONArray>()
             val actualRiskAccount = if (openBySymbol.isNotEmpty()) {
                 runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
@@ -1899,6 +1900,7 @@ internal class NativeFuturesCampaignCoordinator(
                     val stableReversedExposure = repeatSignedPositions != null &&
                         futuresSignedExposureStable(exchangePositions, repeatSignedPositions)
                     if (signedBookRecoverable && stableReversedExposure) {
+                        recoveredForeignOrderBookBySymbol[symbol] = checkNotNull(symbolBookFingerprint)
                         // Do not return here: latestIntentIndex=null below enters
                         // H1 structural recovery, with no guessed old ownership.
                         // Signed CLOSE_ONLY_TP is preserved untouched, NEVER
@@ -2199,7 +2201,7 @@ internal class NativeFuturesCampaignCoordinator(
                             .put("recovered_position_qty",
                                 position.getString("positionAmt").toBigDecimal().abs().toPlainString())
                             .put("recovery_order_book_fingerprint",
-                                checkNotNull(symbolBookFingerprint))
+                                checkNotNull(recoveredForeignOrderBookBySymbol[symbol]))
                     }
                     persisted.put(matchingIntent)
                     saveIntents(persisted)
