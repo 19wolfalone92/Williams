@@ -1189,6 +1189,16 @@ internal class NativeFuturesCampaignCoordinator(
                 val direction = if (signedAmount.signum() > 0) "LONG" else "SHORT"
                 if (latest.optString("direction") != direction) reversedCampaignSymbols += symbol
             }
+            // Stop-only recovery never resurrects historical opposite-side
+            // entry fills or their ownership. This set is derived exclusively
+            // from the newest durable UNOWNED recovery records.
+            val quarantinedHistoricalEntryIds = latestEntryIndexBySymbol.values.mapNotNull { index ->
+                persisted.optJSONObject(index)?.takeIf {
+                    it.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+                        it.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE" &&
+                        !it.optBoolean("strategy_ownership_verified", true)
+                }?.optString("quarantined_old_campaign_id")?.takeIf { it.isNotBlank() }
+            }.toSet()
             val activeEntryClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeExitClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeProtectionClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
@@ -1237,6 +1247,7 @@ internal class NativeFuturesCampaignCoordinator(
                             campaignLifecycleStatus(it) !in TERMINAL_CAMPAIGN_STATUSES }) ||
                     !owner.optBoolean("strategy_ownership_verified", false)) continue
                 val cid = owner.optString("client_id")
+                if (cid in quarantinedHistoricalEntryIds) continue
                 val execution = if (owner.optString("kind") in setOf(EntryKind.LIMIT.name, EntryKind.MARKET.name)) {
                     standardOrderOrNull(adapter, symbol, cid)
                 } else {
