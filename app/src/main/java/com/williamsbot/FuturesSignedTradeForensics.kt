@@ -26,11 +26,16 @@ internal object FuturesSignedTradeForensics {
             val index = shift % items.size
             return items.drop(index) + items.take(index)
         }
-        val activeSelection = if (active.size <= limit) active
-            else rotate(active, cursor).take(limit)
         val flat = approved.filterNot { it in active }
-        return (activeSelection + rotate(flat, cursor).take(limit-activeSelection.size))
-            .distinct()
+        // Even with >=8 open positions, never starve histories of FLAT
+        // contracts indefinitely. Risk/STOP P0 for all open exposure is
+        // already handled separately by account-wide reconciliation.
+        val flatReserve = if(flat.isEmpty()) 0 else minOf(flat.size,maxOf(1,limit/4))
+        val selectedActive=rotate(active,cursor).take(limit-flatReserve)
+        val selectedFlat=rotate(flat,cursor).take(limit-selectedActive.size)
+        val remainder=limit-selectedActive.size-selectedFlat.size
+        val extraActive=rotate(active,cursor).filterNot { it in selectedActive }.take(remainder)
+        return (selectedActive + selectedFlat + extraActive).distinct()
     }
 
     /** Funding is account-wide signed income evidence, NOT an attributed trade.
