@@ -73,7 +73,15 @@ internal fun readFuturesProtectionDisplaySnapshot(
         }
     }
     val activeSupervisions = CockpitDiagnostics.rows(supervisions).filter { it.optString("state") == "ACTIVE" }
-    val standardOrders = if (activeSupervisions.isNotEmpty()) readOpenOrders?.invoke() else null
+    // An external fixed-quantity STOP is only a coverage observation while
+    // NO resting standard order can change the verified position.
+    val hasForeignContractStopCandidate=CockpitDiagnostics.rows(algos).any {
+        it.optString("workingType")=="CONTRACT_PRICE" &&
+            it.optString("orderType")=="STOP_MARKET" &&
+            it.optString("reduceOnly").equals("true",ignoreCase=true)
+    }
+    val standardOrders = if (activeSupervisions.isNotEmpty() ||
+        hasForeignContractStopCandidate) readOpenOrders?.invoke() else null
     if (standardOrders != null) check(CockpitDiagnostics.rows(standardOrders).size == standardOrders.length()) {
         "Malformed signed open standard-order snapshot"
     }
@@ -114,8 +122,13 @@ internal fun readFuturesProtectionDisplaySnapshot(
                         amount.abs(),contract ?: contractPrice(symbol).also { quote -> contract=quote })
                 }
             } else null
+        val standardBookSafe = standardOrders != null &&
+            CockpitDiagnostics.rows(standardOrders).none { it.optString("symbol")==symbol }
+        val certifiedExternalContractStop=externalContractStop?.takeIf {
+            standardBookSafe
+        }
         val nativeStop = stops.singleOrNull()
-        val stop = nativeStop ?: externalContractStop
+        val stop = nativeStop ?: certifiedExternalContractStop
         val id = stop?.optString("clientAlgoId").orEmpty()
         val price = stop?.optString("triggerPrice")?.ifBlank { stop.optString("stopPrice") }
         val owner = CockpitDiagnostics.rows(intents).singleOrNull { intent ->
@@ -165,7 +178,7 @@ internal fun readFuturesProtectionDisplaySnapshot(
             .put("stop_proof", when {
                 stops.size > 1 -> "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED"
                 stop == null -> "STOP_UNCONFIRMED"
-                externalContractStop != null -> "EXTERNAL_PROTECTED"
+                certifiedExternalContractStop != null -> "EXTERNAL_PROTECTED"
                 owned -> "OWNED_STOP_SEEN"
                 else -> "EXTERNAL_PROTECTED"
             }).put("stop", price ?: JSONObject.NULL)
@@ -176,9 +189,9 @@ internal fun readFuturesProtectionDisplaySnapshot(
                 else if (supervised) supervision!!.getString("mode") else "OBSERVE_ONLY")
             .put("signed_algo_orders_seen", signedAlgoRows.size)
             .put("signed_full_stops_seen", stops.size)
-            .put("signed_external_contract_stops_seen",if(externalContractStop != null) 1 else 0)
+            .put("signed_external_contract_stops_seen",if(certifiedExternalContractStop != null) 1 else 0)
             .put("protection_contract",when {
-                externalContractStop != null -> "CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY"
+                certifiedExternalContractStop != null -> "CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY"
                 nativeStop != null -> "MARK_PRICE_PROTECTIVE_STOP"
                 else -> JSONObject.NULL
             })
