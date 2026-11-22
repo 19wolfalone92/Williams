@@ -3745,4 +3745,83 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(old,coordinator.intentsSnapshot().toString())
         assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
     }
+    @Test fun diag8ReversedPositionWithoutAnyOpenAlgoGetsOnlyAnUnownedEmergencyH1Stop() {
+        for (oldDirection in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val (_, exchange) = open(oldDirection, journal = journal)
+            val oldOwner = JSONObject(JSONArray(journal.readState("futures_campaign_intents_v2")).getJSONObject(0).toString())
+            exchange.quantity = -exchange.quantity
+            exchange.mark = if (exchange.quantity > 0.0) 102.0 else 98.0
+            // This is the exact DIAG8 class of incident: a signed LONG/SHORT
+            // that conflicts with the durable old campaign, and ZERO open algos.
+            exchange.algos.clear()
+            val beforeStopPosts = exchange.posts("/fapi/v1/algoOrder")
+            val recovered = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            var recoveryCalls = 0
+            recovered.setStructuralStopRecoveryProvider { symbol, direction, _, qty, entry ->
+                assertEquals("BTCUSDT", symbol)
+                assertEquals(if (exchange.quantity > 0.0) "LONG" else "SHORT", direction)
+                assertEquals(kotlin.math.abs(exchange.quantity), qty, 0.0)
+                assertEquals(exchange.entry, entry, 0.0)
+                recoveryCalls++
+                RecoveredStructuralStop(if (direction == "LONG") "95" else "105", .002)
+            }
+            val first = recovered.reconcile()
+            assertFalse(first.toString(), first.getBoolean("ok"))
+            assertFalse(recovered.status().getBoolean("ready_for_new_entry"))
+            assertEquals(1, recoveryCalls)
+            assertEquals(beforeStopPosts + 1, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val saved = recovered.intentsSnapshot()
+            assertEquals(2, saved.length())
+            assertEquals(oldOwner.toString(), saved.getJSONObject(0).toString())
+            val emergency = saved.getJSONObject(1)
+            assertEquals("RECOVERED_EXCHANGE_POSITION", emergency.getString("kind"))
+            assertEquals("OPPOSITE_SIDE_POSITION_QUARANTINE", emergency.getString("recovery_origin"))
+            assertEquals(oldOwner.getString("client_id"), emergency.getString("quarantined_old_campaign_id"))
+            assertFalse(emergency.getBoolean("strategy_ownership_verified"))
+            assertEquals("PROTECTED", emergency.getString("protection_status"))
+            assertEquals("EXTERNAL_PROTECTED",
+                first.getJSONArray("exchange_protection_observations").getJSONObject(0).getString("stop_proof"))
+            // After Android reboot the same signed stop is rebound by exact ID.
+            // Never resubmit on a new client id and never adopt strategy ownership.
+            val restart = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val second = restart.reconcile()
+            assertFalse(second.toString(), second.getBoolean("ok"))
+            assertEquals(beforeStopPosts + 1, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            assertEquals(2, restart.intentsSnapshot().length())
+            assertEquals(oldOwner.toString(), restart.intentsSnapshot().getJSONObject(0).toString())
+            assertFalse(restart.intentsSnapshot().getJSONObject(1).getBoolean("strategy_ownership_verified"))
+            assertFalse(restart.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun diag8ReversedPositionWithoutH1OrStableSignedIdentityNeverPostsAnOrder() {
+        for (failure in listOf("NO_H1", "POSITION_CHANGED_DURING_SIGNED_GET")) {
+            val journal = Journal()
+            val (_, exchange) = open(NativeFuturesCampaignCoordinator.Direction.SHORT, journal = journal)
+            exchange.quantity = -exchange.quantity
+            exchange.mark = 102.0
+            exchange.algos.clear()
+            val beforePosts = exchange.posts("/fapi/v1/algoOrder")
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            if (failure == "POSITION_CHANGED_DURING_SIGNED_GET") {
+                coordinator.setStructuralStopRecoveryProvider { _, _, _, _, _ ->
+                    RecoveredStructuralStop("95", .002)
+                }
+                var positionReads = 0
+                exchange.beforeRequest = { request, _ ->
+                    if (request.method == "GET" && request.url.encodedPath == "/fapi/v3/positionRisk" &&
+                        ++positionReads == 2) exchange.quantity *= 2.0
+                }
+            }
+            val result = coordinator.reconcile()
+            assertFalse("$failure: $result", result.getBoolean("ok"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            assertEquals("$failure accidentally posted a STOP", beforePosts, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
 }
