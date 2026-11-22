@@ -11,15 +11,26 @@ import java.math.BigDecimal
  */
 internal object FuturesSignedTradeForensics {
     /**
-     * Retain both BNB and LTC even when they are FLAT: the unresolved histories
-     * disappear from live position snapshots. Never treat this read-only
-     * selection as campaign ownership or a permission to submit an order.
+     * Signed trade forensics must eventually cover ALL 15 approved Demo
+     * symbols, including flat pairs (closed positions no longer appear in
+     * positionRisk). Observe active exposure first, then rotate the remaining
+     * symbols so a bounded P1 sweep never starves a permanently flat contract.
+     * No fill collected here grants entry/STOP ownership.
      */
-    fun auditSymbols(liveSymbols: List<String>, limit: Int = 8): List<String> {
-        require(limit in 2..10)
-        return (listOf("BNBUSDT", "LTCUSDT") + liveSymbols)
-            .filter { it in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS }
-            .distinct().take(limit)
+    fun auditSymbols(liveSymbols: List<String>, limit: Int = 8, cursor: Int = 0): List<String> {
+        require(limit in 1..10 && cursor >= 0)
+        val approved = BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.toList().sorted()
+        val active = liveSymbols.distinct().filter { it in approved }
+        fun rotate(items: List<String>, shift: Int): List<String> {
+            if (items.isEmpty()) return emptyList()
+            val index = shift % items.size
+            return items.drop(index) + items.take(index)
+        }
+        val activeSelection = if (active.size <= limit) active
+            else rotate(active, cursor).take(limit)
+        val flat = approved.filterNot { it in active }
+        return (activeSelection + rotate(flat, cursor).take(limit-activeSelection.size))
+            .distinct()
     }
 
     /** Funding is account-wide signed income evidence, NOT an attributed trade.
