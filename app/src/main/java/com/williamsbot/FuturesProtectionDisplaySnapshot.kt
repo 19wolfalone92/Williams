@@ -127,6 +127,16 @@ internal fun readFuturesProtectionDisplaySnapshot(
         val certifiedExternalContractStop=externalContractStop?.takeIf {
             standardBookSafe
         }
+        val observedPriceProtectedContractStop =
+            if (certifiedExternalContractStop == null && stops.isEmpty() &&
+                signedAlgoRows.size == 1 && standardBookSafe) {
+                val candidate=signedAlgoRows.single()
+                candidate.takeIf {
+                    isSignedPriceProtectedExternalContractStopForObservation(
+                        it,symbol,direction,amount.abs(),
+                        contract ?: contractPrice(symbol).also { quote -> contract=quote })
+                }
+            } else null
         val nativeStop = stops.singleOrNull()
         val stop = nativeStop ?: certifiedExternalContractStop
         val id = stop?.optString("clientAlgoId").orEmpty()
@@ -190,6 +200,13 @@ internal fun readFuturesProtectionDisplaySnapshot(
             .put("signed_algo_orders_seen", signedAlgoRows.size)
             .put("signed_full_stops_seen", stops.size)
             .put("signed_external_contract_stops_seen",if(certifiedExternalContractStop != null) 1 else 0)
+            // The conditional order EXISTS on exchange, but priceProtect=true
+            // may defer triggering. Never put it into stop/protection_client_id.
+            .put("observed_conditional_stop",
+                observedPriceProtectedContractStop?.let {
+                    signedPriceProtectedConditionalStopObservation(
+                        it,"SIGNED_SYMBOL_SCOPED_DISPLAY_NOT_EXECUTION_AUTHORITY")
+                } ?: JSONObject.NULL)
             .put("protection_contract",when {
                 certifiedExternalContractStop != null -> "CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY"
                 nativeStop != null -> "MARK_PRICE_PROTECTIVE_STOP"
@@ -201,6 +218,8 @@ internal fun readFuturesProtectionDisplaySnapshot(
                 stops.size > 1 -> "MULTIPLE_FULL_STOPS_NEED_OWNER_AND_COVERAGE_REVIEW"
                 stop != null -> JSONObject.NULL
                 signedAlgoRows.isEmpty() -> "NO_OPEN_ALGO_ORDERS_RETURNED_FOR_SYMBOL"
+                observedPriceProtectedContractStop != null ->
+                    "SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED"
                 else -> "SIGNED_ALGOS_PRESENT_BUT_NOT_FULL_POSITION_PROTECTIVE_STOP"
             })
             .put("scope", "SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"))
