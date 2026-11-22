@@ -1672,6 +1672,22 @@ internal class NativeFuturesCampaignCoordinator(
                     continue
                 }
                 if (position != null && !isLatestCampaign) {
+                    // A reversed exchange position may be stop-only recovered with
+                    // fresh signed proof. Its old opposite-side intent is historical
+                    // quarantine, NOT an owner of the new position. Keep those old
+                    // bytes untouched and never assign its fills/STOP to the recovery.
+                    val recentRecovered = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
+                    val historicalQuarantine = recentRecovered != null &&
+                        recentRecovered.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+                        recentRecovered.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE" &&
+                        recentRecovered.optString("quarantined_old_campaign_id") == clientId &&
+                        !recentRecovered.optBoolean("strategy_ownership_verified", true) &&
+                        recentRecovered.optString("direction") == direction &&
+                        recentRecovered.optString("recovered_position_qty").toBigDecimalOrNull()
+                            ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0 &&
+                        recentRecovered.optString("entry_price").toBigDecimalOrNull()
+                            ?.compareTo(position.getString("entryPrice").toBigDecimal()) == 0
+                    if (historicalQuarantine) continue
                     if (prior !in TERMINAL_CAMPAIGN_STATUSES) {
                         throw IllegalStateException(
                             "Live " + symbol + " position conflicts with non-latest campaign intent " +
@@ -1780,6 +1796,30 @@ internal class NativeFuturesCampaignCoordinator(
                             position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
                     } else emptyList()
                 if (symbol in reversedCampaignSymbols) {
+                    // A reverse-direction position must NEVER borrow the former
+                    // campaign's signal, fill, stop, or strategy ownership.
+                    // For a genuinely empty signed order book, permit only the
+                    // existing orphan-position H1 emergency STOP recovery below.
+                    // Recheck the SAME signed account exposure immediately before
+                    // journaling a fresh, UNOWNED stop-only recovery intent.
+                    val hasSymbolStandardOrder = (0 until allOpenOrders.length()).any { j ->
+                        allOpenOrders.optJSONObject(j)?.optString("symbol") == symbol
+                    }
+                    val hasSymbolConditionalOrder = (0 until allOpenAlgoOrders.length()).any { j ->
+                        allOpenAlgoOrders.optJSONObject(j)?.optString("symbol") == symbol
+                    }
+                    val signedBookEmpty = algos.length() == 0 &&
+                        !hasSymbolStandardOrder && !hasSymbolConditionalOrder
+                    val repeatSignedPositions = if (signedBookEmpty && referenceMark != null) {
+                        runCatching { validateFuturesPositionSnapshot(adapter.positions()) }.getOrNull()
+                    } else null
+                    val stableReversedExposure = repeatSignedPositions != null &&
+                        futuresSignedExposureStable(exchangePositions, repeatSignedPositions)
+                    if (signedBookEmpty && stableReversedExposure) {
+                        // Do not return here: latestIntentIndex=null below enters
+                        // H1 structural recovery, with no guessed old ownership.
+                        // No safety-market-close, reversal or new-entry authority.
+                    } else {
                     // Verify protection for signed Binance SHORT, NOT old LONG.
                     // Exchange protection is informational; neither a new
                     // strategy owner nor an automatic order action is inferred.
@@ -1803,8 +1843,10 @@ internal class NativeFuturesCampaignCoordinator(
                         "a verified matching exchange stop must be checked manually. " +
                         "No automatic reversal/close/stop mutation."
                     continue
+                    }
                 }
-                val latestIntentIndex = latestEntryIndexBySymbol[symbol]
+                val latestIntentIndex = if (symbol in reversedCampaignSymbols) null
+                    else latestEntryIndexBySymbol[symbol]
                 var matchingIntent = latestIntentIndex?.let { persisted.optJSONObject(it) }
                     ?.takeIf { intent ->
                         intent.optString("intent_role", "ENTRY") == "ENTRY" &&
@@ -1814,7 +1856,17 @@ internal class NativeFuturesCampaignCoordinator(
                             // Namespace alone is never ownership. Reversals also
                             // bind their deterministic id to parent and H1 signal;
                             // the signed fill ledger is verified immediately below.
-                            williamsKnownDurableEntryIdentity(intent)
+                            // A separately tagged emergency recovery is not an
+                            // ENTRY owner; it may only rebind its EXACT STOP after
+                            // signed direction, quantity and entry remain unchanged.
+                            (williamsKnownDurableEntryIdentity(intent) ||
+                                (intent.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+                                    intent.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE" &&
+                                    !intent.optBoolean("strategy_ownership_verified", true) &&
+                                    intent.optString("recovered_position_qty").toBigDecimalOrNull()
+                                        ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0 &&
+                                    intent.optString("entry_price").toBigDecimalOrNull()
+                                        ?.compareTo(position.getString("entryPrice").toBigDecimal()) == 0))
                     }
                 var liveMark: Double? = null
                 if (matchingIntent?.optBoolean("strategy_ownership_verified", false) == true) {
@@ -2048,6 +2100,14 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("recovery_source", "EXCHANGE_POSITION_PLUS_FIVE_CLOSED_H1_BARS")
                         .put("strategy_ownership_verified", false)
                         .put("recovered_position_at_ms", clock())
+                    if (symbol in reversedCampaignSymbols) {
+                        matchingIntent.put("recovery_origin", "OPPOSITE_SIDE_POSITION_QUARANTINE")
+                            .put("quarantined_old_campaign_id",
+                                persisted.getJSONObject(checkNotNull(latestEntryIndexBySymbol[symbol]))
+                                    .getString("client_id"))
+                            .put("recovered_position_qty",
+                                position.getString("positionAmt").toBigDecimal().abs().toPlainString())
+                    }
                     persisted.put(matchingIntent)
                     saveIntents(persisted)
                     anyUnprotected = true
