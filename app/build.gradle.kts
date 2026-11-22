@@ -18,7 +18,7 @@ if (keystorePropertiesFile.exists()) {
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // DIAG9 P0 signed emergency STOP review build. Monotonic debug version
 // distinguishes the candidate from the 4.64.46 installed on Demo phones.
-val resolvedVersionCode = maxOf(46447, ciRunNumber ?: 46447)
+val resolvedVersionCode = maxOf(46448, ciRunNumber ?: 46448)
 val sourceRevision = System.getenv("GITHUB_SHA")
     ?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: "LOCAL_UNSTAMPED"
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
@@ -45,7 +45,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.64.47"
+        versionName = "4.64.48"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 
