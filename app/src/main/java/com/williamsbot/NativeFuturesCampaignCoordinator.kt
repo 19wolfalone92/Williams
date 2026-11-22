@@ -1819,7 +1819,8 @@ internal class NativeFuturesCampaignCoordinator(
                     val hasSymbolConditionalOrder = (0 until allOpenAlgoOrders.length()).any { j ->
                         allOpenAlgoOrders.optJSONObject(j)?.optString("symbol") == symbol
                     }
-                    val signedBookEmpty = algos.length() == 0 &&
+                    val signedBookEmpty = structuralStopRecoveryProvider != null &&
+                        algos.length() == 0 &&
                         !hasSymbolStandardOrder && !hasSymbolConditionalOrder
                     val repeatSignedPositions = if (signedBookEmpty && referenceMark != null) {
                         runCatching { validateFuturesPositionSnapshot(adapter.positions()) }.getOrNull()
