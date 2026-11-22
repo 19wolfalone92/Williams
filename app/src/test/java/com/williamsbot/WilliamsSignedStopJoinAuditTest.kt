@@ -132,4 +132,29 @@ class WilliamsSignedStopJoinAuditTest {
             assertEquals(0,out.getInt("signed_stop_matched_count"))
         }
     }
+    @Test fun diag11UnverifiedStopCannotBeCalledPriceMismatchWhenNoStopPriceExists() {
+        val row=position(qty="0.463",stop=1648.34)
+            .put("symbol","ETHUSDT").put("direction","LONG")
+            .put("stop",JSONObject.NULL)
+            .put("stop_verification_status","UNVERIFIED_OR_STALE")
+            .put("strategy_ownership_verified",false)
+        val unverified=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("quantity","0.463").put("observed_at_ms",now-1_000L)
+            .put("stop_proof","STOP_UNCONFIRMED").put("stop",JSONObject.NULL)
+            .put("protection_client_id",JSONObject.NULL)
+            .put("stop_proof_rejection","SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED")
+            .put("strategy_ownership_verified",false)
+        val c=JSONObject().put("state","POSITION_UNPROTECTED")
+            .put("exchange_protection_observations",JSONArray().put(unverified))
+        val result=WilliamsSignedStopJoinAudit.inspect(status(row),c,now)
+        assertEquals("WARNING",result.getString("severity"))
+        val snapshot=result.getJSONArray("positions").getJSONObject(0)
+        assertEquals("WARNING_SIGNED_STOP_UNCONFIRMED",
+            snapshot.getString("stop_proof_state"))
+        assertEquals("SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED",
+            snapshot.getString("stop_proof_rejection"))
+        assertFalse(snapshot.getBoolean("protection_verification_complete"))
+        assertFalse(result.getBoolean("can_trade_or_manage_stops"))
+    }
+
 }
