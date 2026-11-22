@@ -2087,6 +2087,7 @@ private class NativeEngine(
     @Volatile private var signedFillAuditRunning = false
     @Volatile private var signedFillAuditLastAttemptMs = 0L
     @Volatile private var signedFillAuditCursor = 0
+    @Volatile private var manualPriceProtectedStopHandoffCursor = 0
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -5354,7 +5355,15 @@ private class NativeEngine(
             }.getOrDefault(emptyList())
             if (pendingManualHandoffs.isNotEmpty()) {
                 val handoffResults = JSONArray()
-                for (symbol in pendingManualHandoffs.take(1)) {
+                // A permanently blocked manual STOP on alphabetically first
+                // symbol must not starve other live signed positions forever.
+                val selected = synchronized(this) {
+                    val choice=nextFuturesManualHandoffCandidate(
+                        pendingManualHandoffs,manualPriceProtectedStopHandoffCursor)
+                    manualPriceProtectedStopHandoffCursor=choice.second
+                    listOfNotNull(choice.first)
+                }
+                for (symbol in selected) {
                     val observation = runCatching {
                         withCampaignMutation(symbol = symbol,
                             purpose = "SIGNED_MANUAL_PRICE_PROTECTED_STOP_HANDOFF",
