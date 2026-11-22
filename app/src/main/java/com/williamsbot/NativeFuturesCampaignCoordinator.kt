@@ -2714,6 +2714,9 @@ internal class NativeFuturesCampaignCoordinator(
                             val expectedCompanions = matchingIntent.optString(
                                 "recovery_order_book_fingerprint", "EMPTY"
                             )
+                            val renewedStopSafe = afterStopMark != null &&
+                                isFullPositionFuturesStop(checkNotNull(protective),symbol,direction,
+                                    position.getString("positionAmt").toBigDecimal().abs(),afterStopMark)
                             val unchangedCompanions = afterStopMark != null &&
                                 certifiedCloseOnlyTakeProfitBook(
                                     symbolCompanions,symbol,direction,afterStopMark,true
@@ -2724,7 +2727,8 @@ internal class NativeFuturesCampaignCoordinator(
                             if (signedAfterStop == null ||
                                 !futuresSignedExposureStable(exchangePositions, signedAfterStop) ||
                                 ownSymbolStopCount != 1 || ownAccountStopCount != 1 ||
-                                !exactAccountStopProof || !unchangedCompanions) {
+                                !exactAccountStopProof || !renewedStopSafe ||
+                                !unchangedCompanions) {
                                 anyUnprotected = true
                                 lastBlocker = "$symbol STOP POST has a signed ID but the " +
                                     "post-submit exposure or conditional order book changed; " +
