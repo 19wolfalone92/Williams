@@ -923,6 +923,9 @@ internal class NativeFuturesCampaignCoordinator(
     /** Signed exchange observations; never infer strategy ownership from an order prefix. */
     @Volatile private var externalOrderObservationsJson = "[]"
     @Volatile private var externalProtectionObservationsJson = "[]"
+    // Read-only signed hints, never ownership/STOP placement permission.
+    @Volatile private var manualPriceProtectedStopHintsJson = "[]"
+    @Volatile private var manualPriceProtectedStopHintsAtMs = 0L
     /** Fresh read-only-scope proof; isolated risk-reducing stop moves only. */
     @Volatile private var externalStopManagementSymbolsJson = "[]"
     @Volatile private var externalStopManagementVerifiedAtMs = 0L
@@ -1000,6 +1003,15 @@ internal class NativeFuturesCampaignCoordinator(
     fun manualPriceProtectedStopHandoffCandidates(): List<String> = synchronized(lock) {
         val observed = JSONArray(externalProtectionObservationsJson)
         val candidates = linkedSetOf<String>()
+        val observedAt=manualPriceProtectedStopHintsAtMs
+        val now=clock()
+        if(observedAt>0L && now>=observedAt && now-observedAt<=60_000L) {
+            val fresh=JSONArray(manualPriceProtectedStopHintsJson)
+            for(i in 0 until fresh.length()) {
+                val symbol=fresh.optString(i)
+                if(symbol in allowedSymbols) candidates.add(symbol)
+            }
+        }
         for (i in 0 until observed.length()) {
             val row=observed.optJSONObject(i) ?: continue
             val symbol=row.optString("symbol")
@@ -3422,6 +3434,14 @@ internal class NativeFuturesCampaignCoordinator(
             check(futuresSignedExposureStable(exchangePositions,finalPositions)) {
                 "FUTURES_POSITION_CHANGED_DURING_SIGNED_RECONCILIATION; new entries blocked; repeat full account/STOP proof"
             }
+            // Account-wide signed snapshots are already in this reconciliation.
+            // Identify ALL live manual priceProtected STOPs, not only those
+            // associated with opposite historic Williams campaigns. Hints are
+            // discovery only; handoff repeats signed preflight under its Door.
+            manualPriceProtectedStopHintsJson=JSONArray(
+                signedManualPriceProtectedStopHandoffHints(
+                    finalPositions,allOpenAlgoOrders).sorted()).toString()
+            manualPriceProtectedStopHintsAtMs=clock()
             saveIntents(persisted)
             externalProtectionObservationsJson=protectionObservations.toString()
             // Existing unknown orders block NEW risk, but must not freeze
