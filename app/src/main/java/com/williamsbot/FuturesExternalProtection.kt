@@ -46,3 +46,53 @@ internal fun isFullPositionFuturesStop(
     return isProtectiveStopOnCorrectSide(direction, referencePrice.toString(),
         order.optString("triggerPrice").ifBlank { order.optString("stopPrice") })
 }
+
+/**
+ * DIAG10: A human/other-client Binance CONTRACT_PRICE reduce-only STOP is
+ * NOT the native MARK_PRICE+closePosition contract and grants NO strategy
+ * ownership, trailing, cancellation, reversal or new-entry authorization.
+ *
+ * It can nevertheless be observed as independent exchange-side coverage if
+ * EVERY field is signed, the remaining quantity exactly equals the current
+ * one-way exposure and the trigger is on the correct side of the CONTRACT
+ * price (not MARK). A missing priceProtect or non-reduce-only order is UNKNOWN.
+ * Caller must additionally demand UNIQUE orders, matching account-wide and
+ * symbol-scoped signed GETs, zero ordinary orders and stable signed exposure.
+ */
+internal fun isSignedExternalContractPriceFullQuantityStop(
+    order: JSONObject,
+    symbol: String,
+    direction: String,
+    positionQuantity: BigDecimal,
+    contractPrice: Double
+): Boolean {
+    if (symbol.isBlank() || direction !in setOf("LONG", "SHORT") ||
+        positionQuantity.signum() <= 0 ||
+        !contractPrice.isFinite() || contractPrice <= 0.0) return false
+    if (order.optString("symbol") != symbol ||
+        order.optString("algoType") != "CONDITIONAL" ||
+        order.optString("orderType") != "STOP_MARKET" ||
+        order.optString("positionSide") != "BOTH" ||
+        order.optString("workingType") != "CONTRACT_PRICE" ||
+        !isActiveFuturesProtectionStatus(order.optString("algoStatus")) ||
+        order.optString("side") != (if (direction == "LONG") "SELL" else "BUY") ||
+        !order.optString("closePosition").equals("false",ignoreCase=true) ||
+        !order.optString("reduceOnly").equals("true",ignoreCase=true) ||
+        !isBinanceUnrestrictedStopTrigger(order) ||
+        order.optString("clientAlgoId").isBlank() ||
+        order.optString("algoId").toLongOrNull()?.let { it > 0L } != true
+    ) return false
+    val quantity = order.optString("quantity").toBigDecimalOrNull()
+    if (quantity == null || quantity.signum() <= 0 ||
+        quantity.compareTo(positionQuantity) != 0) return false
+    return isProtectiveStopOnCorrectSide(direction,contractPrice.toString(),
+        order.optString("triggerPrice").ifBlank { order.optString("stopPrice") })
+}
+
+/** Stable signed-order fingerprint for reconciling symbol and account reads.
+ * Never accept missing execution-critical attributes as proof. */
+internal fun signedExternalContractStopFingerprint(order: JSONObject): String =
+    listOf("symbol","algoId","clientAlgoId","algoType","orderType","algoStatus",
+        "side","positionSide","workingType","triggerPrice","quantity","closePosition",
+        "reduceOnly","priceProtect")
+        .joinToString("|") { field -> "$field=${order.optString(field)}" }
