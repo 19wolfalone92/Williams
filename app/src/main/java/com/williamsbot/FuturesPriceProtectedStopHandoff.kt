@@ -226,6 +226,21 @@ internal class FuturesPriceProtectedStopHandoff(
                 manualStop(s)?.optString("algoId")!=tx.optString("old_algo_id") ||
                 !isProtectiveStopOnCorrectSide(s.direction,s.mark.toString(),tx.optString("trigger")))
                 return status("MANUAL_STOP_CHANGED_OR_TRIGGER_CROSSED_NO_POST")
+            // Snapshot/journal preparation can be separated from POST by
+            // network latency, process pauses, or a concurrent Binance fill.
+            // Repeat two fresh account-wide signed position reads and BOTH
+            // order books IMMEDIATELY before changing exchange state.
+            val beforePost=snapshot(symbol)
+            if(!samePosition(beforePost,tx) || beforePost.algos.size!=1 ||
+                manualStop(beforePost)?.let {
+                    it.optString("algoId")==tx.optString("old_algo_id") &&
+                        it.optString("clientAlgoId")==tx.optString("old_client_id") &&
+                        fingerprint(it)==tx.optString("old_fingerprint")
+                }!=true ||
+                !isProtectiveStopOnCorrectSide(
+                    beforePost.direction,beforePost.mark.toString(),tx.optString("trigger"))) {
+                return status("SIGNED_STOP_OR_POSITION_DRIFTED_BEFORE_POST")
+            }
             // Snapshot, journal and PREPARED identity are independently
             // persisted before the irreversible POST. Never submit again
             // unless a genuinely unsubmitted preflight is re-observed.
