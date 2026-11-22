@@ -87,6 +87,8 @@ internal object WilliamsSignedStopJoinAudit {
                 candidates.isEmpty() -> "WARNING_SIGNED_STOP_PROOF_MISSING_OR_WRONG_QTY"
                 candidates.size>1 -> "WARNING_AMBIGUOUS_PROTECTION_PROOFS"
                 !fresh(proofAt,observedAtMs) -> "NOT_VERIFIED_STOP_PROOF_STALE"
+                proof?.optString("stop_proof")=="STOP_UNCONFIRMED" ->
+                    "WARNING_SIGNED_STOP_UNCONFIRMED"
                 !stopsMatch -> "WARNING_POSITION_STOP_PRICE_MISMATCH"
                 !strategyOwned -> "NOT_VERIFIED_STRATEGY_OWNERSHIP"
                 !active -> "WARNING_SIGNED_ACTIVE_OWNED_STOP_ABSENT"
@@ -109,6 +111,8 @@ internal object WilliamsSignedStopJoinAudit {
                 .put("protection_verification_complete",wellFormedProof)
                 .put("strategy_owned",strategyOwned)
                 .put("stop_proof_state",state)
+                .put("stop_proof_rejection",
+                    proof?.optString("stop_proof_rejection")?.ifBlank { null } ?: JSONObject.NULL)
                 .put("signed_stop_client_id_present",
                     !proof?.optString("protection_client_id").isNullOrBlank())
                 .put("signed_but_not_execution_authority",true))
