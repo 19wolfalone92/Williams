@@ -992,6 +992,23 @@ internal class NativeFuturesCampaignCoordinator(
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
 
     /**
+     * P0: a 5%-drawdown/emergency KILL cannot stop monitoring unless the
+     * SAME signed Demo account has TWO matching flat position snapshots and
+     * NO normal/conditional pending orders. A failed GET is UNKNOWN, never
+     * permission to shut down the only live STOP reconciliation worker.
+     */
+    fun signedFlatForMonitoringShutdown(): Boolean = synchronized(lock) {
+        val adapter=adapterFactory()
+        adapter.requireOneWayMode()
+        val before=adapter.positions()
+        val standard=adapter.allOpenOrders()
+        val algos=adapter.allOpenAlgoOrders()
+        val after=adapter.positions()
+        futuresOldAccountHasNoExposure(before,standard,algos,after) &&
+            futuresSignedExposureStable(before,after)
+    }
+
+    /**
      * Automatic P0 manual-STOP handoff for the single Demo account.
      * Only a signed priceProtect=true CONTRACT_PRICE stop on a stable
      * position can initiate a new protective-first handoff.
