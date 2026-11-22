@@ -210,6 +210,78 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("NEW",manual.getString("algoStatus"))
     }
 
+    @Test fun auditP0SameDirectionUnownedSignedManualStopIsDiscoverableWithoutHistoricalReversal() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        exchange.algos["77"]=JSONObject().put("symbol","ETHUSDT")
+            .put("algoId","77").put("clientAlgoId","MANUAL_STOP_77")
+            .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+            .put("algoStatus","NEW").put("side","SELL").put("positionSide","BOTH")
+            .put("workingType","CONTRACT_PRICE").put("triggerPrice","1648.34")
+            .put("quantity","0.463").put("reduceOnly",true)
+            .put("closePosition",false).put("priceProtect",true).put("actualOrderId","")
+        val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+        coordinator.reconcile()
+        assertTrue("A signed manual STOP cannot depend on an old reversed Williams campaign",
+            coordinator.manualPriceProtectedStopHandoffCandidates().contains("ETHUSDT"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+    }
+
+    @Test fun auditP0DoneHandoffCanRearmLaterDifferentSignedPositionSameSymbol() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        fun old(id:String,qty:String)=JSONObject().put("symbol","ETHUSDT")
+            .put("algoId",id).put("clientAlgoId","MANUAL_STOP_$id")
+            .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+            .put("algoStatus","NEW").put("side","SELL").put("positionSide","BOTH")
+            .put("workingType","CONTRACT_PRICE").put("triggerPrice","1648.34")
+            .put("quantity",qty).put("reduceOnly",true)
+            .put("closePosition",false).put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=old("77","0.463")
+        val journal=Journal()
+        val handoff=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis,"test-account")
+        assertEquals("NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
+            handoff.advance("ETHUSDT").getString("status"))
+        val firstRecord=JSONObject(journal.readState(
+            "manual_price_protected_stop_handoff_v1_ETHUSDT"))
+        assertEquals("DONE",firstRecord.getString("phase"))
+        exchange.quantity=0.5
+        exchange.entry=1625.0
+        exchange.algos.clear()
+        exchange.algos["88"]=old("88","0.5")
+        val later=handoff.advance("ETHUSDT")
+        assertEquals(later.toString(),"NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
+            later.getString("status"))
+        assertEquals(2,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("DONE",JSONObject(journal.readState(
+            "manual_price_protected_stop_handoff_v1_ETHUSDT")).getString("phase"))
+        assertTrue("Original DONE journal must be archived, not overwritten without evidence",
+            journal.readState("manual_price_protected_stop_handoff_archive_v1_ETHUSDT_77") != null)
+    }
+
+    @Test fun auditP0ManualStopWithSpawnedChildCannotBeMigrated() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        exchange.algos["77"]=JSONObject().put("symbol","ETHUSDT")
+            .put("algoId","77").put("clientAlgoId","MANUAL_STOP_77")
+            .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+            .put("algoStatus","NEW").put("side","SELL").put("positionSide","BOTH")
+            .put("workingType","CONTRACT_PRICE").put("triggerPrice","1648.34")
+            .put("quantity","0.463").put("reduceOnly",true)
+            .put("closePosition",false).put("priceProtect",true).put("actualOrderId","987654")
+        val result=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),Journal(),System::currentTimeMillis,"test-account")
+            .advance("ETHUSDT")
+        assertEquals(result.toString(),"NOT_UNIQUE_SIGNED_MANUAL_PRICE_PROTECTED_STOP",
+            result.getString("status"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
