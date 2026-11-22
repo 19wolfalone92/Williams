@@ -313,4 +313,54 @@ class FuturesProtectionDisplaySnapshotTest {
         }
     }
 
+    @Test fun diag11PriceProtectTrueOrderIsVisibleButNeverCertifiesStop() {
+        for(direction in listOf("LONG","SHORT")) {
+            val f=Fixture(direction)
+            f.contract=if(direction=="LONG") 754.38 else 749.0
+            f.order.put("algoType","CONDITIONAL").put("workingType","CONTRACT_PRICE")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity","0.21").put("priceProtect",true)
+            val p=f.read().observations.getJSONObject(0)
+            assertEquals(p.toString(),"STOP_UNCONFIRMED",p.getString("stop_proof"))
+            assertEquals("SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED",
+                p.getString("stop_proof_rejection"))
+            assertTrue(p.isNull("stop"))
+            assertTrue(p.isNull("protection_client_id"))
+            assertEquals(0,p.getInt("signed_external_contract_stops_seen"))
+            val observed=p.getJSONObject("observed_conditional_stop")
+            assertEquals("STOP_MARKET",observed.getString("order_type"))
+            assertEquals("CONTRACT_PRICE",observed.getString("working_type"))
+            assertEquals("0.21",observed.getString("quantity"))
+            assertEquals(f.order.getString("triggerPrice"),
+                observed.getString("trigger_price"))
+            assertTrue(observed.getBoolean("price_protect"))
+            assertTrue(observed.getBoolean("read_only_not_execution_authority"))
+            assertFalse(p.getBoolean("strategy_ownership_verified"))
+            assertFalse(p.getBoolean("automatic_trailing_authorized"))
+            assertEquals("OBSERVE_ONLY",p.getString("management_mode"))
+        }
+    }
+    @Test fun diag11UnknownOrMismatchedConditionalStopHasNoPriceProtectedProof() {
+        for(fault in listOf("NO_PRICE_PROTECT","WRONG_QTY","DUPLICATE","OPEN_ORDER",
+            "WRONG_SIDE","INVALID_TRIGGER")) {
+            val f=Fixture()
+            f.order.put("algoType","CONDITIONAL").put("workingType","CONTRACT_PRICE")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity","0.21").put("priceProtect",true)
+            when(fault) {
+                "NO_PRICE_PROTECT"-> f.order.remove("priceProtect")
+                "WRONG_QTY" -> f.order.put("quantity","0.20")
+                "DUPLICATE" -> f.orders.put(JSONObject(f.order.toString())
+                    .put("algoId","200").put("clientAlgoId","other"))
+                "OPEN_ORDER" -> f.standardOrders.put(JSONObject().put("symbol","BNBUSDT"))
+                "WRONG_SIDE" -> f.order.put("side","BUY")
+                "INVALID_TRIGGER" -> f.contract=740.0
+            }
+            val proof=f.read().observations.getJSONObject(0)
+            assertEquals("$fault $proof","STOP_UNCONFIRMED",proof.getString("stop_proof"))
+            assertTrue("$fault $proof",proof.isNull("observed_conditional_stop"))
+            assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+        }
+    }
+
 }
