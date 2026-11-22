@@ -40,7 +40,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("priceProtect",true).put("actualOrderId","")
             exchange.algos["77"]=manual
             val journal=Journal()
-            val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis)
+            val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis,"mock-demo-account-key-fingerprint")
             val writes=mutableListOf<String>()
             journal.afterWrite={ key,value ->
                 if(key.startsWith("manual_price_protected_stop_handoff_v1_")) writes.add(value)
@@ -91,13 +91,15 @@ class NativeFuturesCoordinatorLifecycleTest {
         exchange.loseProtectionReply=true
         val journal=Journal()
         val first=FuturesPriceProtectedStopHandoff(
-            exchange.adapter(),journal,System::currentTimeMillis).advance("ETHUSDT")
+            exchange.adapter(),journal,System::currentTimeMillis,
+            "mock-demo-account-key-fingerprint").advance("ETHUSDT")
         assertEquals("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",first.getString("status"))
         assertEquals("NEW",manual.getString("algoStatus"))
         assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
         exchange.loseProtectionReply=false
         val recovered=FuturesPriceProtectedStopHandoff(
-            exchange.adapter(),journal,System::currentTimeMillis).advance("ETHUSDT")
+            exchange.adapter(),journal,System::currentTimeMillis,
+            "mock-demo-account-key-fingerprint").advance("ETHUSDT")
         assertEquals(recovered.toString(),"NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
             recovered.getString("status"))
         assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
@@ -122,7 +124,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 exchange.algos.remove(row.getString("algoId"))
         }
         val journal=Journal()
-        val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis)
+        val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis,"mock-demo-account-key-fingerprint")
         assertEquals("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",
             handoff.advance("ETHUSDT").getString("status"))
         exchange.loseProtectionReply=false
