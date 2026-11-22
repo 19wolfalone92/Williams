@@ -615,7 +615,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"$symbol","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
-                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"0.1"},
+                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"${if(symbol=="ETHUSDT") "0.01" else "0.1"}"},
                     {"filterType":"MIN_NOTIONAL","notional":"5"}]}]}""")
                 "/fapi/v1/leverageBracket" -> JSONObject("""{"symbol":"$symbol","brackets":[
                     {"notionalFloor":0,"notionalCap":1000000,"initialLeverage":125,"maintMarginRatio":0.005}]}""")
