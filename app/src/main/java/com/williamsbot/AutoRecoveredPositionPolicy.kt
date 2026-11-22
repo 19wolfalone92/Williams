@@ -20,9 +20,13 @@ internal fun autonomousRecoveredStopCandidateBlocker(
         return "SIGNED_HEDGE_MODE_NOT_SUPPORTED"
     if(proof.optString("symbol")!=symbol || proof.optString("direction")!=side)
         return "SIGNED_STOP_DIRECTION_MISMATCH"
+    // A formerly opposite-side Williams journal can remain quarantined
+    // after Binance confirms a new full close-all STOP. Signed STOP-only
+    // supervision is allowed, but old ENTRY ownership stays quarantined.
+    val safeReadOnlyModes=setOf("OBSERVE_ONLY","REVERSED_CAMPAIGN_QUARANTINE")
     if(proof.optString("stop_proof")!="EXTERNAL_PROTECTED" ||
         proof.optBoolean("strategy_ownership_verified",true) ||
-        proof.optString("management_mode")!="OBSERVE_ONLY")
+        proof.optString("management_mode") !in safeReadOnlyModes)
         return "STOP_NOT_EXCHANGE_PROTECTED_OR_ALREADY_MANAGED"
     if(!CockpitDiagnostics.fresh(proof.optLong("observed_at_ms"),nowMs,15_000L))
         return "SIGNED_STOP_PROOF_STALE"
