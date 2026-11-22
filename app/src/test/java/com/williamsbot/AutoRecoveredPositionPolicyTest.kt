@@ -43,6 +43,17 @@ class AutoRecoveredPositionPolicyTest {
                 signedStop().put("management_mode","AUTO_VERIFIED_STOP_ONLY"),now))
     }
 
+    @Test fun reversedHistoricalCampaignCanHaveSignedStopOnlyManagementNotEntryOwnership() {
+        val quarantined=signedStop().put("management_mode","REVERSED_CAMPAIGN_QUARANTINE")
+        assertNull(autonomousRecoveredStopCandidateBlocker(position(),quarantined,now))
+        assertEquals("STOP_NOT_EXCHANGE_PROTECTED_OR_ALREADY_MANAGED",
+            autonomousRecoveredStopCandidateBlocker(position(),
+                JSONObject(quarantined.toString()).put("stop_proof","STOP_UNCONFIRMED"),now))
+        assertEquals("STOP_NOT_EXCHANGE_PROTECTED_OR_ALREADY_MANAGED",
+            autonomousRecoveredStopCandidateBlocker(position(),
+                JSONObject(quarantined.toString()).put("strategy_ownership_verified",true),now))
+    }
+
     @Test fun staleWrongSideWrongSizeOrUnidentifiedStopMustNeverBeAdopted() {
         assertEquals("SIGNED_STOP_PROOF_STALE",
             autonomousRecoveredStopCandidateBlocker(position(),

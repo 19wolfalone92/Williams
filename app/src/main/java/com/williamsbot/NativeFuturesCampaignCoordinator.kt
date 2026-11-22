@@ -987,6 +987,46 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+
+    /**
+     * Automatic P0 manual-STOP handoff for the single Demo account.
+     * Only a signed priceProtect=true CONTRACT_PRICE stop on a stable
+     * position can initiate a new protective-first handoff.
+     *
+     * A PREPARED/POST_UNKNOWN handoff remains eligible even after its new
+     * STOP appears; otherwise the coordinator would never finish the swap.
+     * New-entry rights and the historical campaign journal are unchanged.
+     */
+    fun manualPriceProtectedStopHandoffCandidates(): List<String> = synchronized(lock) {
+        val observed = JSONArray(externalProtectionObservationsJson)
+        val candidates = linkedSetOf<String>()
+        for (i in 0 until observed.length()) {
+            val row=observed.optJSONObject(i) ?: continue
+            val symbol=row.optString("symbol")
+            if (symbol in allowedSymbols &&
+                row.optJSONObject("observed_conditional_stop")
+                    ?.optBoolean("price_protect",false)==true) candidates.add(symbol)
+        }
+        for (symbol in allowedSymbols) {
+            val raw=executionStore.readState("manual_price_protected_stop_handoff_v1_$symbol")
+            val phase=raw?.takeIf { it.isNotBlank() }?.let { runCatching {
+                JSONObject(it).optString("phase")
+            }.getOrNull() }
+            if (phase!=null && phase!="DONE") candidates.add(symbol)
+        }
+        candidates.sorted()
+    }
+
+    /** Called ONLY under the shared account-wide reconciliation Execution Door. */
+    fun handoffManualPriceProtectedStop(
+        symbol:String, accountFingerprint:String
+    ):JSONObject = synchronized(lock) {
+        require(symbol in allowedSymbols && accountFingerprint.isNotBlank()) {
+            "Manual STOP handoff account identity or symbol is not approved"
+        }
+        FuturesPriceProtectedStopHandoff(
+            adapterFactory(),executionStore,clock,accountFingerprint).advance(symbol)
+    }
     /** Display/diagnostic GETs do not wait for or publish execution reconciliation. */
     fun protectionDisplaySnapshot(): FuturesProtectionDisplaySnapshot {
         val adapter = adapterFactory()
@@ -2615,6 +2655,52 @@ internal class NativeFuturesCampaignCoordinator(
                         )
                         if (protective == null) {
                             anyUnprotected = true
+                            // Definitively terminal signed STOP + stable positions and
+                            // empty symbol/account books can be rearmed with a NEW ID.
+                            // Unknown POST outcomes and absent GETs never qualify.
+                            val terminalRearmEligible = stopQuery != null &&
+                                matchesTerminalUntriggeredFuturesProtectiveStop(
+                                    stopQuery, symbol, direction, protectionClientId,
+                                    matchingIntent.optString("protective_stop"))
+                            if (terminalRearmEligible) {
+                                val retryPositions = runCatching {
+                                    validateFuturesPositionSnapshot(adapter.positions())
+                                }.getOrNull()
+                                val retrySymbolOrders = runCatching { adapter.openOrders(symbol) }.getOrNull()
+                                val retryAccountOrders = runCatching { adapter.allOpenOrders() }.getOrNull()
+                                val retryAccountAlgos = runCatching { adapter.allOpenAlgoOrders() }.getOrNull()
+                                val retryMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                                val retryBlocker = futuresTerminalStopRearmBlocker(
+                                    matchingIntent,stopQuery,exchangePositions,retryPositions,
+                                    refreshed,retryAccountAlgos,retrySymbolOrders,retryAccountOrders,
+                                    symbol,direction,retryMark ?: Double.NaN,clock())
+                                if (retryBlocker == null) {
+                                    val generation = matchingIntent.optInt("terminal_stop_retry_count",0)+1
+                                    val freshId = terminalStopRearmClientId(
+                                        symbol,matchingIntent.getString("client_id"),generation)
+                                    check(freshId != protectionClientId) {
+                                        "$symbol attempted to reuse terminal protective STOP identity"
+                                    }
+                                    matchingIntent.put("terminal_stop_rearm",JSONObject()
+                                        .put("former_client_id",protectionClientId)
+                                        .put("former_algo_id",stopQuery.optString("algoId"))
+                                        .put("former_status",stopQuery.optString("algoStatus"))
+                                        .put("former_trigger",matchingIntent.optString("protective_stop"))
+                                        .put("prepared_at_ms",clock())
+                                        .put("new_client_id",freshId)
+                                        .put("signed_empty_book_confirmed",true)
+                                        .put("signed_position_stable",true))
+                                        .put("terminal_stop_retry_count",generation)
+                                        .put("protection_client_id",freshId)
+                                        .put("protection_status","NOT_SUBMITTED")
+                                    saveIntents(persisted)
+                                    lastBlocker="$symbol signed terminal STOP confirmed; new protective STOP " +
+                                        "identity journaled for next signed preflight, no entry authorized"
+                                    continue
+                                }
+                                matchingIntent.put("terminal_stop_rearm_blocker",retryBlocker)
+                                saveIntents(persisted)
+                            }
                             // A known formerly confirmed stop is now explicitly
                             // terminal, the live exchange has no other algo for
                             // this symbol, and there is no replacement candidate.
@@ -2669,6 +2755,38 @@ internal class NativeFuturesCampaignCoordinator(
                             anyUnprotected = true
                             lastBlocker = "$symbol previously rejected protective STOP could not be confirmed absent"
                             continue
+                        }
+                        // A previously prepared rearm is not mutation authority.
+                        // Re-prove the exact terminal ancestor, exchange exposure,
+                        // and both full signed order books immediately before POST.
+                        val preparedRearm = matchingIntent.optJSONObject("terminal_stop_rearm")
+                            ?.takeIf { it.optString("new_client_id") == protectionClientId }
+                        if (preparedRearm != null) {
+                            val signedBeforePost=validateFuturesPositionSnapshot(adapter.positions())
+                            check(futuresSignedExposureStable(exchangePositions,signedBeforePost)) {
+                                "$symbol terminal STOP rearm exposure changed; no POST"
+                            }
+                            val formerId=preparedRearm.getString("former_client_id")
+                            val former=adapter.queryAlgoOrder(symbol,formerId)
+                            check(matchesTerminalUntriggeredFuturesProtectiveStop(
+                                former,symbol,direction,formerId,
+                                preparedRearm.getString("former_trigger"))) {
+                                "$symbol terminal STOP is no longer explicitly terminal; no POST"
+                            }
+                            val liveMark=adapter.markPrice(symbol)
+                            val symbolAlgos=adapter.openAlgoOrders(symbol)
+                            val accountAlgos=adapter.allOpenAlgoOrders()
+                            val symbolOrders=adapter.openOrders(symbol)
+                            val accountOrders=adapter.allOpenOrders()
+                            check(futuresTerminalStopRearmBlocker(
+                                JSONObject(matchingIntent.toString())
+                                    .put("protection_client_id",formerId)
+                                    .put("protection_status","SUBMISSION_UNKNOWN"),
+                                former,exchangePositions,signedBeforePost,
+                                symbolAlgos,accountAlgos,symbolOrders,accountOrders,
+                                symbol,direction,liveMark,clock())==null) {
+                                "$symbol terminal STOP rearm signed proof became stale; no POST"
+                            }
                         }
                         if (matchingIntent.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE") {
                             // H1 acquisition and accounting can take many seconds.
@@ -2725,17 +2843,33 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.put("protection_status","NOT_SUBMITTED")
                                     .put("protection_preflight_rejected_at_ms",clock())
                                     .put("protection_post_attempted",false)
-                                matchingIntent.remove("protection_client_id")
+                                // A terminal-rearm ID is a durable one-shot
+                                // identity. Even a LOCAL preflight rejection must
+                                // not regenerate the formerly terminal W2PS_ ID.
+                                if(preparedRearm==null)
+                                    matchingIntent.remove("protection_client_id")
+                                else matchingIntent.put("terminal_stop_rearm_last_local_failure",
+                                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
                                 saveIntents(persisted)
                                 lastBlocker="$symbol protective STOP was not submitted; protection will be re-evaluated without duplicating a POST"
                             } else if (failure is FuturesHttpException && failure.statusCode == 400 &&
                                 failure.exchangeCode == -2021 && failure.requestPath == "/fapi/v1/algoOrder") {
                                 // Binance rejected this exact trigger before accepting an order.
                                 // Keep its identity for signed absence checks after a restart.
-                                matchingIntent.put("protection_status", "NOT_SUBMITTED")
-                                    .put("initial_stop_rejection_id", protectionClientId)
-                                    .put("protection_post_attempted", true)
-                                matchingIntent.remove("protection_client_id")
+                                matchingIntent.put("initial_stop_rejection_id",protectionClientId)
+                                    .put("protection_post_attempted",true)
+                                if(preparedRearm != null) {
+                                    // Binance definitively rejected this trigger.
+                                    // Never fall back to the already terminal
+                                    // original STOP id or blindly reuse its
+                                    // rejected rearm. A fresh H1 plan is needed.
+                                    matchingIntent.put("protection_status","SUBMISSION_UNKNOWN")
+                                        .put("terminal_stop_rearm_blocker",
+                                            "REJECTED_TRIGGER_REQUIRES_NEW_STRUCTURAL_STOP")
+                                } else {
+                                    matchingIntent.put("protection_status","NOT_SUBMITTED")
+                                    matchingIntent.remove("protection_client_id")
+                                }
                                 saveIntents(persisted)
                                 lastBlocker = "$symbol protective STOP rejected (-2021); recheck MARK_PRICE and signed orders"
                             } else {
@@ -5450,11 +5584,16 @@ internal class NativeFuturesCampaignCoordinator(
         if(activeRows.isNotEmpty()) return@synchronized rejected.put("status","ALREADY_SUPERVISED")
         val local=intents()
         val latest=latestEntryIntentIndex(local,symbol)?.let { local.optJSONObject(it) }
-        // A historical LONG must never be mistaken for a current SHORT owner.
-        // The opposite/uncertain campaign needs separate forensic resolution.
-        if(latest?.optBoolean("strategy_ownership_verified",false)==true ||
-            latest!=null && latest.optString("direction")!=direction) {
-            return@synchronized rejected.put("status","CAMPAIGN_IDENTITY_CONFLICT")
+        // An old opposite-direction Williams ENTRY is historical evidence,
+        // not ownership of the current signed position. It MUST NOT suppress
+        // separately verified STOP-only safety supervision forever. Still block
+        // takeover of any same-direction active strategy-owned campaign.
+        val sameDirectionLiveOwner = latest!=null &&
+            latest.optString("direction")==direction &&
+            latest.optBoolean("strategy_ownership_verified",false) &&
+            campaignLifecycleStatus(latest) in ACTIVE_CAMPAIGN_STATUSES
+        if(sameDirectionLiveOwner) {
+            return@synchronized rejected.put("status","ACTIVE_STRATEGY_OWNED_CAMPAIGN")
         }
         val qty=observedQuantity.toBigDecimalOrNull()?.abs()?.stripTrailingZeros()
         val entry=observedEntry.toBigDecimalOrNull()?.stripTrailingZeros()
