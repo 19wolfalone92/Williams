@@ -261,4 +261,54 @@ class FuturesProtectionDisplaySnapshotTest {
         try { f.read(); fail("Failed GET accepted") } catch (_: java.io.IOException) { }
         assertEquals(before, f.proof.toString())
     }
+    @Test fun diag10ExactForeignContractStopMustBeObservedButNeverOwnedOrTrailed() {
+        for(direction in listOf("LONG","SHORT")) {
+            val f=Fixture(direction)
+            f.contract=if(direction=="LONG") 754.38 else 749.0
+            f.order.put("algoType","CONDITIONAL")
+                .put("workingType","CONTRACT_PRICE")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity","0.21").put("priceProtect",false)
+            // Historical locally owned records MUST NOT grant the foreign
+            // CONTRACT_PRICE order strategy ownership or automatic trailing.
+            val observed=f.read().observations.getJSONObject(0)
+            assertEquals(observed.toString(),"EXTERNAL_PROTECTED",observed.getString("stop_proof"))
+            assertEquals(1,observed.getInt("signed_external_contract_stops_seen"))
+            assertEquals(f.order.getString("triggerPrice"),observed.getString("stop"))
+            assertEquals(f.order.getString("clientAlgoId"),observed.getString("protection_client_id"))
+            assertEquals("CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY",observed.getString("protection_contract"))
+            assertFalse(observed.getBoolean("strategy_ownership_verified"))
+            assertFalse(observed.getBoolean("automatic_trailing_authorized"))
+            assertEquals("OBSERVE_ONLY",observed.getString("management_mode"))
+        }
+    }
+
+    @Test fun diag10InvalidContractStopNeverBecomesVerifiedOrOwned() {
+        for(fault in listOf("PRICE_PROTECT_TRUE","PRICE_PROTECT_MISSING","QUANTITY_MISMATCH",
+            "CONTRACT_ALREADY_CROSSED","WRONG_SIDE","UNKNOWN_STATUS","MISSING_ID",
+            "REDUCE_ONLY_FALSE","DUPLICATE")) {
+            val f=Fixture()
+            f.order.put("algoType","CONDITIONAL")
+                .put("workingType","CONTRACT_PRICE")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity","0.21").put("priceProtect",false)
+            when(fault) {
+                "PRICE_PROTECT_TRUE" -> f.order.put("priceProtect",true)
+                "PRICE_PROTECT_MISSING" -> f.order.remove("priceProtect")
+                "QUANTITY_MISMATCH" -> f.order.put("quantity","0.20")
+                "CONTRACT_ALREADY_CROSSED" -> f.contract=740.0
+                "WRONG_SIDE" -> f.order.put("side","BUY")
+                "UNKNOWN_STATUS" -> f.order.put("algoStatus","EXPIRED")
+                "MISSING_ID" -> f.order.remove("clientAlgoId")
+                "REDUCE_ONLY_FALSE" -> f.order.put("reduceOnly",false)
+                "DUPLICATE" -> f.orders.put(JSONObject(f.order.toString())
+                    .put("algoId","999").put("clientAlgoId","foreign_duplicate"))
+            }
+            val proof=f.read().observations.getJSONObject(0)
+            assertEquals("$fault: $proof","STOP_UNCONFIRMED",proof.getString("stop_proof"))
+            assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+            assertFalse(proof.getBoolean("strategy_ownership_verified"))
+        }
+    }
+
 }
