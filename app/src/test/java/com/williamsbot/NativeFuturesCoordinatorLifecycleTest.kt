@@ -3955,4 +3955,95 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun diag10ForeignContractPriceStopProtectsExposureButCannotGrantOwnershipOrNewEntries() {
+        for(oldDirection in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val (_,exchange)=open(oldDirection,journal=journal)
+            val old=journal.readState("futures_campaign_intents_v2")
+            exchange.quantity = -exchange.quantity
+            exchange.mark=if(exchange.quantity>0.0) 102.0 else 98.0
+            exchange.contract=exchange.mark
+            exchange.algos.clear()
+            val liveDirection=if(exchange.quantity>0.0) "LONG" else "SHORT"
+            val foreign=JSONObject().put("symbol","BTCUSDT")
+                .put("algoId","901").put("clientAlgoId","aos_diag10_foreign_sl")
+                .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("side",if(liveDirection=="LONG") "SELL" else "BUY")
+                .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+                .put("triggerPrice",if(liveDirection=="LONG") "95" else "105")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity",kotlin.math.abs(exchange.quantity).toString())
+                .put("priceProtect",false)
+            exchange.algos["901"]=foreign
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.setStructuralStopRecoveryProvider { _,_,_,_,_ ->
+                error("No duplicate H1 STOP permitted when a complete external STOP exists")
+            }
+            val result=coordinator.reconcile()
+            assertFalse(result.toString(),result.getBoolean("ok"))
+            assertEquals("RECONCILE_REQUIRED",result.getString("state"))
+            val p=result.getJSONArray("exchange_protection_observations").getJSONObject(0)
+            assertEquals("EXTERNAL_PROTECTED",p.getString("stop_proof"))
+            assertEquals(foreign.getString("triggerPrice"),p.getString("stop"))
+            assertEquals("CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY",p.getString("protection_contract"))
+            assertFalse(p.getBoolean("strategy_ownership_verified"))
+            assertFalse(p.getBoolean("automatic_trailing_authorized"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertEquals(old,journal.readState("futures_campaign_intents_v2"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+            val restart=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val repeated=restart.reconcile()
+            assertEquals("EXTERNAL_PROTECTED",
+                repeated.getJSONArray("exchange_protection_observations")
+                    .getJSONObject(0).getString("stop_proof"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(restart.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun diag10ForeignContractStopUnknownOrMismatchStaysQuarantinedWithNoMutation() {
+        for(fault in listOf("QTY","PRICE_PROTECT","PRICE_PROTECT_MISSING","SIDE",
+            "STATUS","TRIGGER_CROSSED","EXTRA_ALGO","ENTRY_ORDER")) {
+            val journal=Journal()
+            val (_,exchange)=open(NativeFuturesCampaignCoordinator.Direction.SHORT,journal=journal)
+            exchange.quantity = -exchange.quantity
+            exchange.mark=102.0
+            exchange.contract=102.0
+            exchange.algos.clear()
+            val foreign=JSONObject().put("symbol","BTCUSDT")
+                .put("algoId","901").put("clientAlgoId","aos_diag10_foreign_sl")
+                .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("side","SELL")
+                .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+                .put("triggerPrice","95").put("closePosition",false)
+                .put("reduceOnly",true).put("quantity","1").put("priceProtect",false)
+            when(fault) {
+                "QTY" -> foreign.put("quantity","0.7")
+                "PRICE_PROTECT" -> foreign.put("priceProtect",true)
+                "PRICE_PROTECT_MISSING" -> foreign.remove("priceProtect")
+                "SIDE" -> foreign.put("side","BUY")
+                "STATUS" -> foreign.put("algoStatus","CANCELED")
+                "TRIGGER_CROSSED" -> exchange.contract=94.0
+                "EXTRA_ALGO" -> exchange.algos["902"]=JSONObject(foreign.toString())
+                    .put("algoId","902").put("clientAlgoId","another_external_algo")
+                "ENTRY_ORDER" -> exchange.orders["999"]=JSONObject()
+                    .put("symbol","BTCUSDT").put("orderId","999")
+                    .put("status","NEW").put("side","BUY")
+            }
+            exchange.algos["901"]=foreign
+            val posts=exchange.posts("/fapi/v1/algoOrder")
+            val coordinator=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val result=coordinator.reconcile()
+            assertEquals("$fault: $result","POSITION_UNPROTECTED",result.getString("state"))
+            assertEquals("$fault: $result","STOP_UNCONFIRMED",
+                result.getJSONArray("exchange_protection_observations")
+                    .getJSONObject(0).getString("stop_proof"))
+            assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
 }
