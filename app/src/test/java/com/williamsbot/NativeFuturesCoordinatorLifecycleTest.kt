@@ -3825,4 +3825,92 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun diag9ReversedLiveExposureWithCertifiedCloseOnlyTakeProfitGetsEmergencyStopOnce() {
+        for (oldDirection in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal = Journal()
+            val (_, exchange) = open(oldDirection, journal = journal)
+            val oldCampaign = JSONArray(journal.readState("futures_campaign_intents_v2"))
+                .getJSONObject(0).toString()
+            exchange.quantity = -exchange.quantity
+            exchange.mark = if (exchange.quantity > 0.0) 102.0 else 98.0
+            exchange.algos.clear()
+            val liveDirection = if (exchange.quantity > 0.0) "LONG" else "SHORT"
+            val tp = JSONObject().put("symbol", "BTCUSDT").put("algoId", "901")
+                .put("clientAlgoId", "aos_external_close_only_tp")
+                .put("algoType", "CONDITIONAL").put("orderType", "TAKE_PROFIT_MARKET")
+                .put("side", if (liveDirection == "LONG") "SELL" else "BUY")
+                .put("positionSide", "BOTH").put("workingType", "MARK_PRICE")
+                .put("closePosition", true).put("reduceOnly", false)
+                .put("quantity", "0").put("algoStatus", "NEW")
+                .put("triggerPrice", if (liveDirection == "LONG") "110" else "90")
+            exchange.algos["901"] = tp
+            val before = exchange.posts("/fapi/v1/algoOrder")
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.setStructuralStopRecoveryProvider { _, _, _, _, _ ->
+                RecoveredStructuralStop(if (liveDirection == "LONG") "95" else "105", .002)
+            }
+            val result = coordinator.reconcile()
+            assertFalse(result.toString(), result.getBoolean("ok"))
+            assertEquals(before + 1, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            assertEquals("NEW", tp.getString("algoStatus"))
+            assertEquals(oldCampaign, coordinator.intentsSnapshot().getJSONObject(0).toString())
+            assertEquals("PROTECTED", coordinator.intentsSnapshot().getJSONObject(1)
+                .getString("protection_status"))
+            assertFalse(coordinator.intentsSnapshot().getJSONObject(1)
+                .getBoolean("strategy_ownership_verified"))
+            assertEquals("TAKE_PROFIT_MARKET", result.getJSONArray("external_open_orders")
+                .getJSONObject(0).getString("order_type"))
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertFalse(restarted.reconcile().getBoolean("ok"))
+            assertEquals(before + 1, exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(restarted.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
+    @Test fun diag9UnverifiedForeignAlgoOrChangedTakeProfitMustNeverAuthorizeStopPost() {
+        for (mode in listOf("FOREIGN_ENTRY", "CLOSE_ONLY_WRONG_SIDE", "CLOSE_ONLY_MISSING_MODE",
+            "CLOSE_ONLY_UNSAFE_TRIGGER", "CLOSE_ONLY_CHANGED_BEFORE_POST")) {
+            val journal = Journal()
+            val (_, exchange) = open(NativeFuturesCampaignCoordinator.Direction.SHORT, journal = journal)
+            exchange.quantity = -exchange.quantity
+            exchange.mark = 102.0
+            exchange.algos.clear()
+            val foreign = JSONObject().put("symbol", "BTCUSDT").put("algoId", "901")
+                .put("clientAlgoId", "aos_external_conditional")
+                .put("algoType", "CONDITIONAL").put("orderType", "TAKE_PROFIT_MARKET")
+                .put("side", "SELL").put("positionSide", "BOTH")
+                .put("workingType", "MARK_PRICE").put("closePosition", true)
+                .put("reduceOnly", false).put("quantity", "0")
+                .put("algoStatus", "NEW").put("triggerPrice", "110")
+            when (mode) {
+                "FOREIGN_ENTRY" -> foreign.put("orderType", "STOP_MARKET")
+                    .put("closePosition", false).put("quantity", "1")
+                "CLOSE_ONLY_WRONG_SIDE" -> foreign.put("side", "BUY")
+                "CLOSE_ONLY_MISSING_MODE" -> foreign.remove("workingType")
+                "CLOSE_ONLY_UNSAFE_TRIGGER" -> foreign.put("triggerPrice", "99")
+            }
+            exchange.algos["901"] = foreign
+            if (mode == "CLOSE_ONLY_CHANGED_BEFORE_POST") {
+                var symbolAlgoReads = 0
+                exchange.beforeRequest = { request, params ->
+                    if (request.method == "GET" && request.url.encodedPath == "/fapi/v1/openAlgoOrders" &&
+                        params["symbol"] == "BTCUSDT" && ++symbolAlgoReads == 2) {
+                        foreign.put("triggerPrice", "112")
+                    }
+                }
+            }
+            val before = exchange.posts("/fapi/v1/algoOrder")
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            coordinator.setStructuralStopRecoveryProvider { _, _, _, _, _ ->
+                RecoveredStructuralStop("95", .002)
+            }
+            val result = coordinator.reconcile()
+            assertFalse("$mode: $result", result.getBoolean("ok"))
+            assertEquals("$mode created a STOP", before, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
 }
