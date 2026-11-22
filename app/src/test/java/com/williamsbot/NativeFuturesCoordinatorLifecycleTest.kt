@@ -3991,7 +3991,24 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertFalse(p.getBoolean("automatic_trailing_authorized"))
             assertEquals(posts,exchange.posts("/fapi/v1/algoOrder"))
             assertEquals(0,exchange.posts("/fapi/v1/order"))
-            assertEquals(old,journal.readState("futures_campaign_intents_v2"))
+            // The SQLite JSON projection can normalize 6.3535E-4 to
+            // 0.00063535 when deserialized. Preserve EVERY historic field
+            // semantically rather than comparing floating-point notation.
+            val prior=JSONArray(checkNotNull(old)).getJSONObject(0)
+            val retainedRows=JSONArray(checkNotNull(
+                journal.readState("futures_campaign_intents_v2")))
+            assertEquals(1,retainedRows.length())
+            val retained=retainedRows.getJSONObject(0)
+            assertEquals(prior.length(),retained.length())
+            for(key in prior.keys()) {
+                val before=prior.opt(key)
+                val after=retained.opt(key)
+                if(before is Number && after is Number) {
+                    assertEquals("$key changed numerically",0,
+                        java.math.BigDecimal(before.toString()).compareTo(
+                            java.math.BigDecimal(after.toString())))
+                } else assertEquals("$key changed",before?.toString(),after?.toString())
+            }
             assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
             val restart=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
             val repeated=restart.reconcile()
