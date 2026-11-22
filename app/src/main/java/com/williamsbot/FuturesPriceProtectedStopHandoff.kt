@@ -149,7 +149,15 @@ internal class FuturesPriceProtectedStopHandoff(
 
     private fun validNewStop(s:Snapshot,tx:JSONObject,order:JSONObject):Boolean {
         val expected=tx.optString("trigger").toBigDecimalOrNull() ?: return false
+        // A newly created handoff STOP is required to be *close-all*, not
+        // merely exact-size reduceOnly. A fixed-size STOP can become
+        // oversized after partial TP/exit and fail on its future trigger.
+        // Do not cancel the human's older STOP against that weaker proof.
         return order.optString("clientAlgoId")==tx.optString("new_id") &&
+            order.optString("closePosition").equals("true",true) &&
+            !order.optString("reduceOnly").equals("true",true) &&
+            order.optString("workingType")=="MARK_PRICE" &&
+            isBinanceUnrestrictedStopTrigger(order) &&
             isFullPositionFuturesStop(order,tx.getString("symbol"),s.direction,s.quantity,s.mark) &&
             order.optString("triggerPrice").ifBlank { order.optString("stopPrice") }
                 .toBigDecimalOrNull()?.compareTo(expected)==0
