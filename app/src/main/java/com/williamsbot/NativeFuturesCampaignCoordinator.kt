@@ -2500,6 +2500,21 @@ internal class NativeFuturesCampaignCoordinator(
                             lastBlocker = "$symbol previously rejected protective STOP could not be confirmed absent"
                             continue
                         }
+                        if (matchingIntent.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE") {
+                            // H1 acquisition and accounting can take many seconds.
+                            // The second signed GET above does not prove that
+                            // this unowned position is still unchanged at POST.
+                            // Re-check both exposure AND zero open orders before
+                            // assigning the durable one-shot STOP client id.
+                            val immediatelyBeforeStop = validateFuturesPositionSnapshot(adapter.positions())
+                            check(futuresSignedExposureStable(exchangePositions, immediatelyBeforeStop)) {
+                                "$symbol exchange exposure changed during emergency H1 STOP preparation; no STOP submitted"
+                            }
+                            check(adapter.openOrders(symbol).length() == 0 &&
+                                adapter.openAlgoOrders(symbol).length() == 0) {
+                                "$symbol exchange order book changed during emergency H1 STOP preparation; no STOP submitted"
+                            }
+                        }
                         if (protectionClientId.isBlank()) {
                             protectionClientId = stableProtectionId(symbol, matchingIntent.optString("client_id"))
                             matchingIntent.put("protection_client_id", protectionClientId)
