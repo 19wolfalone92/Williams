@@ -2087,6 +2087,7 @@ private class NativeEngine(
     @Volatile private var signedFillAuditRunning = false
     @Volatile private var signedFillAuditLastAttemptMs = 0L
     @Volatile private var signedFillAuditCursor = 0
+    @Volatile private var manualPriceProtectedStopHandoffCursor = 0
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -3520,12 +3521,50 @@ private class NativeEngine(
         }.getOrElse {
             JSONObject().put("ok", false).put("error", it.message ?: it.javaClass.simpleName)
         }
-        stateMachine.force(TradingState.KILL_SWITCH_LATCHED, "USD-M Futures kill switch; restart blocked")
-        val success = errors.isEmpty() && reconciliation.optBoolean("ok", false)
-        lastError = if (success) "KILL_SWITCH: Futures positions reconciled; trading remains latched OFF"
-            else "KILL_SWITCH: unresolved exchange close/reconciliation warning"
+        // P0: KILL shuts down new risk, but it must NOT shut down the only
+        // Android REST/WS STOP supervisor if any live position or conditional
+        // order remains, or Binance's signed read is unavailable. Previous
+        // code stopped the worker and auto-run BEFORE attempting the close:
+        // an unowned position survived while no monitor could recover its SL.
+        // Only two independent signed flat snapshots AND empty standard/algo
+        // order books permit monitoring to remain fully stopped.
+        val flatProof=runCatching {
+            futuresCampaignCoordinator.signedFlatForMonitoringShutdown()
+        }
+        val signedFlat=flatProof.getOrDefault(false)
+        var monitoringResumed=false
+        if(!signedFlat) {
+            reconcileRequired=true
+            persistSafetyFlag("reconcile_required",true)
+            val restore=runCatching {
+                // START under a persisted kill latch is MONITOR-ONLY. It
+                // restores account-wide signed reconciliation, private WS
+                // and Foreground Service lease while entries stay forbidden.
+                start()
+            }
+            monitoringResumed=restore.getOrNull()?.optBoolean("started",false)==true ||
+                running && worker?.isAlive==true
+            if(!monitoringResumed) {
+                errors += "KILL_MONITOR_RECOVERY_FAILED: " +
+                    safeDiagnosticText(restore.exceptionOrNull()?.message
+                        ?: "monitor worker could not be confirmed")
+            }
+            errors += "KILL_EXCHANGE_NOT_SIGNED_FLAT: kill latched, new entries blocked; " +
+                "live position/STOP monitoring " +
+                if(monitoringResumed) "resumed" else "NOT VERIFIED"
+        }
+        stateMachine.force(TradingState.KILL_SWITCH_LATCHED,
+            if(signedFlat) "USD-M Futures kill switch; signed-flat account, monitoring stopped"
+            else "USD-M Futures kill switch; exchange exposure unresolved, monitor-only runtime")
+        val success = errors.isEmpty() && reconciliation.optBoolean("ok", false) && signedFlat
+        lastError = if (success) "KILL_SWITCH: signed-flat Futures account; trading remains latched OFF"
+            else "KILL_SWITCH: unresolved exchange close/reconciliation; " +
+                if(monitoringResumed) "STOP supervision monitor-only" else "signed safety monitoring NOT VERIFIED"
         return JSONObject().put("killed", true).put("latched", true)
             .put("exchange", "BINANCE_USDM_FUTURES_TESTNET").put("state", "KILL_SWITCH_LATCHED")
+            .put("signed_flat_confirmed",signedFlat)
+            .put("monitoring_running",running && worker?.isAlive==true)
+            .put("monitoring_resumed_after_unresolved_exposure",monitoringResumed)
             .put("errors", JSONArray(errors)).put("ownership_reconciliation", ownershipReconciliation)
             .put("pending_entry_cancellation", cancellation)
             .put("futures_reconciliation", reconciliation)
@@ -5354,7 +5393,15 @@ private class NativeEngine(
             }.getOrDefault(emptyList())
             if (pendingManualHandoffs.isNotEmpty()) {
                 val handoffResults = JSONArray()
-                for (symbol in pendingManualHandoffs.take(1)) {
+                // A permanently blocked manual STOP on alphabetically first
+                // symbol must not starve other live signed positions forever.
+                val selected = synchronized(this) {
+                    val choice=nextFuturesManualHandoffCandidate(
+                        pendingManualHandoffs,manualPriceProtectedStopHandoffCursor)
+                    manualPriceProtectedStopHandoffCursor=choice.second
+                    listOfNotNull(choice.first)
+                }
+                for (symbol in selected) {
                     val observation = runCatching {
                         withCampaignMutation(symbol = symbol,
                             purpose = "SIGNED_MANUAL_PRICE_PROTECTED_STOP_HANDOFF",

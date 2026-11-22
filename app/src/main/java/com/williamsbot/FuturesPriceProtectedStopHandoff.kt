@@ -5,6 +5,17 @@ import org.json.JSONObject
 import java.math.BigDecimal
 import java.security.MessageDigest
 
+/** At most one independently signed handoff per monitor tick; rotate to
+ * prevent one permanently unresolved BTC STOP starving ETH or another pair. */
+internal fun nextFuturesManualHandoffCandidate(
+    symbols:List<String>,cursor:Int
+):Pair<String?,Int> {
+    val eligible=symbols.distinct().filter { it in APPROVED_FUTURES_SYMBOLS }
+    if(eligible.isEmpty()) return null to 0
+    val index=cursor.coerceAtLeast(0)%eligible.size
+    return eligible[index] to ((index+1)%eligible.size)
+}
+
 /**
  * Exchange-only recovery of the user's manually placed priceProtect=true
  * CONTRACT_PRICE reduceOnly STOP on an otherwise bot-operated Demo position.
@@ -119,8 +130,12 @@ internal class FuturesPriceProtectedStopHandoff(
         if(s.algos.size!=1) return null
         val row=s.algos.single()
         return row.takeIf {
-            isSignedPriceProtectedExternalContractStopForObservation(
-                it,s.position.getString("symbol"),s.direction,s.quantity,s.contract)
+            // A STOP already spawning an actual matching-engine child MUST
+            // never be treated as a resting manual STOP safe to cancel.
+            it.has("actualOrderId") && !it.isNull("actualOrderId") &&
+                it.optString("actualOrderId") in setOf("","0") &&
+                isSignedPriceProtectedExternalContractStopForObservation(
+                    it,s.position.getString("symbol"),s.direction,s.quantity,s.contract)
         }
     }
 
@@ -134,7 +149,15 @@ internal class FuturesPriceProtectedStopHandoff(
 
     private fun validNewStop(s:Snapshot,tx:JSONObject,order:JSONObject):Boolean {
         val expected=tx.optString("trigger").toBigDecimalOrNull() ?: return false
+        // A newly created handoff STOP is required to be *close-all*, not
+        // merely exact-size reduceOnly. A fixed-size STOP can become
+        // oversized after partial TP/exit and fail on its future trigger.
+        // Do not cancel the human's older STOP against that weaker proof.
         return order.optString("clientAlgoId")==tx.optString("new_id") &&
+            order.optString("closePosition").equals("true",true) &&
+            !order.optString("reduceOnly").equals("true",true) &&
+            order.optString("workingType")=="MARK_PRICE" &&
+            isBinanceUnrestrictedStopTrigger(order) &&
             isFullPositionFuturesStop(order,tx.getString("symbol"),s.direction,s.quantity,s.mark) &&
             order.optString("triggerPrice").ifBlank { order.optString("stopPrice") }
                 .toBigDecimalOrNull()?.compareTo(expected)==0
@@ -150,15 +173,33 @@ internal class FuturesPriceProtectedStopHandoff(
         val s=snapshot(symbol)
         val now=clock()
         check(now>0L) { "$symbol HANDOFF_CLOCK_INVALID" }
+        var tx=existing
         if(existing?.optString("phase")=="DONE") {
-            // Prior success is historical evidence, not durable ownership
-            // of a new or changed Binance position.
-            val valid=samePosition(s,existing) && s.algos.size==1 &&
+            // DONE is a historical completed campaign, not a perpetual
+            // lock on ETHUSDT. If Binance later shows a UNIQUE new manual
+            // STOP on a different exposure, preserve the exact old DONE
+            // record in a separate journal key BEFORE replacing the active
+            // handoff journal. Never manufacture strategy ENTRY ownership.
+            val stillProtected=samePosition(s,existing) && s.algos.size==1 &&
                 validNewStop(s,existing,s.algos.single())
-            return status(if(valid) "ALREADY_EXCHANGE_PROTECTED" else "HISTORICAL_HANDOFF_CHANGED")
+            if(stillProtected) return status("ALREADY_EXCHANGE_PROTECTED")
+            val later=manualStop(s)
+                ?: return status("HISTORICAL_HANDOFF_CHANGED")
+            val laterId=later.optString("algoId")
+            if(laterId.isBlank() || laterId==existing.optString("old_algo_id") ||
+                laterId==existing.optString("new_algo_id"))
+                return status("HISTORICAL_HANDOFF_IDENTITY_REUSED")
+            val archiveKey="manual_price_protected_stop_handoff_archive_v1_${symbol}_${existing.optString("old_algo_id")}"
+            val historical=existing.toString()
+            val archived=store.readState(archiveKey)
+            if(archived!=null && archived!=historical)
+                return status("HISTORICAL_HANDOFF_ARCHIVE_CONFLICT")
+            if(archived==null) persist(archiveKey,existing)
+            // A crash before preparing the next journal retains DONE and
+            // an idempotent archive. The next run can safely retry.
+            tx=null
         }
 
-        var tx=existing
         if(tx==null) {
             val old=manualStop(s) ?: return status("NOT_UNIQUE_SIGNED_MANUAL_PRICE_PROTECTED_STOP")
             val trigger=old.optString("triggerPrice").ifBlank { old.optString("stopPrice") }
@@ -195,6 +236,8 @@ internal class FuturesPriceProtectedStopHandoff(
         if(other.isNotEmpty() || s.algos.size > 2) return status("UNEXPECTED_SIGNED_ALGO_NO_MUTATION")
         if(newest!=null && !validNew) return status("NEW_STOP_SIGNED_BUT_INVALID_NO_CANCEL")
 
+        if(!validNew && tx.optString("phase")=="POST_DEFINITIVELY_REJECTED")
+            return status("STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED")
         if(!validNew && tx.optString("phase") in setOf(
                 "POST_OUTCOME_UNKNOWN","POST_ACKNOWLEDGED","NEW_STOP_CONFIRMED")) {
             // NEVER replay an uncertain financial POST. Only an exact signed
@@ -260,6 +303,21 @@ internal class FuturesPriceProtectedStopHandoff(
                             failure.message ?: failure.javaClass.simpleName))
                     persist(key,tx)
                     return status("STOP_PREFLIGHT_NOT_SUBMITTED")
+                }
+                if(failure is FuturesHttpException &&
+                    failure.requestPath=="/fapi/v1/algoOrder" &&
+                    failure.statusCode==400 &&
+                    failure.exchangeCode in setOf(-4130,-2021)) {
+                    // Signed Binance reply definitively rejected this POST.
+                    // A same-side close-all conflict (-4130) cannot be safely
+                    // solved by cancelling the original, sole manual STOP.
+                    // Retain it, persist the typed outcome and NEVER loop
+                    // on the same rejected identity every monitoring tick.
+                    tx.put("phase","POST_DEFINITIVELY_REJECTED")
+                        .put("rejection_code",failure.exchangeCode)
+                        .put("rejected_at_ms",clock())
+                    persist(key,tx)
+                    return status("STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED",true)
                 }
                 return status("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",true)
             }

@@ -1,5 +1,6 @@
 package com.williamsbot
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.math.BigDecimal
 
@@ -130,10 +131,63 @@ internal fun signedPriceProtectedConditionalStopObservation(
     .put("can_confirm_unrestricted_protection",false)
     .put("scope",scope)
 
+/**
+ * Read-only wake-up hints from the same signed account-wide position and
+ * conditional-order snapshots used by coordinator reconciliation. Earlier
+ * code only discovered manually protected STOPs inside the historic
+ * opposite-direction quarantine branch and silently missed all other live
+ * positions. This returns NO mutation/adoption authority. The handoff must
+ * independently repeat signed symbol/account reads and MARK/CONTRACT quotes.
+ */
+internal fun signedManualPriceProtectedStopHandoffHints(
+    positions: JSONArray,
+    openAlgos: JSONArray
+): Set<String> {
+    val signedPositions=linkedMapOf<String,Pair<java.math.BigDecimal,String>>()
+    val allSymbols=mutableSetOf<String>()
+    for (i in 0 until positions.length()) {
+        val p=positions.optJSONObject(i) ?: return emptySet()
+        val symbol=p.optString("symbol")
+        val qty=p.optString("positionAmt").toBigDecimalOrNull() ?: return emptySet()
+        if (symbol.isBlank() || !allSymbols.add(symbol)) return emptySet()
+        if (qty.signum()==0 || symbol !in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS) continue
+        if (p.optString("positionSide")!="BOTH") return emptySet()
+        signedPositions[symbol] = qty.abs() to (if(qty.signum()>0) "SELL" else "BUY")
+    }
+    val bySymbol=linkedMapOf<String,MutableList<JSONObject>>()
+    for (i in 0 until openAlgos.length()) {
+        val o=openAlgos.optJSONObject(i) ?: return emptySet()
+        val symbol=o.optString("symbol")
+        if(symbol.isBlank()) return emptySet()
+        bySymbol.getOrPut(symbol) { mutableListOf() }.add(o)
+    }
+    return signedPositions.filter { (symbol, identity) ->
+        val orders=bySymbol[symbol]
+        if(orders?.size!=1) return@filter false
+        val o=orders.single()
+        val child=o.optString("actualOrderId")
+        o.optString("algoType")=="CONDITIONAL" &&
+            o.optString("orderType")=="STOP_MARKET" &&
+            isActiveFuturesProtectionStatus(o.optString("algoStatus")) &&
+            o.optString("positionSide")=="BOTH" &&
+            o.optString("workingType")=="CONTRACT_PRICE" &&
+            o.optString("priceProtect").equals("true",true) &&
+            o.optString("closePosition").equals("false",true) &&
+            o.optString("reduceOnly").equals("true",true) &&
+            o.optString("side")==identity.second &&
+            o.optString("clientAlgoId").isNotBlank() &&
+            o.optString("algoId").toLongOrNull()?.let { it>0L }==true &&
+            o.has("actualOrderId") && !o.isNull("actualOrderId") &&
+            child in setOf("","0") &&
+            o.optString("quantity").toBigDecimalOrNull()?.compareTo(identity.first)==0 &&
+            o.optString("triggerPrice").toBigDecimalOrNull()?.signum()==1
+    }.keys
+}
+
 /** Stable signed-order fingerprint for reconciling symbol and account reads.
  * Never accept missing execution-critical attributes as proof. */
 internal fun signedExternalContractStopFingerprint(order: JSONObject): String =
     listOf("symbol","algoId","clientAlgoId","algoType","orderType","algoStatus",
         "side","positionSide","workingType","triggerPrice","quantity","closePosition",
-        "reduceOnly","priceProtect")
+        "reduceOnly","priceProtect","actualOrderId")
         .joinToString("|") { field -> "$field=${order.optString(field)}" }

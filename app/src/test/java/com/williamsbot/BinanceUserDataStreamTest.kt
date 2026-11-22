@@ -94,7 +94,7 @@ class BinanceUserDataStreamTest {
             listener.onOpen(socket, socketResponse(socket.request()))
             listener.onMessage(socket, """{"e":"ORDER_TRADE_UPDATE"}""")
             assertFalse(stream.isConnected())
-            assertFalse(connections.any { it })
+            assertFalse(synchronized(connections) { connections.any { it } })
             assertTrue(events.isEmpty())
         } finally {
             stream.stop()
@@ -287,7 +287,9 @@ class BinanceUserDataStreamTest {
             // heartbeat could leave an unprotected fill undiscovered.
             listener.onMessage(old, """{"data":{"foo":"without-event-type"}}""")
             assertFalse(stream.isConnected())
-            assertTrue(disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") })
+            assertTrue(synchronized(disconnected) {
+                disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") }
+            })
             org.junit.Assert.assertEquals("private_event_schema_mismatch", old.lastCloseReason)
             assertTrue(events.isEmpty())
             val (next, nextListener) = requireNotNull(sessions.poll(5, TimeUnit.SECONDS))
@@ -313,7 +315,7 @@ class BinanceUserDataStreamTest {
                 assertTrue("Unexpected disconnect on $name", stream.isConnected())
             }
             org.junit.Assert.assertEquals(listOf("MARGIN_CALL", "TRADE_LITE",
-                "STRATEGY_UPDATE", "GRID_UPDATE"), events.toList())
+                "STRATEGY_UPDATE", "GRID_UPDATE"), synchronized(events) { events.toList() })
             org.junit.Assert.assertEquals(0, socket.lastCloseCode)
         } finally { stream.stop() }
     }
@@ -332,7 +334,9 @@ class BinanceUserDataStreamTest {
             listener.onOpen(old, socketResponse(old.request()))
             listener.onMessage(old, """{"e":"FUTURE_UNSUPPORTED_FILL_EVENT","E":1800000000000}""")
             assertFalse(stream.isConnected())
-            assertTrue(disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") })
+            assertTrue(synchronized(disconnected) {
+                disconnected.any { it.contains("PRIVATE_STREAM_UNRECOGNIZED_EVENT_ENVELOPE") }
+            })
             assertTrue(old.lastCloseCode == 1000 || old.cancelled)
             val (next, newListener) = requireNotNull(sessions.poll(5L, TimeUnit.SECONDS))
             newListener.onOpen(next, socketResponse(next.request()))

@@ -5,10 +5,14 @@
 дают SHA/издание для номеров страниц. Severity относится к выявленному дефекту,
 не к доказанной сумме потерь на пользовательском счёте.
 
-Актуализация14.11: новые входыNEW10 отделены от management15; общий
-half-margin gate реализован в обоих runtimes. Подтверждённые CI и APK
-закреплены в `ANDROID_46432_VERIFICATION_20261114.md`. Эти изменения не
-закрывают independent-source, signed Demo или физическую приёмку телефона.
+История 14.11: входы были ограничены NEW10 при management15; позднее
+политика изменена пользователем на NEW15/management15. В текущей ветке
+`williams_symbol_policy.py`, `WilliamsSymbolPolicy.kt` и соответствующие
+тесты допускают пятнадцать инструментов при выполнении остальных risk-gates.
+Историческая CI/APK-контрольная точка `ANDROID_46432_VERIFICATION_20261114.md`
+относится к другой сборке и не является Demo/физической приёмкой текущей.
+Общий half-margin gate реализован в обоих runtimes; independent-source,
+signed Demo и физическая Android приёмка остаются OPEN.
 
 4.64.34: bounded WM1 single-bar angle и полная группа WM3 согласованы;
 подробности/источники: `TC2_WM1_WM3_CONTINUATION_20261114.md`.
@@ -30,6 +34,6 @@ half-margin gate реализован в обоих runtimes. Подтвержд
 | TC2 initial/trailing; EN149/177-180 | Разные начальные anchors и3-5-bar trail | `WilliamsSetupRules`, exit policy, native coordinator | Risk size → position quantity → signed STOP replacement | Варианты закреплены; paper results не доказывают действующий STOP | Exact tick tests baseline PASS; authenticated Demo OPEN |
 | TC1 MFI crypto-volume | Не выдавать proxy за original tick volume | `WilliamsTc1MarketFacilitation`, `williams_tc1_market_facilitation` | Four-source observer | Android уже строго различал ties, Python расходился | Согласование семантики исправлено, scalar reference test PASS |
 | Новые входы TC2 | Другие источники не отправляют новые ордера | `WilliamsExecutionPolicy`, `williams_execution_policy`, coordinator | Все entry/add/reversal requests | Реестр и AI не имеют execution authority | Existing isolation tests PASS; никакой новой AI authority |
-| Symbol policy:10 requested |10 новых инструментов, защита legacy позиций | `williams_symbol_policy.NEW_RISK_SYMBOLS`/`MANAGEMENT_SYMBOLS`, Android execution policy, coordinator and final HTTP door | Market data+UI+recovery+all order gates | CLOSED offline implementation:NEW10/management15; old pending/unknown identities and reserve retained | `tests/test_new_risk_symbol_policy.py`, coordinator preupgrade/restart lifecycle; PASS; actual device migration OPEN |
+| Symbol policy: 15 current (user requirement) | 15 новых TC2 USDT инструментов; прежние pending/unknown обязательства не теряются | `williams_symbol_policy.NEW_RISK_SYMBOLS`/`MANAGEMENT_SYMBOLS`, `WilliamsSymbolPolicy.kt`, coordinator and final HTTP door | Market data+UI+recovery+all order gates | NEW15/management15 по актуальному коду, а не старый NEW10; не доказана фактическая готовность каждой пары на устройстве/бирже | `tests/test_new_risk_symbol_policy.py`, coordinator legacy/restart lifecycle, static code verified on PR #265; signed Demo per-pair E2E/physical device OPEN |
 | TC2 aggregate half margin; EN212–213 | Все occupied/pending margins одновременно не выше половины счёта; это не процент риска отдельной сделки | `futures_half_margin.margin_observation/assess_half_margin`, `FuturesHalfMargin.kt`, both coordinators and final HTTP door | Signed account/config/positions+ordinary/algo; durable liabilities; final source/time/position fence | CLOSED bounded implementation; engineering base=min(wallet,equity), reserves and supported-mode bounds explicit; signed Demo/device OPEN |51 shared fixtures, partial/parent-child/isolated/external/unknown cases; transport/lifecycle tests PASS; no gap/funding or atomic-exchange guarantee |
 | Unknown result / STOP | Сверить биржу перед повтором; не осиротить позицию | `binance_futures_client.order_safe`, ExecutionBarrier, NativeFuturesCampaignCoordinator | Durable intent, signed position/algo/order state | Проверены offline tests; P0 actual fill-to-owned-STOP remains unproven | Baseline PASS; signed Demo/device OPEN |
