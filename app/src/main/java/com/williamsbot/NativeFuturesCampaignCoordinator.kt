@@ -1018,9 +1018,14 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Called ONLY under the shared account-wide reconciliation Execution Door. */
-    fun handoffManualPriceProtectedStop(symbol:String):JSONObject = synchronized(lock) {
-        require(symbol in allowedSymbols) { "Manual STOP handoff symbol is not approved" }
-        FuturesPriceProtectedStopHandoff(adapterFactory(),executionStore,clock).advance(symbol)
+    fun handoffManualPriceProtectedStop(
+        symbol:String, accountFingerprint:String
+    ):JSONObject = synchronized(lock) {
+        require(symbol in allowedSymbols && accountFingerprint.isNotBlank()) {
+            "Manual STOP handoff account identity or symbol is not approved"
+        }
+        FuturesPriceProtectedStopHandoff(
+            adapterFactory(),executionStore,clock,accountFingerprint).advance(symbol)
     }
     /** Display/diagnostic GETs do not wait for or publish execution reconciliation. */
     fun protectionDisplaySnapshot(): FuturesProtectionDisplaySnapshot {
