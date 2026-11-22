@@ -20,7 +20,8 @@ import java.security.MessageDigest
 internal class FuturesPriceProtectedStopHandoff(
     private val adapter: BinanceUsdMFuturesTestnetAdapter,
     private val store: FuturesCampaignStateStore,
-    private val clock: () -> Long
+    private val clock: () -> Long,
+    private val accountFingerprint: String
 ) {
     private data class Snapshot(
         val position: JSONObject,
@@ -140,9 +141,12 @@ internal class FuturesPriceProtectedStopHandoff(
     }
 
     fun advance(symbol:String):JSONObject {
-        require(symbol in APPROVED_FUTURES_SYMBOLS)
+        require(symbol in APPROVED_FUTURES_SYMBOLS && accountFingerprint.isNotBlank())
+            { "HANDOFF_ACCOUNT_OR_SYMBOL_NOT_PINNED" }
         val key="manual_price_protected_stop_handoff_v1_$symbol"
         val existing=store.readState(key)?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
+        if(existing!=null && existing.optString("account_fingerprint")!=accountFingerprint)
+            return status("HANDOFF_ACCOUNT_IDENTITY_CHANGED_NO_MUTATION")
         val s=snapshot(symbol)
         val now=clock()
         check(now>0L) { "$symbol HANDOFF_CLOCK_INVALID" }
@@ -162,6 +166,7 @@ internal class FuturesPriceProtectedStopHandoff(
                 "$symbol HANDOFF_MANUAL_TRIGGER_UNSAFE_ON_MARK"
             }
             tx=JSONObject()
+                .put("account_fingerprint",accountFingerprint)
                 .put("symbol",symbol).put("direction",s.direction)
                 .put("quantity",s.quantity.stripTrailingZeros().toPlainString())
                 .put("entry",s.entry.stripTrailingZeros().toPlainString())
