@@ -2588,7 +2588,7 @@ internal class NativeFuturesCampaignCoordinator(
                             // H1 acquisition and accounting can take many seconds.
                             // The second signed GET above does not prove that
                             // this unowned position is still unchanged at POST.
-                            // Re-check both exposure AND zero open orders before
+                            // Re-check exposure and the explicitly certified companion book before
                             // assigning the durable one-shot STOP client id.
                             val immediatelyBeforeStop = validateFuturesPositionSnapshot(adapter.positions())
                             check(futuresSignedExposureStable(exchangePositions, immediatelyBeforeStop)) {
@@ -2668,6 +2668,72 @@ internal class NativeFuturesCampaignCoordinator(
                             lastBlocker = "$symbol protective stop was submitted but its exact client id/structural trigger is not confirmed in open algo orders"
                             matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
                             continue
+                        }
+                        if (matchingIntent.optString("recovery_origin") ==
+                            "OPPOSITE_SIDE_POSITION_QUARANTINE") {
+                            // The signed stop POST and its first readback are NOT
+                            // an atomic position snapshot. A TP could close the
+                            // exposure while POST is in flight, or another Algo
+                            // could appear concurrently. Do not claim PROTECTED
+                            // for a position that no longer matches the signed
+                            // recovery ledger, or for an unexpected order book.
+                            val signedAfterStop = runCatching {
+                                validateFuturesPositionSnapshot(adapter.positions())
+                            }.getOrNull()
+                            val afterStopMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                            val allAfterStopAlgos = runCatching { adapter.allOpenAlgoOrders() }.getOrNull()
+                            var ownSymbolStopCount = 0
+                            val symbolCompanions = JSONArray()
+                            for (j in 0 until refreshed.length()) {
+                                val row = refreshed.optJSONObject(j)
+                                    ?: throw IllegalStateException(
+                                        "$symbol malformed signed stop POST readback row")
+                                if (row.optString("clientAlgoId") == protectionClientId &&
+                                    row.optString("symbol") == symbol) ownSymbolStopCount++
+                                else symbolCompanions.put(row)
+                            }
+                            var ownAccountStopCount = 0
+                            var exactAccountStopProof = false
+                            val accountCompanions = JSONArray()
+                            if (allAfterStopAlgos != null) {
+                                for (j in 0 until allAfterStopAlgos.length()) {
+                                    val row = allAfterStopAlgos.optJSONObject(j)
+                                        ?: throw IllegalStateException(
+                                            "$symbol malformed account-wide post-STOP algo row")
+                                    if (row.optString("symbol") == symbol &&
+                                        row.optString("clientAlgoId") == protectionClientId) {
+                                        ownAccountStopCount++
+                                        exactAccountStopProof = row.optString("algoId") ==
+                                            protective.optString("algoId") &&
+                                            row.optString("orderType") == "STOP_MARKET" &&
+                                            row.optString("closePosition") == "true" &&
+                                            row.optString("workingType") == "MARK_PRICE"
+                                    } else accountCompanions.put(row)
+                                }
+                            }
+                            val expectedCompanions = matchingIntent.optString(
+                                "recovery_order_book_fingerprint", "EMPTY"
+                            )
+                            val unchangedCompanions = afterStopMark != null &&
+                                certifiedCloseOnlyTakeProfitBook(
+                                    symbolCompanions,symbol,direction,afterStopMark,true
+                                ) == expectedCompanions &&
+                                certifiedCloseOnlyTakeProfitBook(
+                                    accountCompanions,symbol,direction,afterStopMark,false
+                                ) == expectedCompanions
+                            if (signedAfterStop == null ||
+                                !futuresSignedExposureStable(exchangePositions, signedAfterStop) ||
+                                ownSymbolStopCount != 1 || ownAccountStopCount != 1 ||
+                                !exactAccountStopProof || !unchangedCompanions) {
+                                anyUnprotected = true
+                                lastBlocker = "$symbol STOP POST has a signed ID but the " +
+                                    "post-submit exposure or conditional order book changed; " +
+                                    "do not claim protection, do not resend or enter"
+                                matchingIntent.put("protection_status", "SUBMISSION_UNKNOWN")
+                                    .put("post_stop_exposure_or_book_unverified_at_ms", clock())
+                                saveIntents(persisted)
+                                continue
+                            }
                         }
                     }
                 }
