@@ -286,7 +286,7 @@ class FuturesProtectionDisplaySnapshotTest {
     @Test fun diag10InvalidContractStopNeverBecomesVerifiedOrOwned() {
         for(fault in listOf("PRICE_PROTECT_TRUE","PRICE_PROTECT_MISSING","QUANTITY_MISMATCH",
             "CONTRACT_ALREADY_CROSSED","WRONG_SIDE","UNKNOWN_STATUS","MISSING_ID",
-            "REDUCE_ONLY_FALSE","DUPLICATE")) {
+            "REDUCE_ONLY_FALSE","DUPLICATE","OPEN_STANDARD_ORDER")) {
             val f=Fixture()
             f.order.put("algoType","CONDITIONAL")
                 .put("workingType","CONTRACT_PRICE")
@@ -301,6 +301,8 @@ class FuturesProtectionDisplaySnapshotTest {
                 "UNKNOWN_STATUS" -> f.order.put("algoStatus","EXPIRED")
                 "MISSING_ID" -> f.order.remove("clientAlgoId")
                 "REDUCE_ONLY_FALSE" -> f.order.put("reduceOnly",false)
+                "OPEN_STANDARD_ORDER" -> f.standardOrders.put(JSONObject()
+                    .put("symbol","BNBUSDT").put("status","NEW"))
                 "DUPLICATE" -> f.orders.put(JSONObject(f.order.toString())
                     .put("algoId","999").put("clientAlgoId","foreign_duplicate"))
             }
