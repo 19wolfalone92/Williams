@@ -42,10 +42,23 @@ class FuturesSignedTradeForensicsTest {
         assertFalse(result.getBoolean("window_usdt_commission_known"))
         assertTrue(result.isNull("window_usdt_commission"))
     }
-    @Test fun historicalForensicsNeverDropFlatBnbOrLtc() {
-        val symbols=FuturesSignedTradeForensics.auditSymbols(listOf("ETHUSDT","BTCUSDT","BNBUSDT"),8)
-        assertEquals(listOf("BNBUSDT","LTCUSDT","ETHUSDT","BTCUSDT"),symbols)
+    @Test fun rollingSignedForensicsCoversAllFifteenIncludingFlatPairs() {
+        val active=listOf("ETHUSDT","BTCUSDT","BNBUSDT")
+        val first=FuturesSignedTradeForensics.auditSymbols(active,8,cursor=0)
+        assertEquals(8,first.size)
+        assertTrue(first.containsAll(active))
+        assertEquals(first.size,first.distinct().size)
         assertEquals(2,FuturesSignedTradeForensics.auditSymbols(emptyList(),2).size)
+        val union=(0..8).flatMap { batch ->
+            FuturesSignedTradeForensics.auditSymbols(active,8,cursor=batch*8)
+        }.toSet()
+        assertEquals(BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.toSet(),union)
+        // With >8 live positions a changing cursor must not starve any exposure.
+        val many=BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.toList().sorted().take(10)
+        val liveUnion=(0..9).flatMap {
+            FuturesSignedTradeForensics.auditSymbols(many,8,cursor=it)
+        }.toSet()
+        assertTrue(liveUnion.containsAll(many))
     }
 
     @Test fun signedFundingIsSeparateFromCampaignPnl() {
