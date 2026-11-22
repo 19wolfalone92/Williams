@@ -5342,6 +5342,43 @@ private class NativeEngine(
                 safetyExitResults.put(JSONObject().put("symbol", request.optString("symbol")).put("result", outcome))
             }
             if (safetyExitResults.length() > 0) result.put("safety_exit_results", safetyExitResults)
+            // P0: do not leave the user's priceProtect=true Binance Demo STOP
+            // permanently outside management. Under the SAME account-wide
+            // reconciliation lock, migrate at most one verified manual STOP
+            // per tick. The dedicated handoff places and confirms the NEW
+            // MARK_PRICE stop BEFORE considering cancellation of the old
+            // reduce-only stop. Unknown mutations persist and are queried
+            // rather than blindly retried. This never grants new entries.
+            val pendingManualHandoffs = runCatching {
+                futuresCampaignCoordinator.manualPriceProtectedStopHandoffCandidates()
+            }.getOrDefault(emptyList())
+            if (pendingManualHandoffs.isNotEmpty()) {
+                val handoffResults = JSONArray()
+                for (symbol in pendingManualHandoffs.take(1)) {
+                    val observation = runCatching {
+                        withCampaignMutation(symbol = symbol,
+                            purpose = "SIGNED_MANUAL_PRICE_PROTECTED_STOP_HANDOFF",
+                            allowPaused = true, allowStopped = true,
+                            allowKillLatched = true, allowReconcileRequired = true,
+                            waitForDoorMs = waitForDoorMs
+                        ) {
+                            futuresCampaignCoordinator.handoffManualPriceProtectedStop(symbol)
+                        }
+                    }.getOrElse { failure ->
+                        JSONObject().put("status","HANDOFF_RECONCILIATION_REQUIRED")
+                            .put("mutation_attempted",JSONObject.NULL)
+                            .put("error",safeDiagnosticText(
+                                failure.message ?: failure.javaClass.simpleName))
+                    }
+                    handoffResults.put(JSONObject().put("symbol",symbol)
+                        .put("result",observation))
+                    runCatching { auditStore.recordCockpitEvent(
+                        "SIGNED_STOP_HANDOFF",symbol,state=observation.optString("status"),
+                        detail="Standalone signed Demo STOP handoff; new entries remain blocked"
+                    ) }
+                }
+                result.put("manual_price_protected_stop_handoffs",handoffResults)
+            }
             // The account Door is released, but this reconciliation still owns
             // futuresReconciliationLock. Run approved stop-only maintenance here:
             // a periodic management tick can be coalesced behind a continuous
