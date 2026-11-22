@@ -282,6 +282,39 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(0,exchange.requests.count { it.method=="DELETE" })
     }
 
+    @Test fun auditP0ManuallyProtectedStopMustNotBeCancelledAgainstWeakFixedQuantityReplacement() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        val original=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=original
+        exchange.afterAlgoMutation={ request,row ->
+            if(request.method=="POST" && row.optString("clientAlgoId").startsWith("W2H_")) {
+                // This represents a malformed/changed Binance Algo receipt:
+                // exact-size reduceOnly is NOT full close-all protection.
+                row.put("closePosition",false).put("reduceOnly",true)
+                    .put("quantity","0.463")
+            }
+        }
+        val journal=Journal()
+        val handoff=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis,"mock-demo-account-key-fingerprint")
+        val outcome=handoff.advance("ETHUSDT")
+        assertEquals(outcome.toString(),"NEW_STOP_NOT_YET_SIGNED_CONFIRMED",
+            outcome.getString("status"))
+        assertEquals("NEW",original.getString("algoStatus"))
+        assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("POST_ACKNOWLEDGED",JSONObject(journal.readState(
+            "manual_price_protected_stop_handoff_v1_ETHUSDT")).optString("phase"))
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
