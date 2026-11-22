@@ -2086,6 +2086,7 @@ private class NativeEngine(
     @Volatile private var signedFillAuditJson = """{"state":"NOT_REQUESTED"}"""
     @Volatile private var signedFillAuditRunning = false
     @Volatile private var signedFillAuditLastAttemptMs = 0L
+    @Volatile private var signedFillAuditCursor = 0
     @Volatile private var liveUsdtBalance = 0.0
     @Volatile private var liveUsdtBalanceKnown = false
     @Volatile private var futuresAccountSnapshotUpdatedAtMs = 0L
@@ -12997,6 +12998,13 @@ private class NativeEngine(
                     .put("requested_at_ms",nowMs).toString()
             }
         }
+        // The read-only audit covers every approved pair over bounded sweeps.
+        // P0 account/STOP synchronization always preempts this worker.
+        val auditCursor = synchronized(this) {
+            val current=signedFillAuditCursor
+            signedFillAuditCursor=(current+8)%BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.size
+            current
+        }
         Thread({
             val output=JSONObject().put("source","BINANCE_USDM_SIGNED_USER_TRADES_READ_ONLY")
                 .put("report_generation_at_ms",nowMs)
@@ -13011,7 +13019,13 @@ private class NativeEngine(
                 }
                 val live=runCatching { status(fast=true).optJSONArray("futures_positions") }.getOrNull()
                 val symbols=FuturesSignedTradeForensics.auditSymbols(
-                    CockpitDiagnostics.rows(live).map { it.optString("symbol") },limit=8)
+                    CockpitDiagnostics.rows(live).map { it.optString("symbol") },
+                    limit=8,cursor=auditCursor)
+                output.put("approved_symbol_count",
+                    BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.size)
+                    .put("sweep_symbol_count",symbols.size)
+                    .put("audit_cursor",auditCursor)
+                    .put("scope","ROTATING_7_DAY_SIGNED_FILLS_NOT_FULL_ACCOUNT_LIFETIME")
                 val audited=JSONArray()
                 val endMs=System.currentTimeMillis()
                 val sevenDaysMs=7L*24L*60L*60L*1000L
@@ -13048,10 +13062,9 @@ private class NativeEngine(
                             .put("reason","Live Futures safety work preempted optional signed read")
                         return@Thread
                     }
-                    val ageMs=if(symbol in setOf("BNBUSDT","LTCUSDT")) sevenDaysMs
-                        else 24L*60L*60L*1000L
-                    // Never let one failing symbol erase independent signed
-                    // forensics of BNB/LTC or other contracts.
+                    val ageMs=sevenDaysMs
+                    // A bounded 7-day window is NOT full lifetime history.
+                    // A failed symbol cannot erase independent signed reads.
                     val fromMs=(endMs-ageMs).coerceAtLeast(0L)
                     val trades=runCatching {
                         loadFuturesTradeRows(symbol,fromMs,endMs)
