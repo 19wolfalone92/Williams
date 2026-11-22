@@ -4063,4 +4063,58 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun diag11PriceProtectedExternalStopIsNotFullProtectionOrAnEntryAuthority() {
+        for(oldDirection in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val (_,exchange)=open(oldDirection,journal=journal)
+            exchange.quantity = -exchange.quantity
+            exchange.mark=if(exchange.quantity>0.0) 102.0 else 98.0
+            exchange.contract=exchange.mark
+            exchange.algos.clear()
+            val direction=if(exchange.quantity>0.0) "LONG" else "SHORT"
+            val foreign=JSONObject().put("symbol","BTCUSDT")
+                .put("algoId","901").put("clientAlgoId","aos_diag11_priceprotected")
+                .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("side",if(direction=="LONG") "SELL" else "BUY")
+                .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+                .put("triggerPrice",if(direction=="LONG") "95" else "105")
+                .put("closePosition",false).put("reduceOnly",true)
+                .put("quantity",kotlin.math.abs(exchange.quantity).toString())
+                .put("priceProtect",true)
+            exchange.algos["901"]=foreign
+            val beforePosts=exchange.posts("/fapi/v1/algoOrder")
+            val c=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            c.setStructuralStopRecoveryProvider { _,_,_,_,_ ->
+                error("Foreign price-protected STOP must never authorize blind H1 duplicate STOP")
+            }
+            val result=c.reconcile()
+            assertFalse(result.toString(),result.getBoolean("ok"))
+            assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+            val proof=result.getJSONArray("exchange_protection_observations")
+                .getJSONObject(0)
+            assertEquals("STOP_UNCONFIRMED",proof.getString("stop_proof"))
+            assertEquals("SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED",
+                proof.getString("stop_proof_rejection"))
+            assertTrue(proof.isNull("stop"))
+            assertTrue(proof.isNull("protection_client_id"))
+            val observed=proof.getJSONObject("observed_conditional_stop")
+            assertEquals("STOP_MARKET",observed.getString("order_type"))
+            assertEquals("CONTRACT_PRICE",observed.getString("working_type"))
+            assertTrue(observed.getBoolean("price_protect"))
+            assertEquals(foreign.getString("triggerPrice"),observed.getString("trigger_price"))
+            assertFalse(proof.getBoolean("strategy_ownership_verified"))
+            assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+            assertEquals(beforePosts,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+            assertFalse(c.status().getBoolean("ready_for_new_entry"))
+            val restart=NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val repeated=restart.reconcile()
+            assertFalse(repeated.getBoolean("ok"))
+            assertEquals("STOP_UNCONFIRMED",repeated.getJSONArray(
+                "exchange_protection_observations").getJSONObject(0).getString("stop_proof"))
+            assertEquals(beforePosts,exchange.posts("/fapi/v1/algoOrder"))
+            assertFalse(restart.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+
 }
