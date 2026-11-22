@@ -3798,7 +3798,7 @@ class NativeFuturesCoordinatorLifecycleTest {
     }
 
     @Test fun diag8ReversedPositionWithoutH1OrStableSignedIdentityNeverPostsAnOrder() {
-        for (failure in listOf("NO_H1", "POSITION_CHANGED_DURING_SIGNED_GET")) {
+        for (failure in listOf("NO_H1", "POSITION_CHANGED_DURING_SIGNED_GET", "POSITION_CHANGED_AT_STOP_PREFLIGHT")) {
             val journal = Journal()
             val (_, exchange) = open(NativeFuturesCampaignCoordinator.Direction.SHORT, journal = journal)
             exchange.quantity = -exchange.quantity
@@ -3806,14 +3806,15 @@ class NativeFuturesCoordinatorLifecycleTest {
             exchange.algos.clear()
             val beforePosts = exchange.posts("/fapi/v1/algoOrder")
             val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
-            if (failure == "POSITION_CHANGED_DURING_SIGNED_GET") {
+            if (failure != "NO_H1") {
                 coordinator.setStructuralStopRecoveryProvider { _, _, _, _, _ ->
                     RecoveredStructuralStop("95", .002)
                 }
                 var positionReads = 0
                 exchange.beforeRequest = { request, _ ->
                     if (request.method == "GET" && request.url.encodedPath == "/fapi/v3/positionRisk" &&
-                        ++positionReads == 2) exchange.quantity *= 2.0
+                        ++positionReads == if (failure == "POSITION_CHANGED_DURING_SIGNED_GET") 2 else 3)
+                        exchange.quantity *= 2.0
                 }
             }
             val result = coordinator.reconcile()
