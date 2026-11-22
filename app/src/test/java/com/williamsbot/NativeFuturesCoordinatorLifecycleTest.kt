@@ -23,6 +23,42 @@ class NativeFuturesCoordinatorLifecycleTest {
      * position. The handoff must FIRST confirm a new MARK_PRICE stop on Demo,
      * THEN remove only the exact manual stop, and never open an ENTRY.
      */
+    @Test fun signedReversedHistoricPositionCanAutoEnrollStopOnlyButNeverClaimEntry() {
+        var timestamp=System.currentTimeMillis()
+        val journal=Journal()
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG,
+            journal=journal,clock={timestamp})
+        val oldCampaign=coordinator.intentsSnapshot().toString()
+        exchange.quantity = -exchange.quantity
+        exchange.mark=98.0
+        exchange.adapter().placeProtectiveStop("BTCUSDT","SHORT","105","MANUAL_SHORT_STOP")
+        val stopPosts=exchange.posts("/fapi/v1/algoOrder")
+        val reconciliation=coordinator.reconcile()
+        assertFalse(reconciliation.getBoolean("ok"))
+        val proof=reconciliation.getJSONArray("exchange_protection_observations")
+            .getJSONObject(0)
+        assertEquals("REVERSED_CAMPAIGN_QUARANTINE",proof.getString("management_mode"))
+        assertEquals("EXTERNAL_PROTECTED",proof.getString("stop_proof"))
+        val signedPosition=exchange.positions().getJSONObject(0)
+        assertNull(autonomousRecoveredStopCandidateBlocker(signedPosition,proof,timestamp))
+        val first=coordinator.enrollAutonomousRecoveredStopOnly(
+            "BTCUSDT","SHORT","1",exchange.entry.toString(),"105")
+        assertEquals(first.toString(),"WAIT_SECOND_SIGNED_SNAPSHOT",first.getString("status"))
+        timestamp+=31_000L
+        val second=coordinator.enrollAutonomousRecoveredStopOnly(
+            "BTCUSDT","SHORT","1",exchange.entry.toString(),"105")
+        assertEquals(second.toString(),"AUTONOMOUS_STOP_ONLY_ACTIVATED",second.getString("status"))
+        val supervisor=coordinator.operatorSupervisionsSnapshot().getJSONObject(0)
+        assertEquals("AUTO_VERIFIED_STOP_ONLY",supervisor.getString("mode"))
+        assertFalse(supervisor.getBoolean("strategy_ownership_verified"))
+        assertFalse(supervisor.getBoolean("market_close_authorized"))
+        assertFalse(supervisor.getBoolean("add_on_authorized"))
+        assertEquals(oldCampaign,coordinator.intentsSnapshot().toString())
+        assertEquals(stopPosts,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
     @Test fun manualPriceProtectedStopHandoffCompletesProtectiveFirstForLongAndShort() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val exchange=Exchange(direction,"ETHUSDT")
