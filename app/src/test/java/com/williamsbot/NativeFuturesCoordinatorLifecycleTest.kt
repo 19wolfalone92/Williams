@@ -176,6 +176,37 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals(0,exchange.requests.count { it.method=="DELETE" })
     }
 
+    @Test fun manualStopHandoffPrePostSignedOrderDriftBlocksAnyProtectiveMutation() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=manual
+        var scopedSignedReads=0
+        exchange.beforeRequest={ request,_ ->
+            if(request.method=="GET" && request.url.encodedPath=="/fapi/v1/openAlgoOrders" &&
+                request.url.queryParameter("symbol")=="ETHUSDT" && ++scopedSignedReads==2) {
+                // Second signed pre-POST read catches newly appeared foreign order.
+                exchange.algos["78"]=JSONObject(manual.toString())
+                    .put("algoId","78").put("clientAlgoId","CONCURRENT_FOREIGN_STOP")
+            }
+        }
+        val result=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),Journal(),System::currentTimeMillis,
+            "mock-demo-account-key-fingerprint").advance("ETHUSDT")
+        assertEquals(result.toString(),"SIGNED_STOP_OR_POSITION_DRIFTED_BEFORE_POST",
+            result.getString("status"))
+        assertEquals(0,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+        assertEquals("NEW",manual.getString("algoStatus"))
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
