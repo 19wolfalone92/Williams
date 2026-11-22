@@ -3811,10 +3811,10 @@ class NativeFuturesCoordinatorLifecycleTest {
                     RecoveredStructuralStop("95", .002)
                 }
                 var positionReads = 0
+                val driftOnRead = if (failure == "POSITION_CHANGED_DURING_SIGNED_GET") 2 else 3
                 exchange.beforeRequest = { request, _ ->
                     if (request.method == "GET" && request.url.encodedPath == "/fapi/v3/positionRisk" &&
-                        ++positionReads == if (failure == "POSITION_CHANGED_DURING_SIGNED_GET") 2 else 3)
-                        exchange.quantity *= 2.0
+                        ++positionReads == driftOnRead) exchange.quantity *= 2.0
                 }
             }
             val result = coordinator.reconcile()
