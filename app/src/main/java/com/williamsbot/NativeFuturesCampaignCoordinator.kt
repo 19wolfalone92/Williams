@@ -1893,29 +1893,49 @@ internal class NativeFuturesCampaignCoordinator(
                     val matchingAccountAlgos=(0 until allOpenAlgoOrders.length())
                         .mapNotNull { allOpenAlgoOrders.optJSONObject(it) }
                         .filter { it.optString("symbol")==symbol }
-                    val signedExternalContractStop =
-                        if (!hasSymbolStandardOrder && signedFullStops.isEmpty() &&
-                            algos.length()==1 && matchingAccountAlgos.size==1) {
-                            val foreign=algos.optJSONObject(0)
-                            val accountForeign=matchingAccountAlgos.single()
-                            val contractQuote=runCatching { adapter.contractPrice(symbol) }.getOrNull()
-                            val signedQuantity=position.optString("positionAmt").toBigDecimalOrNull()?.abs()
-                            val matchingOrder=foreign!=null && signedQuantity!=null &&
-                                contractQuote!=null &&
-                                isSignedExternalContractPriceFullQuantityStop(
-                                    foreign,symbol,direction,signedQuantity,contractQuote) &&
-                                isSignedExternalContractPriceFullQuantityStop(
-                                    accountForeign,symbol,direction,signedQuantity,contractQuote) &&
-                                signedExternalContractStopFingerprint(foreign) ==
-                                    signedExternalContractStopFingerprint(accountForeign)
-                            val stableSignedPositions=if (matchingOrder)
-                                runCatching { validateFuturesPositionSnapshot(adapter.positions()) }
-                                    .getOrNull()?.let {
-                                        futuresSignedExposureStable(exchangePositions,it)
-                                    } == true
-                                else false
-                            foreign?.takeIf { matchingOrder && stableSignedPositions }
-                        } else null
+                    // Signed account-wide and symbol-scoped Algo snapshots must
+                    // match EXACTLY. Read-only price-protection inspection is
+                    // never a license to cancel/mutate a foreign order.
+                    val eligibleExternalOrderBook = !hasSymbolStandardOrder &&
+                        signedFullStops.isEmpty() && algos.length()==1 &&
+                        matchingAccountAlgos.size==1
+                    val foreign=if(eligibleExternalOrderBook) algos.optJSONObject(0) else null
+                    val accountForeign=matchingAccountAlgos.singleOrNull()
+                    val signedQuantity=position.optString("positionAmt").toBigDecimalOrNull()?.abs()
+                    val contractQuote=if(foreign!=null)
+                        runCatching { adapter.contractPrice(symbol) }.getOrNull()
+                        else null
+                    val identicalSignedAlgos=foreign!=null && accountForeign!=null &&
+                        signedExternalContractStopFingerprint(foreign) ==
+                            signedExternalContractStopFingerprint(accountForeign)
+                    val fullUnrestricted=identicalSignedAlgos && signedQuantity!=null &&
+                        contractQuote!=null &&
+                        isSignedExternalContractPriceFullQuantityStop(
+                            checkNotNull(foreign),symbol,direction,signedQuantity,contractQuote) &&
+                        isSignedExternalContractPriceFullQuantityStop(
+                            checkNotNull(accountForeign),symbol,direction,signedQuantity,contractQuote)
+                    val priceProtectedConditional=identicalSignedAlgos && signedQuantity!=null &&
+                        contractQuote!=null &&
+                        isSignedPriceProtectedExternalContractStopForObservation(
+                            checkNotNull(foreign),symbol,direction,signedQuantity,contractQuote) &&
+                        isSignedPriceProtectedExternalContractStopForObservation(
+                            checkNotNull(accountForeign),symbol,direction,signedQuantity,contractQuote)
+                    val externalExposureStillStable=if(fullUnrestricted || priceProtectedConditional)
+                        runCatching { validateFuturesPositionSnapshot(adapter.positions()) }
+                            .getOrNull()?.let {
+                                futuresSignedExposureStable(exchangePositions,it)
+                            } == true
+                        else false
+                    val signedExternalContractStop=foreign?.takeIf {
+                        fullUnrestricted && externalExposureStillStable
+                    }
+                    // DIAG11: an active STOP with priceProtect=true really exists
+                    // but its trigger can be DEFERRED by mark/contract divergence.
+                    // This is not unrestricted protection, risk approval or
+                    // strategy ownership; preserve it untouched and block entries.
+                    val observedPriceProtectedContractStop=foreign?.takeIf {
+                        priceProtectedConditional && externalExposureStillStable
+                    }
                     val symbolBookFingerprint = referenceMark?.let {
                         certifiedCloseOnlyTakeProfitBook(algos,symbol,direction,it,true)
                     }
@@ -1958,6 +1978,18 @@ internal class NativeFuturesCampaignCoordinator(
                             uniquelyProtected.optString("stopPrice")) ?: JSONObject.NULL)
                         .put("protection_client_id",
                             uniquelyProtected?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("observed_conditional_stop",
+                            observedPriceProtectedContractStop?.let {
+                                signedPriceProtectedConditionalStopObservation(
+                                    it,"MATCHED_ACCOUNT_AND_SYMBOL_SIGNED_GET_OBSERVATION_ONLY")
+                            } ?: JSONObject.NULL)
+                        .put("stop_proof_rejection",when {
+                            uniquelyProtected != null -> JSONObject.NULL
+                            observedPriceProtectedContractStop != null ->
+                                "SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED"
+                            algos.length() == 0 -> "NO_OPEN_ALGO_ORDERS_RETURNED_FOR_SYMBOL"
+                            else -> "SIGNED_ALGOS_PRESENT_BUT_NOT_FULL_POSITION_PROTECTIVE_STOP"
+                        })
                         .put("protection_contract",when {
                             externalStop != null -> "CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY"
                             nativeStop != null -> "MARK_PRICE_PROTECTIVE_STOP"
@@ -1974,6 +2006,10 @@ internal class NativeFuturesCampaignCoordinator(
                                 "old SHORT/LONG campaign cannot own or trail it, measured strategy risk unresolved"
                         nativeStop != null ->
                             "signed external MARK_PRICE STOP observed; historical opposite campaign cannot own it"
+                        observedPriceProtectedContractStop != null ->
+                            "signed external STOP_MARKET with priceProtect=true exists but " +
+                                "its trigger can be delayed by mark/contract divergence; " +
+                                "operator review required, no blind replacement or new entry"
                         algos.length() > 0 ->
                             "conditional order is not uniquely certified as a full-position STOP; " +
                                 "inspect type/side/qty/workingType/priceProtect before any mutation"
