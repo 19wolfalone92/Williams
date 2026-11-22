@@ -346,6 +346,39 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("NEW",manual.getString("algoStatus"))
     }
 
+    @Test fun auditP0KillSwitchMustNotStopMonitoringUntilTwoSignedFlatSnapshotsAndNoOrders() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction,"ETHUSDT")
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            assertTrue("No exchange liability: only here may runtime fully stop",
+                coordinator.signedFlatForMonitoringShutdown())
+            exchange.quantity=if(direction.name=="LONG") 1.0 else -1.0
+            exchange.entry=100.0
+            assertFalse("Even one nonzero position forbids shutdown",
+                coordinator.signedFlatForMonitoringShutdown())
+            exchange.quantity=0.0
+            exchange.algos["11"]=JSONObject().put("symbol","ETHUSDT").put("algoId","11")
+                .put("clientAlgoId","STOP_OR_PENDING")
+                .put("algoStatus","NEW").put("orderType","STOP_MARKET")
+            assertFalse("Pending conditional orders forbid kill shutdown",
+                coordinator.signedFlatForMonitoringShutdown())
+            exchange.algos.clear()
+            exchange.orders["28"]=JSONObject().put("symbol","ETHUSDT").put("orderId","28")
+                .put("status","NEW").put("side","BUY")
+            assertFalse("Ordinary pending orders forbid kill shutdown",
+                coordinator.signedFlatForMonitoringShutdown())
+            exchange.orders.clear()
+            var positionGetCount=0
+            exchange.beforeRequest={ request,_ ->
+                if(request.method=="GET" && request.url.encodedPath=="/fapi/v3/positionRisk" &&
+                    ++positionGetCount==2)
+                    exchange.quantity=if(direction.name=="LONG") 1.0 else -1.0
+            }
+            assertFalse("A fill between the two signed reads forbids monitor shutdown",
+                coordinator.signedFlatForMonitoringShutdown())
+        }
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
