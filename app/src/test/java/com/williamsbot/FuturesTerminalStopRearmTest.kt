@@ -63,7 +63,7 @@ class FuturesTerminalStopRearmTest {
             assertNotNull(blocker(direction,former=null))
             assertNotNull(blocker(direction,former=stop(direction).put("algoStatus","NEW")))
             assertNotNull(blocker(direction,former=stop(direction).put("actualOrderId","888")))
-            assertNotNull(blocker(direction,former=stop(direction).remove("actualOrderId")))
+            assertNotNull(blocker(direction,former=stop(direction).apply { remove("actualOrderId") }))
             assertNotNull(blocker(direction,former=stop(direction).put("clientAlgoId","other")))
             assertNotNull(blocker(direction,former=stop(direction).put("side",
                 if(direction=="LONG") "BUY" else "SELL")))
