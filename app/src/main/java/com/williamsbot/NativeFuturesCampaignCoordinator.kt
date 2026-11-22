@@ -2843,17 +2843,33 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.put("protection_status","NOT_SUBMITTED")
                                     .put("protection_preflight_rejected_at_ms",clock())
                                     .put("protection_post_attempted",false)
-                                matchingIntent.remove("protection_client_id")
+                                // A terminal-rearm ID is a durable one-shot
+                                // identity. Even a LOCAL preflight rejection must
+                                // not regenerate the formerly terminal W2PS_ ID.
+                                if(preparedRearm==null)
+                                    matchingIntent.remove("protection_client_id")
+                                else matchingIntent.put("terminal_stop_rearm_last_local_failure",
+                                    safeDiagnosticText(failure.message ?: failure.javaClass.simpleName))
                                 saveIntents(persisted)
                                 lastBlocker="$symbol protective STOP was not submitted; protection will be re-evaluated without duplicating a POST"
                             } else if (failure is FuturesHttpException && failure.statusCode == 400 &&
                                 failure.exchangeCode == -2021 && failure.requestPath == "/fapi/v1/algoOrder") {
                                 // Binance rejected this exact trigger before accepting an order.
                                 // Keep its identity for signed absence checks after a restart.
-                                matchingIntent.put("protection_status", "NOT_SUBMITTED")
-                                    .put("initial_stop_rejection_id", protectionClientId)
-                                    .put("protection_post_attempted", true)
-                                matchingIntent.remove("protection_client_id")
+                                matchingIntent.put("initial_stop_rejection_id",protectionClientId)
+                                    .put("protection_post_attempted",true)
+                                if(preparedRearm != null) {
+                                    // Binance definitively rejected this trigger.
+                                    // Never fall back to the already terminal
+                                    // original STOP id or blindly reuse its
+                                    // rejected rearm. A fresh H1 plan is needed.
+                                    matchingIntent.put("protection_status","SUBMISSION_UNKNOWN")
+                                        .put("terminal_stop_rearm_blocker",
+                                            "REJECTED_TRIGGER_REQUIRES_NEW_STRUCTURAL_STOP")
+                                } else {
+                                    matchingIntent.put("protection_status","NOT_SUBMITTED")
+                                    matchingIntent.remove("protection_client_id")
+                                }
                                 saveIntents(persisted)
                                 lastBlocker = "$symbol protective STOP rejected (-2021); recheck MARK_PRICE and signed orders"
                             } else {
