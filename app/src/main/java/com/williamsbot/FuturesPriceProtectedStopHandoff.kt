@@ -236,6 +236,8 @@ internal class FuturesPriceProtectedStopHandoff(
         if(other.isNotEmpty() || s.algos.size > 2) return status("UNEXPECTED_SIGNED_ALGO_NO_MUTATION")
         if(newest!=null && !validNew) return status("NEW_STOP_SIGNED_BUT_INVALID_NO_CANCEL")
 
+        if(!validNew && tx.optString("phase")=="POST_DEFINITIVELY_REJECTED")
+            return status("STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED")
         if(!validNew && tx.optString("phase") in setOf(
                 "POST_OUTCOME_UNKNOWN","POST_ACKNOWLEDGED","NEW_STOP_CONFIRMED")) {
             // NEVER replay an uncertain financial POST. Only an exact signed
@@ -301,6 +303,21 @@ internal class FuturesPriceProtectedStopHandoff(
                             failure.message ?: failure.javaClass.simpleName))
                     persist(key,tx)
                     return status("STOP_PREFLIGHT_NOT_SUBMITTED")
+                }
+                if(failure is FuturesHttpException &&
+                    failure.requestPath=="/fapi/v1/algoOrder" &&
+                    failure.statusCode==400 &&
+                    failure.exchangeCode in setOf(-4130,-2021)) {
+                    // Signed Binance reply definitively rejected this POST.
+                    // A same-side close-all conflict (-4130) cannot be safely
+                    // solved by cancelling the original, sole manual STOP.
+                    // Retain it, persist the typed outcome and NEVER loop
+                    // on the same rejected identity every monitoring tick.
+                    tx.put("phase","POST_DEFINITIVELY_REJECTED")
+                        .put("rejection_code",failure.exchangeCode)
+                        .put("rejected_at_ms",clock())
+                    persist(key,tx)
+                    return status("STOP_POST_DEFINITIVELY_REJECTED_OLD_SL_RETAINED",true)
                 }
                 return status("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",true)
             }
