@@ -2615,6 +2615,52 @@ internal class NativeFuturesCampaignCoordinator(
                         )
                         if (protective == null) {
                             anyUnprotected = true
+                            // Definitively terminal signed STOP + stable positions and
+                            // empty symbol/account books can be rearmed with a NEW ID.
+                            // Unknown POST outcomes and absent GETs never qualify.
+                            val terminalRearmEligible = stopQuery != null &&
+                                matchesTerminalUntriggeredFuturesProtectiveStop(
+                                    stopQuery, symbol, direction, protectionClientId,
+                                    matchingIntent.optString("protective_stop"))
+                            if (terminalRearmEligible) {
+                                val retryPositions = runCatching {
+                                    validateFuturesPositionSnapshot(adapter.positions())
+                                }.getOrNull()
+                                val retrySymbolOrders = runCatching { adapter.openOrders(symbol) }.getOrNull()
+                                val retryAccountOrders = runCatching { adapter.allOpenOrders() }.getOrNull()
+                                val retryAccountAlgos = runCatching { adapter.allOpenAlgoOrders() }.getOrNull()
+                                val retryMark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                                val retryBlocker = futuresTerminalStopRearmBlocker(
+                                    matchingIntent,stopQuery,exchangePositions,retryPositions,
+                                    refreshed,retryAccountAlgos,retrySymbolOrders,retryAccountOrders,
+                                    symbol,direction,retryMark ?: Double.NaN,clock())
+                                if (retryBlocker == null) {
+                                    val generation = matchingIntent.optInt("terminal_stop_retry_count",0)+1
+                                    val freshId = terminalStopRearmClientId(
+                                        symbol,matchingIntent.getString("client_id"),generation)
+                                    check(freshId != protectionClientId) {
+                                        "$symbol attempted to reuse terminal protective STOP identity"
+                                    }
+                                    matchingIntent.put("terminal_stop_rearm",JSONObject()
+                                        .put("former_client_id",protectionClientId)
+                                        .put("former_algo_id",stopQuery.optString("algoId"))
+                                        .put("former_status",stopQuery.optString("algoStatus"))
+                                        .put("former_trigger",matchingIntent.optString("protective_stop"))
+                                        .put("prepared_at_ms",clock())
+                                        .put("new_client_id",freshId)
+                                        .put("signed_empty_book_confirmed",true)
+                                        .put("signed_position_stable",true))
+                                        .put("terminal_stop_retry_count",generation)
+                                        .put("protection_client_id",freshId)
+                                        .put("protection_status","NOT_SUBMITTED")
+                                    saveIntents(persisted)
+                                    lastBlocker="$symbol signed terminal STOP confirmed; new protective STOP " +
+                                        "identity journaled for next signed preflight, no entry authorized"
+                                    continue
+                                }
+                                matchingIntent.put("terminal_stop_rearm_blocker",retryBlocker)
+                                saveIntents(persisted)
+                            }
                             // A known formerly confirmed stop is now explicitly
                             // terminal, the live exchange has no other algo for
                             // this symbol, and there is no replacement candidate.
@@ -2669,6 +2715,38 @@ internal class NativeFuturesCampaignCoordinator(
                             anyUnprotected = true
                             lastBlocker = "$symbol previously rejected protective STOP could not be confirmed absent"
                             continue
+                        }
+                        // A previously prepared rearm is not mutation authority.
+                        // Re-prove the exact terminal ancestor, exchange exposure,
+                        // and both full signed order books immediately before POST.
+                        val preparedRearm = matchingIntent.optJSONObject("terminal_stop_rearm")
+                            ?.takeIf { it.optString("new_client_id") == protectionClientId }
+                        if (preparedRearm != null) {
+                            val signedBeforePost=validateFuturesPositionSnapshot(adapter.positions())
+                            check(futuresSignedExposureStable(exchangePositions,signedBeforePost)) {
+                                "$symbol terminal STOP rearm exposure changed; no POST"
+                            }
+                            val formerId=preparedRearm.getString("former_client_id")
+                            val former=adapter.queryAlgoOrder(symbol,formerId)
+                            check(matchesTerminalUntriggeredFuturesProtectiveStop(
+                                former,symbol,direction,formerId,
+                                preparedRearm.getString("former_trigger"))) {
+                                "$symbol terminal STOP is no longer explicitly terminal; no POST"
+                            }
+                            val liveMark=adapter.markPrice(symbol)
+                            val symbolAlgos=adapter.openAlgoOrders(symbol)
+                            val accountAlgos=adapter.allOpenAlgoOrders()
+                            val symbolOrders=adapter.openOrders(symbol)
+                            val accountOrders=adapter.allOpenOrders()
+                            check(futuresTerminalStopRearmBlocker(
+                                JSONObject(matchingIntent.toString())
+                                    .put("protection_client_id",formerId)
+                                    .put("protection_status","SUBMISSION_UNKNOWN"),
+                                former,exchangePositions,signedBeforePost,
+                                symbolAlgos,accountAlgos,symbolOrders,accountOrders,
+                                symbol,direction,liveMark,clock())==null) {
+                                "$symbol terminal STOP rearm signed proof became stale; no POST"
+                            }
                         }
                         if (matchingIntent.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE") {
                             // H1 acquisition and accounting can take many seconds.
