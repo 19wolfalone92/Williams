@@ -31,6 +31,9 @@ class NativeFuturesCoordinatorLifecycleTest {
         val oldCampaign=coordinator.intentsSnapshot().toString()
         exchange.quantity = -exchange.quantity
         exchange.mark=98.0
+        // The former LONG SL is no longer exchange-open; it may remain in
+        // historical journal, but must not count as current SHORT protection.
+        exchange.algos.clear()
         exchange.adapter().placeProtectiveStop("BTCUSDT","SHORT","105","MANUAL_SHORT_STOP")
         val stopPosts=exchange.posts("/fapi/v1/algoOrder")
         val reconciliation=coordinator.reconcile()
