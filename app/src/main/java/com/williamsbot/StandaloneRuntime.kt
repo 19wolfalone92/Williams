@@ -5362,7 +5362,8 @@ private class NativeEngine(
                             allowKillLatched = true, allowReconcileRequired = true,
                             waitForDoorMs = waitForDoorMs
                         ) {
-                            futuresCampaignCoordinator.handoffManualPriceProtectedStop(symbol)
+                            futuresCampaignCoordinator.handoffManualPriceProtectedStop(
+                                symbol,futuresApiKeyFingerprint(key()))
                         }
                     }.getOrElse { failure ->
                         JSONObject().put("status","HANDOFF_RECONCILIATION_REQUIRED")
