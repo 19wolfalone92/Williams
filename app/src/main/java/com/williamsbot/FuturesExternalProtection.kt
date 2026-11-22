@@ -59,7 +59,7 @@ internal fun isFullPositionFuturesStop(
  * Caller must additionally demand UNIQUE orders, matching account-wide and
  * symbol-scoped signed GETs, zero ordinary orders and stable signed exposure.
  */
-internal fun isSignedExternalContractPriceFullQuantityStop(
+private fun signedExternalContractStopStructure(
     order: JSONObject,
     symbol: String,
     direction: String,
@@ -78,7 +78,6 @@ internal fun isSignedExternalContractPriceFullQuantityStop(
         order.optString("side") != (if (direction == "LONG") "SELL" else "BUY") ||
         !order.optString("closePosition").equals("false",ignoreCase=true) ||
         !order.optString("reduceOnly").equals("true",ignoreCase=true) ||
-        !isBinanceUnrestrictedStopTrigger(order) ||
         order.optString("clientAlgoId").isBlank() ||
         order.optString("algoId").toLongOrNull()?.let { it > 0L } != true
     ) return false
@@ -88,6 +87,48 @@ internal fun isSignedExternalContractPriceFullQuantityStop(
     return isProtectiveStopOnCorrectSide(direction,contractPrice.toString(),
         order.optString("triggerPrice").ifBlank { order.optString("stopPrice") })
 }
+
+/** Only this strict method can certify unrestricted CONTRACT_PRICE protection. */
+internal fun isSignedExternalContractPriceFullQuantityStop(
+    order: JSONObject,
+    symbol: String,
+    direction: String,
+    positionQuantity: BigDecimal,
+    contractPrice: Double
+): Boolean = isBinanceUnrestrictedStopTrigger(order) &&
+    signedExternalContractStopStructure(order,symbol,direction,positionQuantity,contractPrice)
+
+/**
+ * DIAG11: priceProtect=true is a signed, conditional STOP but can delay
+ * activation when mark/contract price divergence exceeds triggerProtect.
+ * This method exists ONLY for observer diagnostics; never call it from
+ * execution admission, H1 recovery or risk approval. No protective proof.
+ */
+internal fun isSignedPriceProtectedExternalContractStopForObservation(
+    order: JSONObject,
+    symbol: String,
+    direction: String,
+    positionQuantity: BigDecimal,
+    contractPrice: Double
+): Boolean = order.optString("priceProtect").equals("true",ignoreCase=true) &&
+    signedExternalContractStopStructure(order,symbol,direction,positionQuantity,contractPrice)
+
+/** Explicitly unverified, read-only description; not a protective STOP. */
+internal fun signedPriceProtectedConditionalStopObservation(
+    order: JSONObject,scope: String
+): JSONObject = JSONObject()
+    .put("order_type",order.optString("orderType"))
+    .put("working_type",order.optString("workingType"))
+    .put("exchange_algo_id",order.optString("algoId"))
+    .put("client_algo_id",order.optString("clientAlgoId"))
+    .put("trigger_price",order.optString("triggerPrice"))
+    .put("quantity",order.optString("quantity"))
+    .put("side",order.optString("side"))
+    .put("price_protect",true)
+    .put("reason","SIGNED_STOP_PRICE_PROTECT_TRUE_TRIGGER_CAN_BE_DELAYED")
+    .put("read_only_not_execution_authority",true)
+    .put("can_confirm_unrestricted_protection",false)
+    .put("scope",scope)
 
 /** Stable signed-order fingerprint for reconciling symbol and account reads.
  * Never accept missing execution-critical attributes as proof. */
