@@ -5,6 +5,17 @@ import org.json.JSONObject
 import java.math.BigDecimal
 import java.security.MessageDigest
 
+/** At most one independently signed handoff per monitor tick; rotate to
+ * prevent one permanently unresolved BTC STOP starving ETH or another pair. */
+internal fun nextFuturesManualHandoffCandidate(
+    symbols:List<String>,cursor:Int
+):Pair<String?,Int> {
+    val eligible=symbols.distinct().filter { it in APPROVED_FUTURES_SYMBOLS }
+    if(eligible.isEmpty()) return null to 0
+    val index=cursor.coerceAtLeast(0)%eligible.size
+    return eligible[index] to ((index+1)%eligible.size)
+}
+
 /**
  * Exchange-only recovery of the user's manually placed priceProtect=true
  * CONTRACT_PRICE reduceOnly STOP on an otherwise bot-operated Demo position.
