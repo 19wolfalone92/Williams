@@ -18,6 +18,126 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Real coordinator + real signed transport; only persistence/network peers are modeled. */
 class NativeFuturesCoordinatorLifecycleTest {
+    /**
+     * DIAG11: the user manually placed a CONTRACT_PRICE stop on a bot-generated
+     * position. The handoff must FIRST confirm a new MARK_PRICE stop on Demo,
+     * THEN remove only the exact manual stop, and never open an ENTRY.
+     */
+    @Test fun manualPriceProtectedStopHandoffCompletesProtectiveFirstForLongAndShort() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction,"ETHUSDT")
+            exchange.quantity=if(direction.name=="LONG") 0.463 else -0.463
+            exchange.entry=1641.32
+            exchange.mark=if(direction.name=="LONG") 1712.46 else 1600.0
+            exchange.contract=exchange.mark
+            val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+                .put("clientAlgoId","MANUAL_USER_STOP_77")
+                .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
+                .put("algoStatus","NEW").put("side",if(direction.name=="LONG") "SELL" else "BUY")
+                .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+                .put("triggerPrice","1648.34").put("quantity","0.463")
+                .put("reduceOnly",true).put("closePosition",false)
+                .put("priceProtect",true).put("actualOrderId","")
+            exchange.algos["77"]=manual
+            val journal=Journal()
+            val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis)
+            val writes=mutableListOf<String>()
+            journal.afterWrite={ key,value ->
+                if(key.startsWith("manual_price_protected_stop_handoff_v1_")) writes.add(value)
+            }
+            val result=handoff.advance("ETHUSDT")
+            assertEquals(result.toString(),"NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
+                result.getString("status"))
+            assertTrue(result.getBoolean("signed_exchange_verified"))
+            val new=exchange.algos.values.single { it.optString("algoStatus")=="NEW" }
+            assertEquals("MARK_PRICE",new.getString("workingType"))
+            assertFalse(new.getBoolean("priceProtect"))
+            assertTrue(new.getBoolean("closePosition"))
+            assertEquals("1648.34",new.getString("triggerPrice"))
+            assertEquals("CANCELED",manual.getString("algoStatus"))
+            val firstPosts=exchange.requests.filter {
+                it.url.encodedPath=="/fapi/v1/algoOrder" && it.method=="POST"
+            }
+            assertEquals(1,firstPosts.size)
+            val cancelIndex=exchange.requests.indexOfFirst {
+                it.url.encodedPath=="/fapi/v1/algoOrder" && it.method=="DELETE"
+            }
+            val newPostIndex=exchange.requests.indexOfFirst {
+                it.url.encodedPath=="/fapi/v1/algoOrder" && it.method=="POST"
+            }
+            assertTrue(cancelIndex>newPostIndex)
+            assertTrue(writes.any { JSONObject(it).optString("phase")=="POST_OUTCOME_UNKNOWN" })
+            assertTrue(writes.any { JSONObject(it).optString("phase")=="NEW_STOP_CONFIRMED" })
+            assertEquals("DONE",JSONObject(journal.readState(
+                "manual_price_protected_stop_handoff_v1_ETHUSDT")).getString("phase"))
+            assertEquals("ALREADY_EXCHANGE_PROTECTED",handoff.advance("ETHUSDT").getString("status"))
+            assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0,exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun manualStopHandoffLostPostReplyResumesBySignedGETWithoutSecondPost() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=manual
+        exchange.loseProtectionReply=true
+        val journal=Journal()
+        val first=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis).advance("ETHUSDT")
+        assertEquals("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",first.getString("status"))
+        assertEquals("NEW",manual.getString("algoStatus"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        exchange.loseProtectionReply=false
+        val recovered=FuturesPriceProtectedStopHandoff(
+            exchange.adapter(),journal,System::currentTimeMillis).advance("ETHUSDT")
+        assertEquals(recovered.toString(),"NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
+            recovered.getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("CANCELED",manual.getString("algoStatus"))
+    }
+
+    @Test fun manualStopHandoffNoBlindDuplicateOnMissingPostAndChangedPosition() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1712.46
+        exchange.contract=1712.46
+        val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=manual
+        exchange.loseProtectionReply=true
+        exchange.afterAlgoMutation={ request,row ->
+            if(request.method=="POST" && row.optString("clientAlgoId").startsWith("W2H_"))
+                exchange.algos.remove(row.getString("algoId"))
+        }
+        val journal=Journal()
+        val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),journal,System::currentTimeMillis)
+        assertEquals("STOP_POST_UNCONFIRMED_MANUAL_STOP_PRESERVED",
+            handoff.advance("ETHUSDT").getString("status"))
+        exchange.loseProtectionReply=false
+        exchange.afterAlgoMutation=null
+        assertEquals("POST_OUTCOME_UNKNOWN_SIGNED_GET_RETRY_ONLY",
+            handoff.advance("ETHUSDT").getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("NEW",manual.getString("algoStatus"))
+        exchange.quantity=0.462
+        assertEquals("SIGNED_POSITION_CHANGED_NO_MUTATION",
+            handoff.advance("ETHUSDT").getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.requests.count { it.method=="DELETE" })
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()
