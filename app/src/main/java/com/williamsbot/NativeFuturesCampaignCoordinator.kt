@@ -987,6 +987,41 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun accountSnapshot(): JSONObject = adapterFactory().account()
     fun positionsSnapshot(): JSONArray = adapterFactory().positions()
+
+    /**
+     * Automatic P0 manual-STOP handoff for the single Demo account.
+     * Only a signed priceProtect=true CONTRACT_PRICE stop on a stable
+     * position can initiate a new protective-first handoff.
+     *
+     * A PREPARED/POST_UNKNOWN handoff remains eligible even after its new
+     * STOP appears; otherwise the coordinator would never finish the swap.
+     * New-entry rights and the historical campaign journal are unchanged.
+     */
+    fun manualPriceProtectedStopHandoffCandidates(): List<String> = synchronized(lock) {
+        val observed = JSONArray(externalProtectionObservationsJson)
+        val candidates = linkedSetOf<String>()
+        for (i in 0 until observed.length()) {
+            val row=observed.optJSONObject(i) ?: continue
+            val symbol=row.optString("symbol")
+            if (symbol in allowedSymbols &&
+                row.optJSONObject("observed_conditional_stop")
+                    ?.optBoolean("price_protect",false)==true) candidates.add(symbol)
+        }
+        for (symbol in allowedSymbols) {
+            val raw=executionStore.readState("manual_price_protected_stop_handoff_v1_$symbol")
+            val phase=raw?.takeIf { it.isNotBlank() }?.let { runCatching {
+                JSONObject(it).optString("phase")
+            }.getOrNull() }
+            if (phase!=null && phase!="DONE") candidates.add(symbol)
+        }
+        candidates.sorted()
+    }
+
+    /** Called ONLY under the shared account-wide reconciliation Execution Door. */
+    fun handoffManualPriceProtectedStop(symbol:String):JSONObject = synchronized(lock) {
+        require(symbol in allowedSymbols) { "Manual STOP handoff symbol is not approved" }
+        FuturesPriceProtectedStopHandoff(adapterFactory(),executionStore,clock).advance(symbol)
+    }
     /** Display/diagnostic GETs do not wait for or publish execution reconciliation. */
     fun protectionDisplaySnapshot(): FuturesProtectionDisplaySnapshot {
         val adapter = adapterFactory()
@@ -5528,11 +5563,16 @@ internal class NativeFuturesCampaignCoordinator(
         if(activeRows.isNotEmpty()) return@synchronized rejected.put("status","ALREADY_SUPERVISED")
         val local=intents()
         val latest=latestEntryIntentIndex(local,symbol)?.let { local.optJSONObject(it) }
-        // A historical LONG must never be mistaken for a current SHORT owner.
-        // The opposite/uncertain campaign needs separate forensic resolution.
-        if(latest?.optBoolean("strategy_ownership_verified",false)==true ||
-            latest!=null && latest.optString("direction")!=direction) {
-            return@synchronized rejected.put("status","CAMPAIGN_IDENTITY_CONFLICT")
+        // An old opposite-direction Williams ENTRY is historical evidence,
+        // not ownership of the current signed position. It MUST NOT suppress
+        // separately verified STOP-only safety supervision forever. Still block
+        // takeover of any same-direction active strategy-owned campaign.
+        val sameDirectionLiveOwner = latest!=null &&
+            latest.optString("direction")==direction &&
+            latest.optBoolean("strategy_ownership_verified",false) &&
+            campaignLifecycleStatus(latest) in ACTIVE_CAMPAIGN_STATUSES
+        if(sameDirectionLiveOwner) {
+            return@synchronized rejected.put("status","ACTIVE_STRATEGY_OWNED_CAMPAIGN")
         }
         val qty=observedQuantity.toBigDecimalOrNull()?.abs()?.stripTrailingZeros()
         val entry=observedEntry.toBigDecimalOrNull()?.stripTrailingZeros()
