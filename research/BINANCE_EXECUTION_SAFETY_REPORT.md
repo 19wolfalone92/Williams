@@ -84,7 +84,31 @@ write, реальной передачи ETH STOP или физической An
    `MARK_PRICE`, не защищённый `priceProtect` STOP до отмены ручного.
    Тест `auditP0ManuallyProtectedStopMustNotBeCancelledAgainstWeakFixedQuantityReplacement`.
 
-6. **Нестабильность проверки WS**. На историческом CI SHA
+6. **Аварийный kill switch оставлял открытые позиции без мониторинга**.
+   Старый `NativeEngine.kill()` немедленно отключал worker, WS и persisted
+   `auto_run` *до* подписанной попытки закрыть всё. Если текущий Binance
+   LONG/SHORT не был подтверждён как стратегия Williams, аварийное
+   рыночное закрытие намеренно не выполнялось; позиция и STOP оставались
+   на бирже, но бот уже не пытался восстановить сеть/сопровождение.
+   Исправлено: `signedFlatForMonitoringShutdown()` требует две отдельные
+   подписанные account-wide проверки flat, полное отсутствие обычных и
+   условных заявок и стабильность снимков. Если flat не доказан,
+   `kill_latched` и блокировка новых входов остаются, но запускается
+   **monitor-only** REST/WS supervision и сохраняется auto-run lease для
+   проверки после рестарта. Тест `auditP0KillSwitchMustNotStopMonitoringUntilTwoSignedFlatSnapshotsAndNoOrders`.
+   Временное окно между аварийной остановкой и восстановлением мониторинга
+   остаётся для физического E2E; это НЕ гарантирует непрерывность при сбое
+   сети или Android OS.
+
+7. **Определённое отклонение Binance STOP**. Коды `-4130` и
+   `-2021` означают отказ на указанном POST, а не успех.
+   После отклонения запрещено удалять единственный ручной SL или отправлять
+   тот же конфликтующий STOP каждую секунду. Durable фаза
+   `POST_DEFINITIVELY_REJECTED`, исходный STOP сохранён, новых
+   входов/снятия HOLD нет. Тест
+   `auditP0BinanceDefinitiveStopConflictRetainsHumanProtectionWithoutRetryStorm`.
+
+8. **Нестабильность проверки WS**. На историческом CI SHA
    `bc858c72fe88ef882727cf65b374929a85cec633` 1/1399
    unit tests падал в `BinanceUserDataStreamTest` с
    `ConcurrentModificationException`, из-за одновременной callback
@@ -98,4 +122,10 @@ write, реальной передачи ETH STOP или физической An
 Android, независимая вторая экспертиза, независимый review полного корпуса
 книг. Отдельные REST операции входа и SL **не атомарны**: даже после
 успешных offline тестов окно без доказанной защиты возможно.
-Fail-closed HOLD до подтверждения.
+Fail-closed HOLD до подтверждения. Отдельно нужно проверить, что
+трёхубыточная серия сейчас вычисляется **в рамках UTC-дня**:
+`evaluateFuturesLossStreak` фильтрует закрытия с `closed_at>=dayStart`.
+Если правило пользователя «3 подряд» должно охватывать переход через полночь,
+эта граница остаётся семантическим расхождением, а не сертифицированным PASS.
+До прояснения/независимой проверки нельзя выдавать всю risk-модель за
+буквально подтверждённую.
