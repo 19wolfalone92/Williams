@@ -1402,8 +1402,9 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("working_type",order.optString("workingType"))
                         .put("trigger_price",order.optString("triggerPrice"))
                         .put("quantity",order.optString("quantity"))
-                        .put("close_position",order.optBoolean("closePosition",false))
-                        .put("reduce_only",order.optBoolean("reduceOnly",false)))
+                        .put("close_position",order.opt("closePosition") ?: JSONObject.NULL)
+                        .put("reduce_only",order.opt("reduceOnly") ?: JSONObject.NULL)
+                        .put("price_protect",order.opt("priceProtect") ?: JSONObject.NULL))
                 
                 }
             }
@@ -1882,6 +1883,39 @@ internal class NativeFuturesCampaignCoordinator(
                     val hasSymbolConditionalOrder = (0 until allOpenAlgoOrders.length()).any { j ->
                         allOpenAlgoOrders.optJSONObject(j)?.optString("symbol") == symbol
                     }
+                    // DIAG10 exact signed foreign STOP: a full-quantity
+                    // CONTRACT_PRICE reduceOnly order is NOT the native
+                    // MARK_PRICE closePosition contract. However, when its
+                    // exact signed identity/coverage and live trigger basis
+                    // are proven across account+symbol GETs and two exposure
+                    // reads, it must be displayed as EXTERNAL protection.
+                    // Never mutate/cancel/adopt it or release entry gates.
+                    val matchingAccountAlgos=(0 until allOpenAlgoOrders.length())
+                        .mapNotNull { allOpenAlgoOrders.optJSONObject(it) }
+                        .filter { it.optString("symbol")==symbol }
+                    val signedExternalContractStop =
+                        if (!hasSymbolStandardOrder && signedFullStops.isEmpty() &&
+                            algos.length()==1 && matchingAccountAlgos.size==1) {
+                            val foreign=algos.optJSONObject(0)
+                            val accountForeign=matchingAccountAlgos.single()
+                            val contractQuote=runCatching { adapter.contractPrice(symbol) }.getOrNull()
+                            val signedQuantity=position.optString("positionAmt").toBigDecimalOrNull()?.abs()
+                            val matchingOrder=foreign!=null && signedQuantity!=null &&
+                                contractQuote!=null &&
+                                isSignedExternalContractPriceFullQuantityStop(
+                                    foreign,symbol,direction,signedQuantity,contractQuote) &&
+                                isSignedExternalContractPriceFullQuantityStop(
+                                    accountForeign,symbol,direction,signedQuantity,contractQuote) &&
+                                signedExternalContractStopFingerprint(foreign) ==
+                                    signedExternalContractStopFingerprint(accountForeign)
+                            val stableSignedPositions=if (matchingOrder)
+                                runCatching { validateFuturesPositionSnapshot(adapter.positions()) }
+                                    .getOrNull()?.let {
+                                        futuresSignedExposureStable(exchangePositions,it)
+                                    } == true
+                                else false
+                            foreign?.takeIf { matchingOrder && stableSignedPositions }
+                        } else null
                     val symbolBookFingerprint = referenceMark?.let {
                         certifiedCloseOnlyTakeProfitBook(algos,symbol,direction,it,true)
                     }
@@ -1910,31 +1944,47 @@ internal class NativeFuturesCampaignCoordinator(
                     // Verify protection for signed Binance SHORT, NOT old LONG.
                     // Exchange protection is informational; neither a new
                     // strategy owner nor an automatic order action is inferred.
-                    val unique = signedFullStops.singleOrNull()
-                    val proof = if (unique != null) "EXTERNAL_PROTECTED"
+                    val nativeStop = signedFullStops.singleOrNull()
+                    val externalStop = signedExternalContractStop
+                    val uniquelyProtected = nativeStop ?: externalStop
+                    val proof = if (uniquelyProtected != null) "EXTERNAL_PROTECTED"
                         else if (signedFullStops.size > 1) "MULTIPLE_PROTECTIVE_ORDERS_UNRESOLVED"
                         else "STOP_UNCONFIRMED"
                     protectionObservations.put(JSONObject()
                         .put("symbol",symbol).put("direction",direction)
                         .put("quantity",position.optString("positionAmt"))
                         .put("observed_at_ms",clock()).put("stop_proof",proof)
-                        .put("stop",unique?.optString("triggerPrice",
-                            unique.optString("stopPrice")) ?: JSONObject.NULL)
-                        .put("protection_client_id",unique?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("stop",uniquelyProtected?.optString("triggerPrice",
+                            uniquelyProtected.optString("stopPrice")) ?: JSONObject.NULL)
+                        .put("protection_client_id",
+                            uniquelyProtected?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("protection_contract",when {
+                            externalStop != null -> "CONTRACT_PRICE_REDUCE_ONLY_EXACT_QTY"
+                            nativeStop != null -> "MARK_PRICE_PROTECTIVE_STOP"
+                            else -> JSONObject.NULL
+                        })
                         .put("strategy_ownership_verified",false)
                         .put("automatic_trailing_authorized",false)
                         .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE"))
-                    if (unique == null) anyUnprotected = true
+                    if (uniquelyProtected == null) anyUnprotected = true
                     actualRiskAuditBlocked = true
-                    val conditionalReason = if (algos.length() > 0 && signedFullStops.isEmpty())
-                        "signed conditional order is not certified as a safe, unique close-only TP or position STOP"
-                    else if (structuralStopRecoveryProvider == null)
-                        "H1 emergency STOP provider unavailable"
-                    else if (!stableReversedExposure)
-                        "signed exchange position not proven stable across reads"
-                    else "signed order/position identity is unresolved"
+                    val conditionalReason = when {
+                        externalStop != null ->
+                            "signed full-quantity external CONTRACT_PRICE reduce-only STOP observed; " +
+                                "old SHORT/LONG campaign cannot own or trail it, measured strategy risk unresolved"
+                        nativeStop != null ->
+                            "signed external MARK_PRICE STOP observed; historical opposite campaign cannot own it"
+                        algos.length() > 0 ->
+                            "conditional order is not uniquely certified as a full-position STOP; " +
+                                "inspect type/side/qty/workingType/priceProtect before any mutation"
+                        structuralStopRecoveryProvider == null ->
+                            "H1 emergency STOP provider unavailable"
+                        !stableReversedExposure ->
+                            "signed exchange position not proven stable across reads"
+                        else -> "signed order/position identity is unresolved"
+                    }
                     lastBlocker = "$symbol $direction conflicts with old campaign: $conditionalReason; " +
-                        "inspect signed EXTERNAL_ALGO_ORDER details; no blind mutation, new entries frozen."
+                        "no blind cancellation/reversal or new entries."
                     continue
                     }
                 }
