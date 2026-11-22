@@ -123,20 +123,21 @@ internal class FuturesPriceProtectedStopHandoff(
         }
     }
 
-    private fun samePosition(s:Snapshot,tx:JSONObject):Boolean =
-        s.position.optString("symbol")==tx.optString("symbol") &&
+    private fun samePosition(s:Snapshot,tx:JSONObject):Boolean {
+        val expectedQty=tx.optString("quantity").toBigDecimalOrNull() ?: return false
+        val expectedEntry=tx.optString("entry").toBigDecimalOrNull() ?: return false
+        return s.position.optString("symbol")==tx.optString("symbol") &&
             s.direction==tx.optString("direction") &&
-            s.quantity.compareTo(tx.optString("quantity").toBigDecimalOrNull()
-                ?: return false)==0 &&
-            s.entry.compareTo(tx.optString("entry").toBigDecimalOrNull()
-                ?: return false)==0
+            s.quantity.compareTo(expectedQty)==0 && s.entry.compareTo(expectedEntry)==0
+    }
 
-    private fun validNewStop(s:Snapshot,tx:JSONObject,order:JSONObject):Boolean =
-        order.optString("clientAlgoId")==tx.optString("new_id") &&
+    private fun validNewStop(s:Snapshot,tx:JSONObject,order:JSONObject):Boolean {
+        val expected=tx.optString("trigger").toBigDecimalOrNull() ?: return false
+        return order.optString("clientAlgoId")==tx.optString("new_id") &&
             isFullPositionFuturesStop(order,tx.getString("symbol"),s.direction,s.quantity,s.mark) &&
             order.optString("triggerPrice").ifBlank { order.optString("stopPrice") }
-                .toBigDecimalOrNull()?.compareTo(tx.optString("trigger").toBigDecimalOrNull()
-                    ?: return false)==0
+                .toBigDecimalOrNull()?.compareTo(expected)==0
+    }
 
     fun advance(symbol:String):JSONObject {
         require(symbol in APPROVED_FUTURES_SYMBOLS)
