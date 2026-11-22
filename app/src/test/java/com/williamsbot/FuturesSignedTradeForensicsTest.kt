@@ -59,6 +59,7 @@ class FuturesSignedTradeForensicsTest {
             FuturesSignedTradeForensics.auditSymbols(many,8,cursor=it)
         }.toSet()
         assertTrue(liveUnion.containsAll(many))
+        assertEquals(BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS.toSet(),liveUnion)
     }
 
     @Test fun signedFundingIsSeparateFromCampaignPnl() {
