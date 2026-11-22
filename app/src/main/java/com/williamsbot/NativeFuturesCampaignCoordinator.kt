@@ -1393,7 +1393,17 @@ internal class NativeFuturesCampaignCoordinator(
                 ) {
                     externalOrders.put(JSONObject().put("symbol",symbol)
                         .put("client_id",clientId).put("kind","EXTERNAL_ALGO_ORDER")
-                        .put("exchange_algo_id",order.optString("algoId")))
+                        .put("exchange_algo_id",order.optString("algoId"))
+                        .put("order_type",order.optString("orderType"))
+                        .put("algo_type",order.optString("algoType"))
+                        .put("algo_status",order.optString("algoStatus"))
+                        .put("side",order.optString("side"))
+                        .put("position_side",order.optString("positionSide"))
+                        .put("working_type",order.optString("workingType"))
+                        .put("trigger_price",order.optString("triggerPrice"))
+                        .put("quantity",order.optString("quantity"))
+                        .put("close_position",order.optBoolean("closePosition",false))
+                        .put("reduce_only",order.optBoolean("reduceOnly",false)))
                 
                 }
             }
@@ -1790,6 +1800,58 @@ internal class NativeFuturesCampaignCoordinator(
                 }
             }
 
+            // DIAG9: a foreign active conditional is not automatically either a
+            // protective STOP or an unsafe opening order. Only a unique, signed,
+            // full-position close-only TAKE_PROFIT_MARKET is an admissible
+            // companion to a new H1 emergency STOP. Every other combination
+            // remains in quarantine; no foreign order may be cancelled here.
+            //
+            // The returned fingerprint describes the *complete* eligible book
+            // for this symbol, and must match account-wide and symbol-scoped
+            // signed GETs before recovery and again immediately before POST.
+            fun certifiedCloseOnlyTakeProfitBook(
+                source: JSONArray, symbol: String, direction: String, mark: Double,
+                symbolScoped: Boolean
+            ): String? {
+                if (!mark.isFinite() || mark <= 0.0) return null
+                val matching = mutableListOf<JSONObject>()
+                for (i in 0 until source.length()) {
+                    val row = source.optJSONObject(i) ?: return null
+                    if (symbolScoped && row.optString("symbol") != symbol) return null
+                    if (row.optString("symbol") == symbol) matching.add(row)
+                }
+                if (matching.isEmpty()) return "EMPTY"
+                if (matching.size != 1) return null
+                val row = matching.single()
+                val type = row.optString("orderType")
+                val basis = row.optString("workingType")
+                val status = row.optString("algoStatus")
+                val side = row.optString("side")
+                val trigger = row.optString("triggerPrice").toBigDecimalOrNull() ?: return null
+                val zeroQuantity = row.optString("quantity", "0").toBigDecimalOrNull()
+                    ?.signum() == 0
+                val markPrice = java.math.BigDecimal.valueOf(mark)
+                val safeTrigger = if (direction == "LONG") trigger > markPrice
+                    else if (direction == "SHORT") trigger < markPrice else false
+                val id = row.optString("algoId")
+                val clientId = row.optString("clientAlgoId")
+                if (type != "TAKE_PROFIT_MARKET" ||
+                    row.optString("algoType") != "CONDITIONAL" ||
+                    status != "NEW" ||
+                    row.optString("positionSide") != "BOTH" ||
+                    basis !in setOf("MARK_PRICE", "CONTRACT_PRICE") ||
+                    side != (if (direction == "LONG") "SELL" else "BUY") ||
+                    !row.optBoolean("closePosition", false) ||
+                    row.optBoolean("reduceOnly", false) ||
+                    !zeroQuantity || !safeTrigger ||
+                    id.toLongOrNull()?.let { it > 0L } != true ||
+                    clientId.isBlank()
+                ) return null
+                return listOf("CLOSE_ONLY_TP", id, clientId, type, side,
+                    row.optString("positionSide"), basis, status,
+                    trigger.stripTrailingZeros().toPlainString(),
+                    row.optString("priceProtect")).joinToString("|")
+            }
             val protectiveOrdersBySymbol = mutableMapOf<String, JSONArray>()
             val actualRiskAccount = if (openBySymbol.isNotEmpty()) {
                 runCatching { parseFuturesAccountSnapshot(adapter.account()) }.getOrNull()
@@ -1819,18 +1881,29 @@ internal class NativeFuturesCampaignCoordinator(
                     val hasSymbolConditionalOrder = (0 until allOpenAlgoOrders.length()).any { j ->
                         allOpenAlgoOrders.optJSONObject(j)?.optString("symbol") == symbol
                     }
-                    val signedBookEmpty = structuralStopRecoveryProvider != null &&
-                        algos.length() == 0 &&
-                        !hasSymbolStandardOrder && !hasSymbolConditionalOrder
-                    val repeatSignedPositions = if (signedBookEmpty && referenceMark != null) {
+                    val symbolBookFingerprint = referenceMark?.let {
+                        certifiedCloseOnlyTakeProfitBook(algos,symbol,direction,it,true)
+                    }
+                    val accountBookFingerprint = referenceMark?.let {
+                        certifiedCloseOnlyTakeProfitBook(allOpenAlgoOrders,symbol,direction,it,false)
+                    }
+                    val signedBookRecoverable = structuralStopRecoveryProvider != null &&
+                        !hasSymbolStandardOrder && signedFullStops.isEmpty() &&
+                        symbolBookFingerprint != null &&
+                        symbolBookFingerprint == accountBookFingerprint &&
+                        (algos.length() == 0 || (algos.length() == 1 &&
+                            hasSymbolConditionalOrder))
+                    val repeatSignedPositions = if (signedBookRecoverable && referenceMark != null) {
                         runCatching { validateFuturesPositionSnapshot(adapter.positions()) }.getOrNull()
                     } else null
                     val stableReversedExposure = repeatSignedPositions != null &&
                         futuresSignedExposureStable(exchangePositions, repeatSignedPositions)
-                    if (signedBookEmpty && stableReversedExposure) {
+                    if (signedBookRecoverable && stableReversedExposure) {
                         // Do not return here: latestIntentIndex=null below enters
                         // H1 structural recovery, with no guessed old ownership.
-                        // No safety-market-close, reversal or new-entry authority.
+                        // Signed CLOSE_ONLY_TP is preserved untouched, NEVER
+                        // promoted to a STOP; a new STOP must receive its own
+                        // signed confirmation. No safety-market-close authority.
                     } else {
                     // Verify protection for signed Binance SHORT, NOT old LONG.
                     // Exchange protection is informational; neither a new
@@ -1851,9 +1924,15 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE"))
                     if (unique == null) anyUnprotected = true
                     actualRiskAuditBlocked = true
-                    lastBlocker = "$symbol $direction conflicts with old campaign; " +
-                        "a verified matching exchange stop must be checked manually. " +
-                        "No automatic reversal/close/stop mutation."
+                    val conditionalReason = if (algos.length() > 0 && signedFullStops.isEmpty())
+                        "signed conditional order is not certified as a safe, unique close-only TP or position STOP"
+                    else if (structuralStopRecoveryProvider == null)
+                        "H1 emergency STOP provider unavailable"
+                    else if (!stableReversedExposure)
+                        "signed exchange position not proven stable across reads"
+                    else "signed order/position identity is unresolved"
+                    lastBlocker = "$symbol $direction conflicts with old campaign: $conditionalReason; " +
+                        "inspect signed EXTERNAL_ALGO_ORDER details; no blind mutation, new entries frozen."
                     continue
                     }
                 }
@@ -2119,6 +2198,8 @@ internal class NativeFuturesCampaignCoordinator(
                                     .getString("client_id"))
                             .put("recovered_position_qty",
                                 position.getString("positionAmt").toBigDecimal().abs().toPlainString())
+                            .put("recovery_order_book_fingerprint",
+                                checkNotNull(symbolBookFingerprint))
                     }
                     persisted.put(matchingIntent)
                     saveIntents(persisted)
@@ -2511,9 +2592,22 @@ internal class NativeFuturesCampaignCoordinator(
                             check(futuresSignedExposureStable(exchangePositions, immediatelyBeforeStop)) {
                                 "$symbol exchange exposure changed during emergency H1 STOP preparation; no STOP submitted"
                             }
-                            check(adapter.openOrders(symbol).length() == 0 &&
-                                adapter.openAlgoOrders(symbol).length() == 0) {
-                                "$symbol exchange order book changed during emergency H1 STOP preparation; no STOP submitted"
+                            val preflightOpenOrders = adapter.openOrders(symbol)
+                            val preflightMark = adapter.markPrice(symbol)
+                            val preflightSymbolAlgos = adapter.openAlgoOrders(symbol)
+                            val preflightAccountAlgos = adapter.allOpenAlgoOrders()
+                            val expectedBook = matchingIntent.optString(
+                                "recovery_order_book_fingerprint", "EMPTY"
+                            )
+                            check(preflightOpenOrders.length() == 0 &&
+                                certifiedCloseOnlyTakeProfitBook(
+                                    preflightSymbolAlgos,symbol,direction,preflightMark,true
+                                ) == expectedBook &&
+                                certifiedCloseOnlyTakeProfitBook(
+                                    preflightAccountAlgos,symbol,direction,preflightMark,false
+                                ) == expectedBook) {
+                                "$symbol exchange order book or foreign close-only TP changed during " +
+                                    "emergency H1 STOP preparation; no STOP submitted"
                             }
                         }
                         if (protectionClientId.isBlank()) {
