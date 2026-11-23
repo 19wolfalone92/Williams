@@ -113,7 +113,7 @@ class FuturesTerminalStopRearmTest {
                 .put("kind","RECOVERED_EXCHANGE_POSITION")
                 .put("recovery_origin","OPPOSITE_SIDE_POSITION_QUARANTINE")
                 .put("protection_post_attempted",true)
-                .put("first_signed_stop_observed_at_ms",now-90_000L)
+                .put("first_signed_stop_observed_at_ms",now-30_000L)
                 .put("recovery_order_book_fingerprint","EMPTY")
             assertNull("$direction: signed terminal/no-child STOP + identical exchange exposure",
                 blocker(direction,owner=recovered))
