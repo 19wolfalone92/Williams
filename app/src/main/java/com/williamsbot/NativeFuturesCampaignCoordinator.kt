@@ -1940,6 +1940,18 @@ internal class NativeFuturesCampaignCoordinator(
                             position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
                     } else emptyList()
                 if (symbol in reversedCampaignSymbols) {
+                    // DIAG14: signed exchange position/STOP and a durable
+                    // AUTO_VERIFIED_STOP_ONLY journal can coexist with an old
+                    // opposite-side ENTRY. The former ENTRY remains quarantined
+                    // and the account NEW-entry gate stays blocked, but the
+                    // separately approved protection monitor must not vanish
+                    // merely because its legacy ENTRY still exists.
+                    val recoveredStopOnlySupervision = referenceMark?.let { mark ->
+                        signedQuarantinedStopOnlyManagementProven(
+                            symbol,direction,position,algos,allOpenAlgoOrders,
+                            allOpenOrders,supervisionAudit,mark,clock()
+                        )
+                    } == true
                     // A reverse-direction position must NEVER borrow the former
                     // campaign's signal, fill, stop, or strategy ownership.
                     // For a genuinely empty signed order book, permit only the
@@ -2065,8 +2077,16 @@ internal class NativeFuturesCampaignCoordinator(
                             else -> JSONObject.NULL
                         })
                         .put("strategy_ownership_verified",false)
-                        .put("automatic_trailing_authorized",false)
-                        .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE"))
+                        .put("automatic_trailing_authorized",
+                            recoveredStopOnlySupervision && nativeStop!=null &&
+                                signedFullStops.size==1 && algos.length()==1)
+                        .put("management_mode",if(recoveredStopOnlySupervision &&
+                                nativeStop!=null && signedFullStops.size==1 && algos.length()==1)
+                            (0 until supervisionAudit.length()).mapNotNull { supervisionAudit.optJSONObject(it) }
+                                .singleOrNull { it.optString("symbol")==symbol &&
+                                    it.optString("state")=="ACTIVE" }?.optString("mode")
+                                    ?: "REVERSED_CAMPAIGN_QUARANTINE"
+                            else "REVERSED_CAMPAIGN_QUARANTINE"))
                     if (uniquelyProtected == null) anyUnprotected = true
                     actualRiskAuditBlocked = true
                     val conditionalReason = when {
