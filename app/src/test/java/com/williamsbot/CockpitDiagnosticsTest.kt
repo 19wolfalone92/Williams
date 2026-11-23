@@ -6,6 +6,118 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CockpitDiagnosticsTest {
+
+    /**
+     * DIAG13 fixture derived from sanitized ETH signed position/STOP values
+     * and an older, opposite-direction persisted campaign. Only the fields
+     * needed for role separation are reconstructed; no Binance credential.
+     */
+    @Test fun diag13SignedW2HCloseAllStopIsNotAnOrphanEntryOrMissingProtection() {
+        val current=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("positionAmt","0.463").put("qty","0.463")
+            .put("stop","1648.34").put("mark_price","1733.94")
+            .put("strategy_ownership_verified",false)
+            .put("stop_verification_status","EXTERNAL_PROTECTED")
+        val stopId="W2H_ETHUSDT_0be6c940adc0914fc4"
+        val signedProof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("quantity","0.463").put("stop","1648.34")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id",stopId)
+            .put("strategy_ownership_verified",false)
+            .put("automatic_trailing_authorized",false)
+            .put("observed_at_ms",now-1000L)
+        val externalStop=JSONObject().put("symbol","ETHUSDT")
+            .put("client_id",stopId).put("kind","EXTERNAL_ALGO_ORDER")
+            .put("exchange_algo_id","1000000298184852")
+            .put("order_type","STOP_MARKET").put("algo_type","CONDITIONAL")
+            .put("algo_status","NEW").put("side","SELL")
+            .put("position_side","BOTH").put("working_type","MARK_PRICE")
+            .put("trigger_price","1648.34").put("quantity","0.0")
+            .put("close_position",true).put("reduce_only",true).put("price_protect",false)
+        val oldShort=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
+            .put("role","ENTRY").put("kind","STOP").put("order_status","NEW")
+            .put("campaign_status","OPEN_PROTECTED")
+            .put("protection_status","PROTECTED")
+            .put("strategy_ownership_verified",true)
+            .put("last_reconciled_ms",now-200_000L)
+        val status=healthy().put("futures_positions",JSONArray().put(current))
+            .put("reconcile_required",true).put("execution_enabled",false)
+        val coordinator=coordinator().put("ready_for_new_entry",false)
+            .put("blocker","exchange_reconciliation_in_progress")
+            .put("pending_intent_details",JSONArray().put(oldShort))
+            .put("external_open_orders",JSONArray().put(externalStop))
+            .put("exchange_protection_observations",JSONArray().put(signedProof))
+        assertEquals("PASS",severity("EXE-03",status,coordinator))
+        assertEquals("PASS",severity("EXE-04",status,coordinator))
+        assertEquals("PASS",severity("EXE-11",status,coordinator))
+        assertEquals("FAIL",severity("EXE-12",status,coordinator))
+        assertTrue(check("EXE-03",status,coordinator).getString("detail")
+            .contains("исторических кампаний с противоположной"))
+        assertEquals(0,CockpitDiagnostics.readiness(status,coordinator,now)
+            .getJSONArray("unprotected_positions").length())
+        assertFalse(CockpitDiagnostics.readiness(status,coordinator,now)
+            .getBoolean("position_management_ready"))
+        assertFalse(CockpitDiagnostics.readiness(status,coordinator,now)
+            .getBoolean("new_entries_allowed"))
+        assertFalse(CockpitDiagnostics.readiness(status,coordinator,now)
+            .getString("new_entries_reason").contains("Найдена неподтверждённая"))
+
+        // An older proof is NOT exchange protection. Old campaign risk and
+        // orphan alarm must return instead of silently granting authorization.
+        signedProof.put("observed_at_ms",now-20_000L)
+        assertEquals("FAIL",severity("EXE-03",status,coordinator))
+        assertEquals("FAIL",severity("EXE-11",status,coordinator))
+        assertTrue(CockpitDiagnostics.readiness(status,coordinator,now)
+            .getString("new_entries_reason").contains("ETHUSDT"))
+    }
+
+    @Test fun diag13UnidentifiedOrNonProtectiveW2HOrderStillBlocksTrading() {
+        val id="W2H_ETHUSDT_signed_stop"
+        val p=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("positionAmt","0.463").put("qty","0.463")
+            .put("stop","1648.34").put("mark_price","1733.94")
+        val proof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("quantity","0.463").put("stop","1648.34")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id",id)
+            .put("strategy_ownership_verified",false)
+            .put("automatic_trailing_authorized",false)
+            .put("observed_at_ms",now-1_000L)
+        val original=JSONObject().put("symbol","ETHUSDT").put("client_id",id)
+            .put("kind","EXTERNAL_ALGO_ORDER")
+            .put("exchange_algo_id","10001").put("order_type","STOP_MARKET")
+            .put("algo_type","CONDITIONAL").put("algo_status","NEW")
+            .put("side","SELL").put("position_side","BOTH")
+            .put("working_type","MARK_PRICE").put("trigger_price","1648.34")
+            .put("quantity","0.0").put("close_position",true)
+            .put("reduce_only",true).put("price_protect",false)
+        val s=healthy().put("futures_positions",JSONArray().put(p))
+        val c=coordinator().put("external_open_orders",JSONArray().put(original))
+            .put("exchange_protection_observations",JSONArray().put(proof))
+        assertEquals("PASS",severity("EXE-11",s,c))
+        for ((field,bad) in listOf(
+            "side" to "BUY", "trigger_price" to "1647.34",
+            "working_type" to "CONTRACT_PRICE", "close_position" to false,
+            "price_protect" to true, "reduce_only" to false,
+            "order_type" to "TAKE_PROFIT_MARKET",
+            "exchange_algo_id" to "0", "quantity" to "0.463"
+        )) {
+            val changed=JSONObject(original.toString()).put(field,bad)
+            c.put("external_open_orders",JSONArray().put(changed))
+            assertEquals("Unsafe "+field,"FAIL",severity("EXE-11",s,c))
+        }
+        c.put("external_open_orders",JSONArray().put(original))
+        c.put("exchange_protection_observations",JSONArray().put(
+            JSONObject(proof.toString()).put("protection_client_id","DIFFERENT")))
+        assertEquals("FAIL",severity("EXE-11",s,c))
+        c.put("exchange_protection_observations",JSONArray().put(proof))
+        c.put("external_open_orders",JSONArray().put(original).put(JSONObject(original.toString())))
+        assertEquals("FAIL",severity("EXE-11",s,c))
+        c.put("external_open_orders",JSONArray().put(original))
+        s.put("positions_snapshot_at_ms",now-16_000L)
+        assertEquals("FAIL",severity("EXE-11",s,c))
+    }
+
     @Test fun diagnostic9SixOrphanShortsRemainVisibleWithNoLocalIntentJournal() {
         val symbols=listOf("DOGEUSDT","BTCUSDT","AVAXUSDT","ADAUSDT","XRPUSDT","LTCUSDT")
         val signed=JSONArray()
