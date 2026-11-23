@@ -27,7 +27,7 @@ internal fun tc2ExactStructuralStop(direction: String, extreme: Double, tick: Do
  * consume this proposal. This function never places or cancels Binance orders.
  *
  * Fractal trailing follows confirmed five-bar swing structure (two bars to the
- * right). TC2 uses structural 3/5-bar and confirmed-fractal protection ONLY.
+ * right). TC2 uses structural 3/4/5-bar and confirmed-fractal protection ONLY.
  * Automatic 1R/cost-buffered break-even is retired and never proposed.
  */
 internal data class FuturesTrailBar(
@@ -118,7 +118,7 @@ internal fun planFuturesStopTrail(
     else proposals.minByOrNull { it.stop }
 }
 
-/** TC2 chapter 12: structural 3/5 CLOSED price-bar and confirmed fractal stop.
+/** TC2 chapter 12: structural 3/4/5 CLOSED price-bar and confirmed fractal stop.
  * No discretionary 1R/break-even stop; unknown original R cannot prevent a
  * structurally valid protective move. */
 internal fun planWilliamsCampaignStop(
@@ -126,11 +126,14 @@ internal fun planWilliamsCampaignStop(
     markPrice: Double, tickSize: Double, openedObservedAtMs: Long,
     bars: List<FuturesTrailBar>, window: Int = 5, feeAllowance: Double = .0035
 ): FuturesStopTrailProposal? {
-    // Never infer an H1 3/5 bar stop from pre-entry candles when the
+    // Never infer an H1 3/4/5 bar stop from pre-entry candles when the
     // exchange-confirmed position opening timestamp is unknown. Reconciliation
     // must establish ownership/protection first. No fallback to invented time.
     if (openedObservedAtMs<=0L) return null
-    if (direction !in listOf("LONG","SHORT") || window !in listOf(3,5) ||
+    // TC2 permits three, FOUR, and five closed price bars. The old hard
+    // gate accidentally rejected window=4, even though the upstream study
+    // calculated its correct level. This must be executable, not shadow-only.
+    if (direction !in listOf("LONG","SHORT") || window !in listOf(3,4,5) ||
         listOf(oldStop,markPrice,tickSize).any { !it.isFinite() || it <= 0 } ||
         bars.any { !it.high.isFinite() || !it.low.isFinite() || it.low <= 0 || it.high < it.low ||
             it.openTimeMs<0L || it.openTimeMs%WILLIAMS_H1_MS!=0L } ||

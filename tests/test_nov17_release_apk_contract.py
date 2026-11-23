@@ -16,10 +16,16 @@ def source(name):
 def test_version_advances_after_46438_and_uses_stable_debug_identity():
     gradle = (ROOT / "app/build.gradle.kts").read_text()
     workflow = (ROOT / ".github/workflows/android-apk.yml").read_text()
-    assert (ROOT / "VERSION").read_text().strip() == "4.64.51"
-    assert "VERSION = '4.64.51'" in (ROOT / "server.py").read_text()
-    assert 'versionName = "4.64.51"' in gradle
-    assert 'maxOf(46451, ciRunNumber ?: 46451)' in gradle
+    # This historical regression guards a monotonic release identity; it
+    # must not pin a November 17 APK number and reject newer signed builds.
+    version = (ROOT / "VERSION").read_text().strip()
+    parts = version.split(".")
+    assert len(parts) == 3 and all(part.isdigit() for part in parts)
+    assert tuple(map(int,parts)) >= (4,64,52)
+    assert f"VERSION = '{version}'" in (ROOT / "server.py").read_text()
+    assert f'versionName = "{version}"' in gradle
+    version_code = int("".join(parts))
+    assert f'maxOf({version_code}, ciRunNumber ?: {version_code})' in gradle
     assert 'WILLIAMS_DEBUG_KEYSTORE_B64' in workflow
     assert 'EXPECTED_SIGNER_SHA256="c177bba354724c24e9668864720e9bfdb2cb545964702903a1fa306060912de9"' in workflow
     assert '"$APKSIGNER" verify --verbose "$APK"' in workflow

@@ -81,9 +81,9 @@ internal fun reviewWilliamsTc2StopTightening(
     // W4/H1 cannot be inferred from stale or still-forming H4 kline values.
     val h1=runCatching { closedWilliamsWaveBars(h1Input,"1h",asOfMs) }
         .getOrNull() ?: return refuse("CLOSED_H1_HISTORY_NOT_VERIFIED")
-    // TC2 p.165 offers both the last-three and last-five-bar exits. Record
-    // both as contemporaneously knowable, exact-tick *shadow* levels even if
-    // H4 research or the live 5-bar stop review later defers a replacement.
+    // TC2 p.161/165 presents 3, 4 and 5 closed-bar exits. Record ALL
+    // as contemporaneously knowable, exact-tick shadow levels even if
+    // the separately chosen live window later defers a replacement.
     // This observer has no independent right to change an exchange STOP.
     audit.put("tc2_three_five_bar_shadow", tc2ThreeFiveBarStudy(
         direction, oldStop, mark, tick, openedAtMs, asOfMs,
@@ -91,8 +91,17 @@ internal fun reviewWilliamsTc2StopTightening(
     ))
     val h4=runCatching { closedWilliamsWaveBars(h4Input,"4h",asOfMs) }
         .getOrNull() ?: return refuse("CLOSED_H4_HISTORY_NOT_VERIFIED")
+    // TC2 3/4/5 are real optional book exits. Unlike the legacy version
+    // that merely displayed windows 3/4 in SHADOW and always executed 5,
+    // select ONE reproducible, conservative live window from signed closed
+    // H1/H4 data. The chooser NEVER authorizes a Binance mutation alone.
+    val barChoice=chooseTc2AdaptiveBarWindow(direction,openedAtMs,h1,h4)
+    audit.put("tc2_live_345_bar_choice",barChoice.evidence())
+        .put("tc2_live_bar_window",barChoice.window)
+        .put("tc2_live_345_selection_is_engineering_not_book_quote",true)
     val candidate=planWilliamsCampaignStop(direction,oldStop,entry,initialStop,mark,tick,
-        openedAtMs,h1.map { FuturesTrailBar(it.t,it.h,it.l) },feeAllowance=feeAndSlippagePct)
+        openedAtMs,h1.map { FuturesTrailBar(it.t,it.h,it.l) },
+        window=barChoice.window,feeAllowance=feeAndSlippagePct)
         ?: return refuse("NO_NEW_CONFIRMED_H1_PROTECTION_STRUCTURE")
 
     val lastFive=h1.takeLast(5)
@@ -120,16 +129,21 @@ internal fun reviewWilliamsTc2StopTightening(
                     h1[(pivotIndex+2).coerceAtMost(h1.lastIndex)].t+WILLIAMS_H1_MS)
         }
     }
-    val afterEntry=lastFive.all { it.t>=openedAtMs }
-    audit.put("five_full_h1_bars_after_entry",afterEntry)
-    // A 5-bar window that contains pre-entry candles is not proof that the
-    // CURRENT campaign has developed a full, new H1 protective structure.
-    if(candidate.reason.startsWith("TC2_LAST_") && !afterEntry)
-        return refuse("FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE")
+    val fiveAfterEntry=lastFive.all { it.t>=openedAtMs }
+    // One cannot use an H1 candle that started before this position was
+    // independently approved / observed. A selected three- or four-bar
+    // mode needs its OWN full post-entry history; never reuse old bars.
+    val chosenAfterEntry=h1.takeLast(barChoice.window).all { it.t>=openedAtMs }
+    audit.put("five_full_h1_bars_after_entry",fiveAfterEntry)
+        .put("chosen_window_full_h1_bars_after_entry",chosenAfterEntry)
+    if(candidate.reason.startsWith("TC2_LAST_") && !chosenAfterEntry)
+        return refuse(if(barChoice.window==5)
+            "FIVE_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE"
+            else "SELECTED_"+barChoice.window+"_CLOSED_H1_BARS_AFTER_ENTRY_NOT_YET_AVAILABLE")
 
     // Price evidence, not an unverified Elliott degree: opposite H4 lower
     // lows/lower closes (LONG), or higher highs/higher closes (SHORT), is a
-    // plausible developing correction; do not ratchet a discretionary 5-bar
+    // plausible developing correction; do not ratchet a discretionary 3/4/5-bar
     // STOP into it before fresh favorable structure is observed.
     val a=lastH4[0];val b=lastH4[1]
     val h4Adverse=if(direction=="LONG") b.l<a.l && b.c<a.c else b.h>a.h && b.c>a.c
@@ -161,7 +175,7 @@ internal fun reviewWilliamsTc2StopTightening(
     // the actual H1 median range between mark and STOP. Ordinary hourly
     // oscillation then left barely half a candle of breathing room.
     // Engineering caution, NOT a TC2 quotation or a forecast edge:
-    // a discretionary 3/5-bar replacement must retain at least a FULL
+    // a discretionary 3/4/5-bar replacement must retain at least a FULL
     // observed typical H1 range plus 10% uncertainty and two exchange ticks.
     // Confirmed structural fractals remain independently evaluated.
     val ranges=last12H1.map { it.h-it.l }.sorted()
