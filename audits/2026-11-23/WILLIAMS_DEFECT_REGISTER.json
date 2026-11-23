@@ -53,6 +53,33 @@
       ],
       "ci": "NEW_HEAD_CI_PENDING_OR_NOT_PROVEN",
       "residual_risk": "2024 tick filters not certified; 2026 SUI tick used for illustrative paper replay; closed-period dataset is not independent holdout."
+    },
+    {
+      "id": "WILL-CAUSAL-003",
+      "priority": "P1",
+      "status": "CODE_FIXED_CI_VERIFICATION_REQUIRED",
+      "title": "Corrupted contiguous native M15/H1/H4/weekly/monthly candles could pass market-data and SQLite cache boundaries",
+      "reproduction": "Native market-data cache validated consecutive candle timestamps but accepted a 5-minute-shifted M15 or 15-minute-shifted H1 series, and monthly candles not at first-day UTC 00:00.",
+      "root_cause": "Market-data/native SQLite integrity and last-closed freshness checked relative adjacency, not absolute UTC-native kline opening grid.",
+      "affected": [
+        "FuturesCandleCacheIntegrity.kt",
+        "BinanceUsdMFuturesMarketData.kt::nativeCandleTimelineContiguous",
+        "BinanceUsdMFuturesMarketData.kt::isKlineOpenTimeClosed",
+        "BinanceUsdMFuturesMarketData.kt::isLastClosedCandleCurrent"
+      ],
+      "fix": "Shared fixed-grid alignment helper (Monday weekly origin) plus UTC calendar-month validation applied at all cache/closed-bar gates; negative regression both sides and frames.",
+      "commits": [
+        "0a46ce1802b8f01a30f484f555a487aff4042500",
+        "8c9fb16979a50bc1abce661313da9236fa019d7c",
+        "040fbe6e03c0f934d64c1498741999d566a0d741"
+      ],
+      "regression_tests": [
+        "app/src/test/java/com/williamsbot/FuturesNativeUtcCandleGridRegressionTest.kt",
+        "app/src/test/java/com/williamsbot/FuturesCandleCacheIntegrityTest.kt",
+        "app/src/test/java/com/williamsbot/BinanceUsdMFuturesMarketDataTest.kt"
+      ],
+      "ci": "NEW_HEAD_CI_PENDING_OR_NOT_PROVEN",
+      "residual_risk": "Do not assume all exchange-native kline timestamps validated in every external cache and Python runtime; Android tests and signed integration remain mandatory."
     }
   ],
   "evidence_gaps_not_confirmed_bugs": [
