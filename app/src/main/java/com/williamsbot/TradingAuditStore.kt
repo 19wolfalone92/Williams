@@ -23,9 +23,27 @@ internal fun stopTrailDecisionAuditEvent(
     require(direction == "LONG" || direction == "SHORT")
     require(phase in setOf("REVIEW_DEFERRED", "PROPOSED_BEFORE_MUTATION",
         "EXCHANGE_RESPONSE_OK", "EXCHANGE_NOT_CONFIRMED", "EXCHANGE_EXCEPTION_UNVERIFIED",
-        "RECOVERY_COMPLETED"))
+        "RECOVERY_COMPLETED", "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION"))
     require(evidence.optString("schema") == "WILLIAMS_TC2_STOP_REVIEW_V1")
     require(evidence.optString("direction") == direction)
+    // DIAG12: the autonomous orphan STOP-only analysis emitted this phase
+    // before its two signed Binance observations. The audit's allowed-phase
+    // contract previously threw a bare IllegalArgumentException every 30 s,
+    // so the ONLY safe on-device supervisor never reached enrollment.
+    // This is evidence of an H1/H4 review, *not* entry ownership, a Binance
+    // mutation receipt, or permission to cancel the existing signed STOP.
+    if (phase == "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION") {
+        require(campaignId == "AUTO_RECOVERY:$symbol" &&
+            evidence.optString("autonomous_orphan_mode") == "AUTO_VERIFIED_STOP_ONLY" &&
+            evidence.opt("strategy_ownership_verified") == false &&
+            evidence.opt("no_add_close_reverse") == true &&
+            evidence.optString("decision") in setOf("DEFER", "PROPOSE_TIGHTEN_ONLY") &&
+            (evidence.optString("decision") != "DEFER" ||
+                evidence.optString("blocker").isNotBlank()) &&
+            exchangeOutcome == null) {
+            "AUTO_RECOVERY_REVIEW_MUST_BE_OBSERVATION_ONLY"
+        }
+    }
     if (phase == "REVIEW_DEFERRED")
         require(evidence.optString("decision") == "DEFER" &&
             evidence.optString("blocker").isNotBlank()) {

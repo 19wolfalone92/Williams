@@ -155,7 +155,11 @@ internal class FuturesPriceProtectedStopHandoff(
         // Do not cancel the human's older STOP against that weaker proof.
         return order.optString("clientAlgoId")==tx.optString("new_id") &&
             order.optString("closePosition").equals("true",true) &&
-            !order.optString("reduceOnly").equals("true",true) &&
+            // Binance USD-M signed GET may report reduceOnly=true for an
+            // exchange-native closePosition=true order. The request MUST
+            // omit reduceOnly, but this signed response flag is not proof of
+            // a weak fixed-quantity stop. Full close-all authority is proved
+            // by closePosition=true + original full-position STOP identity.
             order.optString("workingType")=="MARK_PRICE" &&
             isBinanceUnrestrictedStopTrigger(order) &&
             isFullPositionFuturesStop(order,tx.getString("symbol"),s.direction,s.quantity,s.mark) &&

@@ -6,6 +6,58 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StopTrailDecisionAuditEventTest {
+    /**
+     * DIAG12 device-signed reproduction: 4.64.50 repeats
+     * AUTONOMOUS_ORPHAN_ANALYSIS_BLOCKED ETHUSDT: Failed requirement.
+     * The H1/H4 pre-adoption event uses this legitimate phase, which the
+     * historical event contract rejected before autonomous STOP-only
+     * supervision could ever reach its two signed snapshots.
+     */
+    @Test fun diag12SignedOrphanH1H4ReviewMustBeDurableBeforeSafeAdoption() {
+        for (decision in listOf("DEFER","PROPOSE_TIGHTEN_ONLY")) {
+            val facts=JSONObject().put("schema","WILLIAMS_TC2_STOP_REVIEW_V1")
+                .put("direction","LONG").put("decision",decision)
+                .put("blocker",if(decision=="DEFER") "NO_NEW_CONFIRMED_H1_PROTECTION_STRUCTURE" else "")
+                .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
+                .put("strategy_ownership_verified",false)
+                .put("no_add_close_reverse",true)
+                .put("as_of_ms",1_800_000_000_000L)
+            val event=stopTrailDecisionAuditEvent("ETHUSDT","LONG",
+                "AUTO_RECOVERY:ETHUSDT","CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",facts,
+                recordedAtMs=1_800_000_000_000L)
+            assertEquals("CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",event.getString("phase"))
+            assertTrue(event.isNull("exchange_outcome"))
+            assertFalse(event.getJSONObject("decision_evidence")
+                .getBoolean("strategy_ownership_verified"))
+        }
+    }
+
+    @Test fun diag12OrphanH1H4AdmissionAuditCannotInventOwnershipOrExchangeMutation() {
+        fun evidence()=JSONObject().put("schema","WILLIAMS_TC2_STOP_REVIEW_V1")
+            .put("direction","LONG").put("decision","DEFER")
+            .put("blocker","NO_NEW_CONFIRMED_H1_PROTECTION_STRUCTURE")
+            .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
+            .put("strategy_ownership_verified",false)
+            .put("no_add_close_reverse",true)
+        val invalid=listOf(
+            evidence().put("strategy_ownership_verified",true),
+            evidence().put("no_add_close_reverse",false),
+            evidence().put("autonomous_orphan_mode","TC2_FULL_OWNERSHIP"),
+            evidence().put("direction","SHORT")
+        )
+        for (item in invalid) {
+            assertFalse(runCatching {
+                stopTrailDecisionAuditEvent("ETHUSDT","LONG","AUTO_RECOVERY:ETHUSDT",
+                    "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",item,
+                    recordedAtMs=1_800_000_000_000L)
+            }.isSuccess)
+        }
+        assertFalse(runCatching {
+            stopTrailDecisionAuditEvent("ETHUSDT","LONG","AUTO_RECOVERY:ETHUSDT",
+                "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",evidence(),
+                JSONObject().put("ok",true),1_800_000_000_000L)
+        }.isSuccess)
+    }
     @Test fun longEvidenceAndExchangeReceiptRemainByteForByteRecoverableAfterSerialization() {
         val candles = JSONArray((0 until 250).map { i ->
             JSONObject().put("open_time_ms", i * 3_600_000L)

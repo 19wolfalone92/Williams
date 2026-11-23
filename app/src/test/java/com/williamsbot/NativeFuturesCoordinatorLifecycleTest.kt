@@ -379,6 +379,40 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    /**
+     * DIAG12 actual Binance GET returned closePosition=true AND
+     * reduceOnly=true on W2H_ETHUSDT_*. The local API sends no reduceOnly
+     * when requesting close-all, but Binance can report it as a flag.
+     * Rejecting this valid signed close-all makes the handoff journal stick.
+     */
+    @Test fun diag12SignedCloseAllStopWithExchangeReduceOnlyTrueIsStillFullPositionProtection() {
+        val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
+        exchange.quantity=0.7;exchange.entry=2100.00;exchange.mark=2300.00
+        exchange.contract=2300.00
+        val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
+            .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
+            .put("triggerPrice","2150.00").put("quantity","0.7")
+            .put("reduceOnly",true).put("closePosition",false)
+            .put("priceProtect",true).put("actualOrderId","")
+        exchange.algos["77"]=manual
+        exchange.afterAlgoMutation={ request,row ->
+            if(request.method=="POST" && row.optString("clientAlgoId").startsWith("W2H_"))
+                row.put("closePosition",true).put("reduceOnly",true)
+        }
+        val handoff=FuturesPriceProtectedStopHandoff(exchange.adapter(),Journal(),
+            System::currentTimeMillis,"diag12-demo-account")
+        val result=handoff.advance("ETHUSDT")
+        assertEquals(result.toString(),"NEW_UNRESTRICTED_MARK_PRICE_STOP_SIGNED_CONFIRMED",
+            result.getString("status"))
+        assertEquals(1,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals("CANCELED",manual.getString("algoStatus"))
+        val signed=exchange.algos.values.single { it.optString("algoStatus")=="NEW" }
+        assertEquals("true",signed.optString("closePosition"))
+        assertEquals("true",signed.optString("reduceOnly"))
+    }
+
     @Test fun marginLeaseCannotExtendAnEntryTimePermissionAtFinalTransport() {
         for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             val now = System.currentTimeMillis()

@@ -115,6 +115,16 @@ class StandaloneRuntimeReconciliationTest {
     @Test
     fun healthAndExecutionContractUseOneAuthoritativeStateMapping() {
         assertEquals("RECONCILE_REQUIRED", authoritativeRuntimeDisplayState(true, true, false, false, "RECONCILE_REQUIRED", "ENTRY_PENDING"))
+        // DIAG12 real device: coordinator unresolved SHORT history vs signed
+        // ETH LONG; a paused entry flag must not conceal exchange conflict.
+        assertEquals("RECONCILE_REQUIRED", authoritativeRuntimeDisplayState(
+            true,true,true,false,"RECONCILE_REQUIRED","ENTRY_PENDING"))
+        assertEquals("RECONCILE_REQUIRED", authoritativeRuntimeDisplayState(
+            true,true,true,false,"READY","RECONCILE_REQUIRED"))
+        assertEquals("PAUSED", authoritativeRuntimeDisplayState(
+            true,true,true,false,"READY","READY_FLAT"))
+        assertEquals("KILL_SWITCH_LATCHED", authoritativeRuntimeDisplayState(
+            true,true,true,true,"RECONCILE_REQUIRED","READY_FLAT"))
         assertEquals("ENTRY_PENDING", authoritativeRuntimeDisplayState(true, true, false, false, "ENTRY_PENDING", "READY_FLAT"))
         assertEquals("OPEN", authoritativeRuntimeDisplayState(true, true, false, false, "OPEN_PROTECTED", "ENTRY_PENDING"))
         assertEquals("STOPPED", authoritativeRuntimeDisplayState(true, false, false, false, "READY", "STOPPED"))

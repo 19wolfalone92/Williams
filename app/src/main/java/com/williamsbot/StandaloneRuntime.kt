@@ -361,6 +361,11 @@ internal fun authoritativeRuntimeDisplayState(
     !campaignMode -> fallbackState
     killLatched -> "KILL_SWITCH_LATCHED"
     !running -> "STOPPED"
+    // DIAG12: PAUSED is an operator new-entry preference, not an
+    // exchange reconciliation outcome. Never hide a real signed Binance
+    // mismatch behind PAUSED while coordinator remains RECONCILE_REQUIRED.
+    coordinatorState == "RECONCILE_REQUIRED" || fallbackState == "RECONCILE_REQUIRED" ->
+        "RECONCILE_REQUIRED"
     paused -> "PAUSED"
     coordinatorState == "READY" -> "READY_FLAT"
     coordinatorState == "OPEN_PROTECTED" -> "OPEN"
@@ -6948,8 +6953,9 @@ private class NativeEngine(
      * is left unchanged. This method can never open/close/add/reverse trades.
      */
     private fun analyzeAndEnrollAutonomousRecoveredStops() {
-        if(!running || !userStreamConnected || userStreamSyncRequired ||
-            killLatched || !campaignEngineEnabled) return
+        if(!autonomousStopOnlyRecoveryMonitorAllowed(
+                running,userStreamConnected,userStreamSyncRequired,
+                campaignEngineEnabled,killLatched)) return
         val source=futuresCampaignCoordinator.status()
         val signedProofs=CockpitDiagnostics.rows(source.optJSONArray("exchange_protection_observations"))
         if(signedProofs.isEmpty()) return
@@ -6986,18 +6992,22 @@ private class NativeEngine(
             val stop=proof.optString("stop").toDoubleOrNull() ?: continue
             val entry=pos.optString("entryPrice").toDoubleOrNull() ?: continue
             if(!stop.isFinite() || stop<=0.0 || !entry.isFinite() || entry<=0.0) continue
+            var recoveryStage="FETCH_SIGNED_H1_CANDLES"
             runCatching {
                 val h1=fetchCandles(symbol,"1h",180)
+                recoveryStage="FETCH_SIGNED_H4_CANDLES"
                 val h4=fetchCandles(symbol,"4h",80)
                 require(h1.size>=45 && h4.size>=45) {
                     "Book wave/Alligator evidence requires 45 H1/H4 candles"
                 }
                 val h1Wave=h1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
                 val h4Wave=h4.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                recoveryStage="CHECK_CLOSED_H1_HISTORY"
                 val exchangeNow=futuresMarketData.exchangeNowMs()
                 require(williamsClosedH1HistoryBlocker(h1Wave,exchangeNow)==null) {
                     "H1 closed-candle source not independently verified"
                 }
+                recoveryStage="REVIEW_CLOSED_H1_H4_TC2_STOP"
                 val mark=futuresMarketData.markPrice(symbol)
                 val tick=symbolFilters(symbol).tick
                 val review=reviewWilliamsTc2StopTightening(
@@ -7013,10 +7023,12 @@ private class NativeEngine(
                     .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
                     .put("strategy_ownership_verified",false)
                     .put("no_add_close_reverse",true)
+                recoveryStage="PERSIST_AUTO_RECOVERY_H1_H4_REVIEW"
                 val evidenceId=auditStore.recordStopTrailDecision(
                     symbol,direction,"AUTO_RECOVERY:"+symbol,
                     "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",evidence)
                 check(evidenceId>0L) { "Book analysis audit not durable" }
+                recoveryStage="TWO_SIGNED_POSITION_STOP_SNAPSHOTS"
                 val result=futuresCampaignCoordinator.enrollAutonomousRecoveredStopOnly(
                     symbol,direction,quantity.abs().toPlainString(),
                     pos.optString("entryPrice"),proof.optString("stop")
@@ -7027,8 +7039,9 @@ private class NativeEngine(
                         "SL retained; no new position, no market close, no strategy ownership; evidence="+evidenceId)
                 }
             }.onFailure {
-                val detail="AUTONOMOUS_ORPHAN_ANALYSIS_BLOCKED "+symbol+": "+
-                    (it.message ?: it.javaClass.simpleName)
+                val detail="AUTONOMOUS_ORPHAN_ANALYSIS_BLOCKED "+symbol+
+                    "; stage="+recoveryStage+"; type="+it.javaClass.simpleName+": "+
+                    safeDiagnosticText(it.message ?: "stage failed")
                 lastError=detail
                 runCatching { auditStore.recordCockpitEvent("AUTO_RECOVERY",symbol,direction,
                     "NOT_AUTHORIZED",detail) }
@@ -7038,8 +7051,9 @@ private class NativeEngine(
 
     private fun scheduleAutonomousOrphanAnalysis() {
         val now=System.currentTimeMillis()
-        if(!running || !userStreamConnected || userStreamSyncRequired ||
-            killLatched || !campaignEngineEnabled) return
+        if(!autonomousStopOnlyRecoveryMonitorAllowed(
+                running,userStreamConnected,userStreamSyncRequired,
+                campaignEngineEnabled,killLatched)) return
         synchronized(this) {
             if(autonomousOrphanAnalysisRunning ||
                 now-autonomousOrphanAnalysisStartedAtMs<30_000L) return
