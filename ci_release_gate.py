@@ -487,7 +487,9 @@ def main() -> None:
     for needle in (
         "UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP",
         "williamsH1CounterImpulseVeto(",
-        "val minDistance=max(2.0*tick,med*0.5)",
+        "val minDistance=max(2.0*tick,med*fullRangeGuard)",
+        "val fullRangeGuard=if(candidate.reason.startsWith(\"TC2_LAST_\")) 1.1 else 0.5",
+        "H1_ADVERSE_FIVE_BAR_CORRECTION_RETAIN_SIGNED_STOP",
         "h1_full_closed_source",
         "h4_full_closed_source",
         "full_source_is_exclusively_closed_at_asof",
@@ -519,6 +521,10 @@ def main() -> None:
          "Signed BTC/SOL/DOGE causal H1 regression")
     must(test_case, "actualTc2VoluntaryReviewDefersAdverseImpulseButNotRecoveredClose",
          "End-to-end TC2 review shock guard")
+    must(test_case, "diag15FiveBarNearNoiseStopIsDeferredEvenWhenCampaignProfitable",
+         "DIAG15 signed SL too-close regression")
+    must(test_case, "fullH1RangeGuardIsDirectionSymmetricAndDoesNotDisableConfirmedStructure",
+         "DIAG15 profitable LONG/SHORT H1 buffer safety")
     must(read("app/src/test/java/com/williamsbot/StopTrailDecisionAuditEventTest.kt"),
          "signedStopIsMatchedAgainstActualSubmittedTickPriceNotFloatArtifacts",
          "Tick-exact signed Binance stop audit test")
