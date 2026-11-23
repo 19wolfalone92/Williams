@@ -8,14 +8,14 @@ import org.junit.Test
 class CockpitDiagnosticsTest {
 
     @Test fun diag14StopOnlyManagementDoesNotForgeEntryOwnershipOrReleaseEntryGate() {
-        val id="W2H_ETHUSDT_0be6c940adc0914fc4"
+        val id="W2H_ETHUSDT_SYNTHETIC_PROOF"
         val p=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("positionAmt","0.463").put("qty","0.463")
-            .put("stop","1648.34").put("mark_price","1728.30")
+            .put("positionAmt","0.50").put("qty","0.50")
+            .put("stop","1520.0").put("mark_price","1630.0")
             .put("stop_verification_status","EXTERNAL_PROTECTED")
             .put("strategy_ownership_verified",false)
         val proof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("quantity","0.463").put("stop","1648.34")
+            .put("quantity","0.50").put("stop","1520.0")
             .put("stop_proof","EXTERNAL_PROTECTED").put("protection_client_id",id)
             .put("management_mode","AUTO_VERIFIED_STOP_ONLY")
             .put("strategy_ownership_verified",false)
@@ -57,13 +57,13 @@ class CockpitDiagnosticsTest {
      */
     @Test fun diag13SignedW2HCloseAllStopIsNotAnOrphanEntryOrMissingProtection() {
         val current=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("positionAmt","0.463").put("qty","0.463")
-            .put("stop","1648.34").put("mark_price","1733.94")
+            .put("positionAmt","0.50").put("qty","0.50")
+            .put("stop","1520.0").put("mark_price","1630.0")
             .put("strategy_ownership_verified",false)
             .put("stop_verification_status","EXTERNAL_PROTECTED")
-        val stopId="W2H_ETHUSDT_0be6c940adc0914fc4"
+        val stopId="W2H_ETHUSDT_SYNTHETIC_PROOF"
         val signedProof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("quantity","0.463").put("stop","1648.34")
+            .put("quantity","0.50").put("stop","1520.0")
             .put("stop_proof","EXTERNAL_PROTECTED")
             .put("protection_client_id",stopId)
             .put("strategy_ownership_verified",false)
@@ -75,7 +75,7 @@ class CockpitDiagnosticsTest {
             .put("order_type","STOP_MARKET").put("algo_type","CONDITIONAL")
             .put("algo_status","NEW").put("side","SELL")
             .put("position_side","BOTH").put("working_type","MARK_PRICE")
-            .put("trigger_price","1648.34").put("quantity","0.0")
+            .put("trigger_price","1520.0").put("quantity","0.0")
             .put("close_position",true).put("reduce_only",true).put("price_protect",false)
         val oldShort=JSONObject().put("symbol","ETHUSDT").put("direction","SHORT")
             .put("role","ENTRY").put("kind","STOP").put("order_status","NEW")
@@ -117,10 +117,10 @@ class CockpitDiagnosticsTest {
     @Test fun diag13UnidentifiedOrNonProtectiveW2HOrderStillBlocksTrading() {
         val id="W2H_ETHUSDT_signed_stop"
         val p=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("positionAmt","0.463").put("qty","0.463")
-            .put("stop","1648.34").put("mark_price","1733.94")
+            .put("positionAmt","0.50").put("qty","0.50")
+            .put("stop","1520.0").put("mark_price","1630.0")
         val proof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
-            .put("quantity","0.463").put("stop","1648.34")
+            .put("quantity","0.50").put("stop","1520.0")
             .put("stop_proof","EXTERNAL_PROTECTED")
             .put("protection_client_id",id)
             .put("strategy_ownership_verified",false)
@@ -131,7 +131,7 @@ class CockpitDiagnosticsTest {
             .put("exchange_algo_id","10001").put("order_type","STOP_MARKET")
             .put("algo_type","CONDITIONAL").put("algo_status","NEW")
             .put("side","SELL").put("position_side","BOTH")
-            .put("working_type","MARK_PRICE").put("trigger_price","1648.34")
+            .put("working_type","MARK_PRICE").put("trigger_price","1520.0")
             .put("quantity","0.0").put("close_position",true)
             .put("reduce_only",true).put("price_protect",false)
         val s=healthy().put("futures_positions",JSONArray().put(p))
@@ -143,7 +143,7 @@ class CockpitDiagnosticsTest {
             "working_type" to "CONTRACT_PRICE", "close_position" to false,
             "price_protect" to true, "reduce_only" to false,
             "order_type" to "TAKE_PROFIT_MARKET",
-            "exchange_algo_id" to "0", "quantity" to "0.463"
+            "exchange_algo_id" to "0", "quantity" to "0.50"
         )) {
             val changed=JSONObject(original.toString()).put(field,bad)
             c.put("external_open_orders",JSONArray().put(changed))
