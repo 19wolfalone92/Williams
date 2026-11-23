@@ -8,12 +8,12 @@ class FuturesQuarantinedExitObservationTest {
     private fun intent()=JSONObject()
         .put("symbol","ETHUSDT").put("direction","LONG")
         .put("intent_role","EXIT").put("kind","MARKET_REDUCE_ONLY")
-        .put("client_id","W2X_ETHUSDT_970401a8").put("quantity","0.463")
+        .put("client_id","W2X_ETHUSDT_SYNTHETIC").put("quantity","0.50")
         .put("exchange_status","SUBMISSION_UNKNOWN")
-    private fun signed(status:String="FILLED",executed:String="0.463")=JSONObject()
-        .put("symbol","ETHUSDT").put("clientOrderId","W2X_ETHUSDT_970401a8")
+    private fun signed(status:String="FILLED",executed:String="0.50")=JSONObject()
+        .put("symbol","ETHUSDT").put("clientOrderId","W2X_ETHUSDT_SYNTHETIC")
         .put("side","SELL").put("type","MARKET").put("positionSide","BOTH")
-        .put("reduceOnly",true).put("origQty","0.463")
+        .put("reduceOnly",true).put("origQty","0.50")
         .put("executedQty",executed).put("orderId","10290101")
         .put("status",status)
 
@@ -21,7 +21,7 @@ class FuturesQuarantinedExitObservationTest {
         val local=intent()
         val receipt=verifiedQuarantinedSignedExit(local,signed())!!
         assertEquals("FILLED",receipt.signedStatus)
-        assertEquals("0.463",receipt.executedQuantity)
+        assertEquals("0.50",receipt.executedQuantity)
         assertFalse(receipt.stillActive)
         // The side/position remains an external fact; no ledger mutation
         // occurs in this pure observation function.
@@ -49,8 +49,8 @@ class FuturesQuarantinedExitObservationTest {
             "positionSide" to "LONG",
             "type" to "LIMIT",
             "reduceOnly" to false,
-            "origQty" to "0.462",
-            "executedQty" to "0.464",
+            "origQty" to "0.49",
+            "executedQty" to "0.51",
             "orderId" to "0"
         )) {
             val changed=JSONObject(valid.toString()).put(name,bad)
