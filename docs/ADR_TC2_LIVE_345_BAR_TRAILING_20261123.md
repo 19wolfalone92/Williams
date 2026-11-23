@@ -3,6 +3,7 @@
 ## Source and scope
 - Source: diagnostic `Williams_Diagnostics (15).zip` supplied by the user; specifically `stop_trail_decisions_full.json` and its `tc2_three_five_bar_shadow` (3/4/5 book comparison). The ZIP is evidence from its capture time, not a current Binance signed query.
 - TC2 source metadata in `Tc2ThreeFiveBarStudy.kt`: Russian edition chapter 12, scanned PDF pp. 161 and 165; **three, four and five last completed H1 bars**. The book provides permitted alternatives; it does not provide this automatic choice algorithm.
+- **Additional P0 discovered by red test:** `FuturesStopTrailPolicy.kt::planWilliamsCampaignStop` hard-coded `window !in listOf(3,5)` and returned `null` for FOUR bars even if the selector correctly chose 4. It now accepts `{3,4,5}`, with executable tests and CI static contract.
 - Regression before change: `WilliamsStopTrailReview.kt` called `planWilliamsCampaignStop(... window=5)` exclusively. 3/4 were exported in `tc2_three_five_bar_shadow` with `execution_authority=false`. The old five-bar STOP could be ratcheted too near the mark (DIAG15); the separate 110% median H1 noise guard and H1/H4 correction veto were added in PR #269.
 - Keep separate Williams AI completely untouched.
 
