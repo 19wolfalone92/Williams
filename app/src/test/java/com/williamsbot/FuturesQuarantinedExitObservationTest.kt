@@ -63,4 +63,26 @@ class FuturesQuarantinedExitObservationTest {
         assertNull(verifiedQuarantinedSignedExit(
             intent().put("intent_role","ENTRY"),valid))
     }
+
+    @Test fun diag16UnknownExitNeverAbortsSignedStopSweepOrReplaysSubmission() {
+        // Diagnostic #16: exact EXIT clientOrderId is NOT_FOUND, signed ETH
+        // LONG still exists, historical SHORT exit ownership is unresolved.
+        for (live in listOf(false, true))
+            for (standard in listOf(false, true))
+                for (conditional in listOf(false, true)) {
+                    val result = classifyUnqueryableFuturesExit(live, standard, conditional)
+                    val conflict = live || standard || conditional
+                    assertEquals(conflict, result.blocksNewRisk)
+                    assertEquals(!conflict, result.flatSnapshotOnly)
+                    assertFalse("No signed non-placement receipt permits a second EXIT POST",
+                        result.mayRetrySubmission)
+                }
+        val unknown = intent()
+        val disposition = classifyUnqueryableFuturesExit(true, false, false)
+        assertTrue(disposition.blocksNewRisk)
+        assertFalse(disposition.flatSnapshotOnly)
+        // Pure classification must leave both signed proof and durable intent
+        // untouched: the coordinator may only add quarantine audit fields.
+        assertEquals("SUBMISSION_UNKNOWN", unknown.optString("exchange_status"))
+    }
 }
