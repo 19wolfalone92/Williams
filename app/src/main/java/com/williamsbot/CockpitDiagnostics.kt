@@ -570,6 +570,11 @@ internal object CockpitDiagnostics {
             unownedSignedPositions.map { it.optString("symbol") })
             .filter { it.isNotBlank() }.distinct()
         val signedOwnershipObserved=positions.all { it.has("strategy_ownership_verified") }
+        // Existing signed STOP-only management is a separate, strictly
+        // bounded capability. It never proves original Williams ENTRY.
+        val signedStopOnlyManagementSymbols=unownedSignedPositions.filter {
+            operatorManagementProven(it,coordinator,now)
+        }.map { it.optString("symbol") }.distinct()
         check("EXE-12", "execution", "Восстановленные позиции без подтверждённого владельца стратегии", when {
             !positionsFresh(status,now) || coordinator.optBoolean("reconciliation_running") ->
                 "NOT_VERIFIED"
@@ -582,9 +587,12 @@ internal object CockpitDiagnostics {
             "${unownedSymbols.size}; из signed positions=${unownedSignedPositions.size}; " +
             "из восстановленных журналов=${unownedRecoveredPositions.size}; символы=" +
             unownedSymbols.joinToString(", ").ifBlank { "нет" } +
-            ". Защитный STOP может существовать, но это не разрешение автоматического переноса SL. " +
-            "НЕ создавать повторный вход, не считать такие позиции управляемыми; " +
-            "требуется проверка точных исполнений/клиентских ID на Binance. " +
+            ". Подтверждённое отдельное STOP-only сопровождение (НЕ ENTRY ownership)=" +
+            signedStopOnlyManagementSymbols.joinToString(", ").ifBlank { "нет" } +
+            ". Защитный STOP может существовать, но это не разрешение автоматического переноса SL " +
+            "по правам старой торговой кампании. STOP-only требует независимой подписанной защиты, " +
+            "свежего журнала и отдельного Execution Door; новые входы/доливки/развороты запрещены. " +
+            "Для восстановления именно стратегии требуется доказательство исходных исполнений Binance. " +
             "Проверка диагностическая: ни одна биржевая заявка не изменяется.")
         val explicitlyUnprotected = entries.any { intent ->
             !isUnownedRecovery(intent) && !displacedByProtectedOppositeExposure(intent) &&
