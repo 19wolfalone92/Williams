@@ -16,7 +16,8 @@ class FuturesNativeUtcCandleGridRegressionTest {
         val market=BinanceUsdMFuturesMarketData()
         for((interval,step) in listOf("1h" to hour,"4h" to 4*hour,"15m" to 900_000L)) {
             val aligned=(0 until 48).map { jan2026 + it*step }
-            val shifted=aligned.map { it+15*60_000L }
+            val nonNativeShift=if (interval=="15m") 5*60_000L else 15*60_000L
+            val shifted=aligned.map { it+nonNativeShift }
             assertTrue(interval, futuresClosedCandleTimesContiguous(aligned,step))
             assertTrue(interval,market.nativeCandleTimelineContiguous(aligned,interval))
             assertFalse(interval, futuresClosedCandleTimesContiguous(shifted,step))
