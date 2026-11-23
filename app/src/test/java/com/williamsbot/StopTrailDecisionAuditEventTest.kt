@@ -21,10 +21,10 @@ class StopTrailDecisionAuditEventTest {
                 .put("autonomous_orphan_mode","AUTO_VERIFIED_STOP_ONLY")
                 .put("strategy_ownership_verified",false)
                 .put("no_add_close_reverse",true)
-                .put("as_of_ms",1_795_405_332_535L)
+                .put("as_of_ms",1_800_000_000_000L)
             val event=stopTrailDecisionAuditEvent("ETHUSDT","LONG",
                 "AUTO_RECOVERY:ETHUSDT","CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",facts,
-                recordedAtMs=1_795_405_332_535L)
+                recordedAtMs=1_800_000_000_000L)
             assertEquals("CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",event.getString("phase"))
             assertTrue(event.isNull("exchange_outcome"))
             assertFalse(event.getJSONObject("decision_evidence")
@@ -49,13 +49,13 @@ class StopTrailDecisionAuditEventTest {
             assertFalse(runCatching {
                 stopTrailDecisionAuditEvent("ETHUSDT","LONG","AUTO_RECOVERY:ETHUSDT",
                     "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",item,
-                    recordedAtMs=1_795_405_332_535L)
+                    recordedAtMs=1_800_000_000_000L)
             }.isSuccess)
         }
         assertFalse(runCatching {
             stopTrailDecisionAuditEvent("ETHUSDT","LONG","AUTO_RECOVERY:ETHUSDT",
                 "CLOSED_H1_H4_REVIEW_BEFORE_ADOPTION",evidence(),
-                JSONObject().put("ok",true),1_795_405_332_535L)
+                JSONObject().put("ok",true),1_800_000_000_000L)
         }.isSuccess)
     }
     @Test fun longEvidenceAndExchangeReceiptRemainByteForByteRecoverableAfterSerialization() {
