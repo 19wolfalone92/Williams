@@ -8,11 +8,11 @@ class Tc2AdaptiveBarChoiceTest {
     private val now=180*h
     private val approved=174*h
 
-    private fun slowH1():List<WilliamsWaveBar>=(0 until 180).map { i ->
+    private fun slowH1():List<WilliamsWaveBar> = (0 until 180).map { i ->
         val lo=100.0+0.04*i
         WilliamsWaveBar(i*h,lo+2,lo+4,lo,lo+2,1.0)
     }
-    private fun h4():List<WilliamsWaveBar>=(0 until 45).map { i ->
+    private fun h4():List<WilliamsWaveBar> = (0 until 45).map { i ->
         val lo=95.0+0.25*i
         WilliamsWaveBar(i*4*h,lo+2,lo+5,lo,lo+3,2.0)
     }
