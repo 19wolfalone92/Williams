@@ -361,6 +361,11 @@ internal fun authoritativeRuntimeDisplayState(
     !campaignMode -> fallbackState
     killLatched -> "KILL_SWITCH_LATCHED"
     !running -> "STOPPED"
+    // DIAG12: PAUSED is an operator new-entry preference, not an
+    // exchange reconciliation outcome. Never hide a real signed Binance
+    // mismatch behind PAUSED while coordinator remains RECONCILE_REQUIRED.
+    coordinatorState == "RECONCILE_REQUIRED" || fallbackState == "RECONCILE_REQUIRED" ->
+        "RECONCILE_REQUIRED"
     paused -> "PAUSED"
     coordinatorState == "READY" -> "READY_FLAT"
     coordinatorState == "OPEN_PROTECTED" -> "OPEN"
