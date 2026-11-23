@@ -86,6 +86,7 @@ internal fun signedQuarantinedStopOnlyManagementProven(
     val stopId=record.optString("protection_client_id")
     fun strict(o: JSONObject):Boolean =
         o.optString("clientAlgoId")==stopId &&
+        o.optString("algoType")=="CONDITIONAL" &&
         isFullPositionFuturesStop(o,symbol,direction,signedQty.abs(),mark) &&
         o.optString("triggerPrice").ifBlank { o.optString("stopPrice") }
             .toBigDecimalOrNull()?.compareTo(stop)==0
