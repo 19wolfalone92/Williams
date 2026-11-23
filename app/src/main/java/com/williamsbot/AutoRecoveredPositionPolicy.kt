@@ -3,6 +3,24 @@ package com.williamsbot
 import org.json.JSONObject
 
 /**
+ * Recovery of an existing, already-signed protective STOP is not NEW trading
+ * exposure. Even a persisted 5%-kill latch must not turn an unowned open
+ * position into a permanently unmonitored orphan. The independent execution
+ * door and two signed snapshots remain mandatory before ANY voluntary trail.
+ * Loss of private stream or unverified runtime still blocks adoption.
+ */
+internal fun autonomousStopOnlyRecoveryMonitorAllowed(
+    running:Boolean,privateConnected:Boolean,privateSyncRequired:Boolean,
+    campaignEnabled:Boolean,killLatched:Boolean
+):Boolean {
+    // killLatched is intentionally NOT a veto for read-only orphan review or
+    // STOP-only protection; it remains a hard veto for NEW entries.
+    @Suppress("UNUSED_VARIABLE")
+    val protectiveOnlyWithKillLatch=killLatched
+    return running && privateConnected && !privateSyncRequired && campaignEnabled
+}
+
+/**
  * A signed Binance position and its same-direction stop may be proposed for
  * CLOSED H1/H4 stop-only analysis. They never authorize trade ownership.
  * Approval additionally requires two independent signed REST reads and a
