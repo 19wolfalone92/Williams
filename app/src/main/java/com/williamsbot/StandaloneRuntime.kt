@@ -6948,8 +6948,9 @@ private class NativeEngine(
      * is left unchanged. This method can never open/close/add/reverse trades.
      */
     private fun analyzeAndEnrollAutonomousRecoveredStops() {
-        if(!running || !userStreamConnected || userStreamSyncRequired ||
-            killLatched || !campaignEngineEnabled) return
+        if(!autonomousStopOnlyRecoveryMonitorAllowed(
+                running,userStreamConnected,userStreamSyncRequired,
+                campaignEngineEnabled,killLatched)) return
         val source=futuresCampaignCoordinator.status()
         val signedProofs=CockpitDiagnostics.rows(source.optJSONArray("exchange_protection_observations"))
         if(signedProofs.isEmpty()) return
@@ -7045,8 +7046,9 @@ private class NativeEngine(
 
     private fun scheduleAutonomousOrphanAnalysis() {
         val now=System.currentTimeMillis()
-        if(!running || !userStreamConnected || userStreamSyncRequired ||
-            killLatched || !campaignEngineEnabled) return
+        if(!autonomousStopOnlyRecoveryMonitorAllowed(
+                running,userStreamConnected,userStreamSyncRequired,
+                campaignEngineEnabled,killLatched)) return
         synchronized(this) {
             if(autonomousOrphanAnalysisRunning ||
                 now-autonomousOrphanAnalysisStartedAtMs<30_000L) return
