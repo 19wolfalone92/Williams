@@ -14,7 +14,7 @@ import java.math.BigDecimal
  * the coordinator's existing write-ahead-journaled and read-back-verified path.
  *
  * This grants neither strategy ownership nor entry admission. It may be used
- * only for an already verified durable Williams ENTRY campaign.
+ * only for a verified durable Williams ENTRY or a separately signed, previously\n * protected RECOVERED_EXCHANGE_POSITION. Recovery never authorizes ownership\n * of the Williams strategy, entries, trailing or market EXIT.
  */
 internal fun futuresTerminalStopRearmBlocker(
     owner: JSONObject,
@@ -32,9 +32,23 @@ internal fun futuresTerminalStopRearmBlocker(
 ): String? {
     if (symbol !in APPROVED_FUTURES_SYMBOLS || direction !in setOf("LONG", "SHORT"))
         return "TERMINAL_REARM_SYMBOL_OR_DIRECTION_UNKNOWN"
+    // A previously exchange-confirmed emergency STOP for a recovered, UNOWNED
+    // position may be restored with a fresh STOP identity after definitive
+    // signed terminal/no-child proof. This does NOT adopt the old Williams ENTRY
+    // or authorize trailing, EXIT MARKET, add-ons, reversal or NEW exposure.
+    val verifiedOwned = owner.optBoolean("strategy_ownership_verified", false)
+    val initialAttemptAt = owner.optLong("protection_attempt_at_ms", 0L)
+    val firstConfirmedAt = owner.optLong("first_signed_stop_observed_at_ms", 0L)
+    val verifiedRecoveredStopOnly = !verifiedOwned &&
+        initialAttemptAt > 0L && initialAttemptAt <= firstConfirmedAt &&
+        firstConfirmedAt <= nowMs &&
+        owner.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
+        owner.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE" &&
+        owner.optBoolean("protection_post_attempted", false) &&
+        owner.optString("recovery_order_book_fingerprint") == "EMPTY"
     if (owner.optString("symbol") != symbol || owner.optString("direction") != direction ||
         owner.optString("intent_role", "ENTRY") != "ENTRY" ||
-        !owner.optBoolean("strategy_ownership_verified", false) ||
+        !(verifiedOwned || verifiedRecoveredStopOnly) ||
         owner.optString("campaign_status") !in setOf("POSITION_OPEN", "OPEN_PROTECTED") ||
         owner.optString("protection_status") !in setOf("PROTECTED", "SUBMISSION_UNKNOWN") ||
         owner.optString("previous_protection_client_id").isNotBlank() ||

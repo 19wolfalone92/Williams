@@ -49,3 +49,29 @@ internal fun verifiedQuarantinedSignedExit(
     }
     return QuarantinedSignedExitObservation(status,executed.toPlainString(),orderId,active)
 }
+
+
+/**
+ * DIAG16 — a missing exact clientOrderId GET is NOT a signed non-placement
+ * receipt. With a live position OR an open order still present, keep the
+ * ambiguous reduce-only EXIT quarantined while continuing read-only account
+ * position/STOP reconciliation. No API mutation is authorized here.
+ */
+internal data class UnqueryableFuturesExitDisposition(
+    val flatSnapshotOnly: Boolean,
+    val blocksNewRisk: Boolean,
+    val mayRetrySubmission: Boolean = false
+)
+
+internal fun classifyUnqueryableFuturesExit(
+    livePositionExists: Boolean,
+    matchingOpenStandard: Boolean,
+    matchingOpenConditional: Boolean
+): UnqueryableFuturesExitDisposition {
+    val unresolved = livePositionExists || matchingOpenStandard || matchingOpenConditional
+    return UnqueryableFuturesExitDisposition(
+        flatSnapshotOnly = !unresolved,
+        blocksNewRisk = unresolved,
+        mayRetrySubmission = false
+    )
+}
