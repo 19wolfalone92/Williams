@@ -1621,15 +1621,39 @@ internal class NativeFuturesCampaignCoordinator(
                             row.optString("symbol").equals(symbol, true) &&
                                 row.optString("clientAlgoId") == clientId
                         }
-                        if (position == null && !stillOpenStandard && !stillOpenConditional) {
+                        val unqueryable = classifyUnqueryableFuturesExit(
+                            livePositionExists = position != null,
+                            matchingOpenStandard = stillOpenStandard,
+                            matchingOpenConditional = stillOpenConditional
+                        )
+                        if (unqueryable.flatSnapshotOnly) {
+                            // Preserve legacy flat detection. This does NOT authorize a
+                            // repeat of the unresolved EXIT or imply a known order fill.
                             intent.put("exchange_status", "EXIT_CONFIRMED")
                                 .put("order_status", "NOT_FOUND_FLAT_CONFIRMED")
                                 .put("confirmed_flat_at_ms", clock())
                         } else {
-                            throw IllegalStateException(
-                                "Exit intent " + clientId + " is not queryable while " + symbol +
-                                    " still has a position or matching open order; no retry permitted"
-                            )
+                            // DIAG16: the lost MARKET reduce-only response is NOT a
+                            // reason to abort the whole signed protection sweep.
+                            // An exact clientOrderId GET returned no signed receipt;
+                            // neither its execution nor non-placement was established.
+                            // Keep the original durable exchange/order states intact.
+                            // Reconcile every live position and STOP, but block all
+                            // new exposure and prohibit any replay of this EXIT.
+                            check(unqueryable.blocksNewRisk && !unqueryable.mayRetrySubmission)
+                            hasPendingExit = true
+                            actualRiskAuditBlocked = true
+                            if (actualRiskAuditBlocker == null) {
+                                actualRiskAuditBlocker = "EXIT_LOOKUP_UNRESOLVED: " +
+                                    symbol + " / " + clientId +
+                                    "; signed position/open-order conflict; no EXIT replay or new risk"
+                            }
+                            if (intent.optString("exit_lookup_state") != "UNQUERYABLE_WITH_LIVE_EXPOSURE_OR_OPEN_ORDER") {
+                                intent.put("exit_lookup_state", "UNQUERYABLE_WITH_LIVE_EXPOSURE_OR_OPEN_ORDER")
+                                    .put("exit_lookup_first_observed_at_ms", clock())
+                                    .put("exit_lookup_no_retry", true)
+                                saveIntents(persisted)
+                            }
                         }
                     } else {
                         check(order.optString("symbol") == symbol && order.optString("clientOrderId") == clientId) {
