@@ -147,8 +147,7 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
         "results": reports,
     }
     (outdir / "frozen_fifteen_symbol_summary.json").write_text(
-        json.dumps(summary, indent=2, allow_nan=False, ensure_ascii=False) + "
-",
+        json.dumps(summary, indent=2, allow_nan=False, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     return summary
