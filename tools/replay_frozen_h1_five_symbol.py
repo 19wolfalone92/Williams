@@ -21,9 +21,10 @@ import pandas as pd
 from run_williams_h1_paper_replay import run_symbol_replay
 from williams_paper_replay import PaperReplayConfig
 
-# Observed in CURRENT Binance USD-M exchangeInfo on 2026-10-25, not
-# historical 2024 exchange metadata. Every report discloses that limitation.
-ASSUMED_TICKS_2026_10_25 = {
+# Observed on public Binance USD-M exchangeInfo, 2026-10-25 for the original
+# symbols and 2026-11-23 for SUIUSDT. NOT historical November 2024 filters.
+# This research-only set must exactly equal the approved 15-contract universe.
+ASSUMED_LATEST_NATIVE_TICKS = {
     "BTCUSDT": 0.10,
     "ETHUSDT": 0.01,
     "BNBUSDT": 0.01,
@@ -36,7 +37,7 @@ ASSUMED_TICKS_2026_10_25 = {
     "LTCUSDT": 0.01,
     "TRXUSDT": 0.00001,
     "DOTUSDT": 0.000100,
-    "UNIUSDT": 0.0010,
+    "SUIUSDT": 0.0001,
     "BCHUSDT": 0.01,
     "NEARUSDT": 0.0010,
 }
@@ -105,7 +106,7 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
             "frozen_source_sha256": checksum,
             "bars": len(candles),
             "tick_assumption": tick,
-            "tick_basis": "USD-M exchangeInfo observed 2026-10-25; 2024 precision NOT proven",
+            "tick_basis": ("USD-M exchangeInfo observed 2026-11-23 for SUIUSDT"\n                            if symbol == "SUIUSDT" else "USD-M exchangeInfo observed 2026-10-25")\n                          + "; 2024 precision NOT proven",
             "trade_metrics": result["trade_metrics"],
             "max_drawdown_pct": result.get("max_drawdown_pct"),
             "quality": result["read_only_chronological_quality"],
