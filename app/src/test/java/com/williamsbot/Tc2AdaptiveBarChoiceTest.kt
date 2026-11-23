@@ -35,8 +35,14 @@ class Tc2AdaptiveBarChoiceTest {
         }
         return rows
     }
+    // Decimal-subtract, not binary-double 250-107.04 which becomes
+    // 142.95999999999998. Binance rejects off-tick STOP sources by design.
+    // These regression fixtures must mirror at an exact native price tick.
+    private fun mirroredPrice(x:Double):Double =
+        java.math.BigDecimal("250.00").subtract(java.math.BigDecimal.valueOf(x)).toDouble()
     private fun mirror(bars:List<WilliamsWaveBar>):List<WilliamsWaveBar> =
-        bars.map { b->WilliamsWaveBar(b.t,250-b.o,250-b.l,250-b.h,250-b.c,b.v) }
+        bars.map { b->WilliamsWaveBar(b.t,mirroredPrice(b.o),mirroredPrice(b.l),
+            mirroredPrice(b.h),mirroredPrice(b.c),b.v) }
     private fun choice(side:String,strong:Boolean):Tc2AdaptiveBarChoice {
         val first=accelerated(strong);val senior=h4()
         return chooseTc2AdaptiveBarWindow(side,approved,
