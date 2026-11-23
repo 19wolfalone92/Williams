@@ -35,6 +35,8 @@ internal object WilliamsSignedStopJoinAudit {
         var ambiguous=0
         var reconciliationPending=0
         var tupleMatches=0
+        var freshExchangeStopCoverage=0
+        var freshExternalStopCoverage=0
         for(i in 0 until rows.length()) {
             val position=rows.optJSONObject(i) ?: continue
             val qty=dec(position.opt("positionAmt"))
@@ -78,6 +80,22 @@ internal object WilliamsSignedStopJoinAudit {
             // an agreeing side/qty/price into a fictitious numeric mismatch.
             val tupleMatched=candidates.size==1 && stopsMatch
             if(tupleMatched) tupleMatches++
+            // Distinguish observation of a signed exchange-side full STOP
+            // from owning its Williams ENTRY or possessing mutation authority.
+            // A captured in-flight reconciliation can still show two fresh,
+            // matching signed point-in-time snapshots; it is NOT permission
+            // to trade or trail until the coordinator completes.
+            val observedExchangeProtection=positionFresh && candidates.size==1 &&
+                fresh(proofAt,observedAtMs) && stopsMatch &&
+                proof?.optString("protection_client_id").isNullOrBlank().not() &&
+                proof?.optString("stop_proof") in setOf("OWNED_STOP_SEEN",
+                    "EXTERNAL_PROTECTED","NATIVE_REPLACEMENT_PROTECTION_SEEN") &&
+                position.optString("stop_verification_status")==proof?.optString("stop_proof")
+            if(observedExchangeProtection) {
+                freshExchangeStopCoverage++
+                if(proof?.optString("stop_proof")=="EXTERNAL_PROTECTED")
+                    freshExternalStopCoverage++
+            }
             val wellFormedProof=positionFresh && candidates.size==1 &&
                 fresh(proofAt,observedAtMs) && signedSourceObserved &&
                 snapshotConsistent && displayMatched &&
@@ -107,6 +125,8 @@ internal object WilliamsSignedStopJoinAudit {
                 .put("signed_stop_observed_at_ms",if(proofAt>0L) proofAt else JSONObject.NULL)
                 .put("proof_count_for_signed_qty",candidates.size)
                 .put("matching_side_quantity_and_stop",tupleMatched)
+                .put("fresh_signed_exchange_stop_coverage_observed",observedExchangeProtection)
+                .put("exchange_stop_observation_is_not_execution_authority",true)
                 .put("coordinator_snapshot_complete",snapshotConsistent)
                 .put("protection_verification_complete",wellFormedProof)
                 .put("strategy_owned",strategyOwned)
@@ -133,6 +153,9 @@ internal object WilliamsSignedStopJoinAudit {
             .put("stop_uniqueness_rule","OWNED_STOP_SEEN_REQUIRES_UPSTREAM_EXACTLY_ONE_SIGNED_STOP")
             .put("open_position_count",open).put("signed_stop_matched_count",matched)
             .put("observed_tuple_matched_count",tupleMatches)
+            .put("fresh_signed_exchange_stop_coverage_count",freshExchangeStopCoverage)
+            .put("fresh_signed_external_stop_coverage_count",freshExternalStopCoverage)
+            .put("signed_stop_matched_count_means_owned_and_reconciled_only",true)
             .put("reconciliation_pending_count",reconciliationPending)
             .put("unresolved_position_count",missing)
             .put("ambiguous_proof_count",ambiguous)
@@ -142,7 +165,10 @@ internal object WilliamsSignedStopJoinAudit {
             .put("execution_gate_not_derived_from_join",true)
             .put("e2e_post_fill_stop_sla_certified",false)
             .put("raw_client_ids_exported_here",false)
-            .put("note","Exact signed STOP client IDs are available in separate ZIP proofs. " +
+            .put("note","Fresh exchange STOP coverage and original Williams ENTRY ownership " +
+                "are separate facts. signed_stop_matched_count is strict *owned* proof only; " +
+                "fresh_signed_exchange_stop_coverage_count is NOT authority to trail. " +
+                "Exact signed STOP client IDs are available in separate ZIP proofs. " +
                 "This cached observational join never replaces fresh Binance coordinator " +
                 "reconciliation, establishes stop placement at fill time or grants new entries.")
     }

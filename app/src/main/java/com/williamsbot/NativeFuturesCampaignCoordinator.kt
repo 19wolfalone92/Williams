@@ -1506,8 +1506,42 @@ internal class NativeFuturesCampaignCoordinator(
                     throw IllegalStateException("Persisted Futures intent is malformed")
                 }
                 if (symbol in reversedCampaignSymbols) {
-                    // Preserve all old campaign, add-on and exit intent bytes.
-                    // Never cancel or transfer ownership across an opposite side.
+                    // DIAG14: do not strand an ambiguous MARKET_REDUCE_ONLY
+                    // EXIT forever simply because the historic ENTRY is SHORT
+                    // while the signed current position is LONG. The ONLY
+                    // allowed operation here is an exact signed GET. It may
+                    // prove a terminal order, but can NEVER prove current
+                    // flatness, remove the opposite-side quarantine, replay
+                    // a POST, or grant a new entry.
+                    if(role=="EXIT" && intent.optString("kind")=="MARKET_REDUCE_ONLY") {
+                        val signed=standardOrderOrNull(adapter,symbol,clientId)
+                        val proof=verifiedQuarantinedSignedExit(intent,signed)
+                        if(proof!=null) {
+                            if(proof.stillActive) hasPendingExit=true
+                            val state=if(proof.stillActive) proof.signedStatus
+                                else "EXIT_TERMINAL_POSITION_OPEN"
+                            // A signed audit runs every few seconds. Do not
+                            // rewrite the entire 407+ row SQLite ledger when
+                            // the exchange has returned the SAME evidence.
+                            val changed=intent.optString("order_status")!=proof.signedStatus ||
+                                intent.optString("exchange_status")!=state ||
+                                intent.optString("executed_qty")!=proof.executedQuantity ||
+                                intent.optString("exchange_order_id")!=proof.exchangeOrderId ||
+                                !intent.optBoolean("quarantined_exit_current_position_not_flat",false)
+                            if(changed) {
+                                intent.put("order_status",proof.signedStatus)
+                                    .put("exchange_status",state)
+                                    .put("executed_qty",proof.executedQuantity)
+                                    .put("exchange_order_id",proof.exchangeOrderId)
+                                    .put("quarantined_signed_exit_observed_at_ms",clock())
+                                    .put("quarantined_exit_current_position_not_flat",true)
+                                saveIntents(persisted)
+                            }
+                        }
+                    }
+                    // All historical ENTRY/ADD_ON/EXIT campaign ownership and
+                    // original STOP identities remain quarantined. This GET
+                    // does not authorize new risk, a retry or market close.
                     continue
                 }
                 val position = openBySymbol[symbol]
@@ -1940,6 +1974,18 @@ internal class NativeFuturesCampaignCoordinator(
                             position.getString("positionAmt").toBigDecimal().abs(),referenceMark)
                     } else emptyList()
                 if (symbol in reversedCampaignSymbols) {
+                    // DIAG14: signed exchange position/STOP and a durable
+                    // AUTO_VERIFIED_STOP_ONLY journal can coexist with an old
+                    // opposite-side ENTRY. The former ENTRY remains quarantined
+                    // and the account NEW-entry gate stays blocked, but the
+                    // separately approved protection monitor must not vanish
+                    // merely because its legacy ENTRY still exists.
+                    val recoveredStopOnlySupervision = referenceMark?.let { mark ->
+                        signedQuarantinedStopOnlyManagementProven(
+                            symbol,direction,position,algos,allOpenAlgoOrders,
+                            allOpenOrders,supervisionAudit,mark,clock()
+                        )
+                    } == true
                     // A reverse-direction position must NEVER borrow the former
                     // campaign's signal, fill, stop, or strategy ownership.
                     // For a genuinely empty signed order book, permit only the
@@ -2065,8 +2111,16 @@ internal class NativeFuturesCampaignCoordinator(
                             else -> JSONObject.NULL
                         })
                         .put("strategy_ownership_verified",false)
-                        .put("automatic_trailing_authorized",false)
-                        .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE"))
+                        .put("automatic_trailing_authorized",
+                            recoveredStopOnlySupervision && nativeStop!=null &&
+                                signedFullStops.size==1 && algos.length()==1)
+                        .put("management_mode",if(recoveredStopOnlySupervision &&
+                                nativeStop!=null && signedFullStops.size==1 && algos.length()==1)
+                            (0 until supervisionAudit.length()).mapNotNull { supervisionAudit.optJSONObject(it) }
+                                .singleOrNull { it.optString("symbol")==symbol &&
+                                    it.optString("state")=="ACTIVE" }?.optString("mode")
+                                    ?: "REVERSED_CAMPAIGN_QUARANTINE"
+                            else "REVERSED_CAMPAIGN_QUARANTINE"))
                     if (uniquelyProtected == null) anyUnprotected = true
                     actualRiskAuditBlocked = true
                     val conditionalReason = when {
