@@ -62,6 +62,13 @@ internal fun chooseTc2AdaptiveBarWindow(
        h1Last.zipWithNext().any { (a,b)->b.t-a.t!=WILLIAMS_H1_MS } ||
        h4Last[1].t-h4Last[0].t!=4*WILLIAMS_H1_MS)
         return fallback("H1_H4_CONTINUITY_NOT_VERIFIED_KEEP_FIVE")
+    // The H4 candle must be the latest H4 frame compatible with the most
+    // recent CLOSED H1. Reusing an older yet contiguous pair of H4 bars is
+    // not evidence to tighten from FIVE to THREE/FOUR.
+    val h1ClosedAt=h1Last.last().t+WILLIAMS_H1_MS
+    val h4ClosedAt=h4Last.last().t+4*WILLIAMS_H1_MS
+    if(h1ClosedAt-h4ClosedAt !in 0 until 4*WILLIAMS_H1_MS)
+        return fallback("LATEST_CLOSED_H4_NOT_ALIGNED_WITH_H1_KEEP_FIVE")
     val ranges=h1Last.map { it.h-it.l }.sorted()
     val median=(ranges[5]+ranges[6])/2.0
     if(!median.isFinite() || median<=0.0) return fallback("H1_MEDIAN_RANGE_UNKNOWN_KEEP_FIVE")
