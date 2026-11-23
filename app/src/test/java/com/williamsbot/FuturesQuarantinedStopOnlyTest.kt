@@ -77,6 +77,12 @@ class FuturesQuarantinedStopOnlyTest {
             JSONObject(stop().toString()).put("actualOrderId","1234"))))
         assertFalse(eligible(ordinary=JSONArray().put(
             JSONObject().put("symbol","ETHUSDT").put("orderId","42"))))
+        assertFalse(eligible(ordinary=JSONArray().put(
+            JSONObject().put("orderId","UNKNOWN_SYMBOL"))))
+        assertFalse(eligible(global=JSONArray().put(stop()).put(
+            JSONObject().put("clientAlgoId","UNIDENTIFIED_SYMBOL"))))
+        assertFalse(eligible(global=JSONArray().put(stop()).put(
+            JSONObject().put("symbol","BTCUSDT"))))
     }
 
     @Test fun missingTwoIndependentSignedProofsOrStaleApprovalNeverAuthorizeTrail() {
