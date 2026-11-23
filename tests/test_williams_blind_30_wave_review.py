@@ -2,6 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 import importlib.util
+from trading_config import DEFAULT_FUTURES_SYMBOLS
 
 S=Path(__file__).parents[1]/"tools/benchmark_blind_30_h1_wave_cases.py"
 spec=importlib.util.spec_from_file_location("blind_benchmark",S)
@@ -44,6 +45,8 @@ def test_blind_review_produces_same_reference_with_future_poisoning():
 
 def test_fifteen_real_assets_expand_the_causal_blind_wave_sample_without_fake_experts(tmp_path):
     assert len(mod.ALL_15)==15 and len(set(mod.ALL_15))==15
+    assert set(mod.ALL_15)==set(DEFAULT_FUTURES_SYMBOLS)
+    assert "SUIUSDT" in mod.ALL_15 and "UNIUSDT" not in mod.ALL_15
     for symbol in mod.ALL_15:
         rows,checksum=mod.load_source(symbol)
         assert len(rows)==480 and len(checksum)==64
