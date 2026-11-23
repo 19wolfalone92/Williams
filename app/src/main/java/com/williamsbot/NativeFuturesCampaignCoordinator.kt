@@ -1506,8 +1506,31 @@ internal class NativeFuturesCampaignCoordinator(
                     throw IllegalStateException("Persisted Futures intent is malformed")
                 }
                 if (symbol in reversedCampaignSymbols) {
-                    // Preserve all old campaign, add-on and exit intent bytes.
-                    // Never cancel or transfer ownership across an opposite side.
+                    // DIAG14: do not strand an ambiguous MARKET_REDUCE_ONLY
+                    // EXIT forever simply because the historic ENTRY is SHORT
+                    // while the signed current position is LONG. The ONLY
+                    // allowed operation here is an exact signed GET. It may
+                    // prove a terminal order, but can NEVER prove current
+                    // flatness, remove the opposite-side quarantine, replay
+                    // a POST, or grant a new entry.
+                    if(role=="EXIT" && intent.optString("kind")=="MARKET_REDUCE_ONLY") {
+                        val signed=standardOrderOrNull(adapter,symbol,clientId)
+                        val proof=verifiedQuarantinedSignedExit(intent,signed)
+                        if(proof!=null) {
+                            intent.put("order_status",proof.signedStatus)
+                                .put("exchange_status",if(proof.stillActive)
+                                    proof.signedStatus else "EXIT_TERMINAL_POSITION_OPEN")
+                                .put("executed_qty",proof.executedQuantity)
+                                .put("exchange_order_id",proof.exchangeOrderId)
+                                .put("quarantined_signed_exit_observed_at_ms",clock())
+                                .put("quarantined_exit_current_position_not_flat",true)
+                            if(proof.stillActive) hasPendingExit=true
+                            saveIntents(persisted)
+                        }
+                    }
+                    // All historical ENTRY/ADD_ON/EXIT campaign ownership and
+                    // original STOP identities remain quarantined. This GET
+                    // does not authorize new risk, a retry or market close.
                     continue
                 }
                 val position = openBySymbol[symbol]
