@@ -6,14 +6,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FuturesQuarantinedStopOnlyTest {
-    // Sanitized DIAG14: 2026-11-23 09:26:53 UTC, ETH LONG 0.50,
-    // full signed STOP 1520.0, old SHORT still in the independent ledger.
+    // Fully synthetic case patterned on DIAG14: independently signed ETH LONG
+    // and STOP with an unrelated older SHORT. No private account data.
     private val now=1_800_000_000_000L
     private val id="W2H_ETHUSDT_SYNTHETIC_PROOF"
     private fun position()=JSONObject().put("symbol","ETHUSDT")
         .put("positionSide","BOTH").put("positionAmt","0.50").put("entryPrice","1500.0")
     private fun stop()=JSONObject().put("symbol","ETHUSDT")
-        .put("algoId","1000000298184852").put("clientAlgoId",id)
+        .put("algoId","1234567890123").put("clientAlgoId",id)
         .put("algoType","CONDITIONAL").put("orderType","STOP_MARKET")
         .put("algoStatus","NEW").put("side","SELL").put("positionSide","BOTH")
         .put("workingType","MARK_PRICE").put("triggerPrice","1520.0")
