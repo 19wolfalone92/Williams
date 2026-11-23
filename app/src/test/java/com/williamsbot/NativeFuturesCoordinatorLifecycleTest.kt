@@ -387,13 +387,13 @@ class NativeFuturesCoordinatorLifecycleTest {
      */
     @Test fun diag12SignedCloseAllStopWithExchangeReduceOnlyTrueIsStillFullPositionProtection() {
         val exchange=Exchange(NativeFuturesCampaignCoordinator.Direction.LONG,"ETHUSDT")
-        exchange.quantity=0.463;exchange.entry=1641.32;exchange.mark=1732.14
-        exchange.contract=1732.14
+        exchange.quantity=0.7;exchange.entry=2100.00;exchange.mark=2300.00
+        exchange.contract=2300.00
         val manual=JSONObject().put("symbol","ETHUSDT").put("algoId","77")
             .put("clientAlgoId","MANUAL_STOP_77").put("algoType","CONDITIONAL")
             .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
             .put("positionSide","BOTH").put("workingType","CONTRACT_PRICE")
-            .put("triggerPrice","1648.34").put("quantity","0.463")
+            .put("triggerPrice","2150.00").put("quantity","0.7")
             .put("reduceOnly",true).put("closePosition",false)
             .put("priceProtect",true).put("actualOrderId","")
         exchange.algos["77"]=manual
