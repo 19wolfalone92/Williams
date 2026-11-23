@@ -5,6 +5,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutoRecoveredPositionPolicyTest {
+    @Test fun diag12KillLatchedStillAllowsSignedStopOnlyObservationButNeverBypassesPrivateSync() {
+        for(killed in listOf(false,true)) {
+            assertTrue(autonomousStopOnlyRecoveryMonitorAllowed(
+                running=true,privateConnected=true,privateSyncRequired=false,
+                campaignEnabled=true,killLatched=killed))
+            assertFalse(autonomousStopOnlyRecoveryMonitorAllowed(
+                running=true,privateConnected=false,privateSyncRequired=false,
+                campaignEnabled=true,killLatched=killed))
+            assertFalse(autonomousStopOnlyRecoveryMonitorAllowed(
+                running=true,privateConnected=true,privateSyncRequired=true,
+                campaignEnabled=true,killLatched=killed))
+            assertFalse(autonomousStopOnlyRecoveryMonitorAllowed(
+                running=false,privateConnected=true,privateSyncRequired=false,
+                campaignEnabled=true,killLatched=killed))
+        }
+    }
     @Test fun autonomousStopManagementRequiresStableIndependentSignedSnapshots() {
         val fingerprint="DOGE|SHORT|150|0.07643|0.07727|W2PS_A|1234"
         val seen=JSONObject().put("identity",fingerprint)
