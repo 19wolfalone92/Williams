@@ -85,7 +85,7 @@ class FuturesQuarantinedStopOnlyTest {
         for ((key,bad) in listOf(
             "source" to "LOCAL_GUESSED",
             "first_signed_observed_at_ms" to 0L,
-            "second_signed_observed_at_ms" to 1795407630030L,
+            "second_signed_observed_at_ms" to (now - 90_000L),
             "approved_at_ms" to (now - 100_000L),
             "strategy_ownership_verified" to true,
             "market_close_authorized" to true,
