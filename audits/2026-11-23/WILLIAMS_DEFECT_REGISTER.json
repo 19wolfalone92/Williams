@@ -1,0 +1,91 @@
+{
+  "schema": "WILLIAMS_DEFECT_REGISTER_V1",
+  "capture_date": "2026-11-23",
+  "audit_source_sha": "301833bd0007817b6dd3ed0cfbd686ad2c72faf8",
+  "scope": "Williams Bot / isolated from Williams-AI",
+  "real_trading_performed": false,
+  "defects": [
+    {
+      "id": "WILL-CAUSAL-001",
+      "priority": "P1",
+      "status": "CODE_FIXED_CI_VERIFICATION_REQUIRED",
+      "title": "Off-UTC-grid contiguous OHLCV incorrectly accepted as verified candle history",
+      "reproduction": "Supply 48 contiguous H1 candles with openTime = UTC-hour + 15min; old closedWilliamsWaveBars accepted them and could form wave evidence from non-native exchange hour boundaries.",
+      "root_cause": "Freshness + bar continuity checks did not require Binance native UTC timeframe-open alignment.",
+      "affected": [
+        "WilliamsWaveHierarchy.kt::closedWilliamsWaveBars",
+        "WilliamsStopTrailReview.kt::reviewWilliamsTc2StopTightening",
+        "causal wave charts"
+      ],
+      "fix": "Reject off-grid candle opens for fixed Binance intervals; treat 1w as Monday-aligned. Do not disable or soften old STOP.",
+      "commits": [
+        "a15aaeab747ac20f0636adc2ce7c15dbc537486b"
+      ],
+      "regression_tests": [
+        "app/src/test/java/com/williamsbot/WilliamsCausalCandleGridTest.kt"
+      ],
+      "ci": "NEW_HEAD_CI_PENDING_OR_NOT_PROVEN",
+      "residual_risk": "Native exchange-source time and signed data not fully end-to-end verified."
+    },
+    {
+      "id": "WILL-UNIVERSE-002",
+      "priority": "P1",
+      "status": "CODE_FIXED_CI_VERIFICATION_REQUIRED",
+      "title": "Historical 15-asset exams used UNIUSDT instead of authorized SUIUSDT",
+      "reproduction": "Prior 2026-11-23 backend run 45169894054 logs listed UNIUSDT and no SUIUSDT in 90 H1 snapshots and 499 simulated trades.",
+      "root_cause": "Historical frozen-corpus list hardcoded a legacy 15-symbol set inconsistent with trading_config.DEFAULT_FUTURES_SYMBOLS.",
+      "affected": [
+        "tools/replay_frozen_h1_five_symbol.py",
+        "tools/benchmark_blind_30_h1_wave_cases.py",
+        "tests/test_williams_frozen_five_symbol_replay.py",
+        "tests/test_williams_blind_30_wave_review.py"
+      ],
+      "fix": "Load and validate 480 2024-11-09 through 2024-11-29 closed public Binance SUIUSDT H1 bars; use SUI instead of UNI in both benchmarks; enforce exact equality with approved trading universe.",
+      "commits": [
+        "afad2ae50c8bf23ae45238edb90dece97cb71104",
+        "73f19c432db0f34fd57c0a2ecfde0576237d46b5",
+        "57998ffc52a0e0acccb30bc2d4ddd0b1f47b13e0",
+        "85b835aaa3361e358ab9ace1b6a9f66da2ca3a4d"
+      ],
+      "regression_tests": [
+        "tests/test_williams_frozen_five_symbol_replay.py",
+        "tests/test_williams_blind_30_wave_review.py"
+      ],
+      "ci": "NEW_HEAD_CI_PENDING_OR_NOT_PROVEN",
+      "residual_risk": "2024 tick filters not certified; 2026 SUI tick used for illustrative paper replay; closed-period dataset is not independent holdout."
+    }
+  ],
+  "evidence_gaps_not_confirmed_bugs": [
+    {
+      "id": "GATE-BINANCE-SIGNED-001",
+      "impact": "P0_ACCEPTANCE_GATE",
+      "status": "NOT_VERIFIED",
+      "detail": "No fresh signed Binance Demo position/order/Algo STOP receipt for changed audit HEAD; no FILLED->STOP, partial fill, cancel failure or restart proof."
+    },
+    {
+      "id": "GATE-BOOK-001",
+      "impact": "P1_ACCEPTANCE_GATE",
+      "status": "NOT_VERIFIED",
+      "detail": "Four PDFs available, 642 pages 57 manifest sections; independent figure-grade/book-rule implementation exam not done (0/57 chapter figures independently certified)."
+    },
+    {
+      "id": "GATE-EXAM-001",
+      "impact": "P1_ACCEPTANCE_GATE",
+      "status": "NOT_VERIFIED",
+      "detail": "Old 90-snapshot rule-proxy wave review had 4 classified and 86 abstentions, agreement 25% only within classified vs nonhuman proxy, with zero human labels; not certified TC2 accuracy."
+    },
+    {
+      "id": "GATE-STOP-001",
+      "impact": "P1_ACCEPTANCE_GATE",
+      "status": "NOT_VERIFIED",
+      "detail": "Adaptive 3/4/5 vs fixed 3/4/5 and fractal out-of-sample common-cohort comparator not completed; 0.60/1.25/1.1 thresholds unvalidated engineering."
+    },
+    {
+      "id": "GATE-PHYSICAL-001",
+      "impact": "P0_ACCEPTANCE_GATE",
+      "status": "NOT_VERIFIED",
+      "detail": "No user-device Samsung Android 17 foreground/Doze/boot continuity acceptance, no stable signing identity for an installable update."
+    }
+  ],
+  "acceptance_policy": "Keep draft; do not promote to main or enable new high-risk orders on this audit evidence alone. No unverified defect is claimed fixed."
+}
