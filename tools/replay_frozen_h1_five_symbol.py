@@ -54,7 +54,7 @@ EXPECTED_BARS = (EXPECTED_END - EXPECTED_START) // HOUR_MS
 
 
 def load_sealed_h1(symbol: str) -> tuple[pd.DataFrame, str]:
-    if symbol not in ASSUMED_TICKS_2026_10_25:
+    if symbol not in ASSUMED_LATEST_NATIVE_TICKS:
         raise ValueError("Unknown frozen H1 symbol")
     path = SOURCE_DIR / f"blind_wave_20241109_29_{symbol}.json"
     raw = path.read_bytes()
@@ -100,7 +100,7 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
         trailing_lookback_bars=5, max_pending_bars=20,
     )
     reports = []
-    for symbol, tick in ASSUMED_TICKS_2026_10_25.items():
+    for symbol, tick in ASSUMED_LATEST_NATIVE_TICKS.items():
         candles, checksum = load_sealed_h1(symbol)
         result = run_symbol_replay(
             symbol, candles, tick_size=tick, output_dir=outdir, config=config,
@@ -111,7 +111,9 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
             "frozen_source_sha256": checksum,
             "bars": len(candles),
             "tick_assumption": tick,
-            "tick_basis": ("USD-M exchangeInfo observed 2026-11-23 for SUIUSDT"\n                            if symbol == "SUIUSDT" else "USD-M exchangeInfo observed 2026-10-25")\n                          + "; 2024 precision NOT proven",
+            "tick_basis": ("USD-M exchangeInfo observed 2026-11-23 for SUIUSDT"
+                            if symbol == "SUIUSDT" else "USD-M exchangeInfo observed 2026-10-25")
+                          + "; 2024 precision NOT proven",
             "trade_metrics": result["trade_metrics"],
             "max_drawdown_pct": result.get("max_drawdown_pct"),
             "quality": result["read_only_chronological_quality"],
@@ -120,7 +122,7 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
         "schema": "WILLIAMS_FROZEN_FIFTEEN_SYMBOL_H1_REPLAY_V1",
         "source_period_utc": "[2024-11-09, 2024-11-29)",
         "dataset": "15 x 480 public Binance USD-M genuine closed H1 bars",
-        "symbols": list(ASSUMED_TICKS_2026_10_25),
+        "symbols": list(ASSUMED_LATEST_NATIVE_TICKS),
         "replay_bars": EXPECTED_BARS,
         "method": "causal closed-H1 paper fill, strict symbol tick, chronological cost stress x2",
         "known_limitations": [
@@ -145,7 +147,8 @@ def run_all(outdir: Path, window_bars: int = 180) -> dict:
         "results": reports,
     }
     (outdir / "frozen_fifteen_symbol_summary.json").write_text(
-        json.dumps(summary, indent=2, allow_nan=False, ensure_ascii=False) + "\n",
+        json.dumps(summary, indent=2, allow_nan=False, ensure_ascii=False) + "
+",
         encoding="utf-8",
     )
     return summary
