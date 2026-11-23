@@ -176,6 +176,13 @@ internal fun reviewWilliamsTc2StopTightening(
         .put("candidate_mark_gap",distance)
     if(!med.isFinite() || med<=0.0 || distance<=minDistance)
         return refuse("CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE")
+    val h1Shock=williamsH1CounterImpulseVeto(direction,lastFive,last12H1)
+    audit.put("h1_fresh_adverse_extreme",h1Shock.freshCounterExtreme)
+        .put("h1_last_bar_range_to_median",h1Shock.rangeOverMedian)
+        .put("h1_last_bar_close_location",h1Shock.closeLocation)
+        .put("h1_shock_veto_engineering_not_book_rule",true)
+    if(candidate.reason.startsWith("TC2_LAST_") && h1Shock.block)
+        return refuse("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP")
     // With a five-bar stop, old price extremes may sit near the current
     // mark during a developing correction. Require the most recent CLOSED
     // H1 close to hold above (LONG) / below (SHORT) the five-close median,
@@ -195,13 +202,6 @@ internal fun reviewWilliamsTc2StopTightening(
         if(adverseMomentum)
             return refuse("H1_ADVERSE_FIVE_BAR_CORRECTION_RETAIN_SIGNED_STOP")
     }
-    val h1Shock=williamsH1CounterImpulseVeto(direction,lastFive,last12H1)
-    audit.put("h1_fresh_adverse_extreme",h1Shock.freshCounterExtreme)
-        .put("h1_last_bar_range_to_median",h1Shock.rangeOverMedian)
-        .put("h1_last_bar_close_location",h1Shock.closeLocation)
-        .put("h1_shock_veto_engineering_not_book_rule",true)
-    if(candidate.reason.startsWith("TC2_LAST_") && h1Shock.block)
-        return refuse("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP")
 
     // Proper multi-TF wave genealogy is not yet independently validated.
     // Preserve the actual contemporaneous alternatives as read-only audit.
