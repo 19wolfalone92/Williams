@@ -105,4 +105,36 @@ class FuturesTerminalStopRearmTest {
             assertNotNull(blocker(direction,at=0L))
         }
     }
+
+    @Test fun diag16FormerlySignedRecoveredStopMayRearmButNeverAcquireStrategyOwnership() {
+        for (direction in listOf("LONG","SHORT")) {
+            val recovered = owner(direction)
+                .put("strategy_ownership_verified",false)
+                .put("kind","RECOVERED_EXCHANGE_POSITION")
+                .put("recovery_origin","OPPOSITE_SIDE_POSITION_QUARANTINE")
+                .put("protection_post_attempted",true)
+                .put("first_signed_stop_observed_at_ms",now-90_000L)
+                .put("recovery_order_book_fingerprint","EMPTY")
+            assertNull("$direction: signed terminal/no-child STOP + identical exchange exposure",
+                blocker(direction,owner=recovered))
+            assertFalse(recovered.optBoolean("strategy_ownership_verified",true))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("first_signed_stop_observed_at_ms",0L)))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("protection_post_attempted",false)))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("recovery_order_book_fingerprint","TP:foreign")))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("recovery_origin","UNKNOWN")))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("kind","STOP")))
+            assertNotNull(blocker(direction,owner=recovered,
+                former=stop(direction).put("algoStatus","NEW")))
+            assertNotNull(blocker(direction,owner=recovered,second=null))
+            assertNotNull(blocker(direction,owner=recovered,
+                accountAlgos=JSONArray().put(JSONObject().put("symbol","ETHUSDT"))))
+            assertNotNull(blocker(direction,owner=recovered,
+                mark=if(direction=="LONG") 1630.0 else 1710.0))
+        }
+    }
 }
