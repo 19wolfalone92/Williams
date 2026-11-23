@@ -68,13 +68,19 @@ internal fun signedQuarantinedStopOnlyManagementProven(
     val standard=(0 until accountOrders.length()).map {
         accountOrders.optJSONObject(it) ?: return false
     }
-    if(standard.any { it.optString("symbol") == symbol }) return false
+    // A malformed account-wide row can belong to THIS position. Never
+    // ignore an unidentified normal or conditional order by filterNotNull.
+    if(standard.any { it.optString("symbol").isBlank() ||
+        it.optString("symbol") == symbol }) return false
     val local=(0 until symbolAlgos.length()).map {
         symbolAlgos.optJSONObject(it) ?: return false
     }
-    val global=(0 until accountAlgos.length()).map {
+    val accountRows=(0 until accountAlgos.length()).map {
         accountAlgos.optJSONObject(it) ?: return false
-    }.filter { it.optString("symbol") == symbol }
+    }
+    if(accountRows.any { it.optString("symbol").isBlank() ||
+        it.optString("clientAlgoId").isBlank() }) return false
+    val global=accountRows.filter { it.optString("symbol") == symbol }
     if(local.size!=1 || global.size!=1) return false
     val native=local.single();val account=global.single()
     val stopId=record.optString("protection_client_id")
