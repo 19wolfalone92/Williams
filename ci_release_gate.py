@@ -525,6 +525,24 @@ def main() -> None:
          "DIAG15 signed SL too-close regression")
     must(test_case, "fullH1RangeGuardIsDirectionSymmetricAndDoesNotDisableConfirmedStructure",
          "DIAG15 profitable LONG/SHORT H1 buffer safety")
+    adaptive_selector = read("app/src/main/java/com/williamsbot/Tc2AdaptiveBarChoice.kt")
+    for needle in ("chooseTc2AdaptiveBarWindow(", "STRONG_ORDERLY_H1_H4_IMPULSE_USE_THREE",
+                   "MODERATE_ORDERLY_H1_H4_IMPULSE_USE_FOUR",
+                   "UNCONFIRMED_OR_CORRECTING_MOMENTUM_KEEP_FIVE",
+                   "automatic_window_selection_is_engineering_not_book_quote"):
+        must(adaptive_selector, needle, "TC2 adaptive 3/4/5 closed H1 bar policy")
+    for needle in ("val barChoice=chooseTc2AdaptiveBarWindow(",
+                   "window=barChoice.window",
+                   "tc2_live_345_bar_choice",
+                   "chosen_window_full_h1_bars_after_entry"):
+        must(trail_review, needle, "TC2 3/4/5 live execution integration")
+    adaptive_tests = read("app/src/test/java/com/williamsbot/Tc2AdaptiveBarChoiceTest.kt")
+    for needle in ("strongH1AndAlignedH4ActuallyExecuteThreeBarBookWindowForLongAndShort",
+                   "moderateH1AndAlignedH4ActuallyExecuteFourBarBookWindowForBothSides",
+                   "slowWeakOrOpposingH4KeepsWiderFiveBarModeWithoutFakingBookRules",
+                   "missingPostEntryBarsOrTamperedCandlesCannotPromoteThreeOrFour",
+                   "eachBookBarWindowUsesClosedExtremesAndNeverWidensSignedStop"):
+        must(adaptive_tests, needle, "TC2 verified 3/4/5 live stop regressions")
     must(read("app/src/test/java/com/williamsbot/StopTrailDecisionAuditEventTest.kt"),
          "signedStopIsMatchedAgainstActualSubmittedTickPriceNotFloatArtifacts",
          "Tick-exact signed Binance stop audit test")
