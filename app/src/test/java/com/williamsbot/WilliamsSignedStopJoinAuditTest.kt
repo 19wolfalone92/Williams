@@ -6,6 +6,41 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WilliamsSignedStopJoinAuditTest {
+
+    @Test fun diag14ExternalExchangeStopCoverageIsMeasuredWithoutFalselyOwningItsEntry() {
+        val now=1_800_000_000_000L
+        val p=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("positionAmt","0.50").put("stop","1520.0")
+            .put("stop_verification_status","EXTERNAL_PROTECTED")
+            .put("strategy_ownership_verified",false)
+        val proof=JSONObject().put("symbol","ETHUSDT").put("direction","LONG")
+            .put("quantity","0.5").put("stop","1520.00")
+            .put("stop_proof","EXTERNAL_PROTECTED")
+            .put("protection_client_id","W2H_ETHUSDT_SYNTHETIC")
+            .put("strategy_ownership_verified",false)
+            .put("management_mode","REVERSED_CAMPAIGN_QUARANTINE")
+            .put("observed_at_ms",now-1_000L)
+        val s=JSONObject().put("positions_snapshot_ok",true)
+            .put("positions_snapshot_at_ms",now-1_000L)
+            .put("futures_positions",JSONArray().put(p))
+        val c=JSONObject().put("state","RECONCILE_REQUIRED")
+            .put("reconciliation_running",true)
+            .put("exchange_protection_observations",JSONArray().put(proof))
+        val matched=WilliamsSignedStopJoinAudit.inspect(s,c,now)
+        assertEquals(1,matched.getInt("fresh_signed_exchange_stop_coverage_count"))
+        assertEquals(1,matched.getInt("fresh_signed_external_stop_coverage_count"))
+        assertEquals(0,matched.getInt("signed_stop_matched_count"))
+        assertEquals("WARNING",matched.getString("severity"))
+        assertFalse(matched.getBoolean("can_trade_or_manage_stops"))
+        assertFalse(matched.getJSONArray("positions").getJSONObject(0)
+            .getBoolean("protection_verification_complete"))
+        assertTrue(matched.getJSONArray("positions").getJSONObject(0)
+            .getBoolean("fresh_signed_exchange_stop_coverage_observed"))
+        // A stale proof is never a fresh signed exchange STOP.
+        proof.put("observed_at_ms",now-20_000L)
+        assertEquals(0,WilliamsSignedStopJoinAudit.inspect(s,c,now)
+            .getInt("fresh_signed_exchange_stop_coverage_count"))
+    }
     private val now=1_800_000_000_000L
     private fun position(qty:String="-0.506",stop:Double=232.95)=JSONObject()
         .put("symbol","BCHUSDT").put("direction","SHORT")
