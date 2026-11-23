@@ -525,6 +525,9 @@ def main() -> None:
          "DIAG15 signed SL too-close regression")
     must(test_case, "fullH1RangeGuardIsDirectionSymmetricAndDoesNotDisableConfirmedStructure",
          "DIAG15 profitable LONG/SHORT H1 buffer safety")
+    must(read("app/src/main/java/com/williamsbot/FuturesStopTrailPolicy.kt"),
+         "window !in listOf(3,4,5)",
+         "TC2 live stop executor must NEVER silently veto four-bar book method")
     adaptive_selector = read("app/src/main/java/com/williamsbot/Tc2AdaptiveBarChoice.kt")
     for needle in ("chooseTc2AdaptiveBarWindow(", "STRONG_ORDERLY_H1_H4_IMPULSE_USE_THREE",
                    "MODERATE_ORDERLY_H1_H4_IMPULSE_USE_FOUR",
