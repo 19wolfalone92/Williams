@@ -90,7 +90,8 @@ internal object CockpitDiagnostics {
                     "При достижении любого порога новые входы блокируются; сопровождение позиций продолжается."
         }
         val unresolvedBookOrders=rows(coordinator.optJSONArray("external_open_orders"))
-            .filter { it.optString("client_id").startsWith("W2H_") }
+            .filter { it.optString("client_id").startsWith("W2H_") &&
+                !signedExternalProtectiveStopOnly(it,status,coordinator,now) }
         val unresolvedSymbols=unresolvedBookOrders.map { it.optString("symbol") }
             .filter { it.isNotBlank() }.distinct().joinToString(", ")
         val reason = when {
@@ -180,6 +181,60 @@ internal object CockpitDiagnostics {
                 o.optString("quantity").toBigDecimalOrNull()?.abs()?.compareTo(quantity)==0 &&
                 o.optString("stop").toBigDecimalOrNull()?.compareTo(stop)==0 &&
                 fresh(o.optLong("observed_at_ms"),now,ttlMs)
+        }
+    }
+
+
+    /**
+     * Diagnostic-only identification of a live Binance close-all STOP whose client
+     * id happens to start with W2H_. A prefix is not an order role. The external
+     * order row alone is NEVER sufficient: require a fresh, unique live signed
+     * position and a unique matching exchange STOP proof from reconciliation.
+     *
+     * This does NOT authenticate the old Williams entry, enable trailing, cancel
+     * any order, or grant the execution door permission to open another trade.
+     */
+    private fun signedExternalProtectiveStopOnly(
+        order: JSONObject, status: JSONObject, coordinator: JSONObject, now: Long
+    ): Boolean {
+        if (!positionsFresh(status, now) ||
+            order.optString("kind") != "EXTERNAL_ALGO_ORDER" ||
+            order.optString("algo_type") != "CONDITIONAL" ||
+            order.optString("order_type") != "STOP_MARKET" ||
+            order.optString("algo_status") !in setOf("NEW", "WORKING", "ACCEPTED") ||
+            order.optString("position_side") != "BOTH" ||
+            order.optString("working_type") != "MARK_PRICE" ||
+            !order.optString("close_position").equals("true", true) ||
+            !order.optString("reduce_only").equals("true", true) ||
+            !order.optString("price_protect").equals("false", true) ||
+            order.optString("quantity").toBigDecimalOrNull()?.signum() != 0 ||
+            order.optString("exchange_algo_id").toLongOrNull()?.let { it > 0L } != true
+        ) return false
+        val symbol = order.optString("symbol")
+        val id = order.optString("client_id")
+        if (symbol.isBlank() || id.isBlank() ||
+            rows(coordinator.optJSONArray("external_open_orders")).count {
+                it.optString("symbol") == symbol && it.optString("client_id") == id
+            } != 1) return false
+        val position = rows(status.optJSONArray("futures_positions")).singleOrNull {
+            it.optString("symbol") == symbol &&
+                it.optString("positionAmt").toBigDecimalOrNull()?.signum() != 0
+        } ?: return false
+        val proof = matchingProtectionObservation(position, coordinator, now) ?: return false
+        if (proof.optString("stop_proof") != "EXTERNAL_PROTECTED" ||
+            proof.optString("protection_client_id") != id ||
+            proof.optBoolean("strategy_ownership_verified", true) ||
+            proof.optBoolean("automatic_trailing_authorized", true)
+        ) return false
+        val stop = order.optString("trigger_price").toBigDecimalOrNull() ?: return false
+        val proofStop = proof.optString("stop").toBigDecimalOrNull() ?: return false
+        val mark = position.optString("mark_price").toBigDecimalOrNull() ?: return false
+        if (stop.signum() <= 0 || mark.signum() <= 0 ||
+            stop.compareTo(proofStop) != 0) return false
+        return when (position.optString("direction")) {
+            "LONG" -> order.optString("side") == "SELL" && stop < mark
+            "SHORT" -> order.optString("side") == "BUY" && stop > mark
+            else -> false
         }
     }
 
@@ -467,8 +522,21 @@ internal object CockpitDiagnostics {
         fun isUnownedRecovery(intent:JSONObject):Boolean =
             intent.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
                 !intent.optBoolean("strategy_ownership_verified",false)
+        // A stale SHORT journal cannot disprove the currently signed LONG STOP.
+        // Restrict this exception to an actually opposite live position with
+        // independently fresh exchange protection. Unknown/missing STOP stays FAIL.
+        fun displacedByProtectedOppositeExposure(intent:JSONObject):Boolean =
+            positionsFresh(status,now) && positions.any { position ->
+                position.optString("symbol")==intent.optString("symbol") &&
+                    position.optString("direction") in setOf("LONG","SHORT") &&
+                    intent.optString("direction") in setOf("LONG","SHORT") &&
+                    position.optString("direction")!=intent.optString("direction") &&
+                    matchingProtectionObservation(position,coordinator,now)
+                        ?.optString("stop_proof")=="EXTERNAL_PROTECTED"
+            }
+        val displacedHistoricalCampaigns=entries.count { displacedByProtectedOppositeExposure(it) }
         val filledUnprotected = entries.filter { intent ->
-            !isUnownedRecovery(intent) &&
+            !isUnownedRecovery(intent) && !displacedByProtectedOppositeExposure(intent) &&
                 (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                     intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
                 !protectionProven(intent, now)
@@ -519,7 +587,7 @@ internal object CockpitDiagnostics {
             "требуется проверка точных исполнений/клиентских ID на Binance. " +
             "Проверка диагностическая: ни одна биржевая заявка не изменяется.")
         val explicitlyUnprotected = entries.any { intent ->
-            !isUnownedRecovery(intent) &&
+            !isUnownedRecovery(intent) && !displacedByProtectedOppositeExposure(intent) &&
                 (intent.optString("order_status") in setOf("FILLED", "PARTIALLY_FILLED") ||
                     intent.optString("campaign_status") in setOf("POSITION_OPEN", "OPEN_PROTECTED")) &&
                 (intent.optString("protection_status") != "PROTECTED" ||
@@ -538,6 +606,7 @@ internal object CockpitDiagnostics {
             "Открытых=${positions.size}; без свежего подтверждения=${unprotected.size}; " +
                 "стратегических исполненных кампаний без защиты=${filledUnprotected.size}; " +
                 "восстановленных без доказанного ENTRY=${unownedRecoveredPositions.size}; " +
+                "исторических кампаний с противоположной подписанной защищённой позицией=$displacedHistoricalCampaigns; " +
                 "сверка свежего STOP Binance выполняется=$exchangeStopRefreshPending. " +
                 "NOT_VERIFIED не означает защищённость и не разрешает новую сделку.")
         check("EXE-04", "execution", "Подтверждение стопа Binance", protectionSeverity,
@@ -617,8 +686,13 @@ internal object CockpitDiagnostics {
         // currently verified owned order identities. A historical CLOSED
         // intent with the same clientId cannot legitimize a live Binance
         // order that survived its durable campaign.
+        val signedExternalBookStops=openAlgoOrders.filter { order ->
+            order.optString("client_id").startsWith("W2H_") &&
+                signedExternalProtectiveStopOnly(order,status,coordinator,now)
+        }
         val orphanBookH1Orders=openAlgoOrders.filter { order ->
-            order.optString("client_id").startsWith("W2H_")
+            order.optString("client_id").startsWith("W2H_") &&
+                order !in signedExternalBookStops
         }
         check("EXE-11","execution","Биржевые условные заявки без подтверждённого владельца",when {
             coordinator.optJSONArray("external_open_orders")==null -> "NOT_VERIFIED"
@@ -628,7 +702,9 @@ internal object CockpitDiagnostics {
         },"Открытых H1-ордеров W2H_* без действующей записи кампании=" +
             "${orphanBookH1Orders.size}; символы=" +
             orphanBookH1Orders.map { it.optString("symbol") }.distinct().joinToString().ifBlank { "нет" } +
-            "; проверять в Binance вручную; диагностике ЗАПРЕЩЕНО автоматически отменять ордера.")
+            "; подписанных W2H STOP closePosition для уже открытых позиций=${signedExternalBookStops.size}. " +
+            "Наличие биржевого STOP НЕ доказывает принадлежность стратегии или возможность сопровождения; " +
+            "диагностике ЗАПРЕЩЕНО автоматически отменять ордера.")
 
         val wrongSideStops = livePositions.filter { p ->
             val proof = matchingProtectionObservation(p,coordinator,now) ?: return@filter false
