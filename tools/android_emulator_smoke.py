@@ -64,8 +64,29 @@ def run(apk: Path, output: Path) -> dict:
             raise RuntimeError("Activity did not launch: " + result)
 
     def hierarchy() -> ElementTree.Element:
-        adb("shell", "uiautomator", "dump", "/sdcard/williams-smoke.xml")
-        return ElementTree.fromstring(str(adb("shell", "cat", "/sdcard/williams-smoke.xml")))
+        # On API 36, uiautomator may return before its XML becomes readable.
+        # Retrying ONLY a transient missing/invalid dump is not an assertion
+        # bypass: we still require the real app PID, XML and exact UI labels.
+        last_error: Exception | None = None
+        for attempt in range(4):
+            if not str(adb("shell", "pidof", PACKAGE)).strip():
+                raise RuntimeError("App process disappeared before UI dump")
+            try:
+                adb("shell", "rm", "-f", "/sdcard/williams-smoke.xml")
+                dump = str(adb("shell", "uiautomator", "dump", "/sdcard/williams-smoke.xml"))
+                raw = str(adb("shell", "cat", "/sdcard/williams-smoke.xml"))
+                if not raw.lstrip().startswith("<?xml"):
+                    raise RuntimeError("UI XML not written after dump: " + dump[:200])
+                tree = ElementTree.fromstring(raw)
+                if not any(node.get("package") == PACKAGE for node in tree.iter("node")):
+                    raise RuntimeError("UI XML does not contain the target app")
+                return tree
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                    ElementTree.ParseError, RuntimeError) as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(3)
+        raise RuntimeError("UI hierarchy unavailable after bounded retries: " + str(last_error))
 
     def visible(label: str) -> bool:
         return any(n.get("text") == label or n.get("content-desc") == label for n in hierarchy().iter("node"))
