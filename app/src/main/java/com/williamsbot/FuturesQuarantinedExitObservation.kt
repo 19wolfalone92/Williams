@@ -22,12 +22,15 @@ internal fun verifiedQuarantinedSignedExit(
     val clientId=intent.optString("client_id")
     val direction=intent.optString("direction")
     val requested=intent.optString("quantity").toBigDecimalOrNull()
+        ?: error("QUARANTINED_EXIT_DURABLE_REQUESTED_QTY_UNKNOWN")
     val signedRequested=signedOrder.optString("origQty").toBigDecimalOrNull()
+        ?: error("QUARANTINED_EXIT_SIGNED_ORIGINAL_QTY_UNKNOWN")
     val executed=signedOrder.optString("executedQty").toBigDecimalOrNull()
+        ?: error("QUARANTINED_EXIT_SIGNED_EXECUTED_QTY_UNKNOWN")
     val orderId=signedOrder.optString("orderId")
     check(symbol in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS &&
         clientId.isNotBlank() && direction in setOf("LONG","SHORT") &&
-        requested!=null && requested.signum()>0 &&
+        requested.signum()>0 &&
         signedOrder.optString("symbol")==symbol &&
         signedOrder.optString("clientOrderId")==clientId &&
         signedOrder.optString("positionSide")=="BOTH" &&
@@ -35,8 +38,8 @@ internal fun verifiedQuarantinedSignedExit(
         signedOrder.optString("reduceOnly").equals("true",true) &&
         signedOrder.optString("side")==(if(direction=="LONG") "SELL" else "BUY") &&
         orderId.toLongOrNull()?.let { it>0L }==true &&
-        signedRequested!=null && signedRequested.compareTo(requested)==0 &&
-        executed!=null && executed.signum()>=0 && executed<=requested
+        signedRequested.compareTo(requested)==0 &&
+        executed.signum()>=0 && executed<=requested
     ) { "QUARANTINED_EXIT_SIGNED_IDENTITY_OR_QUANTITY_MISMATCH" }
     val status=signedOrder.optString("status").uppercase(java.util.Locale.US)
     val active=status in setOf("NEW","PARTIALLY_FILLED","PENDING_CANCEL")
