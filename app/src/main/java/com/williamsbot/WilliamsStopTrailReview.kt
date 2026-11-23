@@ -156,17 +156,23 @@ internal fun reviewWilliamsTc2StopTightening(
     if(h4Adverse && candidate.reason.startsWith("TC2_LAST_"))
         return refuse("H4_CORRECTION_CAUTION_RETAIN_EXCHANGE_STOP")
 
-    // Do not place a voluntary stop directly inside the typical range of
-    // an H1 candle. This is an explicit, bounded ENGINEERING noise filter,
-    // not a textbook ATR rule; never claims to eliminate stop-outs.
+    // DIAG15 confirmed premature stop: a signed ETH LONG STOP was ratcheted
+    // to the lowest low of the last five closed H1 bars with only 0.51 of
+    // the actual H1 median range between mark and STOP. Ordinary hourly
+    // oscillation then left barely half a candle of breathing room.
+    // Engineering caution, NOT a TC2 quotation or a forecast edge:
+    // a discretionary 3/5-bar replacement must retain at least a FULL
+    // observed typical H1 range plus 10% uncertainty and two exchange ticks.
+    // Confirmed structural fractals remain independently evaluated.
     val ranges=last12H1.map { it.h-it.l }.sorted()
     val med=(ranges[5]+ranges[6])/2.0
-    // A fixed 0.15%-of-mark CAP previously shrank the H1 noise guard to
-    // almost nothing on highly volatile pairs. Use the observed closed-bar
-    // median itself with a two-tick floor, for all symbols.
-    val minDistance=max(2.0*tick,med*0.5)
+    val fullRangeGuard=if(candidate.reason.startsWith("TC2_LAST_")) 1.1 else 0.5
+    val minDistance=max(2.0*tick,med*fullRangeGuard)
     val distance=if(direction=="LONG") mark-candidate.stop else candidate.stop-mark
-    audit.put("h1_median_closed_range",med).put("minimum_market_gap",minDistance)
+    audit.put("h1_median_closed_range",med)
+        .put("h1_volatility_noise_guard_multiplier",fullRangeGuard)
+        .put("h1_noise_guard_engineering_not_book_rule",true)
+        .put("minimum_market_gap",minDistance)
         .put("candidate_mark_gap",distance)
     if(!med.isFinite() || med<=0.0 || distance<=minDistance)
         return refuse("CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE")
@@ -177,6 +183,25 @@ internal fun reviewWilliamsTc2StopTightening(
         .put("h1_shock_veto_engineering_not_book_rule",true)
     if(candidate.reason.startsWith("TC2_LAST_") && h1Shock.block)
         return refuse("UNCONFIRMED_H1_COUNTER_IMPULSE_RETAIN_SIGNED_STOP")
+    // With a five-bar stop, old price extremes may sit near the current
+    // mark during a developing correction. Require the most recent CLOSED
+    // H1 close to hold above (LONG) / below (SHORT) the five-close median,
+    // or retain the existing signed exchange stop. This does not infer
+    // an Elliott wave label and cannot loosen an existing protective STOP.
+    if(candidate.reason.startsWith("TC2_LAST_")) {
+        val closeSorted=lastFive.map { it.c }.sorted()
+        val closeMedian=closeSorted[2]
+        val lastClose=lastFive.last().c
+        val priorClose=lastFive[lastFive.lastIndex-1].c
+        val adverseMomentum=if(direction=="LONG")
+            lastClose<=closeMedian && lastClose<priorClose
+        else lastClose>=closeMedian && lastClose>priorClose
+        audit.put("h1_five_closed_bar_close_median",closeMedian)
+            .put("h1_recent_close_against_5_bar_context",adverseMomentum)
+            .put("h1_correction_guard_engineering_not_book_rule",true)
+        if(adverseMomentum)
+            return refuse("H1_ADVERSE_FIVE_BAR_CORRECTION_RETAIN_SIGNED_STOP")
+    }
 
     // Proper multi-TF wave genealogy is not yet independently validated.
     // Preserve the actual contemporaneous alternatives as read-only audit.

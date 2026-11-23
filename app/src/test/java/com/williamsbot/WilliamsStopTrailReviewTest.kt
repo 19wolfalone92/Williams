@@ -99,6 +99,74 @@ class WilliamsStopTrailReviewTest {
         assertNull(outcome.proposal)
     }
 
+    /**
+     * DIAG15 falsification, all numbers shifted and synthetic: five closed H1
+     * lows in a correction gave a stop only ~0.51 typical hourly ranges
+     * below mark. Old median*0.5 guard admitted it; signed existing STOP
+     * must now stay in place. No Binance mutation is performed.
+     */
+    @Test fun diag15FiveBarNearNoiseStopIsDeferredEvenWhenCampaignProfitable() {
+        val syntheticH1=h1("LONG").toMutableList()
+        val recent=listOf(
+            doubleArrayOf(119.61,119.94,111.12,118.03),
+            doubleArrayOf(118.03,125.06,115.95,122.03),
+            doubleArrayOf(122.03,124.72,114.62,119.82),
+            doubleArrayOf(119.82,120.98,109.00,109.91),
+            doubleArrayOf(109.92,110.96,98.75,105.18),
+            doubleArrayOf(104.53,142.74,104.23,131.94),
+            doubleArrayOf(131.94,134.37,123.88,126.08),
+            doubleArrayOf(126.04,134.88,123.83,132.68),
+            doubleArrayOf(132.29,133.23,119.62,123.62),
+            doubleArrayOf(123.62,127.02,120.67,121.70),
+            doubleArrayOf(121.70,124.86,117.13,124.70),
+            doubleArrayOf(124.79,132.58,118.18,121.80)
+        )
+        for ((i,ohlc) in recent.withIndex()) {
+            val idx=syntheticH1.size-recent.size+i
+            syntheticH1[idx]=WilliamsWaveBar(idx*hour,ohlc[0],ohlc[1],ohlc[2],ohlc[3],1.0)
+        }
+        val near=reviewWilliamsTc2StopTightening(
+            "LONG",100.00,110.00,100.00,122.60,0.01,174*hour,now,
+            syntheticH1,h4("LONG"),0.0035
+        )
+        assertNull(near.proposal)
+        assertEquals("CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE",near.blocker)
+        assertEquals(117.12,near.evidence.getDouble("candidate_stop"),1e-8)
+        assertEquals(10.77,near.evidence.getDouble("h1_median_closed_range"),0.15)
+        assertTrue(near.evidence.getDouble("candidate_mark_gap") >
+            near.evidence.getDouble("h1_median_closed_range")*0.5)
+        assertTrue(near.evidence.getDouble("minimum_market_gap") >
+            near.evidence.getDouble("candidate_mark_gap"))
+        assertTrue(near.evidence.getBoolean("existing_exchange_stop_retained_if_blocked"))
+        assertEquals(1.1,near.evidence.getDouble("h1_volatility_noise_guard_multiplier"),1e-10)
+
+        // Even an intrabar rebound is not a new closed H1 uptrend: the
+        // most recent H1 close is below both its predecessor and 5-close
+        // median. Do not ratchet the STOP just because a future quote jumps.
+        val rebound=reviewWilliamsTc2StopTightening(
+            "LONG",100.00,110.00,100.00,134.00,0.01,174*hour,now,
+            syntheticH1,h4("LONG"),0.0035
+        )
+        assertNull(rebound.proposal)
+        assertEquals("H1_ADVERSE_FIVE_BAR_CORRECTION_RETAIN_SIGNED_STOP",rebound.blocker)
+        assertTrue(rebound.evidence.getBoolean("h1_recent_close_against_5_bar_context"))
+    }
+
+    @Test fun fullH1RangeGuardIsDirectionSymmetricAndDoesNotDisableConfirmedStructure() {
+        for(side in listOf("LONG","SHORT")) {
+            val eligible=review(side)
+            assertNotNull(eligible.proposal)
+            assertEquals(1.1,eligible.evidence.getDouble("h1_volatility_noise_guard_multiplier"),1e-10)
+            val bars=h1(side)
+            val extrema=if(side=="LONG") bars.takeLast(5).minOf { it.l }-0.01
+                else bars.takeLast(5).maxOf { it.h }+0.01
+            val tightMark=if(side=="LONG") extrema+1.95 else extrema-1.95
+            val blocked=review(side,mark=tightMark)
+            assertNull(blocked.proposal)
+            assertEquals("CANDIDATE_STOP_INSIDE_H1_PRICE_NOISE",blocked.blocker)
+        }
+    }
+
     @Test fun signedPositionQuantityScalesIndicativeWholeCampaignRiskForBothSides() {
         for(side in listOf("LONG","SHORT")) {
             val original = review(side)
