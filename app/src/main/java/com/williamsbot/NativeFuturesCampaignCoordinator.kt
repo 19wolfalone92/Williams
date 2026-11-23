@@ -1517,15 +1517,26 @@ internal class NativeFuturesCampaignCoordinator(
                         val signed=standardOrderOrNull(adapter,symbol,clientId)
                         val proof=verifiedQuarantinedSignedExit(intent,signed)
                         if(proof!=null) {
-                            intent.put("order_status",proof.signedStatus)
-                                .put("exchange_status",if(proof.stillActive)
-                                    proof.signedStatus else "EXIT_TERMINAL_POSITION_OPEN")
-                                .put("executed_qty",proof.executedQuantity)
-                                .put("exchange_order_id",proof.exchangeOrderId)
-                                .put("quarantined_signed_exit_observed_at_ms",clock())
-                                .put("quarantined_exit_current_position_not_flat",true)
                             if(proof.stillActive) hasPendingExit=true
-                            saveIntents(persisted)
+                            val state=if(proof.stillActive) proof.signedStatus
+                                else "EXIT_TERMINAL_POSITION_OPEN"
+                            // A signed audit runs every few seconds. Do not
+                            // rewrite the entire 407+ row SQLite ledger when
+                            // the exchange has returned the SAME evidence.
+                            val changed=intent.optString("order_status")!=proof.signedStatus ||
+                                intent.optString("exchange_status")!=state ||
+                                intent.optString("executed_qty")!=proof.executedQuantity ||
+                                intent.optString("exchange_order_id")!=proof.exchangeOrderId ||
+                                !intent.optBoolean("quarantined_exit_current_position_not_flat",false)
+                            if(changed) {
+                                intent.put("order_status",proof.signedStatus)
+                                    .put("exchange_status",state)
+                                    .put("executed_qty",proof.executedQuantity)
+                                    .put("exchange_order_id",proof.exchangeOrderId)
+                                    .put("quarantined_signed_exit_observed_at_ms",clock())
+                                    .put("quarantined_exit_current_position_not_flat",true)
+                                saveIntents(persisted)
+                            }
                         }
                     }
                     // All historical ENTRY/ADD_ON/EXIT campaign ownership and
