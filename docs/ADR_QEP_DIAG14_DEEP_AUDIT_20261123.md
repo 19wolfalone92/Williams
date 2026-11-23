@@ -3,8 +3,8 @@
 Repository: `19wolfalone92/Williams` (NOT Williams AI).
 Evidence: supplied `Williams_Diagnostics (14).zip`, 47 entries, 6,241,798 bytes.
 Capture: 2026-11-23 09:26:53.409 UTC. APK: `4.64.51-debug`, Android SDK 37,
-device `SM-S918B`. Installed source revision `c0b9f31aba98246cfef7d195f5dc71c5e7c0fd80`
-(PR #267 merge candidate). This is a **historic signed read**; not live access
+Samsung test device (device identifier withheld). Installed source revision `c0b9f31aba98246cfef7d195f5dc71c5e7c0fd80`
+(PR #267 merge candidate). All numeric trading examples in public tests are synthetic; exact account quantities, prices and client IDs remain in the locally supplied ZIP only. This is a **historic signed read**; not live access
 to the user's Binance account.
 
 ## Audited chain / baseline
@@ -19,13 +19,13 @@ No attempt is made to relabel NOT_VERIFIED as PASS.
 | Binance signed account | REST HTTP 200, signed positions / algos, risk snapshot | No global full-success reconciliation; old opposite campaign |
 | Public data | 15/15 H1 history, recent quotes, public WS up | Historical wave validity / external experts not certified |
 | Private stream | Connected, signed user-stream sync proven; durable queue 0 | Real disconnect/reboot continuity and physical SL issuance |
-| Open ETH | LONG 0.463, entry 1641.32, mark 1728.3079107 | No verified original TC2 LONG ENTRY ownership |
-| Exchange STOP | 1648.34 SELL, close-all MARK_PRICE, unique, `priceProtect=false`; same signed id `W2H_ETHUSDT_0be6c940adc0914fc4` | Independent stop protection observed, NOT a Williams-owned ENTRY |
-| Stop-only supervision | `AUTO_VERIFIED_STOP_ONLY`, ACTIVE, two signed observations 04:20:20 / 04:21:13 UTC, current review WAITING_FOR_STRUCTURE | Reversed-campaign branch erroneously hid this signed management scope |
-| Historic ENTRY | ETH SHORT 0.031, owned journal stale since Nov 21 | Reversed relative to current signed LONG; NEVER transfer ownership |
-| EXIT | ETH LONG qty 0.463, `SUBMISSION_UNKNOWN` since Nov 22 | Query exact signed clientOrderId; never resubmit or pretend flat |
+| Open ETH | signed LONG (account quantity and price redacted) | No verified original TC2 LONG ENTRY ownership |
+| Exchange STOP | SELL close-all MARK_PRICE, unique, `priceProtect=false`; exact client ID redacted | Independent stop protection observed, NOT a Williams-owned ENTRY |
+| Stop-only supervision | `AUTO_VERIFIED_STOP_ONLY`, ACTIVE, two independent signed observations over 30s apart, current review WAITING_FOR_STRUCTURE | Reversed-campaign branch erroneously hid this signed management scope |
+| Historic ENTRY | older ETH SHORT, verified historic journal, no current signed matching exposure | Reversed relative to current signed LONG; NEVER transfer ownership |
+| EXIT | ETH LONG reduce-only, `SUBMISSION_UNKNOWN` from earlier session | Query exact signed clientOrderId; never resubmit or pretend flat |
 | Risk | Daily 3%, 0/3 consecutive losses; risk reservation 0.0004 of 0.006 total | Actual unowned exposure risk/liquidation NOT_VERIFIED |
-| Android resources | 97.4MB Java heap in 268.4MB limit, private events 0, rate 835/6000 | Snapshot cannot certify peak memory/Doze/reboot |
+| Android resources | moderate Java heap within declared limit, private events 0, rate headroom observed | Snapshot cannot certify peak memory/Doze/reboot |
 | SQLite | 407 canonical intents / 407 shadow, parity PASS; canonical remains legacy JSON | Full migration and signed fill forensics incomplete |
 | Books | TC2 execution only, H1 decisions, NTD/Course observers | Independent four-book fidelity / future H1 trade exam NOT VERIFIED |
 | Runtime | `RECONCILE_REQUIRED`, user pause=true, signed STOP visible | No verified stable new-exposure authorization, must remain HOLD |
