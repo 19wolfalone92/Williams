@@ -8,12 +8,14 @@ class Tc2AdaptiveBarChoiceTest {
     private val now=180*h
     private val approved=174*h
 
+    // Exchange tick-aligned fixtures: avoid 100.0+0.04*i producing
+    // a spurious off-grid decimal such as 107.03999999999999.
     private fun slowH1():List<WilliamsWaveBar> = (0 until 180).map { i ->
-        val lo=100.0+0.04*i
+        val lo=(10_000+4*i).toDouble()/100.0
         WilliamsWaveBar(i*h,lo+2,lo+4,lo,lo+2,1.0)
     }
     private fun h4():List<WilliamsWaveBar> = (0 until 45).map { i ->
-        val lo=95.0+0.25*i
+        val lo=(9_500+25*i).toDouble()/100.0
         WilliamsWaveBar(i*4*h,lo+2,lo+5,lo,lo+3,2.0)
     }
     private fun accelerated(strong:Boolean):List<WilliamsWaveBar> {
