@@ -137,4 +137,37 @@ class FuturesTerminalStopRearmTest {
                 mark=if(direction=="LONG") 1630.0 else 1710.0))
         }
     }
+
+    @Test fun diag17RearmAllowsEarlierSignedStopProofThanLatestAttempt() {
+        // DIAG17 signed journal shape: first stop was confirmed long before
+        // last persisted attempt; signed STOP GET is now definitively terminal.
+        for (direction in listOf("LONG", "SHORT")) {
+            val recovered = owner(direction)
+                .put("strategy_ownership_verified",false)
+                .put("kind","RECOVERED_EXCHANGE_POSITION")
+                .put("recovery_origin","OPPOSITE_SIDE_POSITION_QUARANTINE")
+                .put("protection_post_attempted",true)
+                .put("recovery_order_book_fingerprint","EMPTY")
+                .put("first_signed_stop_observed_at_ms",now-2*60*60*1000L)
+                .put("protection_attempt_at_ms",now-70_000L)
+            assertNull("Earlier signed proof is valid with an EXACT terminal STOP GET",
+                blocker(direction,owner=recovered))
+            // Remaining strict signed exchange and clock gates cannot be bypassed.
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("first_signed_stop_observed_at_ms",now+1L)))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("protection_attempt_at_ms",now+1L)))
+            assertNotNull(blocker(direction,owner=JSONObject(recovered.toString())
+                .put("first_signed_stop_observed_at_ms",0L)))
+            assertNotNull(blocker(direction,owner=recovered,former=null))
+            assertNotNull(blocker(direction,owner=recovered,second=null))
+            assertNotNull(blocker(direction,owner=recovered,symbolAlgos=JSONArray()
+                .put(JSONObject().put("symbol","ETHUSDT"))))
+            assertNotNull(blocker(direction,owner=recovered,first=positions(direction),second=
+                positions(direction).apply {
+                    getJSONObject(0).put("positionAmt",
+                        if(direction=="LONG") "0.464" else "-0.464")
+                }))
+        }
+    }
 }

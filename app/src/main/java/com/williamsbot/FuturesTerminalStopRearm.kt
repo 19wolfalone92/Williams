@@ -14,7 +14,9 @@ import java.math.BigDecimal
  * the coordinator's existing write-ahead-journaled and read-back-verified path.
  *
  * This grants neither strategy ownership nor entry admission. It may be used
- * only for a verified durable Williams ENTRY or a separately signed, previously\n * protected RECOVERED_EXCHANGE_POSITION. Recovery never authorizes ownership\n * of the Williams strategy, entries, trailing or market EXIT.
+ * only for a verified durable Williams ENTRY or a separately signed, previously
+ * protected RECOVERED_EXCHANGE_POSITION. Recovery never authorizes ownership
+ * of the Williams strategy, entries, trailing or market EXIT.
  */
 internal fun futuresTerminalStopRearmBlocker(
     owner: JSONObject,
@@ -39,9 +41,17 @@ internal fun futuresTerminalStopRearmBlocker(
     val verifiedOwned = owner.optBoolean("strategy_ownership_verified", false)
     val initialAttemptAt = owner.optLong("protection_attempt_at_ms", 0L)
     val firstConfirmedAt = owner.optLong("first_signed_stop_observed_at_ms", 0L)
+    // DIAG17: first_signed_stop_observed_at_ms is the FIRST signed STOP
+    // confirmation, not an acknowledgement of the LATEST placement attempt.
+    // After a recovery/retry/stop-review, protection_attempt_at_ms can be
+    // newer. Requiring lastAttempt <= firstConfirmedAt permanently disabled
+    // terminal STOP rearm on the captured ETHUSDT recovery journal.
+    // Both timestamps must be durable and non-future, while actual authority
+    // comes ONLY from the exact signed terminal/no-child STOP GET and from
+    // stable signed position plus empty, independent order books below.
     val verifiedRecoveredStopOnly = !verifiedOwned &&
-        initialAttemptAt > 0L && initialAttemptAt <= firstConfirmedAt &&
-        firstConfirmedAt <= nowMs &&
+        initialAttemptAt > 0L && initialAttemptAt <= nowMs &&
+        firstConfirmedAt > 0L && firstConfirmedAt <= nowMs &&
         owner.optString("kind") == "RECOVERED_EXCHANGE_POSITION" &&
         owner.optString("recovery_origin") == "OPPOSITE_SIDE_POSITION_QUARANTINE" &&
         owner.optBoolean("protection_post_attempted", false) &&
