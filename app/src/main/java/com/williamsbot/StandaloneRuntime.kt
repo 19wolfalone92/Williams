@@ -13747,6 +13747,15 @@ private class NativeEngine(
             .put("history_http",futuresMarketData.historyRequestSnapshot())
             .put("working_history_keys",workingHistory.size)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
+            .put("closed_edition_memo",JSONObject()
+                .put("size",closedEditionMemo.size())
+                .put("capacity",closedEditionMemo.capacity)
+                .put("in_flight",closedEditionMemo.inFlightCount())
+                .put("started",closedEditionMemo.startedCount)
+                .put("joined",closedEditionMemo.joinedCount)
+                .put("cache_hits",closedEditionMemo.cacheHitsCount)
+                .put("rejected",closedEditionMemo.rejectedCount)
+                .put("failures",closedEditionMemo.failureCount))
     }
 
     fun diagnostics(): JSONObject {
