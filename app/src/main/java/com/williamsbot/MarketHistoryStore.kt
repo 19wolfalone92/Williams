@@ -28,7 +28,7 @@ internal val closedIndicatorCacheSchema = listOf(
         model TEXT NOT NULL, source_revision INTEGER NOT NULL,
         source_first_ms INTEGER NOT NULL, source_last_ms INTEGER NOT NULL,
         source_rows INTEGER NOT NULL, payload TEXT NOT NULL,
-        PRIMARY KEY(symbol,interval))"""
+        PRIMARY KEY(symbol,interval,source_first_ms,source_last_ms,source_rows))"""
 )
 
 internal const val closedIndicatorModelVersion = "WILLIAMS_CLOSED_INDICATORS_V1"
@@ -329,6 +329,12 @@ class MarketHistoryStore(context: Context) :
             revision!=indicatorCacheRevision(symbol,interval)) return false
         val json=payload.toString()
         if(json.length>65_536) return false
+        // Multiple windows (150 strategy bars and 6000 chart bars) can
+        // coexist at the SAME source revision. Remove stale rows only when
+        // source OHLCV changed, not when another window was requested.
+        writableDatabase.delete("closed_indicator_cache",
+            "symbol=? AND interval=? AND source_revision<>?",
+            arrayOf(symbol,interval,revision.toString()))
         val row=ContentValues().apply {
             put("symbol",symbol);put("interval",interval)
             put("model",closedIndicatorModelVersion)
