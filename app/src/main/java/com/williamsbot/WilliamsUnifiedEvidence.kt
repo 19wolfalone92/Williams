@@ -43,6 +43,11 @@ internal fun buildWilliamsUnifiedEvidence(
     var liveSourceConflicts = 0
     var activeCampaigns = 0
     val recoveredUnowned = mutableListOf<String>()
+    // An older opposite-direction strategy ENTRY can remain unresolved in
+    // the durable ledger while Binance shows a newer recovered exposure.
+    // This is an ACCOUNT OWNERSHIP quarantine, never proof of two live positions
+    // and never a defect in the already observed TC2/NTD/Course signal sources.
+    val accountOwnershipQuarantines = JSONArray()
     var observerProofComplete = true
     val visited = mutableSetOf<String>()
     val bySymbol = candidates.groupBy { it.optString("symbol") }
@@ -90,8 +95,34 @@ internal fun buildWilliamsUnifiedEvidence(
         val pairOwners=activeIntents.filter { it.optString("symbol")==symbol &&
             it.optString("role")=="ENTRY" &&
             it.optString("campaign_status") !in setOf("CLOSED_OR_STOPPED","CLOSED") }
-        if(pairOwners.size>1) errors.put("MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:$symbol")
-        val owner=pairOwners.singleOrNull()
+        val singleUnownedRecovery=pairOwners.singleOrNull {
+            it.optString("kind")=="RECOVERED_EXCHANGE_POSITION" &&
+                !it.optBoolean("strategy_ownership_verified",false) &&
+                it.optString("direction") in setOf("LONG","SHORT")
+        }
+        val oppositeHistoricalOwner=if (pairOwners.size==2 && singleUnownedRecovery!=null) {
+            pairOwners.singleOrNull { old ->
+                old !== singleUnownedRecovery &&
+                    old.optBoolean("strategy_ownership_verified",false) &&
+                    old.optString("kind")!="RECOVERED_EXCHANGE_POSITION" &&
+                    old.optString("direction") in setOf("LONG","SHORT") &&
+                    old.optString("direction")!=singleUnownedRecovery.optString("direction")
+            }
+        } else null
+        val historicOppositeQuarantine=oppositeHistoricalOwner!=null
+        if(pairOwners.size>1 && !historicOppositeQuarantine)
+            errors.put("MULTIPLE_ACTIVE_CAMPAIGN_OWNERS:$symbol")
+        if(historicOppositeQuarantine) accountOwnershipQuarantines.put(
+            JSONObject().put("symbol",symbol)
+                .put("code","HISTORICAL_OPPOSITE_ENTRY_AND_RECOVERED_EXPOSURE")
+                .put("old_direction",oppositeHistoricalOwner!!.optString("direction"))
+                .put("recovered_direction",singleUnownedRecovery!!.optString("direction"))
+                .put("requires_signed_exchange_flat_and_order_reconciliation",true)
+                .put("can_release_risk_reservation",false)
+                .put("can_authorize_new_entry",false)
+                .put("can_authorize_stop_or_exit_mutation",false)
+        )
+        val owner=if(historicOppositeQuarantine) singleUnownedRecovery else pairOwners.singleOrNull()
         val ownerSource=owner?.optString("strategy_profile","UNKNOWN") ?: if(ownershipSnapshotPresent) "NONE" else "UNKNOWN"
         // A recovered exchange exposure is NOT an original Williams ENTRY:
         // its placeholder strategy_profile=UNKNOWN is expected, not a forged
@@ -163,6 +194,7 @@ internal fun buildWilliamsUnifiedEvidence(
         perPair.put(JSONObject().put("symbol", symbol)
             .put("campaign_occupied",pairOwners.isNotEmpty())
             .put("active_owner_count",pairOwners.size)
+            .put("historical_opposite_owner_quarantined_for_observation",historicOppositeQuarantine)
             .put("owner_strategy_profile",ownerSource)
             .put("owner_direction",owner?.optString("direction") ?: JSONObject.NULL)
             .put("owner_signal_id",owner?.optString("signal_id") ?: JSONObject.NULL)
@@ -173,6 +205,7 @@ internal fun buildWilliamsUnifiedEvidence(
             .put("owner_last_reconciled_ms",owner?.optLong("last_reconciled_ms") ?: JSONObject.NULL)
             .put("owner_snapshot_state",when {
                 !ownershipSnapshotPresent -> "UNAVAILABLE"
+                historicOppositeQuarantine -> "RECOVERED_EXPOSURE_HISTORICAL_OPPOSITE_OWNER_QUARANTINE"
                 pairOwners.size>1 -> "MULTIPLE_NONTERMINAL_ENTRIES"
                 owner==null -> "NO_NONTERMINAL_ENTRY_INTENT"
                 isRecoveredUnowned -> "RECOVERED_EXCHANGE_POSITION_UNATTRIBUTED"
@@ -202,6 +235,7 @@ internal fun buildWilliamsUnifiedEvidence(
         !complete || visited.size != APPROVED_FUTURES_SYMBOLS.size -> "INCOMPLETE_SCAN"
         errors.length() > 0 -> "INVALID_SNAPSHOT"
         !observerProofComplete -> "INCOMPLETE_OBSERVER_PROOF"
+        accountOwnershipQuarantines.length() > 0 -> "ACCOUNT_QUARANTINED_OBSERVATION_ONLY"
         else -> "COMPLETE_OBSERVATION_ONLY"
     }
     return JSONObject()
@@ -226,6 +260,8 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("by_source", sourceSummary)
         .put("by_symbol", perPair)
         .put("source_contract_errors", errors)
+        .put("account_ownership_quarantines", accountOwnershipQuarantines)
+        .put("account_ownership_quarantine_is_not_execution_authority",true)
         .put("pre_context_opposing_symbol_count", conflicts)
         .put("live_tc2_opposing_symbol_count",tc2Conflicts)
         .put("live_source_opposing_symbol_count",liveSourceConflicts)
