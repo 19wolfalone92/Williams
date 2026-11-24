@@ -42,6 +42,7 @@ android {
 
     defaultConfig {
         applicationId = "com.williamsbot"
+        testInstrumentationRunner = "com.williamsbot.HistoryStoreInstrumentation"
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
