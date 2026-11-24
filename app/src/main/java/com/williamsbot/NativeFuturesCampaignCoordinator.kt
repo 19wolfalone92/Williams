@@ -3486,20 +3486,58 @@ internal class NativeFuturesCampaignCoordinator(
                 } catch (failure: Exception) {
                     val reason = "$symbol protection supervision failed: " +
                         safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(500)
-                    anyUnprotected = true
                     actualRiskAuditBlocked = true
                     if (actualRiskAuditBlocker == null) actualRiskAuditBlocker = reason
                     lastBlocker = reason
+
+                    // A strategy/ledger failure is not proof that the exchange
+                    // STOP disappeared. Re-read symbol and account-wide algo
+                    // snapshots independently before classifying protection.
+                    val signedAmount = position.optString("positionAmt").toBigDecimalOrNull()
+                    val direction = signedAmount?.let { if (it.signum() > 0) "LONG" else "SHORT" } ?: "UNKNOWN"
+                    val mark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                        ?.takeIf { it.isFinite() && it > 0.0 }
+                    val symbolAlgos = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
+                    val accountAlgos = runCatching { adapter.openAlgoOrders() }.getOrNull()
+                    val symbolRows = symbolAlgos?.let {
+                        (0 until it.length()).mapNotNull { index -> it.optJSONObject(index) }
+                    }.orEmpty()
+                    val accountRows = accountAlgos?.let {
+                        (0 until it.length()).mapNotNull { index -> it.optJSONObject(index) }
+                    }?.filter { it.optString("symbol") == symbol }.orEmpty()
+                    val snapshotMatches = symbolAlgos != null && accountAlgos != null &&
+                        symbolRows.map(::signedExternalContractStopFingerprint).sorted() ==
+                            accountRows.map(::signedExternalContractStopFingerprint).sorted()
+                    val fullStops = if (signedAmount != null && mark != null && snapshotMatches)
+                        symbolRows.filter { isFullPositionFuturesStop(it,symbol,direction,signedAmount.abs(),mark) }
+                        else emptyList()
+                    val candidate = fullStops.singleOrNull()
+                    val candidateStop = candidate?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
+                        ?: candidate?.optString("stopPrice")?.takeIf { it.isNotBlank() }
+                    val supervisorState = futuresProtectionSupervisorState(
+                        signedSnapshotComplete=mark!=null && snapshotMatches,
+                        positionOpen=true,matchingFullStops=if(snapshotMatches) fullStops.size else 0,
+                        recoveryRequired=snapshotMatches && fullStops.isEmpty()
+                    )
+                    if (supervisorState != FuturesProtectionSupervisorState.PROTECTED) anyUnprotected = true
                     val ledgerPersisted = runCatching { saveIntents(persisted) }.isSuccess
                     val existing = (0 until protectionObservations.length()).mapNotNull {
                         protectionObservations.optJSONObject(it)
                     }.singleOrNull { it.optString("symbol") == symbol }
                     val observation = existing ?: JSONObject().also { protectionObservations.put(it) }
-                    observation.put("symbol",symbol).put("direction",
-                        if ((position.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT")
-                        .put("quantity",position.optString("positionAmt"))
-                        .put("observed_at_ms",clock()).put("stop_proof","PROTECTION_UNKNOWN")
-                        .put("supervisor_state",FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
+                    val proof = when (supervisorState) {
+                        FuturesProtectionSupervisorState.PROTECTED -> "EXTERNAL_PROTECTED"
+                        FuturesProtectionSupervisorState.UNPROTECTED,
+                        FuturesProtectionSupervisorState.RECOVERY_REQUIRED -> "STOP_UNCONFIRMED"
+                        else -> "PROTECTION_UNKNOWN"
+                    }
+                    observation.put("symbol",symbol).put("direction",direction)
+                        .put("quantity",signedAmount?.toPlainString() ?: position.optString("positionAmt"))
+                        .put("observed_at_ms",clock()).put("stop_proof",proof)
+                        .put("supervisor_state",supervisorState.name)
+                        .put("stop",candidateStop ?: JSONObject.NULL)
+                        .put("protection_client_id",candidate?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("signed_symbol_snapshot_complete",snapshotMatches)
                         .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
                         .put("management_mode","OBSERVE_ONLY")
                         .put("protection_supervisor_error",reason)
