@@ -37,7 +37,13 @@ def test_ticker_or_book_metadata_outage_only_blocks_entries_not_scanning():
 
 def test_chart_refetches_nonempty_but_stale_candles():
     chart=RUNTIME.split('fun klines(',1)[1].split('fun marketQuote(',1)[0]
-    assert 'primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval)' in chart
+    assert 'primaryCandles' not in chart
+    assert 'historyStore.loadRecentSnapshot(symbol,selectedInterval,' in chart
+    assert 'chartExchangeNowMs>0L' in chart
+    assert 'chartInput.candles.last().openTime,selectedInterval,chartExchangeNowMs' in chart
+    assert 'fetchCandles(symbol, selectedInterval, 150)' in chart
+    assert 'if(!current) return JSONObject()' in chart
+    assert '.put("candles_fresh",false)' in chart
     # Live chart freshness is computed from the same verified exchange UTC
     # at the reusable envelope boundary, not from elapsed Android wall time.
     assert 'return liveChartEnvelope(symbol,selectedInterval,output,indicatorSnapshot,' in chart
