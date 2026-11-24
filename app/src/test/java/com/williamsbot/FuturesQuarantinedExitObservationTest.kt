@@ -85,4 +85,49 @@ class FuturesQuarantinedExitObservationTest {
         // untouched: the coordinator may only add quarantine audit fields.
         assertEquals("SUBMISSION_UNKNOWN", unknown.optString("exchange_status"))
     }
+
+    @Test fun diag18ExplicitNegativeReduceOnlyPostReceiptIsNotAnUnknownSubmission() {
+        assertTrue(isDefinitiveFuturesReduceOnlyPostRejection(
+            FuturesHttpException(400,-2022,"ReduceOnly Order is rejected.",
+                "/fapi/v1/order"), false))
+        assertFalse(isDefinitiveFuturesReduceOnlyPostRejection(
+            FuturesHttpException(400,-2022,"ReduceOnly Order is rejected.",
+                "/fapi/v1/order"), true))
+        assertFalse(isDefinitiveFuturesReduceOnlyPostRejection(
+            FuturesHttpException(400,-2022,"wrong endpoint",
+                "/fapi/v1/algoOrder"), false))
+        for (code in listOf(-1021,-2011,-2021,-2019)) {
+            assertFalse(isDefinitiveFuturesReduceOnlyPostRejection(
+                FuturesHttpException(400,code,"unrelated",
+                    "/fapi/v1/order"), false))
+        }
+        assertFalse(isDefinitiveFuturesReduceOnlyPostRejection(
+            java.io.IOException("transport timeout after POST"), false))
+        assertFalse(isDefinitiveFuturesReduceOnlyPostRejection(
+            FuturesHttpException(503,-2022,"service unavailable",
+                "/fapi/v1/order"), false))
+    }
+
+    @Test fun diag18DurableNegativeExitReceiptNeverClaimsSignedFlatness() {
+        val record=intent().put("exchange_status","EXIT_TERMINAL_POSITION_OPEN")
+            .put("order_status","REJECTED").put("rejection_http_status",400)
+            .put("exchange_rejection_code",-2022)
+            .put("rejection_before_post_receipt",true)
+            .put("rejected_at_ms",1_800_000_000_000L)
+        assertTrue(isDurableFuturesReduceOnlyRejection(record))
+        assertNotEquals("EXIT_CONFIRMED",record.getString("exchange_status"))
+        for ((field, value) in listOf(
+            "order_status" to "SUBMISSION_UNKNOWN",
+            "exchange_status" to "EXIT_CONFIRMED",
+            "exchange_rejection_code" to -2011,
+            "rejection_http_status" to 503,
+            "rejection_before_post_receipt" to false,
+            "rejected_at_ms" to 0L,
+            "intent_role" to "ENTRY",
+            "kind" to "STOP"
+        )) {
+            assertFalse(field, isDurableFuturesReduceOnlyRejection(
+                JSONObject(record.toString()).put(field,value)))
+        }
+    }
 }
