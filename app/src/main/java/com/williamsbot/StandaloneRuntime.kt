@@ -5551,21 +5551,33 @@ private class NativeEngine(
             error(it)
         }
 
-        val leasePersisted = executionStore.writeExecutionGate(symbol, purpose) &&
-            prefs.edit()
-                .putString("execution_gate_symbol", symbol)
-                .putString("execution_gate_purpose", purpose)
-                .commit()
+        val leasePersisted = runCatching {
+            executionStore.writeExecutionGate(symbol, purpose) &&
+                prefs.edit()
+                    .putString("execution_gate_symbol", symbol)
+                    .putString("execution_gate_purpose", purpose)
+                    .commit()
+        }.getOrDefault(false)
+        // No exchange I/O has started. Publish the recovery fence BEFORE any
+        // release, including when the SQLite write or mirror commit throws.
         if (!leasePersisted) {
-            executionGate.release(reservationKey)
             reconcileRequired = true
-            persistSafetyFlag("reconcile_required", true)
-            val blocker = "Futures Execution Door lease could not be committed; exchange mutation blocked"
+            val finalization = finalizeExecutionDoorLease(
+                requiresReconciliation = true,
+                persistReconciliation = { persistSafetyFlag("reconcile_required", true) },
+                clearSqliteLease = { executionStore.writeExecutionGate("", "") },
+                clearPreferenceLease = { prefs.edit().remove("execution_gate_symbol").remove("execution_gate_purpose").commit() }
+            )
+            val blocker = "Futures Execution Door lease could not be committed; exchange mutation blocked: " + finalization.name
             lastError = blocker
+            scannerError = blocker
             stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
+            if (finalization == ExecutionLeaseFinalization.RELEASE_ALLOWED)
+                executionGate.release(reservationKey)
             error(blocker)
         }
 
+        var unresolvedOutcome = false
         try {
             val result = block()
             // A coordinator safe_preflight_rejection is emitted only before the
@@ -5580,6 +5592,7 @@ private class NativeEngine(
                     (result.has("accepted") && !result.optBoolean("accepted", false))
                 )
             if (reportedFailure) {
+                unresolvedOutcome = true
                 reconcileRequired = true
                 persistSafetyFlag("reconcile_required", true)
                 val blocker = "Futures mutation returned an unresolved/non-success result ($purpose): " +
@@ -5593,7 +5606,8 @@ private class NativeEngine(
                 )
             }
             return result
-        } catch (failure: Exception) {
+        } catch (failure: Throwable) {
+            unresolvedOutcome = true
             // An exception after a mutation request may mean Binance accepted it but
             // the response was lost. Do not reopen the execution path until exchange
             // state has been reconciled, even if the caller forgets to latch the error.
@@ -5610,27 +5624,22 @@ private class NativeEngine(
             )
             throw failure
         } finally {
-            // Clear the durable lease while still holding the in-memory reservation.
-            // Releasing first creates a race where a second mutation writes its lease
-            // and the first mutation then erases that new lease.
-            val sqliteCleared = runCatching {
-                executionStore.writeExecutionGate("", "")
-            }.getOrDefault(false)
-            val preferencesCleared = runCatching {
-                prefs.edit()
-                    .remove("execution_gate_symbol")
-                    .remove("execution_gate_purpose")
-                    .commit()
-            }.getOrDefault(false)
-            if (!sqliteCleared || !preferencesCleared) {
+            // Unknown outcomes must leave a durable reconcile fence before
+            // erasing the only durable indication of an in-flight mutation.
+            // The reservation is never released on timeout or failed disk I/O.
+            val finalization = finalizeExecutionDoorLease(
+                requiresReconciliation = unresolvedOutcome || reconcileRequired,
+                persistReconciliation = { persistSafetyFlag("reconcile_required", true) },
+                clearSqliteLease = { executionStore.writeExecutionGate("", "") },
+                clearPreferenceLease = { prefs.edit().remove("execution_gate_symbol").remove("execution_gate_purpose").commit() }
+            )
+            if (finalization != ExecutionLeaseFinalization.RELEASE_ALLOWED) {
                 reconcileRequired = true
                 persistSafetyFlag("reconcile_required", true)
-                val blocker = "Futures Execution Door lease could not be cleared durably after mutation"
+                val blocker = "Futures Execution Door lease could not be cleared durably after mutation: " + finalization.name
                 lastError = blocker
                 scannerError = blocker
                 stateMachine.force(TradingState.RECONCILE_REQUIRED, blocker)
-                // Intentionally keep the in-memory reservation: unresolved durable
-                // execution state must not permit another exchange mutation.
                 throw IllegalStateException(blocker)
             }
             executionGate.release(reservationKey)
