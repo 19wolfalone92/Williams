@@ -74,6 +74,8 @@ internal class IncrementalWilliamsMath {
     private var input:List<ClosedMedianBar> = emptyList()
     private var output:List<WilliamsMathPoint> = emptyList()
     private var accumulator=WilliamsMathAccumulator()
+    var seedOpenMs:Long?=null
+        private set
     var appendedPoints:Long=0L
         private set
     var rebuilds:Long=0L
@@ -126,6 +128,7 @@ internal class IncrementalWilliamsMath {
         key=nextKey
         input=next
         accumulator=state
+        seedOpenMs=next.first().openMs
         output=Collections.unmodifiableList(result)
         rebuilds++
         appendedPoints+=next.size.toLong()

@@ -70,6 +70,21 @@ class IncrementalWilliamsMathTest {
         assertEquals(401L,state.appendedPoints)
     }
 
+    @Test fun seedIdentitySurvivesWindowSlideAndChangesOnHistoricalRebuild() {
+        val state=IncrementalWilliamsMath()
+        val initial=bars.take(400)
+        state.update("BTC:1h:seed=0",initial)
+        val originalSeed=state.seedOpenMs
+        assertEquals(initial.first().openMs,originalSeed)
+
+        val slid=bars.take(401).takeLast(400)
+        state.update("BTC:1h:seed=0",slid)
+        assertEquals(originalSeed,state.seedOpenMs)
+
+        state.update("BTC:1h:seed=1",slid)
+        assertEquals(slid.first().openMs,state.seedOpenMs)
+    }
+
     @Test fun flatPricesDoNotInventAoColourOrCrossing() {
         val flat=(1..100).map { ClosedMedianBar(it*3600000L,0.1) }
         assertEquals(full(flat),IncrementalWilliamsMath().update("FLAT:1h",flat))

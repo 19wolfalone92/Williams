@@ -4436,19 +4436,55 @@ private class NativeEngine(
         return calculated
     }
 
-    private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
+
+    private fun memoizedChartIndicatorSnapshot(
+        candles:List<CandleN>,symbol:String,frame:String,
+        mathPoints:List<WilliamsMathPoint>,sourceRevision:Long,
+        seedRevision:Long,seedOpenMs:Long
+    ):JSONObject {
+        val closed=candles.filter { futuresMarketData.isKlineOpenTimeClosed(symbol,frame,it.openTime) }
+        if(closed.size<40) return JSONObject().put("symbol",symbol).put("interval",frame).put("ready",false)
+        val key="chart-indicator-v2|"+symbol+"|"+frame+"|"+closed.first().openTime+
+            "|"+closed.last().openTime+"|"+closed.size+"|"+sourceRevision+
+            "|"+seedRevision+"|"+seedOpenMs
+        val alignedPoints=mathPoints.takeIf { it.size==closed.size }
+        val payload=try {
+            chartIndicatorMemo.getOrCompute(key) {
+                buildIndicatorSnapshot(closed,symbol,frame,alignedPoints).toString()
+            }
+        } catch(_:java.util.concurrent.RejectedExecutionException) {
+            return JSONObject().put("symbol",symbol).put("interval",frame)
+                .put("ready",false).put("error","CHART_INDICATOR_MEMO_BUSY")
+        }
+        return JSONObject(payload)
+    }
+
+    private fun buildIndicatorSnapshot(
+        candles: List<CandleN>, symbol: String, frame: String,
+        mathPoints:List<WilliamsMathPoint>?=null
+    ): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val i = candles.lastIndex
-        val jaw = williamsAlligatorLine(candles, 13, 8)
-        val teeth = williamsAlligatorLine(candles, 8, 5)
-        val lips = williamsAlligatorLine(candles, 5, 3)
-        val jawNow = jaw.getOrNull(i) ?: 0.0
-        val teethNow = teeth.getOrNull(i) ?: 0.0
-        val lipsNow = lips.getOrNull(i) ?: 0.0
-        val aoNow = ao(candles, i)
-        val aoPrev = ao(candles, i - 1)
-        val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
-        val acPrev = aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
+        val points=mathPoints?.takeIf { it.size==candles.size }
+        val incrementalReady=points!=null &&
+            points[i].ao.isFinite() && points[i].ac.isFinite() &&
+            points[i].jaw?.isFinite()==true && points[i].teeth?.isFinite()==true &&
+            points[i].lips?.isFinite()==true &&
+            points[i-1].ao.isFinite() && points[i-1].ac.isFinite()
+        val fullAlligator=if(incrementalReady) null else Triple(
+            williamsAlligatorLine(candles,13,8),
+            williamsAlligatorLine(candles,8,5),
+            williamsAlligatorLine(candles,5,3)
+        )
+        val jawNow = if(incrementalReady) points!![i].jaw!! else fullAlligator!!.first.getOrNull(i) ?: 0.0
+        val teethNow = if(incrementalReady) points!![i].teeth!! else fullAlligator!!.second.getOrNull(i) ?: 0.0
+        val lipsNow = if(incrementalReady) points!![i].lips!! else fullAlligator!!.third.getOrNull(i) ?: 0.0
+        val aoNow = if(incrementalReady) points!![i].ao else ao(candles, i)
+        val aoPrev = if(incrementalReady) points!![i-1].ao else ao(candles, i-1)
+        val acNow = if(incrementalReady) points!![i].ac else
+            aoNow - (0 until 5).map { ao(candles, i - it) }.average()
+        val acPrev = if(incrementalReady) points!![i-1].ac else
+            aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
         val greenZone = aoNow > aoPrev && acNow > acPrev
         val redZone = aoNow < aoPrev && acNow < acPrev
         val range = max(1e-12, candles[i].h - candles[i].l)
@@ -10312,6 +10348,7 @@ private class NativeEngine(
     private data class ClosedEditionKey(val symbol:String,val frame:String,val tick:Double,
         val profile:String,val exitMode:Boolean,val fingerprint:String)
     private val closedEditionMemo=ClosedStructureMemo<ClosedEditionKey,List<CampaignSignalN>>(512)
+    private val chartIndicatorMemo=ClosedStructureMemo<String,String>(256)
 
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
         profile:String=williamsUnifiedProfile,exitMode:Boolean=false):List<CampaignSignalN> {
@@ -13002,8 +13039,9 @@ private class NativeEngine(
         // persisted CLOSED window/revision, even when the app was killed.
         // Historical chart requests with an older cutoff must NEVER reuse a
         // current live-memory snapshot; the SQL key includes both window ends.
-        val indicatorSnapshot = if(chartContinuous) cachedClosedIndicatorSnapshot(
-            sourceCandles,symbol,selectedInterval
+        val indicatorSnapshot = if(chartContinuous) memoizedChartIndicatorSnapshot(
+            sourceCandles,symbol,selectedInterval,mathPoints,chartInput.revision,
+            chartInput.seedRevision,math.seedOpenMs ?: medianBars.first().openMs
         ) else JSONObject().put("symbol",symbol).put("interval",selectedInterval)
             .put("ready",false).put("reason","HISTORY_CONTINUITY_UNVERIFIED")
         if (!historical && indicatorSnapshot.optBoolean("ready",false) &&
@@ -13768,6 +13806,15 @@ private class NativeEngine(
                 .put("cache_hits",closedEditionMemo.cacheHitsCount)
                 .put("rejected",closedEditionMemo.rejectedCount)
                 .put("failures",closedEditionMemo.failureCount))
+            .put("chart_indicator_memo",JSONObject()
+                .put("size",chartIndicatorMemo.size())
+                .put("capacity",chartIndicatorMemo.capacity)
+                .put("in_flight",chartIndicatorMemo.inFlightCount())
+                .put("started",chartIndicatorMemo.startedCount)
+                .put("joined",chartIndicatorMemo.joinedCount)
+                .put("cache_hits",chartIndicatorMemo.cacheHitsCount)
+                .put("rejected",chartIndicatorMemo.rejectedCount)
+                .put("failures",chartIndicatorMemo.failureCount))
     }
 
     fun diagnostics(): JSONObject {
