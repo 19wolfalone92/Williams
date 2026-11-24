@@ -1087,6 +1087,18 @@ fun WilliamsApp(context: Context) {
         exportDiagnosticsLauncher.launch("Williams_Diagnostics.zip")
     }
 
+    // A process stopped by Android does not lose SQLite OHLCV. When the UI
+    // returns, request an asynchronous PUBLIC read-only delta recovery for
+    // every previously persisted frame (and essential M5/M15/H1/H4/D1).
+    // Auto-running Futures position/STOP supervision takes priority; this
+    // explicitly DOES NOT start trading, unpause, or clear safety latches.
+    LaunchedEffect(Unit) {
+        delay(1_200L)
+        withContext(Dispatchers.IO) {
+            runCatching { api.post("/api/v1/history/foreground-catchup") }
+        }
+    }
+
     LaunchedEffect(Unit) {
         delay(700L)
         loadAll(false)
