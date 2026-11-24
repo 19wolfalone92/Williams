@@ -1824,13 +1824,13 @@ private class NativeEngine(
     // The complete 15-TF matrix is analysis metadata, not a startup blocker.
     // Prime H1 for all approved symbols before optional context/chart frames.
     // Missing H4/D1/H6/M15 never turns off read-only H1 market analysis.
-    private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")
+    private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m", "5m")
     // Prioritize analysis horizons. Full exchange history of minute-by-minute
     // bars for fifteen pairs can consume gigabytes and is NOT safe to force on mobile.
     // 1m/3m/5m remain persisted on demand as bounded chart/monitoring history.
     private val durableBackfillFrames = listOf(
         "1h", "4h", "6h", "1d", "1w", "1M",
-        "15m", "30m", "2h", "8h", "12h", "3d"
+        "15m", "5m", "30m", "2h", "8h", "12h", "3d"
     )
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
@@ -4277,6 +4277,10 @@ private class NativeEngine(
         val symbol = k.optString("s").uppercase(Locale.US)
         val frame = k.optString("i")
         if (symbol !in coreSymbols || frame !in analysisFrames) return
+        // The live quote is supplied independently by @aggTrade/bookTicker.
+        // Forming x=false OHLCV is never eligible for Williams calculations.
+        // Do not parse/allocate/cache it on every websocket tick.
+        if (!k.optBoolean("x",false)) return
 
         val candle = CandleN(
             k.optLong("t"),
@@ -4608,7 +4612,16 @@ private class NativeEngine(
                     deepHistoryPairsComplete = durableBackfillFrames.size * coreSymbols.size - incomplete
                     // Once all backfill cursors reach the exchange beginning, the
                     // same job periodically catches up missed newer candles.
-                    val intervalMs = if (incomplete == 0) 3_600_000L else 30_000L
+                    val intervalMs = if (incomplete == 0) {
+                        // M5 is the shortest fully persisted analytical frame:
+                        // schedule the next catch-up just after its UTC close,
+                        // not one H1 hour later. The worker checks each saved
+                        // (symbol,frame) cursor before any exchange REST GET.
+                        val verifiedNow=runCatching {
+                            futuresMarketData.exchangeNowMs()
+                        }.getOrDefault(0L)
+                        nextClosedCandleSyncDelayMs(verifiedNow,"5m")
+                    } else 30_000L
                     try { Thread.sleep(intervalMs) } catch (_: InterruptedException) {
                         Thread.currentThread().interrupt()
                         return@Thread
