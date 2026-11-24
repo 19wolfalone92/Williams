@@ -13028,7 +13028,12 @@ private class NativeEngine(
         val scope = if (includeDecisionTraces) cockpitTraceSymbols(primarySymbol, selectedSymbol) else null
         val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces,
             selectedTraceSymbols = scope)
-        val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
+        // DIAG20: Compose only parses the 38 scalar candidate fields even on
+        // Market/Analysis tabs. Full per-symbol source reasoning already comes
+        // from status.decision_traces scoped to the selected chart, while the
+        // forensic /scanner endpoint and ZIP retain ALL original evidence.
+        // Avoid copying multi-megabyte 15-symbol trace graphs every 5 seconds.
+        val scan = scannerSnapshot(compactForCockpit = true)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
             .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
