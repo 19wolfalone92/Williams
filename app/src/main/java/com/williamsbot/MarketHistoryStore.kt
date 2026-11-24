@@ -274,8 +274,9 @@ class MarketHistoryStore(context: Context) :
 
             // Existing sync_state is maintained in the same transaction as
             // candles. Only rebuild the aggregate for an absent/invalid row.
-            val row = if (prior != null && prior[2] > 0L &&
-                prior[0] > 0L && prior[1] >= prior[0]) {
+            val priorValid = prior != null && prior[2] > 0L &&
+                prior[0] > 0L && prior[1] >= prior[0]
+            val row = if (priorValid && prior != null) {
                 longArrayOf(oldest, newest, prior[2] + added)
             } else db.query(
                 "candles", arrayOf("MIN(open_time)", "MAX(open_time)", "COUNT(*)"),
@@ -297,7 +298,7 @@ class MarketHistoryStore(context: Context) :
                 arrayOf(symbol, interval), null, null, null
             ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
             val completeInt = if (historicBackfillComplete(previousComplete, complete)) 1 else 0
-            if (!changed && prior != null && (completeInt == 1) == previousComplete) return@transaction
+            if (!changed && priorValid && (completeInt == 1) == previousComplete) return@transaction
             state.put("complete", completeInt)
             state.put("updated_at", System.currentTimeMillis())
             db.insertWithOnConflict(
