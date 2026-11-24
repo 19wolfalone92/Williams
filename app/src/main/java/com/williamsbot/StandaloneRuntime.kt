@@ -12613,6 +12613,31 @@ private class NativeEngine(
         )
     }
 
+    /**
+     * One visible full-chart envelope may remain in RAM while the same closed
+     * candle is current. The authoritative full history + small indicator
+     * results stay durable in SQLite. Bound the 6000-JSONObject in-memory
+     * chart cache to ONE pair/frame to avoid recurrence of Android OOM.
+     */
+    private data class ClosedChartDisplayCache(
+        val symbol:String,val frame:String,val bars:Int,val lastOpenMs:Long,
+        val sourceRevision:Long,val candleRows:JSONArray,val indicators:JSONObject,
+        val lastClosedAtMs:Long
+    )
+    @Volatile private var displayedClosedChartCache:ClosedChartDisplayCache? = null
+
+    private fun liveChartEnvelope(
+        symbol:String,frame:String,candles:JSONArray,indicators:JSONObject,
+        lastOpenMs:Long,exchangeNowMs:Long
+    ):JSONObject = marketQuote(symbol).put("interval",frame)
+        .put("indicator_snapshot",indicators).put("candles",candles)
+        .put("h1_market_analysis_independent_of_entry_gate",true)
+        .put("candles_fresh",futuresMarketData.isLastClosedCandleCurrent(
+            lastOpenMs,frame,exchangeNowMs))
+        .put("last_closed_bar_open_ms",if(lastOpenMs>0L) lastOpenMs else JSONObject.NULL)
+        .put("scanner_state",scannerState)
+        .put("execution_allowed",executionReady())
+
     fun klines(
         requestedSymbol: String? = null,
         requestedInterval: String? = null,
@@ -12629,6 +12654,19 @@ private class NativeEngine(
         val bars = requestedBars.coerceIn(120, 6000)
         val historical = requestedEndTime != null
         val chartExchangeNowMs = futuresMarketData.exchangeNowMs()
+        val cached = displayedClosedChartCache
+        if(!historical && bars>150 && cached!=null &&
+            cached.symbol==symbol && cached.frame==selectedInterval &&
+            cached.bars==bars &&
+            cached.sourceRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval) &&
+            cached.lastOpenMs==historyStore.newest(symbol,selectedInterval) &&
+            futuresMarketData.isLastClosedCandleCurrent(
+                cached.lastOpenMs,selectedInterval,chartExchangeNowMs)) {
+            // Only the CURRENT price changes: no SQLite 6000-row load, no
+            // AO/AC/Alligator/fractal recomputation, no JSON rebuild.
+            return liveChartEnvelope(symbol,selectedInterval,cached.candleRows,
+                cached.indicators,cached.lastOpenMs,chartExchangeNowMs)
+        }
         val stored = if (historical || bars > 150) historyStore.loadRecent(
             symbol, selectedInterval, bars.coerceAtMost(6000), requestedEndTime
         ).filter {
@@ -12711,13 +12749,19 @@ private class NativeEngine(
             .put("live_price", JSONObject.NULL).put("live_price_source", "HISTORICAL")
             .put("live_price_at_ms", 0L)
 
-        return marketQuote(symbol).put("interval", selectedInterval)
-            .put("indicator_snapshot", indicatorSnapshot).put("candles", output)
-            .put("h1_market_analysis_independent_of_entry_gate",true)
-            .put("candles_fresh",candleSeriesCurrent(sourceCandles,selectedInterval))
-            .put("last_closed_bar_open_ms",sourceCandles.lastOrNull()?.t ?: JSONObject.NULL)
-            .put("scanner_state",scannerState)
-            .put("execution_allowed",executionReady())
+        // Memoize only a CURRENT fully closed chart. A stale/offline chart
+        // cannot masquerade as live and is not an execution input.
+        if(bars>150 && sourceCandles.isNotEmpty() &&
+            cachedFixedFrameKlinesValid(sourceCandles,selectedInterval) &&
+            futuresMarketData.isLastClosedCandleCurrent(
+                latestClosedCandleTime,selectedInterval,chartExchangeNowMs)) {
+            displayedClosedChartCache=ClosedChartDisplayCache(
+                symbol,selectedInterval,bars,latestClosedCandleTime,
+                historyStore.indicatorCacheRevision(symbol,selectedInterval),
+                output,indicatorSnapshot,System.currentTimeMillis())
+        }
+        return liveChartEnvelope(symbol,selectedInterval,output,indicatorSnapshot,
+            latestClosedCandleTime,chartExchangeNowMs)
     }
 
     fun marketQuote(requestedSymbol: String?): JSONObject {
