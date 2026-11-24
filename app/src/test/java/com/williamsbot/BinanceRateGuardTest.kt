@@ -190,4 +190,38 @@ class BinanceRateGuardTest {
             Thread.interrupted()
         }
     }
+
+    @Test fun rejectedRequestsDoNotCreatePhantomQueueDebt() {
+        val guard = BinanceRateGuard()
+        guard.observe(Headers.headersOf("X-MBX-USED-WEIGHT-1M", "5500"), 200)
+        repeat(100) {
+            val rejected = runCatching { guard.beforeRequest(maximumWaitMs = 1L) }
+            org.junit.Assert.assertTrue(rejected.isFailure)
+        }
+        assertEquals(100L, guard.boundedWaitRejectedCount)
+        guard.observe(Headers.headersOf("X-MBX-USED-WEIGHT-1M", "1"), 200)
+        guard.beforeRequest(maximumWaitMs = 100L)
+    }
+
+    @Test fun concurrentContendersAcquireDistinctPacedSlots() {
+        val guard = BinanceRateGuard()
+        val start = java.util.concurrent.CountDownLatch(1)
+        val admitted = java.util.concurrent.ConcurrentLinkedQueue<Long>()
+        val errors = java.util.concurrent.ConcurrentLinkedQueue<Throwable>()
+        val workers = (0 until 5).map {
+            Thread {
+                start.await()
+                runCatching {
+                    guard.beforeRequest(maximumWaitMs = 3000L)
+                    admitted.add(System.nanoTime())
+                }.onFailure { errors.add(it) }
+            }.apply { isDaemon = true; start() }
+        }
+        start.countDown()
+        workers.forEach { it.join(4000L) }
+        org.junit.Assert.assertTrue(errors.isEmpty())
+        assertEquals(5, admitted.size)
+        val timestamps = admitted.sorted()
+        org.junit.Assert.assertTrue(timestamps.last() - timestamps.first() >= 180_000_000L)
+    }
 }
