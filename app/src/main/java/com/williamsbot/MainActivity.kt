@@ -654,6 +654,10 @@ fun WilliamsApp(context: Context) {
         chartIndicatorSummary = "Загрузка индикаторов…"
         chartError = null
         chartLoading = true
+        // Only the last successfully loaded CLOSED candle determines the
+        // next UI-only chart refresh. A failed fetch retains the old chart
+        // but the refresh delay falls back to a bounded periodic probe.
+        var lastChartBarOpenMs = 0L
         while (isActive) {
             val requestSymbol = selectedChartSymbol
             val requestInterval = selectedChartInterval
@@ -687,15 +691,21 @@ fun WilliamsApp(context: Context) {
                     chartCandles = loaded
                     chartIndicatorSummary = summary
                     chartError = null
+                    lastChartBarOpenMs = loaded.last().time
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 // The last good chart remains visible during a transient history failure.
                 chartError = failure.message ?: failure.javaClass.simpleName
+                lastChartBarOpenMs = 0L
             }
             chartLoading = false
-            delay(30_000L)
+            // Do not regenerate 6000 historical bars every 30s when there
+            // cannot yet be a NEW closed candle. The separate 2s quote flow
+            // remains unaffected; this is NOT a Binance trading-clock gate.
+            delay(cockpitChartNextRefreshDelayMs(
+                lastChartBarOpenMs, requestInterval, System.currentTimeMillis()))
         }
     }
 
