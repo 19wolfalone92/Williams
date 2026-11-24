@@ -272,10 +272,19 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
             val insertOnly = missingOnly || (expectedRevision!=null &&
                 expectedRevision!=indicatorCacheRevision(symbol,interval))
             val priorHistoricalRevision = prior?.getOrNull(3) ?: 0L
-            val priorNewestOpenTime = prior?.getOrNull(1) ?: 0L
+            val priorValid = prior != null && prior[2] > 0L &&
+                prior[0] > 0L && prior[1] >= prior[0]
+            // If sync_state is absent or inconsistent, detect existing candles
+            // with an indexed existence probe (not another MIN/MAX/COUNT scan).
+            // Force one seed invalidation while rebuilding the metadata row.
+            val priorHasHistory = priorValid || db.rawQuery(
+                "SELECT 1 FROM candles WHERE symbol=? AND interval=? LIMIT 1",
+                arrayOf(symbol,interval)
+            ).use { it.moveToFirst() }
+            val priorNewestOpenTime = if(priorValid) prior!![1] else 0L
             var added = 0L
             var changed = false
-            var historicalChanged = false
+            var historicalChanged = priorHasHistory && !priorValid
             var oldest = prior?.get(0) ?: 0L
             var newest = prior?.get(1) ?: 0L
             val insert = ContentValues()
@@ -325,8 +334,6 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
 
             // Existing sync_state is maintained in the same transaction as
             // candles. Only rebuild the aggregate for an absent/invalid row.
-            val priorValid = prior != null && prior[2] > 0L &&
-                prior[0] > 0L && prior[1] >= prior[0]
             val row = if (priorValid && prior != null) {
                 longArrayOf(oldest, newest, prior[2] + added)
             } else db.query(
