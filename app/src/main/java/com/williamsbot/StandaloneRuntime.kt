@@ -5082,17 +5082,27 @@ private class NativeEngine(
                     if (array.length() == 0) break
                     val now = futuresMarketData.exchangeNowMs()
                     val batch = ArrayList<MarketHistoryStore.Candle>(array.length())
+                    var expectedOpen=futuresMarketData.klineCloseTimeMs(newest,frame)+1L
                     for (i in 0 until array.length()) {
                         val row = array.getJSONArray(i)
                         val opened = row.getLong(0)
                         val closed = row.getLong(6)
                         if (opened <= newest) continue
                         if (!futuresMarketData.isCandleClosed(closed, now)) break
+                        check(opened==expectedOpen) {
+                            "PERSISTENT_HISTORY_INCREMENT_GAP: $normalizedSymbol/$frame " +
+                                "expected=$expectedOpen got=$opened"
+                        }
+                        val parsed=CandleN(opened,row.getString(1).toDouble(),
+                            row.getString(2).toDouble(),row.getString(3).toDouble(),
+                            row.getString(4).toDouble(),row.getString(5).toDouble())
+                        require(validNativeCandle(parsed)) {
+                            "PERSISTENT_HISTORY_INCREMENT_INVALID_OHLCV: $normalizedSymbol/$frame"
+                        }
                         batch += MarketHistoryStore.Candle(
-                            opened, row.getString(1).toDouble(), row.getString(2).toDouble(),
-                            row.getString(3).toDouble(), row.getString(4).toDouble(),
-                            row.getString(5).toDouble(), closed
+                            opened,parsed.o,parsed.h,parsed.l,parsed.c,parsed.v,closed
                         )
+                        expectedOpen=futuresMarketData.klineCloseTimeMs(opened,frame)+1L
                     }
                     if (batch.isEmpty()) break
                     historyStore.upsertBatch(normalizedSymbol, frame, batch)
