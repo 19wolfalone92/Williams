@@ -328,14 +328,14 @@ class MarketHistoryStore(context: Context) :
     /** Read a result only for an identical CLOSED working set and candle revision. */
     @Synchronized
     fun loadClosedIndicatorSnapshot(
-        symbol:String, interval:String, firstMs:Long, lastMs:Long, rows:Int
+        symbol:String, interval:String, firstMs:Long, lastMs:Long, rows:Int, fingerprint:String
     ): JSONObject? {
         if(firstMs<=0L || lastMs<firstMs || rows<40) return null
         return readableDatabase.rawQuery(
             "SELECT payload,source_revision FROM closed_indicator_cache " +
                 "WHERE symbol=? AND interval=? AND model=? " +
                 "AND source_first_ms=? AND source_last_ms=? AND source_rows=?",
-            arrayOf(symbol,interval,closedIndicatorModelVersion,
+            arrayOf(symbol,interval,"$closedIndicatorModelVersion:$fingerprint",
                 firstMs.toString(),lastMs.toString(),rows.toString())
         ).use { c ->
             if(!c.moveToFirst() || c.getLong(1)!=indicatorCacheRevision(symbol,interval))
@@ -348,7 +348,7 @@ class MarketHistoryStore(context: Context) :
     @Synchronized
     fun saveClosedIndicatorSnapshot(
         symbol:String, interval:String, firstMs:Long, lastMs:Long, rows:Int,
-        revision:Long, payload:JSONObject
+        revision:Long, fingerprint:String, payload:JSONObject
     ):Boolean {
         if(firstMs<=0L || lastMs<firstMs || rows<40 ||
             !payload.optBoolean("ready",false) ||
@@ -364,7 +364,7 @@ class MarketHistoryStore(context: Context) :
             arrayOf(symbol,interval,revision.toString()))
         val row=ContentValues().apply {
             put("symbol",symbol);put("interval",interval)
-            put("model",closedIndicatorModelVersion)
+            put("model","$closedIndicatorModelVersion:$fingerprint")
             put("source_revision",revision)
             put("source_first_ms",firstMs)
             put("source_last_ms",lastMs)
