@@ -31,6 +31,38 @@ internal val closedIndicatorCacheSchema = listOf(
         PRIMARY KEY(symbol,interval,source_first_ms,source_last_ms,source_rows))"""
 )
 
+// Gap edges are keyed by their right-hand stored candle. A late INSERT splits
+// or removes the affected edges in the same transaction as OHLCV and revision.
+internal val durableHistoryGapSchema = listOf(
+    """CREATE TABLE IF NOT EXISTS history_gap(
+        symbol TEXT NOT NULL, interval TEXT NOT NULL, right_open INTEGER NOT NULL,
+        start_ms INTEGER NOT NULL, PRIMARY KEY(symbol,interval,right_open))""",
+    """CREATE TABLE IF NOT EXISTS history_gap_audit(
+        symbol TEXT NOT NULL, interval TEXT NOT NULL, scanned_through INTEGER NOT NULL,
+        PRIMARY KEY(symbol,interval))""",
+    """CREATE TABLE IF NOT EXISTS history_invalid_grid(
+        symbol TEXT NOT NULL, interval TEXT NOT NULL, open_ms INTEGER NOT NULL,
+        PRIMARY KEY(symbol,interval,open_ms))""",
+    """CREATE TRIGGER IF NOT EXISTS history_gap_after_insert AFTER INSERT ON candles BEGIN
+        DELETE FROM history_invalid_grid WHERE symbol=NEW.symbol AND interval=NEW.interval
+            AND open_ms=NEW.open_time;
+        DELETE FROM history_gap WHERE symbol=NEW.symbol AND interval=NEW.interval
+            AND (right_open=NEW.open_time OR right_open=(
+                SELECT MIN(open_time) FROM candles WHERE symbol=NEW.symbol AND interval=NEW.interval
+                AND open_time>NEW.open_time));
+        INSERT OR REPLACE INTO history_gap(symbol,interval,right_open,start_ms)
+            SELECT NEW.symbol,NEW.interval,NEW.open_time,p.close_time+1 FROM candles p
+            WHERE p.symbol=NEW.symbol AND p.interval=NEW.interval AND p.open_time=(
+                SELECT MAX(open_time) FROM candles WHERE symbol=NEW.symbol AND interval=NEW.interval
+                AND open_time<NEW.open_time) AND p.close_time+1<NEW.open_time;
+        INSERT OR REPLACE INTO history_gap(symbol,interval,right_open,start_ms)
+            SELECT NEW.symbol,NEW.interval,n.open_time,NEW.close_time+1 FROM candles n
+            WHERE n.symbol=NEW.symbol AND n.interval=NEW.interval AND n.open_time=(
+                SELECT MIN(open_time) FROM candles WHERE symbol=NEW.symbol AND interval=NEW.interval
+                AND open_time>NEW.open_time) AND NEW.close_time+1<n.open_time;
+    END"""
+)
+
 internal const val closedIndicatorModelVersion = "WILLIAMS_CLOSED_INDICATORS_V2"
 
 internal data class HistoryReadinessStatus(
@@ -102,7 +134,7 @@ internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean
  * working set for calculations, so the complete history is never retained in RAM.
  */
 class MarketHistoryStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_market_history.db", null, 4) {
+    SQLiteOpenHelper(context, "williams_market_history.db", null, 5) {
 
     data class Candle(
         val openTime: Long,
@@ -154,6 +186,7 @@ class MarketHistoryStore(context: Context) :
         )
         deviceWaveReplaySchema.forEach(db::execSQL)
         closedIndicatorCacheSchema.forEach(db::execSQL)
+        durableHistoryGapSchema.forEach(db::execSQL)
     }
 
     override fun onUpgrade(
@@ -205,6 +238,7 @@ class MarketHistoryStore(context: Context) :
         }
         if(oldVersion<3) deviceWaveReplaySchema.forEach(db::execSQL)
         if(oldVersion<4) closedIndicatorCacheSchema.forEach(db::execSQL)
+        if(oldVersion<5) durableHistoryGapSchema.forEach(db::execSQL)
     }
 
     @Synchronized
@@ -235,7 +269,7 @@ class MarketHistoryStore(context: Context) :
             var newest = prior?.get(1) ?: 0L
             val insert = ContentValues()
             for (c in candles) {
-                require(c.openTime > 0L && c.closeTime >= c.openTime &&
+                require(nativeHistoryCloseMs(c.openTime, interval) == c.closeTime &&
                     listOf(c.open, c.high, c.low, c.close).all { it.isFinite() && it > 0.0 } &&
                     c.high >= maxOf(c.open, c.close, c.low) &&
                     c.low <= minOf(c.open, c.close) &&
@@ -318,6 +352,61 @@ class MarketHistoryStore(context: Context) :
                 "WHERE symbol=? AND interval=?",arrayOf(symbol,interval))
         }
     }
+
+    data class MissingRange(val startMs: Long, val endExclusiveMs: Long)
+
+    /** Scan existing v4 history in bounded pages, not a blocking migration.
+     * All subsequent writes also maintain gap edges transactionally. */
+    @Synchronized
+    fun auditHistoryGapPage(symbol: String, interval: String, limit: Int = 4096) {
+        val db = writableDatabase
+        db.transaction {
+            val cursorMs = rawQuery("SELECT scanned_through FROM history_gap_audit WHERE symbol=? AND interval=?",
+                arrayOf(symbol,interval)).use { if(it.moveToFirst()) it.getLong(0) else 0L }
+            var previousClose = if (cursorMs == 0L) null else rawQuery(
+                "SELECT close_time FROM candles WHERE symbol=? AND interval=? AND open_time=?",
+                arrayOf(symbol,interval,cursorMs.toString())
+            ).use { if(it.moveToFirst()) it.getLong(0) else null }
+            var last = cursorMs
+            rawQuery("SELECT open_time,close_time FROM candles WHERE symbol=? AND interval=? AND open_time>? "+
+                "ORDER BY open_time LIMIT ?",arrayOf(symbol,interval,cursorMs.toString(),
+                limit.coerceIn(1,4096).toString())).use { rows ->
+                while(rows.moveToNext()) {
+                    val opened = rows.getLong(0)
+                    val closed = rows.getLong(1)
+                    if(nativeHistoryCloseMs(opened,interval)!=closed) {
+                        execSQL("INSERT OR IGNORE INTO history_invalid_grid(symbol,interval,open_ms) VALUES(?,?,?)",
+                            arrayOf(symbol,interval,opened))
+                    }
+                    val prior = previousClose
+                    if(prior != null && prior < opened-1L) {
+                        execSQL("INSERT OR REPLACE INTO history_gap(symbol,interval,right_open,start_ms) VALUES(?,?,?,?)",
+                            arrayOf(symbol,interval,opened,prior+1L))
+                    }
+                    previousClose = closed
+                    last = opened
+                }
+            }
+            if(last>cursorMs) execSQL("INSERT OR REPLACE INTO history_gap_audit(symbol,interval,scanned_through) VALUES(?,?,?)",
+                arrayOf(symbol,interval,last))
+        }
+    }
+
+    @Synchronized
+    fun firstMissingRange(symbol: String, interval: String): MissingRange? =
+        readableDatabase.rawQuery("SELECT start_ms,right_open FROM history_gap WHERE symbol=? AND interval=? "+
+            "ORDER BY right_open LIMIT 1",arrayOf(symbol,interval)).use {
+            if(it.moveToFirst()) MissingRange(it.getLong(0),it.getLong(1)) else null
+        }
+
+    @Synchronized
+    fun historyContinuityAudited(symbol: String, interval: String): Boolean =
+        readableDatabase.rawQuery(
+            "SELECT 1 FROM sync_state s JOIN history_gap_audit a ON a.symbol=s.symbol AND a.interval=s.interval "+
+                "WHERE s.symbol=? AND s.interval=? AND s.candle_count>0 AND a.scanned_through=s.newest_open_time "+
+                "AND NOT EXISTS(SELECT 1 FROM history_gap g WHERE g.symbol=s.symbol AND g.interval=s.interval) "+
+                "AND NOT EXISTS(SELECT 1 FROM history_invalid_grid i WHERE i.symbol=s.symbol AND i.interval=s.interval)",
+            arrayOf(symbol,interval)).use { it.moveToFirst() }
 
     @Synchronized
     fun indicatorCacheRevision(symbol:String,interval:String):Long =
@@ -531,7 +620,7 @@ class MarketHistoryStore(context: Context) :
         readableDatabase.rawQuery(
             "SELECT interval FROM sync_state WHERE symbol=? AND complete=1",arrayOf(symbol)
         ).use { c->while(c.moveToNext()) ready+=c.getString(0) }
-        return ready.containsAll(frames)
+        return ready.containsAll(frames) && frames.all { historyContinuityAudited(symbol,it) }
     }
 
     private fun packWaveJson(value:JSONObject):ByteArray {
@@ -691,6 +780,18 @@ class MarketHistoryStore(context: Context) :
             }
         }
 
+        val audit = HashMap<Pair<String,String>,Long>()
+        readableDatabase.rawQuery("SELECT symbol,interval,scanned_through FROM history_gap_audit",null).use { c ->
+            while(c.moveToNext()) audit[c.getString(0) to c.getString(1)]=c.getLong(2)
+        }
+        val gaps = HashMap<Pair<String,String>,Pair<Long,Long>>()
+        readableDatabase.rawQuery("SELECT symbol,interval,COUNT(*),MIN(start_ms) FROM history_gap GROUP BY symbol,interval",null).use { c ->
+            while(c.moveToNext()) gaps[c.getString(0) to c.getString(1)]=c.getLong(2) to c.getLong(3)
+        }
+        val invalid = HashSet<Pair<String,String>>()
+        readableDatabase.rawQuery("SELECT DISTINCT symbol,interval FROM history_invalid_grid",null).use { c ->
+            while(c.moveToNext()) invalid.add(c.getString(0) to c.getString(1))
+        }
         val rows = JSONArray()
         for (symbol in symbols) {
             for (interval in intervals) {
@@ -702,7 +803,24 @@ class MarketHistoryStore(context: Context) :
                     .put("oldest_open_time", 0L)
                     .put("newest_open_time", 0L)
                 val count = row.optLong("count", 0L)
-                val complete = row.optBoolean("complete", false)
+                val key=symbol to interval
+                val earliestReached = row.optBoolean("complete", false)
+                val auditedThrough = audit[key] ?: 0L
+                val gap = gaps[key]
+                val verified = count>0L && auditedThrough==row.optLong("newest_open_time") &&
+                    gap==null && key !in invalid
+                val complete = earliestReached && verified
+                row.put("earliest_history_reached",earliestReached)
+                    .put("complete",complete)
+                    .put("continuity_audited",verified)
+                    .put("gap_audited_through_ms",auditedThrough)
+                    .put("known_gap_count",gap?.first ?: 0L)
+                    .put("first_missing_open_ms",gap?.second ?: JSONObject.NULL)
+                    .put("legacy_grid_invalid",key in invalid)
+                    .put("last_continuous_verified_open_ms",
+                        if(key in invalid || auditedThrough==0L) JSONObject.NULL
+                        else if(gap==null || gap.second>auditedThrough) auditedThrough
+                        else JSONObject.NULL)
                 val readiness = historyReadinessStatus(interval, count, complete)
                 row.put("full_history_complete", complete)
                     .put("minimum_working_set_count", readiness.minimumWorkingSetCount)
