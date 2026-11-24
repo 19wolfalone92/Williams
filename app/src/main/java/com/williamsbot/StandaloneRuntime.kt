@@ -4312,7 +4312,7 @@ private class NativeEngine(
             k.optString("v").toDoubleOrNull() ?: return,
             exchangeClosed=k.optBoolean("x",false)
         )
-        if (!validNativeCandle(candle)) {
+        if (!validNativeCandle(candle) || nativeHistoryCloseMs(candle.t,frame)!=k.optLong("T")) {
             lastError="INVALID_MARKET_KLINE: $symbol $frame; observation ignored"
             return
         }
@@ -4694,7 +4694,14 @@ private class NativeEngine(
                                 return@Thread
                             }
                             deepHistoryStorageLow = false
-                            val result = runCatching { fetchFullHistory(symbol, frame, 4) }
+                            val result = runCatching {
+                                fetchFullHistory(symbol, frame, 4)
+                                // Bounded audit discovers pre-upgrade gaps even when the
+                                // newest timestamp is already current. Late WS closes
+                                // cannot hide missing earlier bars.
+                                historyStore.auditHistoryGapPage(symbol,frame)
+                                repairKnownHistoryGap(symbol,frame)
+                            }
                             if (result.isFailure) {
                                 deepHistoryLastError = symbol + ":" + frame + " " +
                                     (result.exceptionOrNull()?.message ?: "history error")
@@ -4713,7 +4720,8 @@ private class NativeEngine(
                                     futuresMarketData.isLastClosedCandleCurrent(
                                         newest,frame,futuresMarketData.exchangeNowMs())
                                 }.getOrDefault(false)
-                                if (!completeBackward || !currentTail) incomplete++
+                                if (!completeBackward || !currentTail ||
+                                    !historyStore.historyContinuityAudited(symbol,frame)) incomplete++
                             }
                             // Allow new-order protection, scanning and foreground UI
                             // to consume exchange-rate and device I/O budgets first.
@@ -4771,9 +4779,7 @@ private class NativeEngine(
                 bar.l <= minOf(bar.o, bar.c, bar.h) && bar.v >= 0.0
         }
         if (!ohlcvValid) return false
-        if (frame == "1M") return true // Variable-length calendar months.
-        val step = frameSeconds(frame) * 1000L
-        return futuresClosedCandleTimesContiguous(candles.map { it.t }, step)
+        return futuresMarketData.nativeCandleTimelineContiguous(candles.map { it.t }, frame)
     }
 
     /**
@@ -4833,12 +4839,13 @@ private class NativeEngine(
         val normalizedSymbol = symbol.uppercase(Locale.US)
         val liveKey = normalizedSymbol + ":" + frame
         liveCandleCache[liveKey]?.let { live ->
-            synchronized(live) {
+            val liveSnapshot = synchronized(live) { live.toList() }
+            run {
                 // WS caches also contain the currently forming kline (x=false).
                 // It is valid for display, never for a trading decision. Strategy
                 // reads are restricted to bars closed according to Binance server time.
                 val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                val closed = closedNativeStrategyCandles(live) {
+                val closed = closedNativeStrategyCandles(liveSnapshot) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
                 if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs) &&
@@ -5130,6 +5137,57 @@ private class NativeEngine(
      *
      * Return only the small working set, never all historical rows in RAM.
      */
+    private val historyGapRetryAfter = java.util.concurrent.ConcurrentHashMap<String,Long>()
+
+    /** Repair one bounded missing range, independently of the newest cursor.
+     * REST proof must contain the actual missing rows; an empty response
+     * leaves the range registered. This worker has no order permissions. */
+    private fun repairKnownHistoryGap(symbol:String,frame:String) {
+        val gap=historyStore.firstMissingRange(symbol,frame) ?: return
+        val key="$symbol:$frame"
+        val nowElapsed=android.os.SystemClock.elapsedRealtime()
+        if(nowElapsed < (historyGapRetryAfter[key] ?: 0L)) return
+        try {
+            val verifiedNow=futuresMarketData.exchangeNowMs()
+            var endExclusive=gap.startMs
+            var requested=0
+            while(endExclusive<gap.endExclusiveMs && requested<500) {
+                val close=nativeHistoryCloseMs(endExclusive,frame)
+                    ?: error("HISTORY_GAP_OFF_GRID: $symbol/$frame")
+                check(close<verifiedNow && close<Long.MAX_VALUE)
+                endExclusive=close+1L
+                requested++
+            }
+            check(requested>0 && endExclusive<=gap.endExclusiveMs)
+            val rows=futuresMarketData.klines(symbol,frame,requested,
+                startTime=gap.startMs,endTime=endExclusive-1L)
+            val batch=ArrayList<MarketHistoryStore.Candle>(rows.length())
+            var expected=gap.startMs
+            for(i in 0 until rows.length()) {
+                val r=rows.getJSONArray(i)
+                val opened=r.getLong(0)
+                val closed=r.getLong(6)
+                check(opened==expected && opened<endExclusive &&
+                    nativeHistoryCloseMs(opened,frame)==closed && closed<verifiedNow) {
+                    "HISTORY_GAP_REPAIR_NONCONTIGUOUS: $symbol/$frame expected=$expected got=$opened"
+                }
+                batch+=MarketHistoryStore.Candle(opened,r.getString(1).toDouble(),
+                    r.getString(2).toDouble(),r.getString(3).toDouble(),
+                    r.getString(4).toDouble(),r.getString(5).toDouble(),closed)
+                expected=closed+1L
+            }
+            check(batch.isNotEmpty()) { "HISTORY_GAP_UNAVAILABLE: $symbol/$frame" }
+            historyStore.upsertBatch(symbol,frame,batch)
+            historyGapRetryAfter.remove(key)
+        } catch(failure:Exception) {
+            // Old listing/venue gaps may never be fillable. Keep proof of the
+            // gap and do not repeatedly hammer the public API for it.
+            historyGapRetryAfter[key]=nowElapsed+300_000L
+            historyStore.setError(symbol,frame,failure.message ?: failure.javaClass.simpleName)
+            throw failure
+        }
+    }
+
     private fun fetchFullHistory(
         symbol: String,
         frame: String = "1h",
@@ -11602,7 +11660,8 @@ private class NativeEngine(
         val last = rows.lastOrNull()
         val result = JSONObject().put("source", "DEVICE_SQLITE_CLOSED_H1")
             .put("used_for_order_entry", false)
-            .put("full_history_backfilled", historyStore.isComplete(symbol, "1h"))
+            .put("full_history_backfilled", historyStore.isComplete(symbol, "1h") &&
+                historyStore.historyContinuityAudited(symbol,"1h"))
             .put("loaded_bars", rows.size)
             .put("first_bar_open_ms", rows.firstOrNull()?.openTime ?: JSONObject.NULL)
             .put("last_bar_open_ms", last?.openTime ?: JSONObject.NULL)
