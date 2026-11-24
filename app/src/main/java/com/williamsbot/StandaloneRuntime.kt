@@ -5833,6 +5833,11 @@ private class NativeEngine(
      */
     private fun refreshFuturesAccountSnapshotIfNeeded(maxAgeMs: Long = 15_000L) {
         if (key().isBlank() || secret().isBlank()) return
+        // DIAG20: this opportunistic UI-only signed ACCOUNT GET must not
+        // race the real P0 REST/private-stream/position-management sweeps.
+        // A deferred display snapshot never certifies a fresh account.
+        if (!optionalFuturesDisplayReadAllowed(futuresReconciliationRunning,
+                futuresStreamReconcileRunning, nativeManagementRunning)) return
         val nowMs = System.currentTimeMillis()
         val age = nowMs - futuresAccountSnapshotUpdatedAtMs
         if (futuresAccountSnapshotUpdatedAtMs > 0L && age in 0..maxAgeMs) return
@@ -5894,9 +5899,17 @@ private class NativeEngine(
         }
 
         val shouldRefresh = synchronized(this) {
+            // The optional cockpit reader previously competed with signed P0
+            // reconciliations and then could fail its own strict 15s freshness
+            // window, leaving the phone apparently frozen. Defer and retain
+            // old values with their original (STALE) timestamp, never invent
+            // protected/flat state.
+            val canRead = optionalFuturesDisplayReadAllowed(
+                futuresReconciliationRunning, futuresStreamReconcileRunning,
+                nativeManagementRunning)
             val lastAttempt = futuresPositionSnapshotLastAttemptMs
             val retryAllowed = lastAttempt <= 0L || nowMs < lastAttempt || nowMs - lastAttempt >= 15_000L
-            if (!futuresPositionSnapshotRefreshRunning && retryAllowed &&
+            if (canRead && !futuresPositionSnapshotRefreshRunning && retryAllowed &&
                 key().isNotBlank() && secret().isNotBlank()
             ) {
                 futuresPositionSnapshotRefreshRunning = true
