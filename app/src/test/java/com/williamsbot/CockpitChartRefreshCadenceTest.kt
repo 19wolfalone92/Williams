@@ -19,7 +19,7 @@ class CockpitChartRefreshCadenceTest {
         val now=11*h1+59*60_000L+45_000L
         assertEquals(30_000L,cockpitChartNextRefreshDelayMs(10*h1,"1h",now))
         assertEquals(30_000L,cockpitChartNextRefreshDelayMs(11*h1+58*60_000L,
-            "1m",11*h1+59*60_000L))
+            "1m",11*h1+59*60_000L+45_000L))
     }
 
     @Test fun missingHistoryUnsupportedFrameAndPastCloseRetry() {
