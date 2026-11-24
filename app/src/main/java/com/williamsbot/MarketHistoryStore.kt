@@ -12,6 +12,27 @@ import java.io.ByteArrayOutputStream
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 
+/**
+ * Only bounded DERIVED INDICATORS are saved here, not the whole chart:
+ * market OHLCV remains in SQLite candles. Revision updates happen in the
+ * exact same transaction as candle upserts; no stale result survives a
+ * correction, reconnect or process death.
+ */
+internal val closedIndicatorCacheSchema = listOf(
+    """CREATE TABLE IF NOT EXISTS closed_indicator_cache_revision(
+        symbol TEXT NOT NULL, interval TEXT NOT NULL,
+        revision INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY(symbol,interval))""",
+    """CREATE TABLE IF NOT EXISTS closed_indicator_cache(
+        symbol TEXT NOT NULL, interval TEXT NOT NULL,
+        model TEXT NOT NULL, source_revision INTEGER NOT NULL,
+        source_first_ms INTEGER NOT NULL, source_last_ms INTEGER NOT NULL,
+        source_rows INTEGER NOT NULL, payload TEXT NOT NULL,
+        PRIMARY KEY(symbol,interval,source_first_ms,source_last_ms,source_rows))"""
+)
+
+internal const val closedIndicatorModelVersion = "WILLIAMS_CLOSED_INDICATORS_V1"
+
 internal data class HistoryReadinessStatus(
     val minimumWorkingSetCount: Int,
     val workingSetReady: Boolean,
@@ -81,7 +102,7 @@ internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean
  * working set for calculations, so the complete history is never retained in RAM.
  */
 class MarketHistoryStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_market_history.db", null, 3) {
+    SQLiteOpenHelper(context, "williams_market_history.db", null, 4) {
 
     data class Candle(
         val openTime: Long,
@@ -132,6 +153,7 @@ class MarketHistoryStore(context: Context) :
             """.trimIndent()
         )
         deviceWaveReplaySchema.forEach(db::execSQL)
+        closedIndicatorCacheSchema.forEach(db::execSQL)
     }
 
     override fun onUpgrade(
@@ -182,6 +204,7 @@ class MarketHistoryStore(context: Context) :
             }
         }
         if(oldVersion<3) deviceWaveReplaySchema.forEach(db::execSQL)
+        if(oldVersion<4) closedIndicatorCacheSchema.forEach(db::execSQL)
     }
 
     @Synchronized
@@ -259,8 +282,74 @@ class MarketHistoryStore(context: Context) :
                 state,
                 SQLiteDatabase.CONFLICT_REPLACE
             )
-
+            // Any overlapping REST correction or freshly CLOSED WS candle
+            // invalidates the derived indicator cache, including when the
+            // latest open time is unchanged but its OHLCV was corrected.
+            // Portable Android SQLite syntax; no reliance on modern UPSERT.
+            db.execSQL("INSERT OR IGNORE INTO closed_indicator_cache_revision(" +
+                "symbol,interval,revision) VALUES(?,?,0)",arrayOf(symbol,interval))
+            db.execSQL("UPDATE closed_indicator_cache_revision SET revision=revision+1 " +
+                "WHERE symbol=? AND interval=?",arrayOf(symbol,interval))
         }
+    }
+
+    @Synchronized
+    fun indicatorCacheRevision(symbol:String,interval:String):Long =
+        readableDatabase.rawQuery(
+            "SELECT revision FROM closed_indicator_cache_revision WHERE symbol=? AND interval=?",
+            arrayOf(symbol,interval)
+        ).use { if(it.moveToFirst()) it.getLong(0) else 0L }
+
+    /** Read a result only for an identical CLOSED working set and candle revision. */
+    @Synchronized
+    fun loadClosedIndicatorSnapshot(
+        symbol:String, interval:String, firstMs:Long, lastMs:Long, rows:Int
+    ): JSONObject? {
+        if(firstMs<=0L || lastMs<firstMs || rows<40) return null
+        return readableDatabase.rawQuery(
+            "SELECT payload,source_revision FROM closed_indicator_cache " +
+                "WHERE symbol=? AND interval=? AND model=? " +
+                "AND source_first_ms=? AND source_last_ms=? AND source_rows=?",
+            arrayOf(symbol,interval,closedIndicatorModelVersion,
+                firstMs.toString(),lastMs.toString(),rows.toString())
+        ).use { c ->
+            if(!c.moveToFirst() || c.getLong(1)!=indicatorCacheRevision(symbol,interval))
+                null
+            else runCatching { JSONObject(c.getString(0)) }.getOrNull()
+        }
+    }
+
+    /** Persist only computed read-only indicators, never candles or order decisions. */
+    @Synchronized
+    fun saveClosedIndicatorSnapshot(
+        symbol:String, interval:String, firstMs:Long, lastMs:Long, rows:Int,
+        revision:Long, payload:JSONObject
+    ):Boolean {
+        if(firstMs<=0L || lastMs<firstMs || rows<40 ||
+            !payload.optBoolean("ready",false) ||
+            payload.optLong("time")!=lastMs ||
+            revision!=indicatorCacheRevision(symbol,interval)) return false
+        val json=payload.toString()
+        if(json.length>65_536) return false
+        // Multiple windows (150 strategy bars and 6000 chart bars) can
+        // coexist at the SAME source revision. Remove stale rows only when
+        // source OHLCV changed, not when another window was requested.
+        writableDatabase.delete("closed_indicator_cache",
+            "symbol=? AND interval=? AND source_revision<>?",
+            arrayOf(symbol,interval,revision.toString()))
+        val row=ContentValues().apply {
+            put("symbol",symbol);put("interval",interval)
+            put("model",closedIndicatorModelVersion)
+            put("source_revision",revision)
+            put("source_first_ms",firstMs)
+            put("source_last_ms",lastMs)
+            put("source_rows",rows)
+            put("payload",json)
+        }
+        return writableDatabase.insertWithOnConflict(
+            "closed_indicator_cache",null,row,
+            SQLiteDatabase.CONFLICT_REPLACE
+        )!=-1L
     }
 
     @Synchronized

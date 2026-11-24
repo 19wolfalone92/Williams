@@ -74,8 +74,15 @@ def test_throttled_indicators_keep_every_closed_bar_sqlite_write_and_generation_
         "private fun warmCoreHistoryAsync(", 1
     )[0]
     assert "indicatorGeneration.compute(key)" in stream
-    assert "scheduleIndicatorRebuild(key, symbol, frame, list)" in stream
-    assert "historyStore.upsertBatch(" in stream
+    # Forming x=false WS messages must not allocate/recalculate.
+    # A unique confirmed x=true event persists before scheduling Williams
+    # indicator calculation, not vice versa. No quote/STOP gate is weakened.
+    assert 'if (!k.optBoolean("x",false)) return' in stream
+    assert "if (!candle.exchangeClosed || previous == candle) return" in stream
+    assert "scheduleIndicatorRebuild(key,symbol,frame,list)" in stream
+    assert "historyStore.upsertBatch(symbol,frame,listOf(closedCandle))" in stream
+    assert stream.index("historyStore.upsertBatch(symbol,frame,listOf(closedCandle))") < stream.index(
+        "scheduleIndicatorRebuild(key,symbol,frame,list)")
     assert "indicatorExecutor.execute" in stream
     rebuild = RUNTIME.split("private fun scheduleIndicatorRebuild(", 1)[1].split(
         "private fun consumeKlineStream(", 1
