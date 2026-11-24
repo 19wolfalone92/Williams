@@ -4876,7 +4876,7 @@ private class NativeEngine(
         }
         val live=durable.candles.takeLast(limit)
         val closed = closedNativeStrategyCandles(live) {
-            futuresMarketData.isKlineOpenTimeClosed(it.t,frame,exchangeNowMs)
+            futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
         }
         if(durable.continuous && closed.size>=limit &&
             candleSeriesCurrent(closed,frame,exchangeNowMs) &&
