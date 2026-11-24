@@ -285,9 +285,11 @@ class MarketHistoryStore(context: Context) :
             // Any overlapping REST correction or freshly CLOSED WS candle
             // invalidates the derived indicator cache, including when the
             // latest open time is unchanged but its OHLCV was corrected.
-            db.execSQL("INSERT INTO closed_indicator_cache_revision(symbol,interval,revision) " +
-                "VALUES(?,?,1) ON CONFLICT(symbol,interval) DO UPDATE SET revision=revision+1",
-                arrayOf(symbol,interval))
+            // Portable Android SQLite syntax; no reliance on modern UPSERT.
+            db.execSQL("INSERT OR IGNORE INTO closed_indicator_cache_revision(" +
+                "symbol,interval,revision) VALUES(?,?,0)",arrayOf(symbol,interval))
+            db.execSQL("UPDATE closed_indicator_cache_revision SET revision=revision+1 " +
+                "WHERE symbol=? AND interval=?",arrayOf(symbol,interval))
         }
     }
 
