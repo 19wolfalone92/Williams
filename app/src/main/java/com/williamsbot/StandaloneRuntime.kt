@@ -1584,6 +1584,11 @@ private class StandaloneServer(private val context: Context) {
                 x.status(fast = fast, includeDecisionTraces = !fast).toString()
             }
 
+            // An operator reopening a STOPPED application requests read-only
+            // SQLite candle delta catch-up. This route cannot start trading.
+            method == "POST" && path == "/api/v1/history/foreground-catchup" ->
+                x.requestForegroundReadOnlyHistoryCatchup().toString()
+
             method == "GET" && path == "/api/v1/market/indicators" ->
                 x.indicators(params["symbol"], params["interval"]).toString()
 
@@ -4412,6 +4417,84 @@ private class NativeEngine(
             .put("ao_bullish_divergence", aoBullishDivergence(candles))
             .put("ao_bearish_divergence", aoBearishDivergence(candles))
             .put("wave", waveInfo(candles, frame).path)
+    }
+
+    // Stopped/force-closed Android process does not lose downloaded candles.
+    // A user who reopens the UI before opting to run the FGS can still
+    // resume all PREVIOUSLY SAVED timeframes without starting Binance orders.
+    @Volatile private var foregroundHistoryCatchupActive=false
+    @Volatile private var foregroundHistoryCatchupStartedAtMs=0L
+    @Volatile private var foregroundHistoryCatchupPairs=0
+    @Volatile private var foregroundHistoryCatchupError:String?=null
+
+    fun requestForegroundReadOnlyHistoryCatchup():JSONObject {
+        val now=System.currentTimeMillis()
+        val start=synchronized(this) {
+            if(running || historyWarmupRunning || foregroundHistoryCatchupActive ||
+                (foregroundHistoryCatchupStartedAtMs>0L &&
+                    now-foregroundHistoryCatchupStartedAtMs<60_000L)) false
+            else {
+                foregroundHistoryCatchupActive=true
+                foregroundHistoryCatchupStartedAtMs=now
+                foregroundHistoryCatchupPairs=0
+                foregroundHistoryCatchupError=null
+                true
+            }
+        }
+        if(start) {
+            val generation=runtimeGeneration
+            Thread {
+                try {
+                    for(symbol in coreSymbols) {
+                        // Service-started financial supervision always takes
+                        // priority over an optional foreground catch-up.
+                        if(running || generation!=runtimeGeneration ||
+                            Thread.currentThread().isInterrupted) break
+                        for(frame in analysisFrames) {
+                            if(running || generation!=runtimeGeneration ||
+                                Thread.currentThread().isInterrupted) break
+                            if(futuresReconciliationRunning ||
+                                futuresStreamReconcileRunning || nativeManagementRunning) break
+                            try {
+                                val savedCount=historyStore.count(symbol,frame)
+                                // Every frame already downloaded is durable;
+                                // only the essential H1/H4/D1/M15/M5 etc. are
+                                // initially seeded across all 15 markets.
+                                if(savedCount==0L && frame !in startupFrames) continue
+                                val closed=fetchCandles(symbol,frame,
+                                    startupHistoryLimit(frame))
+                                if(closed.size>=40) {
+                                    cachedClosedIndicatorSnapshot(closed,symbol,frame)
+                                }
+                            } catch(failure:Exception) {
+                                // A failed public clock/REST GET is NOT evidence
+                                // of recovered candles, and never clears the
+                                // exchange reconciliation or STOP protection gate.
+                                foregroundHistoryCatchupError=symbol+":"+frame+":"+
+                                    (failure.message ?: failure.javaClass.simpleName)
+                            }
+                            try { Thread.sleep(120L) } catch (_:InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                return@Thread
+                            }
+                        }
+                        foregroundHistoryCatchupPairs++
+                    }
+                } finally {
+                    foregroundHistoryCatchupActive=false
+                }
+            }.apply {
+                isDaemon=true
+                name="williams-foreground-readonly-history-catchup"
+                start()
+            }
+        }
+        return JSONObject().put("started",start)
+            .put("read_only",true).put("can_place_orders",false)
+            .put("can_confirm_stop",false)
+            .put("source","PERSISTED_SQLITE_CLOSED_BARS_ONLY")
+            .put("active",foregroundHistoryCatchupActive)
+            .put("completed_symbol_count",foregroundHistoryCatchupPairs)
     }
 
     private fun warmCoreHistoryAsync(generation: Long = runtimeGeneration) {
