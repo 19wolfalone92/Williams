@@ -4368,12 +4368,14 @@ private class NativeEngine(
      * Only small indicator summaries are persisted; full multi-year OHLCV
      * stays disk-backed, not in Android's 256 MiB Java heap.
      */
+    private val liveChartMath=IncrementalWilliamsMath()
+
     private fun cachedClosedIndicatorSnapshot(
         candles:List<CandleN>,symbol:String,frame:String
     ):JSONObject {
         val closed=candles.filter { it.exchangeClosed }
-        if(closed.size<40) return JSONObject().put("symbol",symbol)
-            .put("interval",frame).put("ready",false)
+        if(closed.size<40 || !cachedFixedFrameKlinesValid(closed,frame)) return JSONObject().put("symbol",symbol)
+            .put("interval",frame).put("ready",false).put("reason","INSUFFICIENT_OR_GAPPED_CLOSED_HISTORY")
         val first=closed.first().t
         val last=closed.last().t
         val revision=historyStore.indicatorCacheRevision(symbol,frame)
@@ -12954,9 +12956,9 @@ private class NativeEngine(
 
         val output = JSONArray()
         val prices = sourceCandles.map { it.c }
-        val medianPrices = sourceCandles.map { (it.h + it.l) / 2.0 }
-        val aoValues = medianPrices.indices.map { index -> awesomeOscillatorAt(medianPrices, index) }
-        val acValues = aoValues.indices.map { index -> acceleratorOscillatorAt(aoValues, index) }
+        val medianBars=sourceCandles.map { ClosedMedianBar(it.t,(it.h+it.l)/2.0) }
+        val math=if(historical) IncrementalWilliamsMath() else liveChartMath
+        val mathPoints=math.update("$symbol:$selectedInterval",medianBars)
         // The chart fetches a moving quote frequently, but Williams indicators use only
         // confirmed closed candles. Cache the expensive wave/indicator explanation by
         // latest closed-bar timestamp so one-second quote refreshes do not recompute it.
@@ -12975,9 +12977,7 @@ private class NativeEngine(
         }
 
         if (prices.isNotEmpty()) {
-            val jaw = williamsAlligatorLine(sourceCandles, 13, 8)
-            val teeth = williamsAlligatorLine(sourceCandles, 8, 5)
-            val lips = williamsAlligatorLine(sourceCandles, 5, 3)
+            // Alligator and AO/AC share the exact same closed series state.
             val start = max(0, sourceCandles.size - bars)
             val observedSignals = if (historical || selectedInterval != "1h") emptyList() else
                 CockpitDiagnostics.rows(CockpitDiagnostics.rows(candidates).firstOrNull { it.optString("symbol") == symbol }?.optJSONArray("campaign_signals"))
@@ -12993,13 +12993,13 @@ private class NativeEngine(
                         .put("high", c.h)
                         .put("low", c.l)
                         .put("close", c.c)
-                        .put("jaw", jaw.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
-                        .put("teeth", teeth.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
-                        .put("lips", lips.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("jaw", mathPoints[i].jaw ?: JSONObject.NULL)
+                        .put("teeth", mathPoints[i].teeth ?: JSONObject.NULL)
+                        .put("lips", mathPoints[i].lips ?: JSONObject.NULL)
                         // AO/AC are nullable during warm-up. Never let NaN/Infinity
                         // abort the entire chart response for a valid symbol/timeframe.
-                        .put("ao", aoValues.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
-                        .put("ac", acValues.getOrNull(i)?.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ao", mathPoints[i].ao.takeIf { it.isFinite() } ?: JSONObject.NULL)
+                        .put("ac", mathPoints[i].ac.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("mfi_proxy", volumeProxy.takeIf { it.isFinite() } ?: JSONObject.NULL)
                         .put("signal_source", "DIAGNOSTIC_ONLY_H1_CAMPAIGN_AUTHORITY")
                         .put("signal_types", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("type") }))
