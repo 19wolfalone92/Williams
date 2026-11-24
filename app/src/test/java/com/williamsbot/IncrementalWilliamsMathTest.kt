@@ -33,10 +33,43 @@ class IncrementalWilliamsMathTest {
         val state=IncrementalWilliamsMath()
         state.update("BTC:1h",bars)
         val corrected=bars.mapIndexed { i,b -> if(i==31) b.copy(median=b.median+3.5) else b }
-        assertEquals(full(corrected),state.update("BTC:1h",corrected))
-        assertEquals(full(corrected.drop(1)),state.update("BTC:1h",corrected.drop(1)))
-        assertEquals(3L,state.rebuilds)
+        val correctedPoints=full(corrected)
+        assertEquals(correctedPoints,state.update("BTC:1h",corrected))
+        assertEquals(correctedPoints.drop(1),state.update("BTC:1h",corrected.drop(1)))
+        assertEquals(2L,state.rebuilds)
     }
+
+    @Test fun slidingWindowAppendsOnlyNewBarsAndKeepsTheOriginalRecursiveSeed() {
+        val state=IncrementalWilliamsMath()
+        val initial=bars.take(400)
+        assertEquals(full(initial),state.update("BTC:1h",initial))
+        val all=bars.take(401)
+        val nextWindow=all.takeLast(400)
+        assertEquals(full(all).takeLast(400),state.update("BTC:1h",nextWindow))
+        assertEquals(1L,state.rebuilds)
+        assertEquals(401L,state.appendedPoints)
+
+        val allAgain=bars.take(402)
+        assertEquals(full(allAgain).takeLast(400),
+            state.update("BTC:1h",allAgain.takeLast(400)))
+        assertEquals(1L,state.rebuilds)
+        assertEquals(402L,state.appendedPoints)
+    }
+
+    @Test fun smallerViewportDoesNotDiscardTheLiveAccumulator() {
+        val state=IncrementalWilliamsMath()
+        val initial=bars.take(400)
+        val fullInitial=state.update("BTC:1h",initial)
+        assertEquals(fullInitial.takeLast(150),state.update("BTC:1h",initial.takeLast(150)))
+        assertEquals(1L,state.rebuilds)
+
+        val all=bars.take(401)
+        assertEquals(full(all).takeLast(150),
+            state.update("BTC:1h",all.takeLast(150)))
+        assertEquals(1L,state.rebuilds)
+        assertEquals(401L,state.appendedPoints)
+    }
+
     @Test fun flatPricesDoNotInventAoColourOrCrossing() {
         val flat=(1..100).map { ClosedMedianBar(it*3600000L,0.1) }
         assertEquals(full(flat),IncrementalWilliamsMath().update("FLAT:1h",flat))

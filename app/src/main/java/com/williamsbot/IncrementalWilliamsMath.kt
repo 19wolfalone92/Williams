@@ -65,9 +65,10 @@ internal class WilliamsMathAccumulator {
     }
 }
 
-/** Bounded single chart window. Same anchor + identical prefix -> append only.
- * Sliding the seed or correcting an old candle deliberately rebuilds; changing
- * the seed silently would alter the current Williams SMMA reference. */
+/** Bounded current chart window. An exact overlapping suffix plus new closed
+ * candles advances the existing accumulator; corrections/prepends/key changes
+ * rebuild from the supplied seed. A shorter historical viewport does not
+ * rewind the live recursive state. */
 internal class IncrementalWilliamsMath {
     private var key=""
     private var input:List<ClosedMedianBar> = emptyList()
@@ -79,23 +80,55 @@ internal class IncrementalWilliamsMath {
         private set
     @Synchronized fun update(nextKey:String,bars:List<ClosedMedianBar>):List<WilliamsMathPoint> {
         val next=bars.toList()
-        val samePrefix=nextKey==key && next.size>=input.size &&
-            input.indices.all { input[it]==next[it] }
-        if(samePrefix && next.size==input.size) return output
-        val state=if(samePrefix) accumulator else WilliamsMathAccumulator()
-        // Validate the complete series before mutating a reusable accumulator.
-        require(next.all { it.median.isFinite() && it.median>0.0 } &&
-            next.zipWithNext().all { (a,b)-> b.openMs>a.openMs })
+        require(next.all { it.openMs>0L && it.median.isFinite() && it.median>0.0 })
+        require(next.zipWithNext().all { (a,b)->b.openMs>a.openMs })
+        if(next.isEmpty()) return emptyList()
+        if(nextKey==key && next==input) return output
+
+        // The chart is a moving bounded window. When its first candle rolls
+        // forward, retain the recursive SMMA/rolling-window state if the new
+        // input is an exact suffix of the previous snapshot plus new bars.
+        // Re-seeding at the new first visible candle changes Alligator values
+        // and needlessly recalculates every point on each candle close.
+        val overlapStart=if(nextKey==key && input.isNotEmpty())
+            input.binarySearchBy(next.first().openMs) { it.openMs }.takeIf { it>=0 }
+        else null
+        if(overlapStart!=null) {
+            val overlapCount=minOf(input.size-overlapStart,next.size)
+            val matches=(0 until overlapCount).all { offset ->
+                input[overlapStart+offset]==next[offset]
+            }
+            if(matches) {
+                // A historical chart viewport may request only a subrange.
+                // Return its existing projection without rewinding the live
+                // accumulator or changing the latest processed candle.
+                if(overlapCount==next.size) {
+                    return Collections.unmodifiableList(
+                        ArrayList(output.subList(overlapStart,overlapStart+overlapCount))
+                    )
+                }
+                val result=ArrayList<WilliamsMathPoint>(next.size)
+                result.addAll(output.subList(overlapStart,input.size))
+                for(i in overlapCount until next.size) result.add(accumulator.append(next[i]))
+                appendedPoints+=(next.size-overlapCount).toLong()
+                input=next
+                output=Collections.unmodifiableList(result)
+                return output
+            }
+        }
+
+        // A correction, prepend, symbol/frame change or non-overlapping range
+        // invalidates the recursive seed. Rebuild once from the supplied
+        // closed snapshot; later appends/slides remain incremental.
+        val state=WilliamsMathAccumulator()
         val result=ArrayList<WilliamsMathPoint>(next.size)
-        val from=if(samePrefix) input.size else 0
-        if(samePrefix) result.addAll(output)
-        for(i in from until next.size) result.add(state.append(next[i]))
-        if(!samePrefix) rebuilds++
-        appendedPoints+=(next.size-from).toLong()
+        next.forEach { result+=state.append(it) }
         key=nextKey
         input=next
         accumulator=state
         output=Collections.unmodifiableList(result)
+        rebuilds++
+        appendedPoints+=next.size.toLong()
         return output
     }
 }
