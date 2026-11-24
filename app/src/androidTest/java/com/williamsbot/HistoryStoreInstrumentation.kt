@@ -6,7 +6,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.os.Bundle
 
 /**
- * Device-only, isolated test APK. Uses the instrumentation package database,
+ * Device-only, isolated test APK. Uses a separately named disposable database,
  * never the operator's application database, credentials or exchange.
  */
 class HistoryStoreInstrumentation : Instrumentation() {
@@ -29,9 +29,8 @@ class HistoryStoreInstrumentation : Instrumentation() {
     }
 
     private fun exerciseHistory() {
-        val app=context
-        check(app.packageName!=targetContext.packageName) { "test database must be isolated" }
-        val dbName="williams_market_history.db"
+        val app=targetContext
+        val dbName="williams_history_instrumentation_test.db"
         app.deleteDatabase(dbName)
         val h=3_600_000L
         val symbol="BTCUSDT"
@@ -39,7 +38,7 @@ class HistoryStoreInstrumentation : Instrumentation() {
         fun candle(hour:Long,close:Double=10.0)=MarketHistoryStore.Candle(
             hour*h,10.0,12.0,9.0,close,5.0,(hour+1)*h-1L)
         try {
-            MarketHistoryStore(app).use { store ->
+            MarketHistoryStore(app,dbName).use { store ->
                 store.upsertBatch(symbol,frame,listOf(candle(10),candle(11),candle(15)))
                 check(store.firstMissingRange(symbol,frame)==MarketHistoryStore.MissingRange(12*h,15*h))
                 val rev=store.indicatorCacheRevision(symbol,frame)
@@ -63,7 +62,7 @@ class HistoryStoreInstrumentation : Instrumentation() {
                 db.execSQL("DROP TABLE history_invalid_grid")
                 db.version=4
             }
-            MarketHistoryStore(app).use { store ->
+            MarketHistoryStore(app,dbName).use { store ->
                 check(store.count(symbol,frame)==4L)
                 check(!store.historyContinuityAudited(symbol,frame))
                 store.auditHistoryGapPage(symbol,frame,2)
