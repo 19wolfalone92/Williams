@@ -4247,7 +4247,7 @@ private class NativeEngine(
                             val closed = closedNativeStrategyCandles(snapshot) {
                                 futuresMarketData.isKlineOpenTimeClosed(it.t, frame, verifiedNow)
                             }
-                            val calculated = buildIndicatorSnapshot(closed, symbol, frame)
+                            val calculated = cachedClosedIndicatorSnapshot(closed, symbol, frame)
                             if (indicatorGeneration[key] == capturedGeneration) {
                                 indicatorSnapshots[key] = calculated
                             }
@@ -4332,6 +4332,39 @@ private class NativeEngine(
                 // new risk; the startup/periodic REST catch-up must fill the gap.
             }
         }
+    }
+
+    /**
+     * Read-only closed-candle indicator state lives beside durable OHLCV in
+     * SQLite. A restart restores this derived snapshot without recalculation,
+     * while a new closed candle or any corrected historical row increments the
+     * source revision transactionally and forces a re-evaluation.
+     *
+     * Only small indicator summaries are persisted; full multi-year OHLCV
+     * stays disk-backed, not in Android's 256 MiB Java heap.
+     */
+    private fun cachedClosedIndicatorSnapshot(
+        candles:List<CandleN>,symbol:String,frame:String
+    ):JSONObject {
+        val closed=candles.filter { it.exchangeClosed }
+        if(closed.size<40) return JSONObject().put("symbol",symbol)
+            .put("interval",frame).put("ready",false)
+        val first=closed.first().t
+        val last=closed.last().t
+        val revision=historyStore.indicatorCacheRevision(symbol,frame)
+        historyStore.loadClosedIndicatorSnapshot(
+            symbol,frame,first,last,closed.size
+        )?.let { return it }
+        val calculated=buildIndicatorSnapshot(closed,symbol,frame)
+        // Only save when the entire latest input is actually durable and its
+        // source revision has not changed under the computation. Otherwise
+        // return it for display but never certify a reusable disk snapshot.
+        if(historyStore.newest(symbol,frame)==last) {
+            historyStore.saveClosedIndicatorSnapshot(
+                symbol,frame,first,last,closed.size,revision,calculated
+            )
+        }
+        return calculated
     }
 
     private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
@@ -4436,7 +4469,7 @@ private class NativeEngine(
                                 candleCache[symbol + ":" + frame + ":" + requestedCount] =
                                     System.currentTimeMillis() to recent
                                 indicatorSnapshots[cacheKey] =
-                                    buildIndicatorSnapshot(recent, symbol, frame)
+                                    cachedClosedIndicatorSnapshot(recent, symbol, frame)
                             } else {
                                 historyLastError = label + " " +
                                     (failure?.message
@@ -12511,12 +12544,11 @@ private class NativeEngine(
     fun indicators(requestedSymbol: String? = null, requestedInterval: String? = null): JSONObject {
         val symbol = requestedSymbol?.uppercase(Locale.US) ?: primarySymbol
         val frame = requestedInterval ?: interval
-        return indicatorSnapshots[symbol + ":" + frame]
-            ?: buildIndicatorSnapshot(
-                fetchCandles(symbol, frame, 150),
-                symbol,
-                frame
-            )
+        // Never reuse a RAM indicator with a stale OHLCV revision after a
+        // process restart, WS correction or historical catch-up.
+        return cachedClosedIndicatorSnapshot(
+            fetchCandles(symbol, frame, 150), symbol, frame
+        )
     }
 
     fun klines(
@@ -12534,9 +12566,14 @@ private class NativeEngine(
         // Never return plausible H1 candles mislabeled as another symbol/interval after an invalid request or REST error.
         val bars = requestedBars.coerceIn(120, 6000)
         val historical = requestedEndTime != null
-        val stored = if (historical || bars > 150) historyStore.loadRecent(symbol, selectedInterval, 6000, requestedEndTime)
-            .filter { futuresMarketData.isKlineOpenTimeClosed(it.openTime, selectedInterval, futuresMarketData.exchangeNowMs()) }
-            .map { CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume) } else emptyList()
+        val chartExchangeNowMs = futuresMarketData.exchangeNowMs()
+        val stored = if (historical || bars > 150) historyStore.loadRecent(
+            symbol, selectedInterval, bars.coerceAtMost(6000), requestedEndTime
+        ).filter {
+            futuresMarketData.isKlineOpenTimeClosed(
+                it.openTime,selectedInterval,chartExchangeNowMs)
+        }.map { CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+        else emptyList()
         val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
             if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
                 primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
@@ -12555,20 +12592,16 @@ private class NativeEngine(
         // latest closed-bar timestamp so one-second quote refreshes do not recompute it.
         val indicatorKey = symbol + ":" + selectedInterval
         val latestClosedCandleTime = sourceCandles.lastOrNull()?.t ?: 0L
-        val cachedIndicatorSnapshot = indicatorSnapshots[indicatorKey]
-        val indicatorSnapshot = if (
-            cachedIndicatorSnapshot != null &&
-            cachedIndicatorSnapshot.optBoolean("ready", false) &&
-            cachedIndicatorSnapshot.optInt("candle_count", -1) == sourceCandles.size &&
-            cachedIndicatorSnapshot.optLong("time", -1L) == latestClosedCandleTime
-        ) {
-            JSONObject(cachedIndicatorSnapshot.toString())
-        } else {
-            buildIndicatorSnapshot(sourceCandles, symbol, selectedInterval).also { snapshot ->
-                if (!historical && snapshot.optBoolean("ready", false) && latestClosedCandleTime > 0L) {
-                    indicatorSnapshots[indicatorKey] = JSONObject(snapshot.toString())
-                }
-            }
+        // A derived indicator is calculated at most once per unchanged
+        // persisted CLOSED window/revision, even when the app was killed.
+        // Historical chart requests with an older cutoff must NEVER reuse a
+        // current live-memory snapshot; the SQL key includes both window ends.
+        val indicatorSnapshot = cachedClosedIndicatorSnapshot(
+            sourceCandles,symbol,selectedInterval
+        )
+        if (!historical && indicatorSnapshot.optBoolean("ready",false) &&
+            latestClosedCandleTime > 0L) {
+            indicatorSnapshots[indicatorKey] = indicatorSnapshot
         }
 
         if (prices.isNotEmpty()) {
