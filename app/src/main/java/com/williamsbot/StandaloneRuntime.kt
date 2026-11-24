@@ -12680,14 +12680,25 @@ private class NativeEngine(
             return liveChartEnvelope(symbol,selectedInterval,cached.candleRows,
                 cached.indicators,cached.lastOpenMs,chartExchangeNowMs)
         }
-        val stored = if (historical || bars > 150) historyStore.loadRecent(
-            symbol, selectedInterval, bars.coerceAtMost(6000), requestedEndTime
-        ).filter {
-            futuresMarketData.isKlineOpenTimeClosed(
-                it.openTime,selectedInterval,chartExchangeNowMs)
-        }.map { CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
-        else emptyList()
-        val sourceCandles = if (historical) stored else if (stored.size >= 150 && candleSeriesCurrent(stored, selectedInterval)) stored else if (symbol == primarySymbol && selectedInterval == interval) {
+        fun chartDiskWindow():List<CandleN> =
+            historyStore.loadRecent(
+                symbol,selectedInterval,bars.coerceAtMost(6000),requestedEndTime
+            ).filter {
+                futuresMarketData.isKlineOpenTimeClosed(
+                    it.openTime,selectedInterval,chartExchangeNowMs)
+            }.map { CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+        var stored = if(historical || bars>150) chartDiskWindow() else emptyList()
+        if(!historical && stored.size>=150 &&
+            !candleSeriesCurrent(stored,selectedInterval,chartExchangeNowMs)) {
+            // After a multi-day offline gap, fetchCandles performs a paged
+            // cursor catch-up. Restore the ENTIRE requested 6000-bar chart
+            // from durable SQLite rather than showing only the 150-bar probe.
+            fetchCandles(symbol,selectedInterval,150)
+            stored=chartDiskWindow()
+        }
+        val sourceCandles = if (historical) stored else if (stored.size >= 150 &&
+            candleSeriesCurrent(stored,selectedInterval,chartExchangeNowMs)) stored
+        else if (symbol == primarySymbol && selectedInterval == interval) {
             if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
                 primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
             primaryCandles
