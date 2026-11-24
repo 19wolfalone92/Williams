@@ -4238,10 +4238,16 @@ private class NativeEngine(
                     for (pass in 0 until 2) {
                         val snapshot = synchronized(list) {
                             capturedGeneration = indicatorGeneration[key] ?: 0L
-                            list.toList()
+                            // Never evaluate a forming WS candle. The 5m, 15m,
+                            // 1h etc. indicator state changes only on a close.
+                            list.filter { it.exchangeClosed }
                         }
                         runCatching {
-                            val calculated = buildIndicatorSnapshot(snapshot, symbol, frame)
+                            val verifiedNow = futuresMarketData.exchangeNowMs()
+                            val closed = closedNativeStrategyCandles(snapshot) {
+                                futuresMarketData.isKlineOpenTimeClosed(it.t, frame, verifiedNow)
+                            }
+                            val calculated = buildIndicatorSnapshot(closed, symbol, frame)
                             if (indicatorGeneration[key] == capturedGeneration) {
                                 indicatorSnapshots[key] = calculated
                             }
@@ -4288,38 +4294,42 @@ private class NativeEngine(
         val key = symbol + ":" + frame
         val list = liveCandleCache.computeIfAbsent(key) { mutableListOf() }
         synchronized(list) {
+            val previous = list.lastOrNull { it.t == candle.t }
             if (!upsertNativeCandleObservation(list,candle)) return
-            val snapshotCandles = list.toList()
-            candleCache[key] = System.currentTimeMillis() to snapshotCandles
-
-            // This candle can update high/low/volume without changing open
-            // time; compare versions, not only timestamps. Every published
-            // cache is still a copy, never a partially-mutated candle list.
+            // Forming x=false WS messages may arrive several times PER SECOND.
+            // They update only raw market observation/price, not AO/AC/
+            // Alligator/fractal/wave or SQLite. A duplicate final close is
+            // likewise harmless; corrections to closed OHLCV are not ignored.
+            if (!candle.exchangeClosed || previous == candle) return
+            candleCache[key] = System.currentTimeMillis() to list.toList()
             indicatorGeneration.compute(key) { _, prior -> (prior ?: 0L) + 1L }
-            scheduleIndicatorRebuild(key, symbol, frame, list)
-
-            if (k.optBoolean("x", false)) {
-                val closedCandle = MarketHistoryStore.Candle(
-                    openTime = candle.t,
-                    closeTime = k.optLong("T"),
-                    open = candle.o,
-                    high = candle.h,
-                    low = candle.l,
-                    close = candle.c,
-                    volume = candle.v
-                )
+            val closedCandle = MarketHistoryStore.Candle(
+                openTime = candle.t,
+                closeTime = k.optLong("T"),
+                open = candle.o,
+                high = candle.h,
+                low = candle.l,
+                close = candle.c,
+                volume = candle.v
+            )
+            try {
                 indicatorExecutor.execute {
                     runCatching {
-                        historyStore.upsertBatch(
-                            symbol,
-                            frame,
-                            listOf(closedCandle)
-                        )
+                        // Commit the completed candle BEFORE publishing its
+                        // derived values. A process killed mid-calculation can
+                        // recover the exact OHLCV from SQLite on restart.
+                        historyStore.upsertBatch(symbol,frame,listOf(closedCandle))
+                        scheduleIndicatorRebuild(key,symbol,frame,list)
                     }.onFailure {
                         lastError = "history update: " +
                             (it.message ?: it.javaClass.simpleName)
                     }
                 }
+            } catch (rejected: java.util.concurrent.RejectedExecutionException) {
+                lastError = "closed candle storage worker busy: $symbol/$frame; " +
+                    "SQLite catch-up required before strategy eligibility"
+                // Do not let a dropped asynchronous persistence event authorize
+                // new risk; the startup/periodic REST catch-up must fill the gap.
             }
         }
     }
