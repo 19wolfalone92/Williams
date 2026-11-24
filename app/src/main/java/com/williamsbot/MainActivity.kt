@@ -493,8 +493,13 @@ private class LocalRuntimeApi(context: Context) {
     fun diagnosticsReport(): JSONObject = StandaloneRuntime.diagnosticsReport(appContext)
 
     /** Retain full evidence for selected charts, never all 15 per-symbol traces. */
-    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
-        StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces, selectedSymbol)
+    fun cockpitSnapshot(
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject =
+        StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces,
+            selectedSymbol, includeTradeHistory)
 
     fun post(path: String, body: String? = null): String =
         StandaloneRuntime.request(appContext, "POST", path, body)
@@ -502,6 +507,16 @@ private class LocalRuntimeApi(context: Context) {
     fun delete(path: String): String =
         StandaloneRuntime.request(appContext, "DELETE", path, null)
 }
+
+/** Background-decoded UI envelope. Never contains an execution permission. */
+private data class CockpitDecodedSnapshot(
+    val status: Status,
+    val candidates: List<Candidate>,
+    val trades: List<Trade>,
+    val marketPairs: List<MarketPair>,
+    val events: List<String>,
+    val tradeHistoryIncluded: Boolean
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -550,33 +565,47 @@ fun WilliamsApp(context: Context) {
         else if (!loadMutex.tryLock()) return
         try {
             refreshing = scan
+            // DIAG20: parsing the status/candidates/trades/events is CPU + JSON
+            // allocation work. It used to run on Compose's MAIN dispatcher on
+            // every 5-second poll, causing visible jank although the worker
+            // heartbeat, heap and scanner were healthy at the diagnostic capture.
+            // Snapshot retrieval, data-model decoding and event formatting are
+            // now on Dispatchers.Default/IO; MAIN publishes only finished values.
+            val requestedDetails = tab == 1 || tab == 3
+            val requestedSymbol = selectedChartSymbol
+            val requestedTradeHistory = tab == 2 || historicalTrade != null
             val payload = withContext(Dispatchers.IO) {
-                if (scan) api.get("/api/v1/scanner?refresh=true")
-                // Keep signed safety/risk/status updates at the same 5s cadence.
-                // The selected chart and primary symbol retain trace provenance,
-                // but the local UI no longer round-trips massive JSON via String.
-                val details = tab == 1 || tab == 3
-                api.cockpitSnapshot(includeDecisionTraces = details,
-                    selectedSymbol = if (details) selectedChartSymbol else null)
+                if (scan) api.post("/api/v1/scanner/refresh")
+                api.cockpitSnapshot(includeDecisionTraces = requestedDetails,
+                    selectedSymbol = if (requestedDetails) requestedSymbol else null,
+                    includeTradeHistory = requestedTradeHistory)
             }
-            val source = payload.getJSONObject("status")
-            val scanner = payload.getJSONObject("scanner")
-            val loadedStatus = parseStatus(source)
-            val loadedCandidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray())
-            val loadedTrades = parseTrades(payload.optJSONArray("trades") ?: JSONArray())
-            val prices = source.optJSONObject("live_prices") ?: JSONObject()
-            val loadedPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
-                MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
+            val decoded = withContext(Dispatchers.Default) {
+                val source = payload.getJSONObject("status")
+                val scanner = payload.getJSONObject("scanner")
+                val prices = source.optJSONObject("live_prices") ?: JSONObject()
+                CockpitDecodedSnapshot(
+                    status = parseStatus(source),
+                    candidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray()),
+                    trades = if (payload.optBoolean("trade_history_included", true))
+                        parseTrades(payload.optJSONArray("trades") ?: JSONArray()) else emptyList(),
+                    marketPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
+                        MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
+                    },
+                    events = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
+                        cockpitTime(it.optLong("E")) + " • " + it.optString("state") +
+                            " • " + it.optString("detail")
+                    }.reversed(),
+                    tradeHistoryIncluded = payload.optBoolean("trade_history_included", true)
+                )
             }
             withContext(Dispatchers.Main) {
                 // Publish one envelope together; no screen combines independent status reads.
-                status = loadedStatus
-                candidates = loadedCandidates
-                trades = loadedTrades
-                marketPairs = loadedPairs
-                logs = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
-                    cockpitTime(it.optLong("E")) + " • " + it.optString("state") + " • " + it.optString("detail")
-                }.reversed()
+                status = decoded.status
+                candidates = decoded.candidates
+                if (decoded.tradeHistoryIncluded) trades = decoded.trades
+                marketPairs = decoded.marketPairs
+                logs = decoded.events
                 message = if (scan) "Сканирование запрошено" else "Данные обновлены"
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -635,6 +664,10 @@ fun WilliamsApp(context: Context) {
         chartIndicatorSummary = "Загрузка индикаторов…"
         chartError = null
         chartLoading = true
+        // Only the last successfully loaded CLOSED candle determines the
+        // next UI-only chart refresh. A failed fetch retains the old chart
+        // but the refresh delay falls back to a bounded periodic probe.
+        var lastChartBarOpenMs = 0L
         while (isActive) {
             val requestSymbol = selectedChartSymbol
             val requestInterval = selectedChartInterval
@@ -668,15 +701,21 @@ fun WilliamsApp(context: Context) {
                     chartCandles = loaded
                     chartIndicatorSummary = summary
                     chartError = null
+                    lastChartBarOpenMs = loaded.last().time
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
                 // The last good chart remains visible during a transient history failure.
                 chartError = failure.message ?: failure.javaClass.simpleName
+                lastChartBarOpenMs = 0L
             }
             chartLoading = false
-            delay(30_000L)
+            // Do not regenerate 6000 historical bars every 30s when there
+            // cannot yet be a NEW closed candle. The separate 2s quote flow
+            // remains unaffected; this is NOT a Binance trading-clock gate.
+            delay(cockpitChartNextRefreshDelayMs(
+                lastChartBarOpenMs, requestInterval, System.currentTimeMillis()))
         }
     }
 
@@ -1063,7 +1102,8 @@ fun WilliamsApp(context: Context) {
         }
         // Switching from a compact dashboard to the market/analysis screen
         // must not show an empty or stale decision trace for another 5s tick.
-        if (tab == 1 || tab == 7 || tab == 6) loadAll(false, waitForLock = true)
+        if (tab == 1 || tab == 2 || tab == 7 || tab == 6)
+            loadAll(false, waitForLock = true)
         if (tab == 4 && diagnosticReport == null) runDiagnostics()
     }
     BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }

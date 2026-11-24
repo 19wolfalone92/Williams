@@ -889,7 +889,9 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     # Read-only diagnostic fields now come from one synchronized scanner
     # snapshot. READY must never be published before scanning=false.
     assert "@Synchronized\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
-    assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in runtime
+    # The candidate display is always compact, even when the selected
+    # market's separate status.decision_traces are included.
+    assert "scannerSnapshot(compactForCockpit = true)" in runtime
     assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
     assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
@@ -920,9 +922,12 @@ def test_android_ui_uses_scanner_endpoint_for_real_state_progress_and_universe()
     ui = _read(ANDROID / "java/com/williamsbot/MainActivity.kt")
     runtime = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     # Direct in-process JSONObject transport prevents OOM on detailed tabs.
-    assert 'api.cockpitSnapshot(includeDecisionTraces = details,' in ui
-    assert 'val details = tab == 1 || tab == 3' in ui
-    assert 'selectedSymbol = if (details) selectedChartSymbol else null' in ui
+    assert 'api.cockpitSnapshot(includeDecisionTraces = requestedDetails,' in ui
+    assert 'val requestedDetails = tab == 1 || tab == 3' in ui
+    assert 'selectedSymbol = if (requestedDetails) requestedSymbol else null' in ui
+    assert "val decoded = withContext(Dispatchers.Default)" in ui
+    assert 'api.post("/api/v1/scanner/refresh")' in ui
+    assert 'scannerSnapshot(compactForCockpit = true)' in runtime
     assert 'x.cockpit(includeDecisionTraces = false).toString()' in runtime
     assert 'payload.getJSONObject("status")' in ui
     assert 'payload.getJSONObject("scanner")' in ui

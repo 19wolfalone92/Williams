@@ -66,9 +66,15 @@ object StandaloneRuntime {
     }
 
     /** In-process bounded cockpit JSON: avoid String serialization + reparsing OOM. */
-    fun cockpitSnapshot(context: Context, includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject {
+    fun cockpitSnapshot(
+        context: Context,
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject {
         start(context)
-        return requireNotNull(server).cockpitSnapshot(includeDecisionTraces, selectedSymbol)
+        return requireNotNull(server).cockpitSnapshot(
+            includeDecisionTraces, selectedSymbol, includeTradeHistory)
     }
 
     fun autostart(context: Context) {
@@ -1497,8 +1503,13 @@ private class StandaloneServer(private val context: Context) {
 
     fun diagnosticsReport(): JSONObject = e().diagnostics()
 
-    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
-        e().cockpit(includeDecisionTraces = includeDecisionTraces, selectedSymbol = selectedSymbol)
+    fun cockpitSnapshot(
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject =
+        e().cockpit(includeDecisionTraces = includeDecisionTraces,
+            selectedSymbol = selectedSymbol, includeTradeHistory = includeTradeHistory)
 
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
@@ -1594,6 +1605,12 @@ private class StandaloneServer(private val context: Context) {
                 x.scanner(
                     refresh = params["refresh"].equals("true", true)
                 ).toString()
+
+            // A screen REFRESH previously serialized multi-megabyte 15-pair
+            // decision traces just to DISCARD the response before a compact
+            // cockpit snapshot. Same read-only trigger, bounded ACK instead.
+            method == "POST" && path == "/api/v1/scanner/refresh" ->
+                x.requestScanCompact().toString()
 
             method == "GET" && path == "/api/v1/portfolio" ->
                 x.portfolio().toString()
@@ -5833,6 +5850,11 @@ private class NativeEngine(
      */
     private fun refreshFuturesAccountSnapshotIfNeeded(maxAgeMs: Long = 15_000L) {
         if (key().isBlank() || secret().isBlank()) return
+        // DIAG20: this opportunistic UI-only signed ACCOUNT GET must not
+        // race the real P0 REST/private-stream/position-management sweeps.
+        // A deferred display snapshot never certifies a fresh account.
+        if (!optionalFuturesDisplayReadAllowed(futuresReconciliationRunning,
+                futuresStreamReconcileRunning, nativeManagementRunning)) return
         val nowMs = System.currentTimeMillis()
         val age = nowMs - futuresAccountSnapshotUpdatedAtMs
         if (futuresAccountSnapshotUpdatedAtMs > 0L && age in 0..maxAgeMs) return
@@ -5894,9 +5916,17 @@ private class NativeEngine(
         }
 
         val shouldRefresh = synchronized(this) {
+            // The optional cockpit reader previously competed with signed P0
+            // reconciliations and then could fail its own strict 15s freshness
+            // window, leaving the phone apparently frozen. Defer and retain
+            // old values with their original (STALE) timestamp, never invent
+            // protected/flat state.
+            val canRead = optionalFuturesDisplayReadAllowed(
+                futuresReconciliationRunning, futuresStreamReconcileRunning,
+                nativeManagementRunning)
             val lastAttempt = futuresPositionSnapshotLastAttemptMs
             val retryAllowed = lastAttempt <= 0L || nowMs < lastAttempt || nowMs - lastAttempt >= 15_000L
-            if (!futuresPositionSnapshotRefreshRunning && retryAllowed &&
+            if (canRead && !futuresPositionSnapshotRefreshRunning && retryAllowed &&
                 key().isNotBlank() && secret().isNotBlank()
             ) {
                 futuresPositionSnapshotRefreshRunning = true
@@ -12108,6 +12138,21 @@ private class NativeEngine(
         return scannerSnapshot()
     }
 
+    /** Trigger read-only H1 scanning with a small explicit ACK only.
+     * Never bypasses scanner readiness, Futures execution gate, or history
+     * causality. The subsequent compact cockpit response carries actual data.
+     */
+    fun requestScanCompact(): JSONObject {
+        requestScan()
+        return JSONObject().put("scanner_state", scannerObservedState(scanning, scannerState))
+            .put("scanning", scanning)
+            .put("run_id", scanRunId)
+            .put("progress_symbols", scanProgressSymbols)
+            .put("progress_total", coreSymbols.size)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("can_authorize_order", false)
+    }
+
     fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true,
                selectedTraceSymbols: Set<String>? = null): JSONObject {
         if (!fast && (primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, interval))) {
@@ -12164,12 +12209,9 @@ private class NativeEngine(
         }
         val livePnlPct = if (totalEntryNotional > 0.0) livePnl / totalEntryNotional else 0.0
         val futuresIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
-        val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
-            val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                futuresCampaignReservedRisk(intent,futuresIntents)
-            } else 0.0
-        }
+        // DISPLAY ONLY: avoid O(N²) whole-ledger scan on every 5s UI poll.
+        // Never use this projection as an order-admission/risk authority.
+        val futuresReservedRiskPct = futuresCockpitTotalReservedRisk(futuresIntents)
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             timeInMillis = if (fast) futuresMarketData.cachedExchangeNowMs() else runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
             set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -12976,13 +13018,22 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null): JSONObject {
+    fun cockpit(
+        includeDecisionTraces: Boolean = true,
+        selectedSymbol: String? = null,
+        includeTradeHistory: Boolean = true
+    ): JSONObject {
         // Cockpit only needs the selected chart and current primary symbol traces.
         // The complete 15-symbol forensic history is kept in the separate ZIP.
         val scope = if (includeDecisionTraces) cockpitTraceSymbols(primarySymbol, selectedSymbol) else null
         val captured = status(fast = true, includeDecisionTraces = includeDecisionTraces,
             selectedTraceSymbols = scope)
-        val scan = scannerSnapshot(compactForCockpit = !includeDecisionTraces)
+        // DIAG20: Compose only parses the 38 scalar candidate fields even on
+        // Market/Analysis tabs. Full per-symbol source reasoning already comes
+        // from status.decision_traces scoped to the selected chart, while the
+        // forensic /scanner endpoint and ZIP retain ALL original evidence.
+        // Avoid copying multi-megabyte 15-symbol trace graphs every 5 seconds.
+        val scan = scannerSnapshot(compactForCockpit = true)
         val coherent = captured.optString("scanner_run_id") == scan.optString("run_id")
         captured.put("snapshot_consistent", coherent)
             .put("scanner_state", if (coherent) scan.optString("scanner_state") else "SNAPSHOT_UPDATING")
@@ -13000,8 +13051,15 @@ private class NativeEngine(
         val observedAt = System.currentTimeMillis()
         val readiness = CockpitDiagnostics.readiness(captured, coordinator, observedAt)
         captured.put("cockpit_readiness", readiness).put("snapshot_at_ms", observedAt)
+        // DIAG20: full trade-history reconciliation joins the persisted
+        // 408+ intents and operator records. It was re-run every 5 seconds
+        // even while a user looked only at the dashboard/market/system.
+        // Fetch the full history on the Trades screen or a historical chart.
+        // This is display-only; signed execution and PnL accounting unchanged.
         return JSONObject().put("snapshot_at_ms", observedAt).put("status", captured)
-            .put("scanner", scan).put("trades", trades())
+            .put("scanner", scan).put("trades",
+                if (includeTradeHistory) trades() else JSONArray())
+            .put("trade_history_included", includeTradeHistory)
             .put("events", auditStore.recentCockpitEvents(30))
     }
 
