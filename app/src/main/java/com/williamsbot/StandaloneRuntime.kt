@@ -1901,9 +1901,12 @@ private class NativeEngine(
         },
         java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
     )
-    private val historyBackfillExecutor = Executors.newFixedThreadPool(6) { runnable ->
-        Thread(runnable, "williams-history-backfill").apply { isDaemon = true }
-    }
+    private val historyBackfillExecutor = java.util.concurrent.ThreadPoolExecutor(
+        6,6,0L,TimeUnit.MILLISECONDS,java.util.concurrent.ArrayBlockingQueue<Runnable>(90),
+        java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable,"williams-history-backfill").apply { isDaemon=true; priority=Thread.NORM_PRIORITY-1 }
+        },java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     // Market WebSocket callbacks must stay lightweight. Indicator/Williams
     // calculations are deliberately moved off the OkHttp WebSocket callback
     // thread so a burst of kline events cannot delay depth/aggTrade handling.
@@ -1969,9 +1972,12 @@ private class NativeEngine(
         java.util.concurrent.ConcurrentHashMap<String, Pair<Long, JSONObject>>()
     // One rate-limited research download queue. Never occupy scanner warmup
     // or existing-position reconciliation executors with deep child history.
-    private val adaptiveWaveFetchExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable,"williams-adaptive-child-wave").apply { isDaemon=true }
-    }
+    private val adaptiveWaveFetchExecutor = java.util.concurrent.ThreadPoolExecutor(
+        1,1,0L,TimeUnit.MILLISECONDS,java.util.concurrent.ArrayBlockingQueue<Runnable>(15),
+        java.util.concurrent.ThreadFactory { runnable ->
+            Thread(runnable,"williams-adaptive-child-wave").apply { isDaemon=true; priority=Thread.NORM_PRIORITY-2 }
+        },java.util.concurrent.ThreadPoolExecutor.AbortPolicy()
+    )
     private val adaptiveWaveFetchAttemptMs =
         java.util.concurrent.ConcurrentHashMap<String, Long>()
     @Volatile private var adaptiveWaveFetchLastError: String? = null
@@ -3256,7 +3262,7 @@ private class NativeEngine(
                         // requires all approved H1 series + independent safety
                         // admission; partial chart data is never an entry pass.
                         if(readOnlyH1Ready) {
-                            if (historyReady) schedulePersistentHistoryBackfill(generation)
+                            schedulePersistentHistoryBackfill(generation)
                             requestScan()
                         } else {
                             scannerState = "WAITING_FOR_HISTORY"
@@ -3428,6 +3434,8 @@ private class NativeEngine(
         historyLastError = null
         activeHistoryTasks.forEach { it.cancel(true) }
         activeHistoryTasks.clear()
+        historyBackfillExecutor.purge()
+        adaptiveWaveFetchExecutor.queue.clear()
 
         RuntimeServiceState.refreshLease?.invoke()
         return JSONObject().put("stopped", true).put("state", "STOPPED")
@@ -4525,6 +4533,7 @@ private class NativeEngine(
             System.currentTimeMillis()-historyWarmupLastStartedMs<historyWarmupRetryIntervalMs) return
         historyWarmupLastStartedMs=System.currentTimeMillis()
         historyWarmupRunning = true
+        historyBackfillExecutor.purge()
         // A retry for optional D1/H4/M15 frames must not revoke a previously
         // verified H1 readiness signal or terminate working read-only charts.
         historyState = if(historyReady) "H1_READY_CONTEXT_LOADING" else "LOADING"
@@ -4647,7 +4656,11 @@ private class NativeEngine(
                     lastError = "history warmup: " + historyLastError
                 }
             } finally {
-                tasks.forEach { (_, future) -> activeHistoryTasks.remove(future) }
+                tasks.forEach { (_, future) ->
+                    if(!future.isDone) future.cancel(true)
+                    activeHistoryTasks.remove(future)
+                }
+                historyBackfillExecutor.purge()
                 if (generation == runtimeGeneration) {
                     historyWarmupRunning = false
                 }
@@ -4668,9 +4681,13 @@ private class NativeEngine(
      * Existing H1 read-only scans and protective orders are never delayed on
      * exhaustive archival downloads.
      */
+    private fun archiveWorkAllowed():Boolean = running && !nativeManagementRunning &&
+        !futuresReconciliationRunning && !futuresStreamReconcileRunning &&
+        !privateEventDrainScheduled.get()
+
     @Synchronized
     private fun schedulePersistentHistoryBackfill(generation: Long) {
-        if (!running || !historyReady || deepHistoryBackfillRunning ||
+        if (!running || !readOnlyH1Ready || deepHistoryBackfillRunning ||
             generation != runtimeGeneration) return
         val now = System.currentTimeMillis()
         if (deepHistoryLastStartMs > 0L && now - deepHistoryLastStartMs < 60_000L) return
@@ -4683,10 +4700,14 @@ private class NativeEngine(
                     var incomplete = 0
                     var successes = 0
                     deepHistoryLastError = null
-                    for (frame in durableBackfillFrames) {
+                    archivePass@ for (frame in durableBackfillFrames) {
                         for (symbol in coreSymbols) {
                             if (!running || generation != runtimeGeneration ||
                                 Thread.currentThread().isInterrupted) return@Thread
+                            if(!archiveWorkAllowed()) {
+                                incomplete=durableBackfillFrames.size*coreSymbols.size-successes
+                                break@archivePass
+                            }
                             // Leave room for the Futures journal, SQLite WAL and Android.
                             val freeBytes = runCatching {
                                 android.os.StatFs(context.filesDir.path).availableBytes
@@ -5084,6 +5105,7 @@ private class NativeEngine(
      * REST proof must contain the actual missing rows; an empty response
      * leaves the range registered. This worker has no order permissions. */
     private fun repairKnownHistoryGap(symbol:String,frame:String) {
+        if(!archiveWorkAllowed()) return
         val gap=historyStore.firstMissingRange(symbol,frame) ?: return
         val key="$symbol:$frame"
         val nowElapsed=android.os.SystemClock.elapsedRealtime()
@@ -5133,7 +5155,7 @@ private class NativeEngine(
         symbol: String,
         frame: String = "1h",
         maxPages: Int = 4
-    ): List<CandleN> {
+    ) {
         val normalizedSymbol = symbol.uppercase(Locale.US)
         val pageLimit = maxPages.coerceIn(1, 8)
         try {
@@ -5142,7 +5164,7 @@ private class NativeEngine(
                 var endTime = if (previousOldest > 0L) previousOldest - 1L
                     else futuresMarketData.exchangeNowMs()
                 for (page in 0 until pageLimit) {
-                    if (!running || Thread.currentThread().isInterrupted) break
+                    if (!archiveWorkAllowed() || Thread.currentThread().isInterrupted) break
                     val array = futuresMarketData.klines(
                         normalizedSymbol, frame, 1000, endTime = endTime
                     )
@@ -5198,12 +5220,10 @@ private class NativeEngine(
                 // Incomplete history always takes the other paginated path.
                 val nowForTail = futuresMarketData.exchangeNowMs()
                 if (futuresMarketData.isLastClosedCandleCurrent(newest, frame, nowForTail)) {
-                    return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
-                        CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
-                    }
+                    return
                 }
                 for (page in 0 until pageLimit) {
-                    if (!running || Thread.currentThread().isInterrupted) break
+                    if (!archiveWorkAllowed() || Thread.currentThread().isInterrupted) break
                     val array = futuresMarketData.klines(
                         normalizedSymbol, frame, 1000, startTime = newest + 1L
                     )
@@ -5244,9 +5264,7 @@ private class NativeEngine(
             historyStore.setError(normalizedSymbol, frame, failure.message ?: failure.javaClass.simpleName)
             throw failure
         }
-        return historyStore.loadRecent(normalizedSymbol, frame, 150).map {
-            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
-        }
+
     }
 
     @Synchronized
@@ -11238,9 +11256,13 @@ private class NativeEngine(
             val now=System.currentTimeMillis()
             val last=adaptiveWaveFetchAttemptMs[key] ?: 0L
             if(last>0L && now-last<15L*60L*1000L) continue
-            adaptiveWaveFetchAttemptMs[key]=now
+            adaptiveWaveFetchAttemptMs.entries.removeIf { now-it.value>=15L*60L*1000L }
+            if(adaptiveWaveFetchAttemptMs.size>=512) return
+            if(adaptiveWaveFetchAttemptMs.putIfAbsent(key,now)!=null) continue
+            val generation=runtimeGeneration
             queued++
-            adaptiveWaveFetchExecutor.execute {
+            try { adaptiveWaveFetchExecutor.execute {
+                if(!running || generation!=runtimeGeneration || !archiveWorkAllowed()) return@execute
                 runCatching {
                     val free=runCatching {
                         android.os.StatFs(context.filesDir.path).availableBytes
@@ -11269,7 +11291,7 @@ private class NativeEngine(
                             row.getString(5).toDouble(),closed)
                     }
                     if(batch.isNotEmpty()) {
-                        historyStore.upsertBatch(symbol,frame,batch)
+                        historyStore.upsertBatch(symbol,frame,batch,missingOnly=true)
                         // Wave report is recalculated at next 15m closure. It
                         // never sees exchange data not yet closed at that time.
                         adaptiveWaveContextCache.remove(symbol)
@@ -11279,6 +11301,9 @@ private class NativeEngine(
                     adaptiveWaveFetchLastError=frame+":"+
                         (e.message ?: e.javaClass.simpleName)
                 }
+            } } catch(rejected:java.util.concurrent.RejectedExecutionException) {
+                adaptiveWaveFetchAttemptMs.remove(key,now)
+                adaptiveWaveFetchLastError="WAVE_CHILD_QUEUE_FULL"
             }
         }
     }
@@ -13617,7 +13642,7 @@ private class NativeEngine(
     }
 
     private fun diagnosticExecutorQueueSnapshot():JSONObject {
-        val backfill=historyBackfillExecutor as? java.util.concurrent.ThreadPoolExecutor
+        val backfill=historyBackfillExecutor
         val indicator=indicatorExecutor as? java.util.concurrent.ThreadPoolExecutor
         return JSONObject()
             .put("scanner_active_threads",scanExecutor.activeCount)
@@ -13644,7 +13669,12 @@ private class NativeEngine(
                     .put("error",safeDiagnosticText(it.message ?: it.javaClass.simpleName))
             })
             .put("depth_resync_inflight_symbols",depthResyncInFlight.size)
-            .put("history_backfill_queue_size",backfill?.queue?.size ?: -1)
+            .put("history_backfill_queue_size",backfill.queue.size)
+            .put("history_backfill_queue_capacity",backfill.queue.size+backfill.queue.remainingCapacity())
+            .put("adaptive_wave_queue_size",adaptiveWaveFetchExecutor.queue.size)
+            .put("adaptive_wave_queue_capacity",adaptiveWaveFetchExecutor.queue.size+adaptiveWaveFetchExecutor.queue.remainingCapacity())
+            .put("history_http",futuresMarketData.historyRequestSnapshot())
+            .put("working_history_keys",workingHistory.size)
             .put("indicator_queue_size",indicator?.queue?.size ?: -1)
     }
 
