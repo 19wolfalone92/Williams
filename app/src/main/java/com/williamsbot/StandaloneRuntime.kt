@@ -4826,11 +4826,34 @@ private class NativeEngine(
                 expected=futuresMarketData.klineCloseTimeMs(opened,frame)+1L
             }
             if(batch.isEmpty()) return false
-            historyStore.upsertBatch(symbol,frame,batch)
+            historyStore.upsertBatch(symbol,frame,batch,missingOnly=true)
             cursor=batch.last().openTime
         }
         return futuresMarketData.isLastClosedCandleCurrent(
             cursor,frame,futuresMarketData.exchangeNowMs())
+    }
+
+    // One durable source per symbol/frame; RAM observations are never a
+    // substitute for a newer SQLite correction or an uncommitted WS event.
+    private data class WorkingHistory(val revision:Long,val requested:Int,
+        val continuous:Boolean,val candles:List<CandleN>)
+    private val workingHistory = java.util.concurrent.ConcurrentHashMap<String,WorkingHistory>()
+
+    private fun durableWorkingHistory(symbol:String,frame:String,limit:Int):WorkingHistory {
+        val key="$symbol:$frame"
+        val revision=historyStore.indicatorCacheRevision(symbol,frame)
+        val cached=workingHistory[key]
+        if(cached!=null && cached.revision==revision && cached.requested>=limit) return cached
+        val snapshot=historyStore.loadRecentSnapshot(symbol,frame,limit)
+        val result=WorkingHistory(snapshot.revision,limit,snapshot.continuous,
+            java.util.Collections.unmodifiableList(snapshot.candles.map {
+                CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+            }))
+        workingHistory.compute(key) { _,old ->
+            if(old!=null && (old.revision>result.revision ||
+                old.revision==result.revision && old.requested>result.requested)) old else result
+        }
+        return result
     }
 
     private fun fetchCandles(
@@ -4839,121 +4862,28 @@ private class NativeEngine(
         limit: Int = 150
     ): List<CandleN> {
         val normalizedSymbol = symbol.uppercase(Locale.US)
+        require(normalizedSymbol in coreSymbols && frame in analysisFrames && limit in 1..1000)
         val liveKey = normalizedSymbol + ":" + frame
-        liveCandleCache[liveKey]?.let { sharedLive ->
-            val live = synchronized(sharedLive) { sharedLive.toList() }
-            run {
-                // WS caches also contain the currently forming kline (x=false).
-                // It is valid for display, never for a trading decision. Strategy
-                // reads are restricted to bars closed according to Binance server time.
-                val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                val closed = closedNativeStrategyCandles(live) {
-                    futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
-                }
-                if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs) &&
-                    cachedFixedFrameKlinesValid(closed.takeLast(limit), frame)) {
-                    // A WebSocket warm cache is not proof that the SQLite history
-                    // journal is populated. Startup readiness checks both the live
-                    // closed-bar count and persisted count; returning here without
-                    // persisting made a healthy stream keep the scanner stuck in
-                    // WAITING_FOR_HISTORY on a fresh install.
-                    val toStored: (CandleN) -> MarketHistoryStore.Candle = { candle ->
-                        MarketHistoryStore.Candle(
-                            openTime = candle.t,
-                            closeTime = futuresMarketData.klineCloseTimeMs(candle.t, frame),
-                            open = candle.o,
-                            high = candle.h,
-                            low = candle.l,
-                            close = candle.c,
-                            volume = candle.v
-                        )
-                    }
-                    // This initial seed is deliberately used only when SQLite lacks enough
-                    // history. It also keeps the repository's closed-candle persistence contract explicit.
-                    val initialRows = closed.takeLast(limit).map(toStored)
-                    val latestClosedTime = closed.lastOrNull()?.t ?: 0L
-                    var persistedNewest = historyStore.newest(normalizedSymbol, frame)
-                    var persistedCount = historyStore.count(normalizedSymbol, frame)
-                    // An in-memory WS cache may contain 150 *recent* bars
-                    // while SQLite has just 10 old saved rows after a crash.
-                    // Never stitch the tail across a silent historical hole.
-                    val firstNew=closed.firstOrNull { it.t>persistedNewest }?.t
-                    if(persistedNewest>0L && persistedNewest<latestClosedTime &&
-                        firstNew!=null && firstNew!=
-                            futuresMarketData.klineCloseTimeMs(persistedNewest,frame)+1L) {
-                        check(catchUpNativeClosedCandles(
-                            normalizedSymbol,frame,persistedNewest
-                        )) {
-                            "WS_HISTORY_GAP_REQUIRES_PAGED_SQLITE_CATCHUP: $normalizedSymbol/$frame"
-                        }
-                        persistedNewest=historyStore.newest(normalizedSymbol,frame)
-                        persistedCount=historyStore.count(normalizedSymbol,frame)
-                    }
-                    // Do not rewrite 150-180 candles into SQLite on every scan tick.
-                    // Persist the initial warm cache once, then only newly closed bars.
-                    val sqliteRecent = if (persistedCount >= limit.toLong())
-                        historyStore.loadRecent(normalizedSymbol, frame, limit).map {
-                            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
-                        } else emptyList()
-                    val sqliteHasGapsOrCorruption = sqliteRecent.isNotEmpty() &&
-                        !cachedFixedFrameKlinesValid(sqliteRecent, frame)
-                    if (persistedCount < limit.toLong() || persistedNewest < latestClosedTime ||
-                        sqliteHasGapsOrCorruption) {
-                        val rowsToPersist = if (persistedCount < limit.toLong() || persistedNewest <= 0L ||
-                            sqliteHasGapsOrCorruption) {
-                            initialRows
-                        } else {
-                            closed.filter { it.t > persistedNewest }.map(toStored)
-                        }
-                        if (rowsToPersist.isNotEmpty()) {
-                            historyStore.upsertBatch(
-                                normalizedSymbol,
-                                frame,
-                                rowsToPersist,
-                                complete = false
-                            )
-                        }
-                    }
-                    return closed.takeLast(limit)
-                }
+        val cacheKey = liveKey + ":" + limit
+        var durable=durableWorkingHistory(normalizedSymbol,frame,limit)
+        val exchangeNowMs=futuresMarketData.exchangeNowMs()
+        if(durable.candles.isNotEmpty() &&
+            !candleSeriesCurrent(durable.candles,frame,exchangeNowMs)) {
+            check(catchUpNativeClosedCandles(normalizedSymbol,frame,durable.candles.last().t)) {
+                "HISTORY_CATCHUP_IN_PROGRESS_OR_UNVERIFIED: $normalizedSymbol/$frame"
             }
+            durable=durableWorkingHistory(normalizedSymbol,frame,limit)
         }
-
-        val cacheKey = normalizedSymbol + ":" + frame + ":" + limit
-        var persistent = historyStore.loadRecent(normalizedSymbol, frame, limit)
-        var persistentCandles = persistent.map {
-            CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+        val live=durable.candles.takeLast(limit)
+        val closed = closedNativeStrategyCandles(live) {
+            futuresMarketData.isKlineOpenTimeClosed(it.t,frame,exchangeNowMs)
         }
-        // A cold app restart after days offline must restore EACH missing
-        // closed native bar from its durable SQLite cursor before regenerating
-        // indicators. A latest-150 REST tail may otherwise hide the gap.
-        if (persistent.isNotEmpty() && !candleSeriesCurrent(persistentCandles,frame)) {
-            val caughtUp=catchUpNativeClosedCandles(
-                normalizedSymbol,frame,persistent.last().openTime)
-            if(!caughtUp) throw IllegalStateException(
-                "HISTORY_CATCHUP_IN_PROGRESS_OR_UNVERIFIED: $normalizedSymbol/$frame")
-            persistent=historyStore.loadRecent(normalizedSymbol,frame,limit)
-            persistentCandles=persistent.map {
-                CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
-            }
+        if(durable.continuous && closed.size>=limit &&
+            candleSeriesCurrent(closed,frame,exchangeNowMs) &&
+            historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision) {
+            return closed
         }
-        if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame) &&
-            cachedFixedFrameKlinesValid(persistentCandles, frame)) {
-            candleCache[cacheKey] = System.currentTimeMillis() to persistentCandles
-            liveCandleCache[liveKey] = persistentCandles.toMutableList()
-            return persistentCandles
-        }
-
-        val cached = candleCache[cacheKey]
-        val now = System.currentTimeMillis()
-        if (cached != null &&
-            cached.second.size >= limit &&
-            now - cached.first < scanCacheTtlMs &&
-            candleSeriesCurrent(cached.second, frame, futuresMarketData.exchangeNowMs()) &&
-            cachedFixedFrameKlinesValid(cached.second.takeLast(limit), frame)
-        ) {
-            return cached.second.takeLast(limit)
-        }
+        val now=System.currentTimeMillis()
 
         // Binance REST has a limited set of native intervals. Build the
         // execution timeframes synthetically only when necessary.
@@ -5078,12 +5008,18 @@ private class NativeEngine(
             )
         }
 
-        if (result.isNotEmpty()) {
-            liveCandleCache[liveKey] = result.takeLast(limit).toMutableList()
-            candleCache[cacheKey] =
-                now to result.takeLast(limit)
+        // Re-read the committed rows rather than publish a REST response
+        // which raced a WS correction. Legacy synthetic frames are not eligible.
+        val final=durableWorkingHistory(normalizedSymbol,frame,limit)
+        val finalNow=futuresMarketData.exchangeNowMs()
+        val verified=final.candles.takeLast(limit)
+        check(final.continuous && cachedFixedFrameKlinesValid(verified,frame) &&
+            candleSeriesCurrent(verified,frame,finalNow) &&
+            historyStore.indicatorCacheRevision(normalizedSymbol,frame)==final.revision) {
+            "HISTORY_DURABLE_WORKING_SET_NOT_CURRENT: $normalizedSymbol/$frame"
         }
-        return result.takeLast(limit)
+        if(result.isNotEmpty()) candleCache[cacheKey]=now to verified
+        return verified
     }
 
     private fun aggregateCandles(
@@ -5233,7 +5169,7 @@ private class NativeEngine(
                         )
                     }
                     if (batch.isNotEmpty()) {
-                        historyStore.upsertBatch(normalizedSymbol, frame, batch)
+                        historyStore.upsertBatch(normalizedSymbol, frame, batch,missingOnly=true)
                     }
                     if (oldestPageTime <= 0L || oldestPageTime >= endTime) {
                         throw IllegalStateException("Historical pagination failed to advance")
@@ -5294,7 +5230,7 @@ private class NativeEngine(
                         expectedOpen=futuresMarketData.klineCloseTimeMs(opened,frame)+1L
                     }
                     if (batch.isEmpty()) break
-                    historyStore.upsertBatch(normalizedSymbol, frame, batch)
+                    historyStore.upsertBatch(normalizedSymbol, frame, batch,missingOnly=true)
                     val next = batch.last().openTime
                     if (next <= newest) throw IllegalStateException("History incremental cursor stalled")
                     newest = next
