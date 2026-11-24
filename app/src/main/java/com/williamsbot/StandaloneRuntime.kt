@@ -4442,12 +4442,16 @@ private class NativeEngine(
         mathPoints:List<WilliamsMathPoint>,sourceRevision:Long,
         seedRevision:Long,seedOpenMs:Long
     ):JSONObject {
-        val closed=candles.filter { futuresMarketData.isKlineOpenTimeClosed(symbol,frame,it.openTime) }
-        if(closed.size<40) return JSONObject().put("symbol",symbol).put("interval",frame).put("ready",false)
-        val key="chart-indicator-v2|"+symbol+"|"+frame+"|"+closed.first().openTime+
-            "|"+closed.last().openTime+"|"+closed.size+"|"+sourceRevision+
+        // The caller captured a continuous, durable closed-candle window.
+        // Do not re-read the exchange clock or independently filter the points:
+        // offline display and the accumulator must refer to the same input.
+        val closed=candles
+        if(closed.size<40 || mathPoints.size!=closed.size)
+            return JSONObject().put("symbol",symbol).put("interval",frame).put("ready",false)
+        val key="chart-indicator-v3|"+symbol+"|"+frame+"|"+closed.first().t+
+            "|"+closed.last().t+"|"+closed.size+"|"+sourceRevision+
             "|"+seedRevision+"|"+seedOpenMs
-        val alignedPoints=mathPoints.takeIf { it.size==closed.size }
+        val alignedPoints=mathPoints
         val payload=try {
             chartIndicatorMemo.getOrCompute(key) {
                 buildIndicatorSnapshot(closed,symbol,frame,alignedPoints).toString()
@@ -9227,10 +9231,14 @@ private class NativeEngine(
             if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED ||
                 !executionReady() || intentsAfter > intentsBefore
             ) break
-            // A proven pre-intent rejection is symbol-local: try the next
-            // candidate. Any persisted/uncertain intent or failed state read
-            // stops this pass so no second order can race the first.
-            if (attempt.isFailure) continue
+            // An exception is not proof of zero mutation, even if the intent
+            // count is unchanged. Stop this pass on uncertainty. Ordinary
+            // explicit preflight rejections return normally and may try peers.
+            if (attempt.isFailure) {
+                scannerError = "ENTRY_ATTEMPT_UNCERTAIN: " +
+                    (attempt.exceptionOrNull()?.message ?: "entry attempt failed")
+                break
+            }
         }
     }
 
@@ -13028,26 +13036,27 @@ private class NativeEngine(
         // A new tail candle is append-only; a correction or historical insert
         // increments seedRevision and forces a fresh, consistent indicator seed.
         val mathKey="$symbol:$selectedInterval:seed="+chartInput.seedRevision
-        val mathPoints=if(chartContinuous) math.update(mathKey,medianBars)
-            else List(sourceCandles.size) { WilliamsMathPoint(Double.NaN,Double.NaN,null,null,null) }
+        // Capture the seed and the points under one monitor; concurrent chart
+        // requests must not label a result with another request's seed.
+        val (mathPoints, chartSeedOpenMs)=if(chartContinuous) synchronized(math) {
+            val points=math.update(mathKey,medianBars)
+            points to (math.seedOpenMs ?: medianBars.firstOrNull()?.openMs ?: 0L)
+        } else List(sourceCandles.size) {
+            WilliamsMathPoint(Double.NaN,Double.NaN,null,null,null)
+        } to 0L
         // The chart fetches a moving quote frequently, but Williams indicators use only
         // confirmed closed candles. Cache the expensive wave/indicator explanation by
         // latest closed-bar timestamp so one-second quote refreshes do not recompute it.
-        val indicatorKey = symbol + ":" + selectedInterval
         val latestClosedCandleTime = sourceCandles.lastOrNull()?.t ?: 0L
-        // A derived indicator is calculated at most once per unchanged
-        // persisted CLOSED window/revision, even when the app was killed.
-        // Historical chart requests with an older cutoff must NEVER reuse a
-        // current live-memory snapshot; the SQL key includes both window ends.
+        // This chart-only memo is process-local and includes the recursive seed.
+        // The separate durable summary cache retains its own window semantics.
+        // Historical chart requests use a new accumulator and cannot rewind live math.
         val indicatorSnapshot = if(chartContinuous) memoizedChartIndicatorSnapshot(
             sourceCandles,symbol,selectedInterval,mathPoints,chartInput.revision,
-            chartInput.seedRevision,math.seedOpenMs ?: medianBars.first().openMs
+            chartInput.seedRevision,chartSeedOpenMs
         ) else JSONObject().put("symbol",symbol).put("interval",selectedInterval)
             .put("ready",false).put("reason","HISTORY_CONTINUITY_UNVERIFIED")
-        if (!historical && indicatorSnapshot.optBoolean("ready",false) &&
-            latestClosedCandleTime > 0L) {
-            indicatorSnapshots[indicatorKey] = indicatorSnapshot
-        }
+        // Never publish a display-seeded snapshot to the shared strategy summary map.
 
         if (prices.isNotEmpty()) {
             // Alligator and AO/AC share the exact same closed series state.
