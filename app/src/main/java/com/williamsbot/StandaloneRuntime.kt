@@ -4843,7 +4843,7 @@ private class NativeEngine(
         val key="$symbol:$frame"
         val revision=historyStore.indicatorCacheRevision(symbol,frame)
         val cached=workingHistory[key]
-        if(cached!=null && cached.revision==revision && cached.requested>=limit) return cached
+        if(cached!=null && cached.revision==revision && cached.requested>=limit && cached.continuous) return cached
         val snapshot=historyStore.loadRecentSnapshot(symbol,frame,limit)
         val result=WorkingHistory(snapshot.revision,limit,snapshot.continuous,
             java.util.Collections.unmodifiableList(snapshot.candles.map {
@@ -4914,6 +4914,7 @@ private class NativeEngine(
                 ).coerceAtMost(1000)
         }
 
+        val requestRevision=historyStore.indicatorCacheRevision(normalizedSymbol,frame)
         val body = futuresMarketData.klines(
             normalizedSymbol,
             sourceFrame,
@@ -4974,7 +4975,8 @@ private class NativeEngine(
                 normalizedSymbol,
                 frame,
                 sourcePersistent,
-                complete = false
+                complete = false,
+                expectedRevision = requestRevision
             )
         }
 
@@ -5010,12 +5012,12 @@ private class NativeEngine(
 
         // Re-read the committed rows rather than publish a REST response
         // which raced a WS correction. Legacy synthetic frames are not eligible.
-        val final=durableWorkingHistory(normalizedSymbol,frame,limit)
+        val committed=durableWorkingHistory(normalizedSymbol,frame,limit)
         val finalNow=futuresMarketData.exchangeNowMs()
-        val verified=final.candles.takeLast(limit)
-        check(final.continuous && cachedFixedFrameKlinesValid(verified,frame) &&
+        val verified=committed.candles.takeLast(limit)
+        check(committed.continuous && cachedFixedFrameKlinesValid(verified,frame) &&
             candleSeriesCurrent(verified,frame,finalNow) &&
-            historyStore.indicatorCacheRevision(normalizedSymbol,frame)==final.revision) {
+            historyStore.indicatorCacheRevision(normalizedSymbol,frame)==committed.revision) {
             "HISTORY_DURABLE_WORKING_SET_NOT_CURRENT: $normalizedSymbol/$frame"
         }
         if(result.isNotEmpty()) candleCache[cacheKey]=now to verified
