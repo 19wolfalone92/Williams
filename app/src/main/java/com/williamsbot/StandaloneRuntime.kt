@@ -4749,8 +4749,23 @@ private class NativeEngine(
                     // history. It also keeps the repository's closed-candle persistence contract explicit.
                     val initialRows = closed.takeLast(limit).map(toStored)
                     val latestClosedTime = closed.lastOrNull()?.t ?: 0L
-                    val persistedNewest = historyStore.newest(normalizedSymbol, frame)
-                    val persistedCount = historyStore.count(normalizedSymbol, frame)
+                    var persistedNewest = historyStore.newest(normalizedSymbol, frame)
+                    var persistedCount = historyStore.count(normalizedSymbol, frame)
+                    // An in-memory WS cache may contain 150 *recent* bars
+                    // while SQLite has just 10 old saved rows after a crash.
+                    // Never stitch the tail across a silent historical hole.
+                    val firstNew=closed.firstOrNull { it.t>persistedNewest }?.t
+                    if(persistedNewest>0L && persistedNewest<latestClosedTime &&
+                        firstNew!=null && firstNew!=
+                            futuresMarketData.klineCloseTimeMs(persistedNewest,frame)+1L) {
+                        check(catchUpNativeClosedCandles(
+                            normalizedSymbol,frame,persistedNewest
+                        )) {
+                            "WS_HISTORY_GAP_REQUIRES_PAGED_SQLITE_CATCHUP: $normalizedSymbol/$frame"
+                        }
+                        persistedNewest=historyStore.newest(normalizedSymbol,frame)
+                        persistedCount=historyStore.count(normalizedSymbol,frame)
+                    }
                     // Do not rewrite 150-180 candles into SQLite on every scan tick.
                     // Persist the initial warm cache once, then only newly closed bars.
                     val sqliteRecent = if (persistedCount >= limit.toLong())
@@ -4789,7 +4804,7 @@ private class NativeEngine(
         // A cold app restart after days offline must restore EACH missing
         // closed native bar from its durable SQLite cursor before regenerating
         // indicators. A latest-150 REST tail may otherwise hide the gap.
-        if (persistent.size >= limit && !candleSeriesCurrent(persistentCandles,frame)) {
+        if (persistent.isNotEmpty() && !candleSeriesCurrent(persistentCandles,frame)) {
             val caughtUp=catchUpNativeClosedCandles(
                 normalizedSymbol,frame,persistent.last().openTime)
             if(!caughtUp) throw IllegalStateException(
