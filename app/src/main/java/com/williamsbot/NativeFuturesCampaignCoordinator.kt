@@ -936,6 +936,9 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var externalStopManagementVerifiedAtMs = 0L
 
     private val lock = Any()
+    // Network reconciliation owns this dedicated monitor; UI/state callers
+    // must never wait behind signed Binance REST latency on the general lock.
+    private val reconciliationLock = Any()
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
     @Volatile private var entryPassportAuditSink:((JSONObject)->Long)?=null
 
@@ -1170,7 +1173,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_started", false)
     }
 
-    fun reconcile(): JSONObject = synchronized(lock) {
+    fun reconcile(): JSONObject = synchronized(reconciliationLock) {
         // A stale success cannot authorize a later stop mutation while the
         // account is being refreshed or when a REST call fails halfway.
         externalStopManagementSymbolsJson = "[]"
@@ -1195,6 +1198,7 @@ internal class NativeFuturesCampaignCoordinator(
             val exchangePositions = adapter.positions()
             noteReconciliationPhase("SIGNED_POSITIONS_RETURNED")
             val openBySymbol = linkedMapOf<String, JSONObject>()
+            val unmanagedPositions = JSONArray()
             val seenPositionSymbols = mutableSetOf<String>()
             for (i in 0 until exchangePositions.length()) {
                 val row = exchangePositions.optJSONObject(i)
@@ -1210,9 +1214,19 @@ internal class NativeFuturesCampaignCoordinator(
                     "Live Futures position does not prove the required one-way mode"
                 }
                 if (symbol !in allowedSymbols) {
-                    throw IllegalStateException(
-                        "Unmanaged live Futures position $symbol detected outside the approved ${allowedSymbols.size}-symbol universe; manual reconciliation required"
-                    )
+                    val direction = if (amount.signum() > 0) "LONG" else "SHORT"
+                    unmanagedPositions.put(JSONObject()
+                        .put("symbol",symbol).put("direction",direction)
+                        .put("quantity",amount.toPlainString())
+                        .put("entry_price",row.optString("entryPrice").toBigDecimalOrNull()?.toPlainString() ?: JSONObject.NULL)
+                        .put("mark_price",row.optString("markPrice").toBigDecimalOrNull()?.toPlainString() ?: JSONObject.NULL)
+                        .put("leverage",row.optString("leverage"))
+                        .put("margin_type",row.optString("marginType"))
+                        .put("unrealized_pnl",row.optString("unRealizedProfit"))
+                        .put("origin","UNVERIFIED_EXTERNAL_OR_LEGACY")
+                        .put("supervision_state",FuturesProtectionSupervisorState.RECOVERY_REQUIRED.name)
+                        .put("automatic_management_authorized",false))
+                    continue
                 }
                 openBySymbol[symbol] = row
             }
@@ -1276,6 +1290,7 @@ internal class NativeFuturesCampaignCoordinator(
             val activeEntryClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeExitClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
             val activeProtectionClientIdsBySymbol = mutableMapOf<String, MutableSet<String>>()
+            val symbolResolutionFailures = linkedMapOf<String,String>()
             fun addOwner(destination: MutableMap<String, MutableSet<String>>, symbol: String, clientId: String) {
                 if (symbol.isNotBlank() && clientId.isNotBlank()) {
                     destination.getOrPut(symbol.uppercase(Locale.US)) { mutableSetOf() }.add(clientId)
@@ -1314,6 +1329,7 @@ internal class NativeFuturesCampaignCoordinator(
             for (i in 0 until persisted.length()) {
                 val owner = persisted.optJSONObject(i) ?: continue
                 val symbol = owner.optString("symbol")
+                try {
                 if (owner.optString("intent_role", "ENTRY") !in setOf("ENTRY", "ADD_ON") ||
                     (owner.optString("intent_role","ENTRY")=="ENTRY" && campaignLifecycleStatus(owner) in TERMINAL_CAMPAIGN_STATUSES) ||
                     (owner.optString("intent_role")=="ADD_ON" && (0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
@@ -1375,6 +1391,11 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("actual_entry_observed_at_ms", clock())
                     entryExecutions[cid] = execution
                 }
+                } catch (failure: Exception) {
+                    val key = symbol.uppercase(Locale.US).ifBlank { "__MALFORMED_ENTRY_$i" }
+                    symbolResolutionFailures[key] = safeDiagnosticText(
+                        failure.message ?: failure.javaClass.simpleName).take(500)
+                }
             }
             // A manual or orphaned order can create exposure without a local intent.
             // Do NOT abort account-wide auditing on its first occurrence: doing
@@ -1408,6 +1429,7 @@ internal class NativeFuturesCampaignCoordinator(
             // exchange entry fill, volume and average; never infer ownership
             // from the W2PS prefix or an unrelated orphan Binance position.
             for ((symbol, position) in openBySymbol) {
+                try {
                 val owner = latestEntryIndexBySymbol[symbol]?.let { persisted.optJSONObject(it) }
                     ?: continue
                 if (!owner.optBoolean("strategy_ownership_verified",false) ||
@@ -1455,6 +1477,10 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("protection_rebound_proof","EXACT_DERIVED_W2PS_AND_AUTHENTICATED_FILL")
                 addOwner(activeProtectionClientIdsBySymbol,symbol,stopId)
                 saveIntents(persisted)
+                } catch (failure: Exception) {
+                    symbolResolutionFailures[symbol.ifBlank { "__MALFORMED_REBIND" }] = safeDiagnosticText(
+                        failure.message ?: failure.javaClass.simpleName).take(500)
+                }
             }
             for (i in 0 until allOpenAlgoOrders.length()) {
                 val order = allOpenAlgoOrders.optJSONObject(i)
@@ -1484,24 +1510,79 @@ internal class NativeFuturesCampaignCoordinator(
             }
             externalOrderObservationsJson=externalOrders.toString()
             val protectionObservations=JSONArray()
+            for (i in 0 until unmanagedPositions.length()) {
+                val unmanaged = unmanagedPositions.getJSONObject(i)
+                val symbol = unmanaged.getString("symbol")
+                val standard = (0 until allOpenOrders.length()).mapNotNull { allOpenOrders.optJSONObject(it) }
+                    .filter { it.optString("symbol") == symbol }
+                val algos = (0 until allOpenAlgoOrders.length()).mapNotNull { allOpenAlgoOrders.optJSONObject(it) }
+                    .filter { it.optString("symbol") == symbol }
+                val summary = JSONArray()
+                for (row in standard) summary.put(JSONObject()
+                    .put("scope","STANDARD").put("order_id",row.optString("orderId"))
+                    .put("client_id",row.optString("clientOrderId"))
+                    .put("order_type",row.optString("type")).put("status",row.optString("status"))
+                    .put("side",row.optString("side")).put("quantity",row.optString("origQty")))
+                for (row in algos) summary.put(JSONObject()
+                    .put("scope","CONDITIONAL").put("algo_id",row.optString("algoId"))
+                    .put("client_id",row.optString("clientAlgoId"))
+                    .put("order_type",row.optString("orderType")).put("status",row.optString("algoStatus"))
+                    .put("side",row.optString("side")).put("position_side",row.optString("positionSide"))
+                    .put("working_type",row.optString("workingType")).put("trigger_price",row.optString("triggerPrice"))
+                    .put("quantity",row.optString("quantity"))
+                    .put("close_position",row.opt("closePosition") ?: JSONObject.NULL)
+                    .put("reduce_only",row.opt("reduceOnly") ?: JSONObject.NULL)
+                    .put("price_protect",row.opt("priceProtect") ?: JSONObject.NULL))
+                unmanaged.put("signed_standard_orders_seen",standard.size)
+                    .put("signed_algo_orders_seen",algos.size)
+                    .put("signed_order_summaries",summary)
+                protectionObservations.put(JSONObject()
+                    .put("symbol",symbol).put("direction",unmanaged.optString("direction"))
+                    .put("quantity",unmanaged.optString("quantity")).put("observed_at_ms",clock())
+                    .put("stop_proof","UNMANAGED_POSITION")
+                    .put("supervisor_state",FuturesProtectionSupervisorState.RECOVERY_REQUIRED.name)
+                    .put("stop",JSONObject.NULL).put("protection_client_id",JSONObject.NULL)
+                    .put("origin","UNVERIFIED_EXTERNAL_OR_LEGACY")
+                    .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                    .put("management_mode","OBSERVE_ONLY")
+                    .put("signed_standard_orders_seen",standard.size)
+                    .put("signed_algo_orders_seen",algos.size)
+                    .put("signed_order_summaries",summary)
+                    .put("stop_proof_rejection","SYMBOL_OUTSIDE_APPROVED_UNIVERSE"))
+            }
             var hasPendingExit = false
             var hasPendingAddition = false
-            var anyUnprotected = false
+            var anyUnprotected = unmanagedPositions.length() > 0
             val entryPriceConflicts = mutableListOf<String>()
             val requiredSafetyExits = JSONArray()
-            var actualRiskAuditBlocked = reversedCampaignSymbols.isNotEmpty()
-            var actualRiskAuditBlocker: String? =
-                if (reversedCampaignSymbols.isNotEmpty())
+            var actualRiskAuditBlocked = reversedCampaignSymbols.isNotEmpty() ||
+                symbolResolutionFailures.isNotEmpty() || unmanagedPositions.length() > 0
+            var actualRiskAuditBlocker: String? = when {
+                unmanagedPositions.length() > 0 ->
+                    "UNMANAGED_LIVE_FUTURES_POSITIONS: " +
+                        (0 until unmanagedPositions.length()).joinToString(",") {
+                            unmanagedPositions.getJSONObject(it).optString("symbol")
+                        } + "; positions outside the approved universe are observe-only; new entries blocked"
+                symbolResolutionFailures.isNotEmpty() ->
+                    "SYMBOL_RECONCILIATION_FAILED: " + symbolResolutionFailures.entries.joinToString("; ") {
+                        it.key + "=" + it.value
+                    } + "; independent protection sweep continues; new entries blocked"
+                reversedCampaignSymbols.isNotEmpty() ->
                     "Signed Futures exposure reversed relative to persisted campaign on " +
                         reversedCampaignSymbols.joinToString(",") +
                         "; no old-owner mutation or new entries authorized"
-                else null
+                else -> null
+            }
+            if (actualRiskAuditBlocker != null) lastBlocker = actualRiskAuditBlocker
             // Resolve persisted entry and exit intents against Binance. Older completed
             // campaigns on a symbol must not be mistaken for the campaign now in market.
             val resolutionOrder=(0 until persisted.length()).sortedBy {
                 when(persisted.optJSONObject(it)?.optString("intent_role")) { "ADD_ON" -> 0; "EXIT" -> 1; else -> 2 }
             }
             for (i in resolutionOrder) {
+                val failureSymbol = persisted.optJSONObject(i)?.optString("symbol")
+                    .orEmpty().uppercase(Locale.US)
+                try {
                 val intent = persisted.optJSONObject(i)
                     ?: throw IllegalStateException("Persisted Futures intent is malformed")
                 val symbol = intent.optString("symbol").uppercase(Locale.US)
@@ -1938,6 +2019,20 @@ internal class NativeFuturesCampaignCoordinator(
                     exchangeStatus in activeStatuses -> intent.put("campaign_status", "ENTRY_PENDING")
                     else -> throw IllegalStateException("Entry $clientId has unsupported exchange status $exchangeStatus")
                 }
+                } catch (failure: Exception) {
+                    val key = failureSymbol.ifBlank { "__MALFORMED_INTENT_$i" }
+                    symbolResolutionFailures[key] = safeDiagnosticText(
+                        failure.message ?: failure.javaClass.simpleName).take(500)
+                }
+            }
+            if (symbolResolutionFailures.isNotEmpty()) {
+                actualRiskAuditBlocked = true
+                if (actualRiskAuditBlocker == null) actualRiskAuditBlocker =
+                    "SYMBOL_RECONCILIATION_FAILED: " + symbolResolutionFailures.entries.joinToString("; ") {
+                        it.key + "=" + it.value
+                    }
+                if (lastBlocker == "exchange_reconciliation_in_progress")
+                    lastBlocker = actualRiskAuditBlocker.orEmpty()
             }
 
             // DIAG9: a foreign active conditional is not automatically either a
@@ -1999,6 +2094,53 @@ internal class NativeFuturesCampaignCoordinator(
             } else null
             val supervisionAudit=operatorSupervisions()
             for ((symbol, position) in openBySymbol) {
+                try {
+                val resolutionFailure = symbolResolutionFailures[symbol]
+                if (resolutionFailure != null) {
+                    val amount = position.optString("positionAmt").toBigDecimalOrNull()
+                    val direction = amount?.let { if (it.signum() > 0) "LONG" else "SHORT" } ?: "UNKNOWN"
+                    val mark = runCatching { adapter.markPrice(symbol) }.getOrNull()
+                        ?.takeIf { it.isFinite() && it > 0.0 }
+                    val symbolAlgos = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
+                    val symbolRows = symbolAlgos?.let {
+                        (0 until it.length()).mapNotNull { index -> it.optJSONObject(index) }
+                    }.orEmpty()
+                    val accountRows = (0 until allOpenAlgoOrders.length()).mapNotNull {
+                        allOpenAlgoOrders.optJSONObject(it)
+                    }.filter { it.optString("symbol") == symbol }
+                    val snapshotMatches = symbolAlgos != null &&
+                        symbolRows.map(::signedExternalContractStopFingerprint).sorted() ==
+                            accountRows.map(::signedExternalContractStopFingerprint).sorted()
+                    val candidates = if (amount != null && mark != null)
+                        symbolRows.filter { isFullPositionFuturesStop(it,symbol,direction,amount.abs(),mark) }
+                        else emptyList()
+                    val candidate = candidates.singleOrNull()
+                    val candidateStop = candidate?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
+                        ?: candidate?.optString("stopPrice")?.takeIf { it.isNotBlank() }
+                    val state = futuresProtectionSupervisorState(
+                        signedSnapshotComplete=mark!=null && snapshotMatches,
+                        positionOpen=true,matchingFullStops=if(snapshotMatches) candidates.size else 0,
+                        recoveryRequired=true
+                    )
+                    protectionObservations.put(JSONObject().put("symbol",symbol).put("direction",direction)
+                        .put("quantity",amount?.toPlainString() ?: position.optString("positionAmt"))
+                        .put("observed_at_ms",clock()).put("stop_proof",
+                            if(state==FuturesProtectionSupervisorState.PROTECTED) "EXTERNAL_PROTECTED"
+                            else "PROTECTION_UNKNOWN")
+                        .put("supervisor_state",state.name)
+                        .put("stop",candidateStop ?: JSONObject.NULL)
+                        .put("protection_client_id",candidate?.optString("clientAlgoId") ?: JSONObject.NULL)
+                        .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                        .put("management_mode","OBSERVE_ONLY")
+                        .put("stop_proof_rejection","SYMBOL_INTENT_RECONCILIATION_FAILED")
+                        .put("read_error",resolutionFailure))
+                    if(state!=FuturesProtectionSupervisorState.PROTECTED) anyUnprotected=true
+                    actualRiskAuditBlocked=true
+                    if(actualRiskAuditBlocker==null)
+                        actualRiskAuditBlocker="SYMBOL_RECONCILIATION_FAILED: $symbol=$resolutionFailure"
+                    lastBlocker="$symbol signed intent reconciliation failed; protection observation=${state.name}; new entries blocked"
+                    continue
+                }
                 val amount = position.optString("positionAmt").toDoubleOrNull()
                     ?: throw IllegalStateException("Binance returned a malformed position amount for $symbol during protection audit")
                 val direction = if (amount > 0.0) "LONG" else "SHORT"
@@ -2125,6 +2267,9 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("symbol",symbol).put("direction",direction)
                         .put("quantity",position.optString("positionAmt"))
                         .put("observed_at_ms",clock()).put("stop_proof",proof)
+                        .put("supervisor_state",futuresProtectionSupervisorState(
+                            signedSnapshotComplete=true,positionOpen=true,matchingFullStops=signedFullStops.size,
+                            recoveryRequired=uniquelyProtected==null).name)
                         .put("stop",uniquelyProtected?.optString("triggerPrice",
                             uniquelyProtected.optString("stopPrice")) ?: JSONObject.NULL)
                         .put("protection_client_id",
@@ -2375,6 +2520,11 @@ internal class NativeFuturesCampaignCoordinator(
                         referenceMark==null -> "MARK_PRICE_UNAVAILABLE"
                         else -> "STOP_UNCONFIRMED"
                     })
+                    .put("supervisor_state",futuresProtectionSupervisorState(
+                        signedSnapshotComplete=referenceMark!=null,positionOpen=true,
+                        matchingFullStops=signedFullStops.size,
+                        mutationPending=matchingIntent?.optString("protection_status")=="SUBMISSION_UNKNOWN",
+                        recoveryRequired=matchingIntent==null).name)
                     .put("stop",if(signedFullStops.size==1)
                         signedFullStops.single().optString("triggerPrice",
                             signedFullStops.single().optString("stopPrice")) else JSONObject.NULL)
@@ -3329,8 +3479,52 @@ internal class NativeFuturesCampaignCoordinator(
                             put("observed_at_ms", clock())
                             put("strategy_ownership_verified", owned)
                             put("automatic_trailing_authorized", owned)
+                            put("supervisor_state",FuturesProtectionSupervisorState.PROTECTED.name)
                             put("management_mode", if (owned) "STRATEGY_OWNED" else "OBSERVE_ONLY")
                         }
+                } catch (failure: Exception) {
+                    val reason = "$symbol protection supervision failed: " +
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(500)
+                    anyUnprotected = true
+                    actualRiskAuditBlocked = true
+                    if (actualRiskAuditBlocker == null) actualRiskAuditBlocker = reason
+                    lastBlocker = reason
+                    val ledgerPersisted = runCatching { saveIntents(persisted) }.isSuccess
+                    val existing = (0 until protectionObservations.length()).mapNotNull {
+                        protectionObservations.optJSONObject(it)
+                    }.singleOrNull { it.optString("symbol") == symbol }
+                    val observation = existing ?: JSONObject().also { protectionObservations.put(it) }
+                    observation.put("symbol",symbol).put("direction",
+                        if ((position.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT")
+                        .put("quantity",position.optString("positionAmt"))
+                        .put("observed_at_ms",clock()).put("stop_proof","PROTECTION_UNKNOWN")
+                        .put("supervisor_state",FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
+                        .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                        .put("management_mode","OBSERVE_ONLY")
+                        .put("protection_supervisor_error",reason)
+                        .put("durable_ledger_commit",if(ledgerPersisted) "CONFIRMED" else "FAILED")
+                }
+                } catch (failure: Exception) {
+                    val reason = "$symbol protection supervision failed: " +
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(500)
+                    anyUnprotected = true
+                    actualRiskAuditBlocked = true
+                    if (actualRiskAuditBlocker == null) actualRiskAuditBlocker = reason
+                    lastBlocker = reason
+                    val ledgerPersisted = runCatching { saveIntents(persisted) }.isSuccess
+                    val existing = (0 until protectionObservations.length()).mapNotNull {
+                        protectionObservations.optJSONObject(it)
+                    }.singleOrNull { it.optString("symbol") == symbol }
+                    val observation = existing ?: JSONObject().also { protectionObservations.put(it) }
+                    observation.put("symbol",symbol).put("direction",
+                        if ((position.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT")
+                        .put("quantity",position.optString("positionAmt"))
+                        .put("observed_at_ms",clock()).put("stop_proof","PROTECTION_UNKNOWN")
+                        .put("supervisor_state",FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
+                        .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                        .put("management_mode","OBSERVE_ONLY")
+                        .put("protection_supervisor_error",reason)
+                        .put("durable_ledger_commit",if(ledgerPersisted) "CONFIRMED" else "FAILED")
                 }
             }
 
@@ -3638,7 +3832,20 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("engine", "USD_M_FUTURES_TESTNET")
                 .put("state", state.name)
                 .put("positions_checked", exchangePositions.length())
-                .put("open_positions", openBySymbol.size)
+                .put("open_positions", openBySymbol.size + unmanagedPositions.length())
+                .put("managed_open_positions",openBySymbol.size)
+                .put("unmanaged_open_positions",unmanagedPositions)
+                .put("unmanaged_open_positions_count",unmanagedPositions.length())
+                .put("symbol_reconciliation_failures",JSONObject().apply {
+                    symbolResolutionFailures.forEach { (symbol,reason) -> put(symbol,reason) }
+                })
+                .put("protection_supervisor",JSONObject()
+                    .put("independent_symbol_failures",symbolResolutionFailures.size)
+                    .put("unmanaged_positions",unmanagedPositions.length())
+                    .put("protection_observations",protectionObservations.length())
+                    .put("mode","PER_SYMBOL_ISOLATED")
+                    .put("state",if(symbolResolutionFailures.isEmpty() && unmanagedPositions.length()==0)
+                        "HEALTHY" else "DEGRADED_FAIL_CLOSED"))
                 .put("pending_intents_checked", persisted.length())
                 .put("active_pending_entry", hasPendingEntry)
                 .put("active_pending_exit", hasPendingExit)

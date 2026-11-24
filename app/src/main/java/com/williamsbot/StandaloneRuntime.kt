@@ -6347,13 +6347,9 @@ private class NativeEngine(
             val signedQty = row.optString("positionAmt").toDoubleOrNull()
                 ?: throw IllegalStateException("Malformed Futures position amount for $symbol")
             if (signedQty == 0.0) continue
-            if (symbol !in coreSymbols) {
-                throw IllegalStateException(
-                    "Unmanaged live Futures position outside the approved fifteen-symbol universe: $symbol"
-                )
-            }
+            val unmanagedPosition = symbol !in coreSymbols
             val direction = if (signedQty > 0.0) "LONG" else "SHORT"
-            val intentIndex = latestEntryIntentIndex(intents, symbol)
+            val intentIndex = if (unmanagedPosition) null else latestEntryIntentIndex(intents, symbol)
             val intent = intentIndex?.let { intents.optJSONObject(it) }
                 ?.takeIf {
                     it.optString("direction").equals(direction, ignoreCase = true) &&
@@ -6361,10 +6357,11 @@ private class NativeEngine(
                 }
             val entry = row.optString("entryPrice").toDoubleOrNull() ?: 0.0
             val mark = row.optString("markPrice").toDoubleOrNull()
-                ?: runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
+                ?: if (unmanagedPosition) 0.0
+                else runCatching { futuresMarketData.markPrice(symbol) }.getOrDefault(0.0)
             val qty = kotlin.math.abs(signedQty)
             val pnl = row.optString("unRealizedProfit").toDoubleOrNull() ?: 0.0
-            val exchangeStop=(0 until observedStops.length()).mapNotNull {
+            val exchangeObservation=(0 until observedStops.length()).mapNotNull {
                 observedStops.optJSONObject(it)
             }.singleOrNull { proof ->
                 val observedAt=proof.optLong("observed_at_ms")
@@ -6372,28 +6369,40 @@ private class NativeEngine(
                 val signedLive=row.optString("positionAmt").toBigDecimalOrNull()
                 proof.optString("symbol")==symbol && proof.optString("direction")==direction &&
                     signedProof!=null && signedLive!=null && signedProof.compareTo(signedLive)==0 &&
-                    CockpitDiagnostics.fresh(observedAt,snapshotAt,CockpitDiagnostics.POSITION_TTL_MS) &&
-                    proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
-                        "NATIVE_REPLACEMENT_PROTECTION_SEEN")
+                    CockpitDiagnostics.fresh(observedAt,snapshotAt,CockpitDiagnostics.POSITION_TTL_MS)
+            }
+            val exchangeStop=exchangeObservation?.takeIf { proof ->
+                proof.optString("stop_proof") in setOf("OWNED_STOP_SEEN","EXTERNAL_PROTECTED",
+                    "NATIVE_REPLACEMENT_PROTECTION_SEEN")
             }
             // Do not mistake old journal stop level for an exchange-confirmed
-            // working protective order.
-            val stopProof=exchangeStop?.optString("stop_proof") ?: "UNVERIFIED_OR_STALE"
-            val stop=exchangeStop?.optString("stop")?.toDoubleOrNull()
+            // working protective order. Unmanaged symbols remain observe-only.
+            val stopProof=if(unmanagedPosition) "UNMANAGED_POSITION"
+                else exchangeStop?.optString("stop_proof") ?: "UNVERIFIED_OR_STALE"
+            val observedStopPrice=if(unmanagedPosition) exchangeObservation?.optString("observed_stop")
+                else exchangeStop?.optString("stop")
+            val stop=observedStopPrice?.toDoubleOrNull()
                 ?.takeIf { it.isFinite() && it>0.0 } ?: JSONObject.NULL
             out.put(JSONObject()
                 .put("symbol", symbol).put("direction", direction).put("side", direction)
                 .put("positionAmt", signedQty).put("qty", qty).put("entry", entry).put("entryPrice", entry)
                 .put("mark_price", mark).put("stop", stop)
                 .put("stop_verification_status",stopProof)
-                .put("stop_confirmed_at_ms",exchangeStop?.optLong("observed_at_ms") ?: JSONObject.NULL)
+                .put("stop_confirmed_at_ms",exchangeObservation?.optLong("observed_at_ms") ?: JSONObject.NULL)
                 // An explicitly operator-approved stop-only supervisor is a
                 // separate, limited authority from strategy campaign ownership.
                 // It can trail an exchange-verified STOP without adding risk.
-                .put("stop_can_be_auto_trailed",williamsObservedStopCanTrail(exchangeStop))
-                .put("stop_management_mode",exchangeStop?.optString("management_mode") ?: "UNVERIFIED")
-                .put("strategy_ownership_verified",exchangeStop?.optBoolean(
-                    "strategy_ownership_verified",false) ?: false)
+                .put("stop_can_be_auto_trailed",!unmanagedPosition && williamsObservedStopCanTrail(exchangeStop))
+                .put("stop_management_mode",if(unmanagedPosition) "OBSERVE_ONLY"
+                    else exchangeStop?.optString("management_mode") ?: "UNVERIFIED")
+                .put("supervisor_state",if(unmanagedPosition)
+                    FuturesProtectionSupervisorState.RECOVERY_REQUIRED.name
+                    else exchangeObservation?.optString("supervisor_state")
+                        ?: FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
+                .put("unmanaged_position",unmanagedPosition)
+                .put("origin",if(unmanagedPosition) "UNVERIFIED_EXTERNAL_OR_LEGACY" else JSONObject.NULL)
+                .put("strategy_ownership_verified",!unmanagedPosition && (exchangeStop?.optBoolean(
+                    "strategy_ownership_verified",false) ?: false))
                 // An unowned / operator-supervised position has no trusted
                 // initial campaign risk. Null is UNKNOWN, never 0% risk.
                 .put("risk_pct", if(intent?.optBoolean("strategy_ownership_verified",false)==true)

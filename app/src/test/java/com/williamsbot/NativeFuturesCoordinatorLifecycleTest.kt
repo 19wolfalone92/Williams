@@ -4511,5 +4511,104 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertFalse(restart.status().getBoolean("ready_for_new_entry"))
         }
     }
+    @Test fun symbolScopedProtectionFailureDoesNotHideOtherOpenPosition() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform = { rows ->
+            JSONArray(rows.toString()).put(JSONObject().put("symbol","ETHUSDT")
+                .put("positionSide","BOTH").put("positionAmt","-0.010")
+                .put("entryPrice","2249.73").put("markPrice","2235.78")
+                .put("leverage","2").put("marginType","ISOLATED"))
+        }
+        exchange.beforeRequest = { request, params ->
+            if(request.url.encodedPath=="/fapi/v1/openAlgoOrders" && params["symbol"]=="ETHUSDT")
+                throw java.io.IOException("ETH signed conditional-order read unavailable")
+        }
+        val algoPostsBefore=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        val observations=result.getJSONArray("exchange_protection_observations")
+        val btc=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="BTCUSDT" }
+        val eth=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="ETHUSDT" }
+        assertEquals("OWNED_STOP_SEEN",btc.getString("stop_proof"))
+        assertEquals("PROTECTED",btc.getString("supervisor_state"))
+        assertEquals("PROTECTION_UNKNOWN",eth.getString("stop_proof"))
+        assertEquals("PROTECTION_UNKNOWN",eth.getString("supervisor_state"))
+        assertTrue(eth.getString("protection_supervisor_error").contains("ETH signed"))
+        assertEquals(algoPostsBefore,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
+    @Test fun unknownPositionOutsideApprovedUniverseDoesNotAbortApprovedPositionProtection() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform = { rows ->
+            JSONArray(rows.toString()).put(JSONObject().put("symbol","FOOUSDT")
+                .put("positionSide","BOTH").put("positionAmt","2")
+                .put("entryPrice","10").put("markPrice","10.5")
+                .put("leverage","3").put("marginType","ISOLATED")
+                .put("unRealizedProfit","1.0"))
+        }
+        val algoPostsBefore=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        assertEquals(2,result.getInt("open_positions"))
+        assertEquals(1,result.getInt("managed_open_positions"))
+        assertEquals(1,result.getInt("unmanaged_open_positions_count"))
+        val unmanaged=result.getJSONArray("unmanaged_open_positions").getJSONObject(0)
+        assertEquals("FOOUSDT",unmanaged.getString("symbol"))
+        assertEquals("UNVERIFIED_EXTERNAL_OR_LEGACY",unmanaged.getString("origin"))
+        assertEquals("RECOVERY_REQUIRED",unmanaged.getString("supervision_state"))
+        val observations=result.getJSONArray("exchange_protection_observations")
+        val btc=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="BTCUSDT" }
+        val foo=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="FOOUSDT" }
+        assertEquals("OWNED_STOP_SEEN",btc.getString("stop_proof"))
+        assertEquals("PROTECTED",btc.getString("supervisor_state"))
+        assertEquals("UNMANAGED_POSITION",foo.getString("stop_proof"))
+        assertEquals("RECOVERY_REQUIRED",foo.getString("supervisor_state"))
+        assertFalse(foo.getBoolean("strategy_ownership_verified"))
+        assertFalse(foo.getBoolean("automatic_trailing_authorized"))
+        assertEquals(algoPostsBefore,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
+    @Test fun generalCoordinatorMonitorIsNotHeldDuringSignedNetworkReconciliation() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val networkEntered=CountDownLatch(1)
+        val releaseNetwork=CountDownLatch(1)
+        val reconciliationResult=AtomicReference<JSONObject?>()
+        exchange.beforeRequest = { request, _ ->
+            if(request.url.encodedPath=="/fapi/v3/positionRisk") {
+                networkEntered.countDown()
+                if(!releaseNetwork.await(5,TimeUnit.SECONDS))
+                    throw java.io.IOException("test network latch timed out")
+            }
+        }
+        val reconciliation=Thread { reconciliationResult.set(coordinator.reconcile()) }
+        reconciliation.start()
+        assertTrue("signed REST call did not reach the network wait",
+            networkEntered.await(2,TimeUnit.SECONDS))
+        val probeDone=CountDownLatch(1)
+        val probe=Thread {
+            coordinator.recordReconciliationBlocker("general_monitor_nonblocking_probe")
+            probeDone.countDown()
+        }
+        probe.start()
+        val generalMonitorAvailable=probeDone.await(750,TimeUnit.MILLISECONDS)
+        releaseNetwork.countDown()
+        reconciliation.join(5_000)
+        probe.join(5_000)
+        assertTrue("general coordinator monitor remained held during signed REST I/O",
+            generalMonitorAvailable)
+        assertFalse("reconciliation thread did not finish",reconciliation.isAlive)
+        assertFalse("general monitor probe did not finish",probe.isAlive)
+        assertNotNull(reconciliationResult.get())
+    }
 
 }
