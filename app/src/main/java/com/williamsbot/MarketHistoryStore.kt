@@ -133,8 +133,8 @@ internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean
  * Full history lives only on the device database. Callers load a bounded
  * working set for calculations, so the complete history is never retained in RAM.
  */
-class MarketHistoryStore(context: Context) :
-    SQLiteOpenHelper(context, "williams_market_history.db", null, 5) {
+class MarketHistoryStore(context: Context, databaseName: String = "williams_market_history.db") :
+    SQLiteOpenHelper(context, databaseName, null, 5) {
 
     data class Candle(
         val openTime: Long,
