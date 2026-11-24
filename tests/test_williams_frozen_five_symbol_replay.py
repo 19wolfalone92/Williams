@@ -8,12 +8,16 @@ import pandas as pd
 import pytest
 
 from tools import replay_frozen_h1_five_symbol as frozen
+from trading_config import DEFAULT_FUTURES_SYMBOLS
 
 
 def test_all_fifteen_frozen_exchange_histories_are_causal_and_checksum_tracked():
-    assert len(frozen.ASSUMED_TICKS_2026_10_25)==15
+    assert len(frozen.ASSUMED_LATEST_NATIVE_TICKS)==15
+    assert set(frozen.ASSUMED_LATEST_NATIVE_TICKS)==set(DEFAULT_FUTURES_SYMBOLS)
+    assert "SUIUSDT" in frozen.ASSUMED_LATEST_NATIVE_TICKS
+    assert "UNIUSDT" not in frozen.ASSUMED_LATEST_NATIVE_TICKS
     hashes = set()
-    for symbol in frozen.ASSUMED_TICKS_2026_10_25:
+    for symbol in frozen.ASSUMED_LATEST_NATIVE_TICKS:
         candles, digest = frozen.load_sealed_h1(symbol)
         assert len(candles) == 480
         assert candles.index.tz is not None
