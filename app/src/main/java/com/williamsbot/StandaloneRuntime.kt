@@ -1595,6 +1595,12 @@ private class StandaloneServer(private val context: Context) {
                     refresh = params["refresh"].equals("true", true)
                 ).toString()
 
+            // A screen REFRESH previously serialized multi-megabyte 15-pair
+            // decision traces just to DISCARD the response before a compact
+            // cockpit snapshot. Same read-only trigger, bounded ACK instead.
+            method == "POST" && path == "/api/v1/scanner/refresh" ->
+                x.requestScanCompact().toString()
+
             method == "GET" && path == "/api/v1/portfolio" ->
                 x.portfolio().toString()
 
@@ -12119,6 +12125,21 @@ private class NativeEngine(
     fun scanner(refresh: Boolean): JSONObject {
         if (refresh) requestScan()
         return scannerSnapshot()
+    }
+
+    /** Trigger read-only H1 scanning with a small explicit ACK only.
+     * Never bypasses scanner readiness, Futures execution gate, or history
+     * causality. The subsequent compact cockpit response carries actual data.
+     */
+    fun requestScanCompact(): JSONObject {
+        requestScan()
+        return JSONObject().put("scanner_state", scannerObservedState(scanning, scannerState))
+            .put("scanning", scanning)
+            .put("run_id", scanRunId)
+            .put("progress_symbols", scanProgressSymbols)
+            .put("progress_total", coreSymbols.size)
+            .put("scanner_error", scannerError ?: JSONObject.NULL)
+            .put("can_authorize_order", false)
     }
 
     fun status(fast: Boolean = false, includeDecisionTraces: Boolean = true,
