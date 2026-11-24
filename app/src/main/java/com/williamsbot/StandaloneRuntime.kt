@@ -12164,12 +12164,9 @@ private class NativeEngine(
         }
         val livePnlPct = if (totalEntryNotional > 0.0) livePnl / totalEntryNotional else 0.0
         val futuresIntents = runCatching { futuresCampaignCoordinator.intentsSnapshot() }.getOrDefault(JSONArray())
-        val futuresReservedRiskPct = (0 until futuresIntents.length()).sumOf { i ->
-            val intent = futuresIntents.optJSONObject(i) ?: return@sumOf 0.0
-            if (intent.optString("intent_role", "ENTRY") == "ENTRY" && isEntryCampaignReserved(intent)) {
-                futuresCampaignReservedRisk(intent,futuresIntents)
-            } else 0.0
-        }
+        // DISPLAY ONLY: avoid O(N²) whole-ledger scan on every 5s UI poll.
+        // Never use this projection as an order-admission/risk authority.
+        val futuresReservedRiskPct = futuresCockpitTotalReservedRisk(futuresIntents)
         val utcDayStart = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC")).apply {
             timeInMillis = if (fast) futuresMarketData.cachedExchangeNowMs() else runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { System.currentTimeMillis() }
             set(java.util.Calendar.HOUR_OF_DAY, 0)
