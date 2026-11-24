@@ -57,23 +57,18 @@ class BinanceRateGuard {
         private set
 
     private val lock = Any()
+    private val originNs = System.nanoTime()
+    private fun monotonicMs(): Long = ((System.nanoTime() - originNs) / 1_000_000L).coerceAtLeast(0L)
     private var nextRequestAtMs = 0L
+    private var monotonicCooldownUntilMs = 0L
     private val minGapMs = 50L
 
     fun beforeRequest(isOrder: Boolean = false, maximumWaitMs: Long = 5_000L) {
         require(maximumWaitMs in 1L..60_000L) { "Invalid Binance governor wait budget" }
-        val waitStartedNs = System.nanoTime()
-        val waitStartedAtMs = System.currentTimeMillis()
-        if (Thread.currentThread().isInterrupted) {
-            throw IllegalStateException(
-                "Binance REST request interrupted before rate-limit scheduling; request was not sent"
-            )
-        }
-        // Compute the pressure delay once per request. Reapplying it on every
-        // sleep-loop iteration would keep pushing the target forward forever
-        // whenever the usage counter stayed above the threshold.
-        var targetMs = synchronized(lock) {
-            val now = System.currentTimeMillis()
+        val started = monotonicMs()
+        val deadline = binanceRateGuardSaturatingAdd(started, maximumWaitMs)
+        // Pressure is calculated once; rejected requests never reserve future slots.
+        val eligibleAt = synchronized(lock) {
             val pressure = when {
                 isOrder &&
                     orderLimit10s > 0 &&
@@ -90,54 +85,34 @@ class BinanceRateGuard {
                     usedWeight1m >= requestWeightLimit1m * 0.90 -> 250L
                 else -> 0L
             }
-            val candidate = binanceRateGuardSaturatingAdd(
-                max(now, max(nextRequestAtMs, cooldownUntilMs)), pressure)
-            nextRequestAtMs = binanceRateGuardSaturatingAdd(candidate, minGapMs)
-            candidate
+            binanceRateGuardSaturatingAdd(started, pressure)
         }
-
         while (true) {
-            val now = System.currentTimeMillis()
-            val scheduled = synchronized(lock) {
-                // Another request may have received 418/429 while this caller
-                // was waiting. Honor the extended cooldown without reapplying
-                // pressure to this request's already-reserved target.
-                if (cooldownUntilMs > targetMs) {
-                    targetMs = cooldownUntilMs
-                    nextRequestAtMs = max(nextRequestAtMs,
-                        binanceRateGuardSaturatingAdd(targetMs, minGapMs))
-                }
-                targetMs
+            if (Thread.currentThread().isInterrupted) {
+                throw IllegalStateException("Binance REST request interrupted; request was not sent")
             }
-            val waitMs = scheduled - now
-            if (waitMs <= 0L) {
-                if (Thread.currentThread().isInterrupted) {
+            val waitMs = synchronized(lock) {
+                val now = monotonicMs()
+                val target = max(eligibleAt, max(nextRequestAtMs, monotonicCooldownUntilMs))
+                if (now > deadline || target > deadline) {
+                    boundedWaitRejectedCount += 1L
                     throw IllegalStateException(
-                        "Binance REST request interrupted while waiting for rate-limit governor; request was not sent"
+                        "Binance REST governor wait exceeds ${maximumWaitMs}ms budget; " +
+                            "cooldown retained; request was not sent"
                     )
                 }
-                val waited = (System.currentTimeMillis() - waitStartedAtMs).coerceAtLeast(0L)
-                synchronized(lock) {
-                    lastWaitMs = waited
-                    totalWaitMs += waited
+                if (target <= now) {
+                    // Commit only actual admission, under the same lock that observes
+                    // 429/418. Waking contenders must acquire separate paced slots.
+                    nextRequestAtMs = binanceRateGuardSaturatingAdd(now, minGapMs)
+                    lastWaitMs = now - started
+                    totalWaitMs = binanceRateGuardSaturatingAdd(totalWaitMs, lastWaitMs)
+                    return
                 }
-                return
-            }
-            val remainingMs = maximumWaitMs -
-                (System.nanoTime() - waitStartedNs) / 1_000_000L
-            if (remainingMs <= 0L || waitMs > remainingMs) {
-                // Preserve the exchange cooldown. Fail BEFORE transport instead
-                // of holding the account/position worker asleep for minutes.
-                // The next monitoring tick may try admission again, never send
-                // early and never bypass a Binance 418/429 restriction.
-                synchronized(lock) { boundedWaitRejectedCount += 1L }
-                throw IllegalStateException(
-                    "Binance REST governor wait exceeds ${maximumWaitMs}ms budget; " +
-                        "cooldown retained; request was not sent"
-                )
+                target - now
             }
             try {
-                Thread.sleep(waitMs.coerceAtMost(5000L))
+                Thread.sleep(waitMs.coerceAtMost(50L))
             } catch (interrupted: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw IllegalStateException(
@@ -182,6 +157,8 @@ class BinanceRateGuard {
                 System.currentTimeMillis(), headers["Retry-After"])
             synchronized(lock) {
                 cooldownUntilMs = max(cooldownUntilMs, deadline)
+                monotonicCooldownUntilMs = max(monotonicCooldownUntilMs,
+                    binanceRateGuardCooldownDeadline(monotonicMs(), headers["Retry-After"]))
             }
         }
     }
@@ -236,6 +213,6 @@ class BinanceRateGuard {
             .put("bounded_wait_rejected_count", boundedWaitRejectedCount)
             .put(
                 "cooldown_ms",
-                (cooldownUntilMs - System.currentTimeMillis()).coerceAtLeast(0L)
+                synchronized(lock) { (monotonicCooldownUntilMs - monotonicMs()).coerceAtLeast(0L) }
             )
 }

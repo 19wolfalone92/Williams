@@ -120,7 +120,7 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "private fun marketWebSocketFresh" in runtime
     assert "marketWebSocketFresh() &&" in runtime
     assert 'add("market_websocket_disconnected_or_stale")' in runtime
-    assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
+    assert "if (!executionReadyForCandidate(candidate) || !candidate.campaignReady) return" in runtime
     # Validate the actual Kotlin REST base declaration, not a matching
     # substring in a comment, a spoofed URL or an unrelated literal.
     declared_base = re.search(
@@ -773,15 +773,19 @@ def test_android_websocket_closed_candles_are_persisted_before_history_readiness
     fetch = runtime.split("private fun fetchCandles(", 1)[1].split(
         "\n    private fun ", 1
     )[0]
-    live_cache = fetch.split("liveCandleCache[liveKey]?.let", 1)[1].split(
-        "val cacheKey =", 1
-    )[0]
-    assert "historyStore.upsertBatch(" in live_cache
-    assert "closed.takeLast(limit).map" in live_cache
-    assert "return closed.takeLast(limit)" in live_cache
-    assert live_cache.index("historyStore.upsertBatch(") < live_cache.index(
-        "return closed.takeLast(limit)"
-    )
+    # The former mutable WS cache seeded SQLite, then returned its own list.
+    # The stronger replacement admits only the revision-bound durable window.
+    assert "liveCandleCache" not in fetch
+    assert "durableWorkingHistory(normalizedSymbol,frame,limit)" in fetch
+    assert "durable.continuous" in fetch
+    assert "historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision" in fetch
+    assert fetch.index("durable.continuous") < fetch.index("return closed")
+    assert fetch.index("historyStore.upsertBatch(") < fetch.index("val committed=durableWorkingHistory")
+    assert fetch.index("==committed.revision") < fetch.index("return verified")
+    # Real SQLite mutation/restart/CAS is exercised separately on Android.
+    integration = _read(ANDROID.parent / "androidTest/java/com/williamsbot/HistoryStoreInstrumentation.kt")
+    assert "expectedRevision=rev" in integration
+    assert "historyContinuityAudited" in integration
 
 
 def test_android_settings_do_not_advertise_legacy_fixed_tp_or_position_sizing():
@@ -852,7 +856,17 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
     assert "entry_protective_price" in ui
     assert "смена графика не меняет торговлю" in ui
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
-    assert "val completeScan = ranked.size == coreSymbols.size" in runtime
+    assert "val perSymbolScanBlockers = scannerSymbolIsolationBlockers(" in runtime
+    assert "perSymbolScanBlockers.forEach" in runtime
+    assert "it.symbol !in perSymbolScanBlockers" in runtime
+    assert "executionReadyWithHistory(candidateHistoryCurrent(candidate))" in runtime
+    assert "H1_CANDIDATE_OR_SHARED_GATE_CHANGED_BEFORE_SUBMISSION" in runtime
+    assert "SYMBOL_SPREAD_UNAVAILABLE" not in runtime
+    assert "if (!completeScan) { coreSymbols.forEach { rejectDecision" not in runtime
+    assert "marketDataFresh = marketDataFresh()" in runtime
+    assert "coarseMetadataMissing.isEmpty()" not in runtime
+    assert "EXCHANGE_CLOCK_UNVERIFIED" in runtime
+    assert "val completeScan = perSymbolScanBlockers.isEmpty()" in runtime
     assert "scannerState = when {" in runtime
     assert '"READY_BLOCKED"' in runtime
     assert '"PARTIAL_BLOCKED"' in runtime

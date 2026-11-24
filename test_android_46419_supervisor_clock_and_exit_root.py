@@ -8,8 +8,14 @@ def test_no_all_symbol_fail_when_shared_binance_utc_missing():
     assert 'scannerAllSymbolClockOutage(coreSymbols.size, ranked.size, symbolErrors)' in src
     assert 'clockUnavailable -> "WAITING_FOR_EXCHANGE_CLOCK"' in src
     assert 'if (!futuresMarketData.clockSnapshot().optBoolean("fresh", false))' in src
-    assert "val completeScan = ranked.size == coreSymbols.size" in src
-    assert 'if (!completeScan) { coreSymbols.forEach { rejectDecision' in src
+    # Partial H1 analysis is isolated per contract; only a shared UTC outage
+    # remains a global clock blocker.
+    assert "val completeScan = perSymbolScanBlockers.isEmpty()" in src
+    assert "scannerSymbolIsolationBlockers(" in src
+    assert "perSymbolScanBlockers.forEach" in src
+    assert 'if (!completeScan) { coreSymbols.forEach { rejectDecision' not in src
+    assert 'if (clockUnavailable) {' in src
+    assert "EXCHANGE_CLOCK_UNVERIFIED" in src
     assert "completedAnalyses == 0" in scanner
     assert "symbolErrors.size == expectedSymbols" in scanner
 

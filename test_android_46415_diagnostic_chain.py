@@ -33,7 +33,11 @@ def test_complete_history_skips_redundant_kline_get_until_next_exchange_bar_clos
     assert "val nowForTail = futuresMarketData.exchangeNowMs()" in complete
     assert assertion in complete
     assert complete.index(assertion) < complete.index("for (page in 0 until pageLimit)")
-    assert "historyStore.loadRecent(normalizedSymbol, frame, 150)" in complete
+    current_branch = complete.split(assertion,1)[1].split("for (page in 0 until pageLimit)",1)[0]
+    # A completed/current archive has no consumer for a freshly allocated 150-row list.
+    assert "return" in current_branch
+    assert "futuresMarketData.klines(" not in current_branch
+    assert "historyStore.loadRecent(" not in current_branch
     # Incomplete history is still backward-paginated, never marked complete by
     # a local cache freshness heuristic.
     assert "futuresMarketData.klines(" in function.split("} else {",1)[0]
