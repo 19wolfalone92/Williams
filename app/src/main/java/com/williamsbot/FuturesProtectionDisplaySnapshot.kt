@@ -74,8 +74,9 @@ internal fun readFuturesProtectionDisplaySnapshot(
                 check(item.optString("symbol") == symbol) {
                     "Signed $symbol algo-order snapshot contains foreign/missing symbol"
                 }
-                algos.put(item)
             }
+            // Publish a symbol's rows only after the complete response is validated.
+            for (index in 0 until signed.length()) algos.put(signed.getJSONObject(index))
         } catch (failure: Exception) {
             algoReadFailures[symbol] = safeDiagnosticText(
                 failure.message ?: failure.javaClass.simpleName).take(500)

@@ -90,7 +90,8 @@ class FuturesProtectionDisplaySnapshotTest {
 
     @Test fun malformedOrForeignSymbolSignedAlgoMustNeverVerifyStop() {
         val f=Fixture()
-        f.orders=JSONArray().put(JSONObject(f.order.toString()).put("symbol","BTCUSDT"))
+        f.orders=JSONArray().put(JSONObject(f.order.toString()))
+            .put(JSONObject(f.order.toString()).put("symbol","BTCUSDT"))
         val result=f.read()
         val proof=result.observations.getJSONObject(0)
         assertFalse(result.protectionSnapshotComplete)

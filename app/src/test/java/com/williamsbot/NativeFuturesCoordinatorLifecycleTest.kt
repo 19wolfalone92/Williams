@@ -4536,6 +4536,9 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertEquals("PROTECTED",btc.getString("supervisor_state"))
         assertEquals("PROTECTION_UNKNOWN",eth.getString("stop_proof"))
         assertEquals("PROTECTION_UNKNOWN",eth.getString("supervisor_state"))
+        assertFalse(result.getBoolean("exchange_snapshot_complete"))
+        assertEquals("DEGRADED_FAIL_CLOSED",result.getJSONObject("protection_supervisor").getString("state"))
+        assertTrue(result.getJSONObject("symbol_reconciliation_failures").has("ETHUSDT"))
         assertTrue(eth.getString("protection_supervisor_error").contains("ETH signed"))
         assertEquals(algoPostsBefore,exchange.posts("/fapi/v1/algoOrder"))
         assertEquals(0,exchange.posts("/fapi/v1/order"))
@@ -4609,6 +4612,55 @@ class NativeFuturesCoordinatorLifecycleTest {
         assertFalse("reconciliation thread did not finish",reconciliation.isAlive)
         assertFalse("general monitor probe did not finish",probe.isAlive)
         assertNotNull(reconciliationResult.get())
+        val result = reconciliationResult.get()!!
+        assertFalse(result.toString(), result.getBoolean("ok"))
+        assertFalse(result.getBoolean("exchange_snapshot_complete"))
+        assertTrue(result.getBoolean("reconciliation_fence_changed"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+    }
+
+    @Test fun journalWriterCannotLoseUpdateBehindDelayedReconciliation() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val owner = coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writerStarted = CountDownLatch(1)
+        val writerDone = CountDownLatch(1)
+        val result = AtomicReference<JSONObject?>()
+        val written = AtomicReference<Boolean?>()
+        exchange.beforeRequest = { request, _ ->
+            if (request.url.encodedPath == "/fapi/v3/positionRisk") {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+            }
+        }
+        val sync = Thread { result.set(coordinator.reconcile()) }
+        val writer = Thread {
+            writerStarted.countDown()
+            try {
+                written.set(coordinator.markTradeJournalStatus(owner, "TEST_JOURNAL_UPDATE", "concurrent history"))
+            } finally { writerDone.countDown() }
+        }
+        sync.start()
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            writer.start()
+            assertTrue(writerStarted.await(2, TimeUnit.SECONDS))
+            assertFalse("Ledger writer bypassed reconciliation mutation serialization",
+                writerDone.await(300, TimeUnit.MILLISECONDS))
+            assertEquals(owner, coordinator.intentsSnapshot().getJSONObject(0).getString("client_id"))
+        } finally {
+            release.countDown()
+            sync.join(5000)
+            writer.join(5000)
+        }
+        assertFalse(sync.isAlive)
+        assertFalse(writer.isAlive)
+        assertTrue(result.get()!!.getBoolean("ok"))
+        assertEquals(true, written.get())
+        assertEquals("TEST_JOURNAL_UPDATE", coordinator.intentsSnapshot().getJSONObject(0)
+            .getString("trade_journal_status"))
     }
 
 }

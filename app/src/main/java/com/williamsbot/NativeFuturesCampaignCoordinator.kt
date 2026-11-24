@@ -935,14 +935,16 @@ internal class NativeFuturesCampaignCoordinator(
     @Volatile private var externalStopManagementSymbolsJson = "[]"
     @Volatile private var externalStopManagementVerifiedAtMs = 0L
 
+    // Financial read-modify-write operations must serialize against reconciliation.
+    // Read-only snapshots and the short admission fence remain independent.
+    private val mutationLock = Any()
     private val lock = Any()
-    // Network reconciliation owns this dedicated monitor; UI/state callers
-    // must never wait behind signed Binance REST latency on the general lock.
-    private val reconciliationLock = Any()
+    private var reconciliationFenceRevision = 0L
+    private var reconciliationFenceReason = "startup_reconciliation_required"
     @Volatile private var observationSink: ((JSONArray) -> Unit)? = null
     @Volatile private var entryPassportAuditSink:((JSONObject)->Long)?=null
 
-    fun setEntryPassportAuditSink(sink:(JSONObject)->Long)=synchronized(lock) {
+    fun setEntryPassportAuditSink(sink:(JSONObject)->Long)=synchronized(mutationLock) {
         check(state==State.UNINITIALIZED) { "Entry audit must be bound before reconciliation" }
         entryPassportAuditSink=sink
     }
@@ -954,15 +956,15 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     @Volatile private var editionSelectionProvider:(()->String)?=null
-    fun setEditionSelectionProvider(provider:()->String)=synchronized(lock) {
+    fun setEditionSelectionProvider(provider:()->String)=synchronized(mutationLock) {
         check(state==State.UNINITIALIZED) { "Edition selection must be bound before reconciliation" }
         editionSelectionProvider=provider
     }
     @Volatile private var entryTimePolicyProvider:()->WilliamsEntryTimePolicy={ WilliamsEntryTimePolicy() }
-    fun setEntryTimePolicyProvider(provider:()->WilliamsEntryTimePolicy)=synchronized(lock) {
+    fun setEntryTimePolicyProvider(provider:()->WilliamsEntryTimePolicy)=synchronized(mutationLock) {
         check(state==State.UNINITIALIZED);entryTimePolicyProvider=provider
     }
-    fun configureWhenFlat(save:()->Unit)=synchronized(lock) {
+    fun configureWhenFlat(save:()->Unit)=synchronized(mutationLock) {
         check(state==State.READY && reservedFuturesPositionSymbols(emptyList(),intents()).isEmpty()) {
             "Смена книги доступна после сверки Binance, без позиций и ожидающих входов"
         }
@@ -983,7 +985,7 @@ internal class NativeFuturesCampaignCoordinator(
      */
     fun setStructuralStopRecoveryProvider(
         provider: (String, String, Double, Double, Double) -> RecoveredStructuralStop?
-    ) = synchronized(lock) {
+    ) = synchronized(mutationLock) {
         check(state == State.UNINITIALIZED) {
             "Structural-stop recovery provider must be configured before reconciliation"
         }
@@ -1005,7 +1007,7 @@ internal class NativeFuturesCampaignCoordinator(
      * NO normal/conditional pending orders. A failed GET is UNKNOWN, never
      * permission to shut down the only live STOP reconciliation worker.
      */
-    fun signedFlatForMonitoringShutdown(): Boolean = synchronized(lock) {
+    fun signedFlatForMonitoringShutdown(): Boolean = synchronized(mutationLock) {
         val adapter=adapterFactory()
         adapter.requireOneWayMode()
         val before=adapter.positions()
@@ -1057,7 +1059,7 @@ internal class NativeFuturesCampaignCoordinator(
     /** Called ONLY under the shared account-wide reconciliation Execution Door. */
     fun handoffManualPriceProtectedStop(
         symbol:String, accountFingerprint:String
-    ):JSONObject = synchronized(lock) {
+    ):JSONObject = synchronized(mutationLock) {
         require(symbol in allowedSymbols && accountFingerprint.isNotBlank()) {
             "Manual STOP handoff account identity or symbol is not approved"
         }
@@ -1089,7 +1091,7 @@ internal class NativeFuturesCampaignCoordinator(
 
     /** Persist the outcome of read-only trade-stat reconstruction; never alters exchange state. */
     fun markTradeJournalStatus(clientId: String, status: String, detail: String? = null): Boolean =
-        synchronized(lock) {
+        synchronized(mutationLock) {
             if (clientId.isBlank() || status.isBlank()) return@synchronized false
             val rows = intents()
             val row = (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
@@ -1105,7 +1107,7 @@ internal class NativeFuturesCampaignCoordinator(
             true
         }
 
-    fun recordVerifiedCampaignResult(clientId:String,netPnl:Double,feesKnown:Boolean,fillCount:Int):Boolean=synchronized(lock) {
+    fun recordVerifiedCampaignResult(clientId:String,netPnl:Double,feesKnown:Boolean,fillCount:Int):Boolean=synchronized(mutationLock) {
         if(!netPnl.isFinite() || fillCount<2) return@synchronized false
         val all=intents()
         val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
@@ -1163,6 +1165,8 @@ internal class NativeFuturesCampaignCoordinator(
     /** Record failures that happen before reconcile() is entered (for example, a busy or unpersisted Execution Door lease). */
     fun recordReconciliationBlocker(reason: String): JSONObject = synchronized(lock) {
         val safeReason = reason.trim().take(500).ifBlank { "reconciliation_blocked_before_exchange_snapshot" }
+        reconciliationFenceRevision++
+        reconciliationFenceReason = safeReason
         state = State.RECONCILE_REQUIRED
         lastBlocker = safeReason
         JSONObject()
@@ -1173,7 +1177,8 @@ internal class NativeFuturesCampaignCoordinator(
             .put("reconciliation_started", false)
     }
 
-    fun reconcile(): JSONObject = synchronized(reconciliationLock) {
+    fun reconcile(): JSONObject = synchronized(mutationLock) {
+        val fenceAtStart = synchronized(lock) { reconciliationFenceRevision }
         // A stale success cannot authorize a later stop mutation while the
         // account is being refreshed or when a REST call fails halfway.
         externalStopManagementSymbolsJson = "[]"
@@ -2109,6 +2114,8 @@ internal class NativeFuturesCampaignCoordinator(
                         allOpenAlgoOrders.optJSONObject(it)
                     }.filter { it.optString("symbol") == symbol }
                     val snapshotMatches = symbolAlgos != null &&
+                        symbolRows.size == symbolAlgos.length() &&
+                        symbolRows.all { it.optString("symbol") == symbol } &&
                         symbolRows.map(::signedExternalContractStopFingerprint).sorted() ==
                             accountRows.map(::signedExternalContractStopFingerprint).sorted()
                     val candidates = if (amount != null && mark != null)
@@ -3486,6 +3493,7 @@ internal class NativeFuturesCampaignCoordinator(
                 } catch (failure: Exception) {
                     val reason = "$symbol protection supervision failed: " +
                         safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(500)
+                    symbolResolutionFailures[symbol] = reason
                     actualRiskAuditBlocked = true
                     if (actualRiskAuditBlocker == null) actualRiskAuditBlocker = reason
                     lastBlocker = reason
@@ -3506,6 +3514,11 @@ internal class NativeFuturesCampaignCoordinator(
                         (0 until it.length()).mapNotNull { index -> it.optJSONObject(index) }
                     }?.filter { it.optString("symbol") == symbol }.orEmpty()
                     val snapshotMatches = symbolAlgos != null && accountAlgos != null &&
+                        symbolRows.size == symbolAlgos.length() &&
+                        symbolRows.all { it.optString("symbol") == symbol } &&
+                        (0 until accountAlgos.length()).all { index ->
+                            accountAlgos.optJSONObject(index)?.optString("symbol")?.isNotBlank() == true
+                        } &&
                         symbolRows.map(::signedExternalContractStopFingerprint).sorted() ==
                             accountRows.map(::signedExternalContractStopFingerprint).sorted()
                     val fullStops = if (signedAmount != null && mark != null && snapshotMatches)
@@ -3814,6 +3827,16 @@ internal class NativeFuturesCampaignCoordinator(
                     entryPriceConflicts.joinToString(",") +
                     "; verify exchange fills, open STOPs and account before resuming trading"
             }
+            synchronized(lock) {
+            val fenceChanged = reconciliationFenceRevision != fenceAtStart
+            if (fenceChanged) {
+                actualRiskAuditBlocked = true
+                actualRiskAuditBlocker = reconciliationFenceReason
+                lastBlocker = reconciliationFenceReason
+                verifiedRiskCapManagementAtMs = 0L
+                externalStopManagementSymbolsJson = "[]"
+                externalStopManagementVerifiedAtMs = 0L
+            }
             state = when {
                 anyUnprotected -> State.POSITION_UNPROTECTED
                 actualRiskAuditBlocked -> State.RECONCILE_REQUIRED
@@ -3833,7 +3856,8 @@ internal class NativeFuturesCampaignCoordinator(
             }
             JSONObject()
                 .put("ok", !anyUnprotected && !actualRiskAuditBlocked && !hasPendingExit)
-                .put("exchange_snapshot_complete", true)
+                .put("exchange_snapshot_complete", !fenceChanged && symbolResolutionFailures.isEmpty())
+                .put("reconciliation_fence_changed", fenceChanged)
                 .put("exchange_snapshot_started_at_ms", reconciliationStartedAtMs)
                 .put("exchange_snapshot_completed_at_ms", clock())
                 .put("external_open_orders",JSONArray(externalOrderObservationsJson))
@@ -3843,7 +3867,7 @@ internal class NativeFuturesCampaignCoordinator(
                 .put("verified_external_stop_management_at_ms",
                     externalStopManagementVerifiedAtMs)
                 .put("actual_risk_audit_blocked", actualRiskAuditBlocked)
-                .put("protected_over_cap_management_allowed", verifiedOverCap)
+                .put("protected_over_cap_management_allowed", verifiedOverCap && !fenceChanged)
                 .put("actual_risk_audit_blocker", actualRiskAuditBlocker ?: JSONObject.NULL)
                 .put("required_safety_exits", requiredSafetyExits)
                 .put("engine", "USD_M_FUTURES_TESTNET")
@@ -3861,12 +3885,14 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("unmanaged_positions",unmanagedPositions.length())
                     .put("protection_observations",protectionObservations.length())
                     .put("mode","PER_SYMBOL_ISOLATED")
-                    .put("state",if(symbolResolutionFailures.isEmpty() && unmanagedPositions.length()==0)
+                    .put("state",if(!anyUnprotected && !actualRiskAuditBlocked && symbolResolutionFailures.isEmpty() &&
+                        unmanagedPositions.length()==0 && !fenceChanged)
                         "HEALTHY" else "DEGRADED_FAIL_CLOSED"))
                 .put("pending_intents_checked", persisted.length())
                 .put("active_pending_entry", hasPendingEntry)
                 .put("active_pending_exit", hasPendingExit)
                 .put("blocker", lastBlocker ?: JSONObject.NULL)
+            }
         } catch (failure: Exception) {
             noteReconciliationPhase("SIGNED_RECONCILIATION_FAILED")
             state = State.RECONCILE_REQUIRED
@@ -3885,7 +3911,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Revalidate an observed liquidation breach before a distinct reduce-only exit. */
-    fun executeRequiredSafetyExit(request: JSONObject): JSONObject = synchronized(lock) {
+    fun executeRequiredSafetyExit(request: JSONObject): JSONObject = synchronized(mutationLock) {
         val symbol = request.optString("symbol")
         val entryClientId = request.optString("entry_client_id")
         val rows = intents()
@@ -3927,7 +3953,7 @@ internal class NativeFuturesCampaignCoordinator(
      * failed GET, unowned position, partial fill, or a merely missing local id.
      * It is an emergency risk reduction, NOT a TC2 strategy exit.
      */
-    fun executeRequiredUnprotectedSafetyExit(request: JSONObject): JSONObject = synchronized(lock) {
+    fun executeRequiredUnprotectedSafetyExit(request: JSONObject): JSONObject = synchronized(mutationLock) {
         fun blocked(why: String) = JSONObject().put("ok", false)
             .put("safe_rejection", true).put("mutation_attempted", false)
             .put("blocker", why)
@@ -4091,7 +4117,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Persist the entry request before any account/order mutation. */
-    fun submitPendingEntry(plan: EntryPlan): JSONObject {
+    fun submitPendingEntry(plan: EntryPlan): JSONObject = synchronized(mutationLock) {
         val attempt=java.util.UUID.randomUUID().toString()
         val preparedId=appendEntryPassport(plan,attempt,"PREPARED")
         if(preparedId==0L) {
@@ -4145,7 +4171,7 @@ internal class NativeFuturesCampaignCoordinator(
         if(eventId==0L) result.put("passport_audit_status","OUTCOME_WRITE_FAILED_RECONCILE_REQUIRED")
         // Diagnostic persistence failure after an accepted order NEVER retries that order.
         runCatching { recordEntryDecision(plan,result,attempt,maxOf(0L,eventId,preparedId)) }
-        return result
+        result
     }
     private fun recordEntryDecision(
         plan:EntryPlan,result:JSONObject,attempt:String,auditEventId:Long,
@@ -4226,7 +4252,7 @@ internal class NativeFuturesCampaignCoordinator(
         return result
     }
 
-    private fun submitPendingEntryLocked(submittedPlan: EntryPlan): JSONObject = synchronized(lock) {
+    private fun submitPendingEntryLocked(submittedPlan: EntryPlan): JSONObject = synchronized(mutationLock) {
         // An explicitly authorized *book-native* initial TC2 entry may reduce
         // leverage, never raise it. Other callers keep their configured value.
         // The persisted intent and every exchange write use this effective plan.
@@ -4765,7 +4791,7 @@ internal class NativeFuturesCampaignCoordinator(
     }
 
     /** Cancel unfilled entries on STOP/KILL without retrying ambiguous mutations. */
-    fun cancelPendingEntries(reason: String, onlySymbol: String? = null): JSONObject = synchronized(lock) {
+    fun cancelPendingEntries(reason: String, onlySymbol: String? = null): JSONObject = synchronized(mutationLock) {
         val adapter = adapterFactory()
         val all = intents()
         val openPositions = adapter.positions()
@@ -4946,7 +4972,7 @@ internal class NativeFuturesCampaignCoordinator(
         newStopPrice: String,
         clientAlgoId: String,
         reason: String = "UNSPECIFIED_STRUCTURAL_TRAIL"
-    ): JSONObject = synchronized(lock) {
+    ): JSONObject = synchronized(mutationLock) {
         val foreignOrderRiskOnly = state in setOf(State.RECONCILE_REQUIRED, State.POSITION_UNPROTECTED) &&
             clientAlgoId.startsWith("W2T_") &&
             externalStopManagementVerifiedAtMs>0L &&
@@ -5218,7 +5244,7 @@ internal class NativeFuturesCampaignCoordinator(
     private fun closePositionInternal(
         symbol:String,direction:Direction,quantity:String,clientOrderId:String,reason:String,
         partialReduction:Boolean,riskEmergencyVerified:Boolean
-    ): JSONObject = synchronized(lock) {
+    ): JSONObject = synchronized(mutationLock) {
         require(symbol in allowedSymbols)
         require(quantity.toBigDecimalOrNull()?.signum() == 1)
         require(clientOrderId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
@@ -5873,7 +5899,7 @@ internal class NativeFuturesCampaignCoordinator(
 
     /** GET-only closure backfill. Its evidence never grants trade ownership or
      * authorizes an exchange mutation. Unknown history remains visible as unknown. */
-    fun refreshOperatorClosedTradeHistory() = synchronized(lock) {
+    fun refreshOperatorClosedTradeHistory() = synchronized(mutationLock) {
         val rows=operatorSupervisions()
         if((0 until rows.length()).none { rows.getJSONObject(it).optString("state")=="CLOSED_PENDING_EVIDENCE" })
             return@synchronized
@@ -5917,7 +5943,7 @@ internal class NativeFuturesCampaignCoordinator(
 
     fun recordOperatorSupervisionObservation(
         symbol:String, status:String, reason:String, closedBarAtMs:Long=0L, proposedStop:Double?=null
-    ) = synchronized(lock) {
+    ) = synchronized(mutationLock) {
         require(status in setOf("WAITING_FOR_FIRST_CLOSED_H1","WAITING_FOR_STRUCTURE",
             "STOP_PROPOSED","TRAILED","RECOVERED","BLOCKED"))
         val rows=operatorSupervisions()
@@ -5948,7 +5974,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun enrollAutonomousRecoveredStopOnly(
         symbol:String, direction:String, observedQuantity:String,
         observedEntry:String, observedStop:String
-    ):JSONObject = synchronized(lock) {
+    ):JSONObject = synchronized(mutationLock) {
         require(symbol in allowedSymbols && direction in setOf("LONG","SHORT")) {
             "AUTONOMOUS_RECOVERY_SYMBOL_OR_DIRECTION_REJECTED"
         }
@@ -6061,7 +6087,7 @@ internal class NativeFuturesCampaignCoordinator(
     fun approveOperatorStopSupervision(
         symbol: String, quantity: String, entryPrice: String, stopPrice: String,
         confirmation: String
-    ): JSONObject = synchronized(lock) {
+    ): JSONObject = synchronized(mutationLock) {
         require(confirmation == "СОПРОВОЖДАТЬ ТОЛЬКО СТОП") {
             "Подтвердите режим сопровождения без новых входов и рыночных закрытий"
         }
@@ -6160,7 +6186,7 @@ internal class NativeFuturesCampaignCoordinator(
      */
     fun trailOperatorSupervisedStop(
         symbol:String, direction:Direction, proposedStop:String, newClientId:String
-    ):JSONObject = synchronized(lock) {
+    ):JSONObject = synchronized(mutationLock) {
         require(symbol in allowedSymbols && newClientId.startsWith("W2T_") &&
             newClientId.matches(Regex("[A-Za-z0-9_./:-]{1,36}")))
         val rows = operatorSupervisions()
@@ -6328,7 +6354,7 @@ internal class NativeFuturesCampaignCoordinator(
      * uncertain absence requires a later signed query and cancellation fence.
      * A confirmed new stop is always required before deleting the ORIGINAL stop.
      */
-    fun recoverOperatorSupervisedStop(symbol:String):JSONObject = synchronized(lock) {
+    fun recoverOperatorSupervisedStop(symbol:String):JSONObject = synchronized(mutationLock) {
         val rows=operatorSupervisions()
         val record=(0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
             .singleOrNull { it.optString("symbol")==symbol && it.optString("state")=="REPLACEMENT_UNRESOLVED" }
@@ -6508,7 +6534,7 @@ internal class NativeFuturesCampaignCoordinator(
             "pending_absent_since_ms")) record.remove(key)
     }
 
-    fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(lock) {
+    fun saveManagementState(symbol:String, clientId:String, state:JSONObject) = synchronized(mutationLock) {
         val all=intents()
         val owner=(0 until all.length()).mapNotNull { all.optJSONObject(it) }.singleOrNull {
             it.optString("client_id")==clientId && it.optString("symbol")==symbol && it.optString("intent_role","ENTRY")=="ENTRY"
