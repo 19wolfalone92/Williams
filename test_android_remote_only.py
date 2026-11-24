@@ -889,7 +889,9 @@ def test_scanner_diagnostic_does_not_pass_ready_at_zero_of_ten_or_stale_progress
     # Read-only diagnostic fields now come from one synchronized scanner
     # snapshot. READY must never be published before scanning=false.
     assert "@Synchronized\n    private fun scannerSnapshot(compactForCockpit: Boolean = false): JSONObject" in runtime
-    assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in runtime
+    # The candidate display is always compact, even when the selected
+    # market's separate status.decision_traces are included.
+    assert "scannerSnapshot(compactForCockpit = true)" in runtime
     assert "val scannerView = scannerSnapshot()" in runtime
     assert "val scannerUniverseMatches = observedSymbols.size == coreSymbols.size" in runtime
     assert 'val scannerComplete = scanObservedState in setOf("READY", "READY_BLOCKED") &&' in runtime
