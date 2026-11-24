@@ -4649,6 +4649,55 @@ private class NativeEngine(
         return futuresClosedCandleTimesContiguous(candles.map { it.t }, step)
     }
 
+    /**
+     * Restart/back-online recovery: request ONLY candles newer than the
+     * persisted cursor. A gap of >150 bars must not be "healed" by fetching
+     * just the newest 150 and silently skipping months of missed history.
+     * Each page is checked for exact native UTC continuity before atomic
+     * SQLite commit. Stale exchange UTC or a partial page remains NOT_READY;
+     * the next warmup/scan retries from the durable cursor.
+     *
+     * Does not touch Binance orders, private streams, STOP, or risk gates.
+     */
+    private fun catchUpNativeClosedCandles(
+        symbol:String,frame:String,fromOpenMs:Long,maxPages:Int=4
+    ):Boolean {
+        if(fromOpenMs<=0L) return false
+        var cursor=fromOpenMs
+        for(page in 0 until maxPages.coerceIn(1,8)) {
+            val verifiedNow=futuresMarketData.exchangeNowMs()
+            if(futuresMarketData.isLastClosedCandleCurrent(cursor,frame,verifiedNow))
+                return true
+            val rows=futuresMarketData.klines(symbol,frame,1000,startTime=cursor+1L)
+            val batch=ArrayList<MarketHistoryStore.Candle>(rows.length())
+            var expected=futuresMarketData.klineCloseTimeMs(cursor,frame)+1L
+            for(i in 0 until rows.length()) {
+                val row=rows.getJSONArray(i)
+                val opened=row.getLong(0)
+                val close=row.getLong(6)
+                if(!futuresMarketData.isCandleClosed(close,verifiedNow)) break
+                check(opened==expected) {
+                    "HISTORY_CATCHUP_GAP: $symbol/$frame expected=$expected got=$opened; " +
+                        "old SQLite cursor preserved"
+                }
+                val candle=CandleN(opened,row.getString(1).toDouble(),
+                    row.getString(2).toDouble(),row.getString(3).toDouble(),
+                    row.getString(4).toDouble(),row.getString(5).toDouble())
+                require(validNativeCandle(candle)) {
+                    "HISTORY_CATCHUP_INVALID_OHLCV: $symbol/$frame $opened"
+                }
+                batch+=MarketHistoryStore.Candle(
+                    opened,candle.o,candle.h,candle.l,candle.c,candle.v,close)
+                expected=futuresMarketData.klineCloseTimeMs(opened,frame)+1L
+            }
+            if(batch.isEmpty()) return false
+            historyStore.upsertBatch(symbol,frame,batch)
+            cursor=batch.last().openTime
+        }
+        return futuresMarketData.isLastClosedCandleCurrent(
+            cursor,frame,futuresMarketData.exchangeNowMs())
+    }
+
     private fun fetchCandles(
         symbol: String,
         frame: String,
@@ -4720,9 +4769,22 @@ private class NativeEngine(
         }
 
         val cacheKey = normalizedSymbol + ":" + frame + ":" + limit
-        val persistent = historyStore.loadRecent(normalizedSymbol, frame, limit)
-        val persistentCandles = persistent.map {
+        var persistent = historyStore.loadRecent(normalizedSymbol, frame, limit)
+        var persistentCandles = persistent.map {
             CandleN(it.openTime, it.open, it.high, it.low, it.close, it.volume)
+        }
+        // A cold app restart after days offline must restore EACH missing
+        // closed native bar from its durable SQLite cursor before regenerating
+        // indicators. A latest-150 REST tail may otherwise hide the gap.
+        if (persistent.size >= limit && !candleSeriesCurrent(persistentCandles,frame)) {
+            val caughtUp=catchUpNativeClosedCandles(
+                normalizedSymbol,frame,persistent.last().openTime)
+            if(!caughtUp) throw IllegalStateException(
+                "HISTORY_CATCHUP_IN_PROGRESS_OR_UNVERIFIED: $normalizedSymbol/$frame")
+            persistent=historyStore.loadRecent(normalizedSymbol,frame,limit)
+            persistentCandles=persistent.map {
+                CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+            }
         }
         if (persistent.size >= limit && candleSeriesCurrent(persistentCandles, frame) &&
             cachedFixedFrameKlinesValid(persistentCandles, frame)) {
