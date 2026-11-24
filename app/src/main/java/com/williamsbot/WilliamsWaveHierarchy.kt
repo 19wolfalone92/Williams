@@ -109,12 +109,19 @@ internal data class WilliamsWaveHierarchy(
 
 internal fun closedWilliamsWaveBars(bars: List<WilliamsWaveBar>, frame: String, asOf: Long): List<WilliamsWaveBar> {
     val duration = requireNotNull(williamsWaveFrames[frame]) { "UNSUPPORTED_FRAME" }
+    // Binance USD-M kline open times follow UTC interval grids. A shifted yet
+    // contiguous series (e.g. 1h bars starting at 00:15) must not be treated
+    // as native exchange history in H1/H4/D1 decisions or causal replay.
+    // Binance 1w starts Monday 00:00 UTC; Unix epoch is Thursday, so its
+    // calendar origin is Jan 5, 1970 rather than time zero.
+    val utcOriginMs = if (frame == "1w") 4L * 86_400_000L else 0L
     val closed = bars.filter { it.t <= asOf - duration }
     require(closed.size >= 40) { "INSUFFICIENT_CLOSED_HISTORY" }
     for ((i, b) in closed.withIndex()) {
         require(b.t >= 0 && listOf(b.o, b.h, b.l, b.c, b.v).all { it.isFinite() } &&
             minOf(b.o, b.l, b.c) > 0 && b.h >= maxOf(b.o, b.c, b.l) &&
             b.l <= minOf(b.o, b.c) && b.v >= 0) { "INVALID_OHLCV" }
+        require((b.t - utcOriginMs) % duration == 0L) { "OFF_UTC_INTERVAL_GRID" }
         require(i == 0 || b.t - closed[i-1].t == duration) { "GAPPED_OR_UNORDERED_HISTORY" }
     }
     // Never accept a missing entire closed bar as a valid wave observation.

@@ -306,13 +306,26 @@ internal fun CockpitDashboard(
                         color = if(cockpitKnownOpenPositionsLabel(status,now)=="—") AppColors.amber else AppColors.textMuted,
                         style = MaterialTheme.typography.labelSmall)
                 } },
-                second={ CockpitCard("Резерв риска", AppColors.amber) {
-                    Text(if (status.positionsSnapshotOk &&
+                second={ CockpitCard("Резерв кампаний", AppColors.amber) {
+                    val freshPositionProof = status.positionsSnapshotOk &&
                         CockpitDiagnostics.fresh(status.positionsSnapshotAtMs,
-                            System.currentTimeMillis(), CockpitDiagnostics.POSITION_TTL_MS))
+                            System.currentTimeMillis(), CockpitDiagnostics.POSITION_TTL_MS)
+                    Text(if (freshPositionProof)
                         cockpitNumber(status.reservedRiskPct * 100, 2) + "%" else "—",
                         style = MaterialTheme.typography.headlineSmall)
-                    Text("Лимит ${cockpitNumber(status.maxTotalRiskPct * 100)}%", style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
+                    Text("Лимит ${cockpitNumber(status.maxTotalRiskPct * 100)}% · учёт заявок",
+                        style = MaterialTheme.typography.labelSmall, color = AppColors.textMuted)
+                    // DIAG18: the recorded 0.64% was a conservative JOURNAL
+                    // reservation (historical SHORT + recovered LONG), NOT
+                    // measured downside of the unprotected LONG position.
+                    // Never show a journal reservation as confirmed loss risk.
+                    if (freshPositionProof && status.positions.any {
+                            it.qty != 0.0 &&
+                                (it.stop == null || it.stopVerificationStatus == "UNVERIFIED_OR_STALE")
+                        }) {
+                        Text("STOP не подтверждён · фактический риск неизвестен",
+                            style = MaterialTheme.typography.labelSmall, color = AppColors.amber)
+                    }
                 } }
             )
         }

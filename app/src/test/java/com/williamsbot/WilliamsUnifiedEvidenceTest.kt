@@ -248,4 +248,59 @@ class WilliamsUnifiedEvidenceTest {
             .getJSONObject("edition_observation_proof").getJSONObject(williamsNtdProfile).getString("state"))
     }
 
+
+    @Test fun diag18OppositeHistoricalShortAndRecoveredLongAreAccountQuarantineNotForgedBookSignals() {
+        // Exact diagnostic 18 shape: old TC2 SHORT remains OPEN_PROTECTED in
+        // historical journal; recovered unowned LONG is the only signed exposure.
+        // Do not certify old SHORT flat OR release the reserved risk from this
+        // read-only source projection.
+        val intents=JSONArray()
+            .put(JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+                .put("kind","STOP").put("direction","SHORT")
+                .put("strategy_profile",williamsTc2Profile)
+                .put("campaign_status","OPEN_PROTECTED")
+                .put("strategy_ownership_verified",true))
+            .put(JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+                .put("kind","RECOVERED_EXCHANGE_POSITION").put("direction","LONG")
+                .put("strategy_profile","UNKNOWN").put("campaign_status","POSITION_OPEN")
+                .put("strategy_ownership_verified",false))
+        val report=buildWilliamsUnifiedEvidence(scanner().put("scanner_state","READY_BLOCKED"),
+            status().put("futures_runtime",JSONObject().put("pending_intent_details",intents)),now)
+        assertEquals("ACCOUNT_QUARANTINED_OBSERVATION_ONLY",report.getString("status"))
+        assertEquals(0,report.getJSONArray("source_contract_errors").length())
+        assertEquals(1,report.getJSONArray("account_ownership_quarantines").length())
+        val quarantine=report.getJSONArray("account_ownership_quarantines").getJSONObject(0)
+        assertEquals("BTCUSDT",quarantine.getString("symbol"))
+        assertFalse(quarantine.getBoolean("can_release_risk_reservation"))
+        assertFalse(quarantine.getBoolean("can_authorize_new_entry"))
+        assertFalse(quarantine.getBoolean("can_authorize_stop_or_exit_mutation"))
+        assertEquals(1,report.getInt("unattributed_recovered_positions"))
+        assertEquals(0,report.getInt("active_campaigns_in_snapshot"))
+        val pair=report.getJSONArray("by_symbol").getJSONObject(0)
+        assertEquals(2,pair.getInt("active_owner_count"))
+        assertTrue(pair.getBoolean("historical_opposite_owner_quarantined_for_observation"))
+        assertTrue(pair.getBoolean("owner_is_unowned_exchange_recovery"))
+        assertEquals("LONG",pair.getString("owner_direction"))
+        assertEquals("RECOVERED_EXPOSURE_HISTORICAL_OPPOSITE_OWNER_QUARANTINE",
+            pair.getString("owner_snapshot_state"))
+        assertFalse(pair.getBoolean("other_strategies_can_trade_this_pair"))
+        assertFalse(report.getBoolean("is_execution_decision"))
+    }
+
+    @Test fun diag18SameDirectionOrTwoVerifiedOwnersStillFailSourceContract() {
+        val recovered=JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("kind","RECOVERED_EXCHANGE_POSITION").put("direction","LONG")
+            .put("campaign_status","POSITION_OPEN").put("strategy_ownership_verified",false)
+        val sameSide=JSONObject().put("symbol","BTCUSDT").put("role","ENTRY")
+            .put("kind","STOP").put("direction","LONG")
+            .put("strategy_profile",williamsTc2Profile).put("campaign_status","OPEN_PROTECTED")
+            .put("strategy_ownership_verified",true)
+        val same=buildWilliamsUnifiedEvidence(scanner(),status().put("futures_runtime",
+            JSONObject().put("pending_intent_details",JSONArray().put(recovered).put(sameSide))),now)
+        assertEquals("INVALID_SNAPSHOT",same.getString("status"))
+        val twoOwned=buildWilliamsUnifiedEvidence(scanner(),status().put("futures_runtime",
+            JSONObject().put("pending_intent_details",JSONArray().put(sameSide)
+                .put(JSONObject(sameSide.toString()).put("direction","SHORT")))),now)
+        assertEquals("INVALID_SNAPSHOT",twoOwned.getString("status"))
+    }
 }

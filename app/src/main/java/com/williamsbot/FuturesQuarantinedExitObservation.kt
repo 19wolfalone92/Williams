@@ -75,3 +75,33 @@ internal fun classifyUnqueryableFuturesExit(
         mayRetrySubmission = false
     )
 }
+
+/**
+ * Binance -2022 is an explicit REJECTED reduce-only order response, not a
+ * transport timeout. Scope this proof to the initial MARKET close POST:
+ * after a POST receipt is returned, a later GET/cleanup failure is NOT proof
+ * of non-submission. The exact failed client ID remains durably recorded.
+ *
+ * No local 4xx, timeout, -1021 clock error or failed signed GET may be
+ * reclassified as a definite MARKET exit rejection.
+ */
+internal fun isDefinitiveFuturesReduceOnlyPostRejection(
+    failure: Exception, closePostReturned: Boolean
+): Boolean = !closePostReturned &&
+    failure is FuturesHttpException &&
+    failure.statusCode == 400 &&
+    failure.exchangeCode == -2022 &&
+    failure.requestPath == "/fapi/v1/order"
+
+/** A durable negative POST receipt is NEVER a signed proof the position is flat. */
+internal fun isDurableFuturesReduceOnlyRejection(intent: JSONObject): Boolean =
+    intent.optString("intent_role") == "EXIT" &&
+    intent.optString("kind") == "MARKET_REDUCE_ONLY" &&
+    intent.optString("order_status") == "REJECTED" &&
+    intent.optString("exchange_status") == "EXIT_TERMINAL_POSITION_OPEN" &&
+    intent.optInt("rejection_http_status", 0) == 400 &&
+    intent.optInt("exchange_rejection_code", 0) == -2022 &&
+    intent.optBoolean("rejection_before_post_receipt", false) &&
+    intent.optLong("rejected_at_ms", 0L) > 0L &&
+    intent.optString("symbol").isNotBlank() &&
+    intent.optString("client_id").isNotBlank()

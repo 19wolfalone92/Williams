@@ -688,7 +688,12 @@ internal fun confirmedPendingEntriesAllowConcurrentAdmission(intents: JSONArray)
         val intent = intents.optJSONObject(i) ?: return false
         val role = intent.optString("intent_role", "ENTRY")
         if (role == "EXIT") {
-            if (intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED") {
+            // A definitive Binance HTTP -2022 POST rejection is a terminal
+            // non-placement proof, not an unresolved exit. It does not imply
+            // exchange flatness or permit entry without independent signed
+            // position, STOP, margin and risk gates.
+            if (intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED" &&
+                !isDurableFuturesReduceOnlyRejection(intent)) {
                 return false
             }
             continue
@@ -1609,6 +1614,13 @@ internal class NativeFuturesCampaignCoordinator(
                             .put("historical_flat_proof_preserved",true)
                         continue
                     }
+                    // DIAG18: an explicit Binance -2022 RESPONSE to a MARKET
+                    // reduce-only POST is a terminal rejected order, not a
+                    // submission-unknown transport timeout. Its exact durable
+                    // negative receipt cannot prove the position flat or
+                    // authorize a later retry. Continue signing/protecting all
+                    // live positions rather than poisoning reconciliation.
+                    if (isDurableFuturesReduceOnlyRejection(intent)) continue
                     val order = standardOrderOrNull(adapter, symbol, clientId)
                     if (order == null) {
                         val stillOpenStandard = (0 until allOpenOrders.length()).any { j ->
@@ -5277,13 +5289,19 @@ internal class NativeFuturesCampaignCoordinator(
             .put("exchange_status", "SUBMISSION_UNKNOWN")
             .put("created_at_ms", clock())
         intents.put(exitIntent)
+        val beforeExitCampaignStatus = managedEntry?.let { campaignLifecycleStatus(it) }
         managedEntry?.put("campaign_status", "EXIT_PENDING")
         saveIntents(intents)
         state = State.EXIT_PENDING
         lastBlocker = "exit_submission_and_exchange_confirmation_pending"
+        // Only a failure DURING the initial POST may qualify as a definitive
+        // rejected order. Once a POST returns, subsequent signed GET/cleanup
+        // errors MUST remain ambiguous and may never be replayed.
+        var closePostReturned = false
         try {
             adapter.requireOneWayMode()
             val result = adapter.closeMarketPosition(symbol, direction.name, quantity, clientOrderId)
+            closePostReturned = true
             val responseStatus = result.optString("status", "UNKNOWN").uppercase(Locale.US)
             exitIntent.put("exchange_order_id", result.optString("orderId", ""))
                 .put("exchange_status", responseStatus)
@@ -5423,17 +5441,39 @@ internal class NativeFuturesCampaignCoordinator(
             // Preserve the known flat/exit result if only protective-order cleanup
             // failed; reconciliation still blocks entry until the orphan is resolved.
             val flatConfirmed = exitIntent.optString("exchange_status").uppercase(Locale.US) == "EXIT_CONFIRMED"
-            if (!flatConfirmed) exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
+            val definitivelyRejected = isDefinitiveFuturesReduceOnlyPostRejection(
+                failure, closePostReturned
+            )
+            if (definitivelyRejected) {
+                // Binance explicitly refused this exact MARKET reduce-only POST.
+                // The position is NOT flat; record the terminal negative receipt
+                // and restore the entry's former lifecycle, preserving its STOP
+                // supervision. The immutable rejected EXIT client id is never
+                // reused, and new risk still needs full signed reconciliation.
+                exitIntent.put("exchange_status", "EXIT_TERMINAL_POSITION_OPEN")
+                    .put("order_status", "REJECTED")
+                    .put("rejection_http_status", 400)
+                    .put("exchange_rejection_code", -2022)
+                    .put("rejection_before_post_receipt", true)
+                    .put("rejected_at_ms", clock())
+                if (beforeExitCampaignStatus != null)
+                    managedEntry?.put("campaign_status", beforeExitCampaignStatus)
+            } else if (!flatConfirmed) {
+                exitIntent.put("exchange_status", "SUBMISSION_UNKNOWN")
+            }
             exitIntent.put("error", failure.message ?: failure.javaClass.simpleName)
             saveIntents(intents)
             state = State.RECONCILE_REQUIRED
-            lastBlocker = if (flatConfirmed) {
-                "position flat is exchange-confirmed, but protective-order cleanup remains unresolved"
-            } else {
-                "exit/protection cleanup unresolved; reconciliation before any retry"
+            lastBlocker = when {
+                definitivelyRejected ->
+                    "$symbol Binance rejected reduce-only MARKET exit (-2022); position remains open; reconcile signed orders and STOP, no blind retry"
+                flatConfirmed ->
+                    "position flat is exchange-confirmed, but protective-order cleanup remains unresolved"
+                else -> "exit/protection cleanup unresolved; reconciliation before any retry"
             }
             JSONObject().put("ok", false).put("state", state.name).put("blocker", lastBlocker)
                 .put("flat_confirmed", flatConfirmed)
+                .put("definitive_order_rejection", definitivelyRejected)
                 .put("protection_cleanup_pending", flatConfirmed)
                 .put("reconcile_required", true)
                 .put("error", failure.message ?: failure.javaClass.simpleName)
