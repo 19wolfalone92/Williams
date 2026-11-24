@@ -503,6 +503,15 @@ private class LocalRuntimeApi(context: Context) {
         StandaloneRuntime.request(appContext, "DELETE", path, null)
 }
 
+/** Background-decoded UI envelope. Never contains an execution permission. */
+private data class CockpitDecodedSnapshot(
+    val status: Status,
+    val candidates: List<Candidate>,
+    val trades: List<Trade>,
+    val marketPairs: List<MarketPair>,
+    val events: List<String>
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WilliamsApp(context: Context) {
@@ -550,33 +559,43 @@ fun WilliamsApp(context: Context) {
         else if (!loadMutex.tryLock()) return
         try {
             refreshing = scan
+            // DIAG20: parsing the status/candidates/trades/events is CPU + JSON
+            // allocation work. It used to run on Compose's MAIN dispatcher on
+            // every 5-second poll, causing visible jank although the worker
+            // heartbeat, heap and scanner were healthy at the diagnostic capture.
+            // Snapshot retrieval, data-model decoding and event formatting are
+            // now on Dispatchers.Default/IO; MAIN publishes only finished values.
+            val requestedDetails = tab == 1 || tab == 3
+            val requestedSymbol = selectedChartSymbol
             val payload = withContext(Dispatchers.IO) {
                 if (scan) api.get("/api/v1/scanner?refresh=true")
-                // Keep signed safety/risk/status updates at the same 5s cadence.
-                // The selected chart and primary symbol retain trace provenance,
-                // but the local UI no longer round-trips massive JSON via String.
-                val details = tab == 1 || tab == 3
-                api.cockpitSnapshot(includeDecisionTraces = details,
-                    selectedSymbol = if (details) selectedChartSymbol else null)
+                api.cockpitSnapshot(includeDecisionTraces = requestedDetails,
+                    selectedSymbol = if (requestedDetails) requestedSymbol else null)
             }
-            val source = payload.getJSONObject("status")
-            val scanner = payload.getJSONObject("scanner")
-            val loadedStatus = parseStatus(source)
-            val loadedCandidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray())
-            val loadedTrades = parseTrades(payload.optJSONArray("trades") ?: JSONArray())
-            val prices = source.optJSONObject("live_prices") ?: JSONObject()
-            val loadedPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
-                MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
+            val decoded = withContext(Dispatchers.Default) {
+                val source = payload.getJSONObject("status")
+                val scanner = payload.getJSONObject("scanner")
+                val prices = source.optJSONObject("live_prices") ?: JSONObject()
+                CockpitDecodedSnapshot(
+                    status = parseStatus(source),
+                    candidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray()),
+                    trades = parseTrades(payload.optJSONArray("trades") ?: JSONArray()),
+                    marketPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
+                        MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
+                    },
+                    events = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
+                        cockpitTime(it.optLong("E")) + " • " + it.optString("state") +
+                            " • " + it.optString("detail")
+                    }.reversed()
+                )
             }
             withContext(Dispatchers.Main) {
                 // Publish one envelope together; no screen combines independent status reads.
-                status = loadedStatus
-                candidates = loadedCandidates
-                trades = loadedTrades
-                marketPairs = loadedPairs
-                logs = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
-                    cockpitTime(it.optLong("E")) + " • " + it.optString("state") + " • " + it.optString("detail")
-                }.reversed()
+                status = decoded.status
+                candidates = decoded.candidates
+                trades = decoded.trades
+                marketPairs = decoded.marketPairs
+                logs = decoded.events
                 message = if (scan) "Сканирование запрошено" else "Данные обновлены"
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
