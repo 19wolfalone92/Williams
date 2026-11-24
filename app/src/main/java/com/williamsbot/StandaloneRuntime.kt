@@ -770,21 +770,19 @@ internal fun scannerSymbolIsolationBlockers(
     }.toMap()
 }
 
-/** Optional market metadata is an entry blocker only for its own contract. */
-internal fun scannerEntrySymbolBlockers(
-    approvedSymbols: Collection<String>,
-    analysisBlockers: Map<String, String>,
-    spreads: Map<String, Double>
-): Map<String, String> {
-    val result = analysisBlockers.toMutableMap()
-    approvedSymbols.distinct().forEach { symbol ->
-        val spread = spreads[symbol]
-        if ((spread == null || !spread.isFinite() || spread < 0.0) && !result.containsKey(symbol)) {
-            result[symbol] = "SYMBOL_SPREAD_UNAVAILABLE: current spread metadata is not verified"
-        }
-    }
-    return result
-}
+/** Only the selected contract's exact, current, durable H1 input can satisfy
+ * the automatic entry history gate. A completed analysis alone is insufficient. */
+internal fun scannerCandidateHistoryVerified(
+    candidate: List<CandleN>,
+    durable: List<CandleN>,
+    continuous: Boolean,
+    current: Boolean,
+    revisionMatches: Boolean
+): Boolean =
+    continuous && current && revisionMatches && candidate.size >= 150 &&
+        candidate.all { it.exchangeClosed && validNativeCandle(it) } &&
+        candidate.zipWithNext().all { (a,b) -> b.t-a.t == 3_600_000L } &&
+        candidate == durable.takeLast(candidate.size)
 
 /** START is the safe entry point for authoritative reconciliation. */
 internal fun runtimeStartButtonEnabled(
@@ -2468,7 +2466,10 @@ private class NativeEngine(
         return privateUserEventInboxAllowsExposure(snapshot)
     }
 
-    private fun executionReady(): Boolean =
+    // Keep the original conservative gate for non-scanner mutation paths.
+    private fun executionReady(): Boolean = executionReadyWithHistory(historyReady)
+
+    private fun executionReadyWithHistory(historyConfirmed:Boolean): Boolean =
         futuresExecutionAdapterReady &&
             privateEventInboxReadyForExposure() &&
             RuntimeServiceState.active &&
@@ -2489,7 +2490,7 @@ private class NativeEngine(
             accountFundedForEntry() &&
             dailyRiskBaselineReady() &&
             dailyEntryHalt().allowNewEntries &&
-            historyReady &&
+            historyConfirmed &&
             futuresFsmAllowsEntry() &&
             futuresLossStreakGuard().allowNewEntries &&
             !equityCircuitBreaker.isTripped()
@@ -2746,6 +2747,8 @@ private class NativeEngine(
             .put("ok", running && !reconcileRequired && !killLatched &&
                 coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING"))
             .put("execution_ready", enabled)
+            .put("automatic_entry_common_gate_ready", executionReadyWithHistory(readOnlyH1Ready) && !activeReconciliation)
+            .put("automatic_entry_history_scope","EXACT_DURABLE_H1_PER_CANDIDATE")
             .put("service", "williams-native")
             .put("version", BuildConfig.VERSION_NAME)
             .put("standalone", true)
@@ -3288,9 +3291,9 @@ private class NativeEngine(
                             warmCoreHistoryAsync(generation)
                         }
                         // The H1 read-only scanner works as soon as ONE
-                        // decision frame is ready. Trading additionally
-                        // requires all approved H1 series + independent safety
-                        // admission; partial chart data is never an entry pass.
+                        // decision frame is ready. Each automatic entry still
+                        // needs its own exact, current durable H1 evidence and
+                        // all account-wide financial/transport safety gates.
                         if(readOnlyH1Ready) {
                             schedulePersistentHistoryBackfill(generation)
                             requestScan()
@@ -5414,7 +5417,7 @@ private class NativeEngine(
             scannerState = gateState
             scannerError = when (gateState) {
                 "STOPPED" -> "Runtime is stopped; press START after Futures credentials are configured"
-                "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for closed H1 history for all ${coreSymbols.size} approved contracts"
+                "WAITING_FOR_HISTORY" -> historyLastError ?: "Waiting for the first verified closed H1 working set"
                 "WAITING_FOR_MARKET_DATA" -> restLastError ?: "Futures REST market data is stale or unavailable"
                 else -> "Read-only scanner data gate is not ready: " + gateState
             }
@@ -8213,6 +8216,18 @@ private class NativeEngine(
         return true
     }
 
+    private fun candidateHistoryCurrent(candidate:BaseAnalysis):Boolean = runCatching {
+        if (!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) return@runCatching false
+        val now=futuresMarketData.cachedExchangeNowMs()
+        val durable=durableWorkingHistory(candidate.symbol,"1h",candidate.candles.size.coerceAtLeast(150))
+        scannerCandidateHistoryVerified(candidate.candles,durable.candles,durable.continuous,
+            candleSeriesCurrent(durable.candles,"1h",now),
+            historyStore.indicatorCacheRevision(candidate.symbol,"1h")==durable.revision)
+    }.getOrDefault(false)
+
+    private fun executionReadyForCandidate(candidate:BaseAnalysis):Boolean =
+        executionReadyWithHistory(candidateHistoryCurrent(candidate))
+
     private fun submitNativeFuturesCampaignEntry(candidate: BaseAnalysis) {
         try { submitNativeFuturesCampaignEntryChecked(candidate) } catch(failure:Exception) {
             rejectDecision(candidate.symbol,failure.message ?: failure.javaClass.simpleName)
@@ -8231,7 +8246,7 @@ private class NativeEngine(
         // candidate must be given a fresh account/STOP reconciliation before
         // rejecting it as stale; all existing admission checks still apply.
         if (!refreshSignedProofForEntryIfNeeded(symbol,"CANDIDATE")) return
-        if (!executionReady()) return rejectDecision(symbol,
+        if (!executionReadyForCandidate(candidate)) return rejectDecision(symbol,
             "RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
         val sessionClockMs = runCatching { futuresMarketData.exchangeNowMs() }.getOrElse { failure ->
             lastError = "FUTURES_SESSION_CLOCK_UNAVAILABLE: " +
@@ -8255,7 +8270,7 @@ private class NativeEngine(
             false
         }
         if (!dailyLossAllowsEntry) return rejectDecision(symbol,"DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED: "+lastError)
-        if (!executionReady() || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
+        if (!executionReadyForCandidate(candidate) || !candidate.campaignReady) return rejectDecision(symbol,"RUNTIME_OR_CAMPAIGN_NOT_READY: running=$running; paused=$paused; reconcile=$reconcileRequired; "+candidate.reason)
         // TC2 submits deferred STOP_MARKET entries: the exchange executes
         // only after its future CONTRACT_PRICE breakout. Present bid/ask cannot
         // predict that future book and must not veto the H1 STOP placement.
@@ -8676,7 +8691,7 @@ private class NativeEngine(
         // consumed most of the original REST freshness budget. Refresh before
         // reserving the durable entry Door, never while a lease is held.
         if (!refreshSignedProofForEntryIfNeeded(symbol,"FINAL_PREFLIGHT")) return
-        if (!executionReady()) return rejectDecision(symbol,
+        if (!executionReadyForCandidate(candidate)) return rejectDecision(symbol,
             "PRE_ENTRY_SIGNED_REFRESH_CHANGED_ACCOUNT_OR_EXECUTION_GATE")
         val result = withCampaignMutation(
             symbol = symbol,
@@ -8811,6 +8826,12 @@ private class NativeEngine(
                             ": last exchange-mutation H1 check deferred new TC2 entry; existing protective STOP unchanged")
                         .put("final_h1_context_as_of_ms",finalH1AsOf)
                 }
+            }
+            // Re-check the selected contract's exact durable H1 input and all
+            // shared financial gates after the read-only preflight. A corrected
+            // bar or an hourly rollover invalidates the candidate, not its peers.
+            check(executionReadyForCandidate(candidate)) {
+                "H1_CANDIDATE_OR_SHARED_GATE_CHANGED_BEFORE_SUBMISSION"
             }
             // The coordinator still performs signed position/STOP and transport
             // checks. Reject BEFORE writing an ENTRY intent if fewer than 20s
@@ -9027,9 +9048,6 @@ private class NativeEngine(
         val perSymbolScanBlockers = scannerSymbolIsolationBlockers(
             coreSymbols, ranked.map { it.symbol }, symbolErrors
         )
-        val perSymbolEntryBlockers = scannerEntrySymbolBlockers(
-            coreSymbols, perSymbolScanBlockers, spreads
-        )
         if (completed.timedOut) scannerError = scannerError
             ?: "Futures H1 scan exceeded its shared 60s deadline; " +
                 (futures.size - completed.completedCount) + " symbol tasks unfinished"
@@ -9065,7 +9083,7 @@ private class NativeEngine(
         lastSymbolsScanned = ranked.size
         lastScannerSymbolErrors = JSONObject().apply {
             symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
-            perSymbolEntryBlockers.forEach { (symbol,reason) ->
+            perSymbolScanBlockers.forEach { (symbol,reason) ->
                 if (!has(symbol)) put(symbol,reason)
             }
         }
@@ -9168,7 +9186,7 @@ private class NativeEngine(
         // A failed/unfinished symbol remains blocked on its own. Valid symbols
         // continue through the same account-wide risk, reconciliation and
         // exchange-side preflights; partial analysis is not an account-wide veto.
-        perSymbolEntryBlockers.forEach { (symbol,reason) -> rejectDecision(symbol,reason) }
+        perSymbolScanBlockers.forEach { (symbol,reason) -> rejectDecision(symbol,reason) }
         if (ranked.isEmpty()) {
             scannerError = scannerError
                 ?: "No approved symbol completed a valid H1 analysis; no entry candidates are available"
@@ -9216,7 +9234,7 @@ private class NativeEngine(
         }
         ranked.filter { it.symbol in openSymbols }.forEach { rejectDecision(it.symbol,"SYMBOL_RESERVED_BY_POSITION_OR_PENDING_ORDER") }
         for (candidate in ranked
-            .filter { it.campaignReady && it.symbol !in openSymbols && it.symbol !in perSymbolEntryBlockers }
+            .filter { it.campaignReady && it.symbol !in openSymbols && it.symbol !in perSymbolScanBlockers }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
         ) {
             val intentsBefore = futuresCampaignCoordinator.intentsSnapshot().length()
@@ -9229,7 +9247,7 @@ private class NativeEngine(
             }
             val intentsAfter = afterSnapshot.getOrThrow()
             if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED ||
-                !executionReady() || intentsAfter > intentsBefore
+                !executionReadyWithHistory(readOnlyH1Ready) || intentsAfter > intentsBefore
             ) break
             // An exception is not proof of zero mutation, even if the intent
             // count is unchanged. Stop this pass on uncertainty. Ordinary
@@ -14499,7 +14517,7 @@ private class NativeEngine(
                 }
             }
             repairStaleMarketStreams()
-            if (historyReady && !scanning && !paused) {
+            if (readOnlyH1Ready && !scanning && !paused) {
                 requestScan()
                 actions.put("futures_scanner_reconnect_requested")
             }

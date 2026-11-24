@@ -12,7 +12,7 @@ def test_no_all_symbol_fail_when_shared_binance_utc_missing():
     # remains a global clock blocker.
     assert "val completeScan = perSymbolScanBlockers.isEmpty()" in src
     assert "scannerSymbolIsolationBlockers(" in src
-    assert "perSymbolEntryBlockers.forEach" in src
+    assert "perSymbolScanBlockers.forEach" in src
     assert 'if (!completeScan) { coreSymbols.forEach { rejectDecision' not in src
     assert 'if (clockUnavailable) {' in src
     assert "EXCHANGE_CLOCK_UNVERIFIED" in src

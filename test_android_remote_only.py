@@ -120,7 +120,7 @@ def test_android_market_socket_uses_futures_demo_endpoint_and_gates_entries():
     assert "private fun marketWebSocketFresh" in runtime
     assert "marketWebSocketFresh() &&" in runtime
     assert 'add("market_websocket_disconnected_or_stale")' in runtime
-    assert "if (!executionReady() || !candidate.campaignReady) return" in runtime
+    assert "if (!executionReadyForCandidate(candidate) || !candidate.campaignReady) return" in runtime
     # Validate the actual Kotlin REST base declaration, not a matching
     # substring in a comment, a spoofed URL or an unrelated literal.
     declared_base = re.search(
@@ -857,10 +857,11 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
     assert "смена графика не меняет торговлю" in ui
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
     assert "val perSymbolScanBlockers = scannerSymbolIsolationBlockers(" in runtime
-    assert "val perSymbolEntryBlockers = scannerEntrySymbolBlockers(" in runtime
-    assert "perSymbolEntryBlockers.forEach" in runtime
-    assert "it.symbol !in perSymbolEntryBlockers" in runtime
-    assert "SYMBOL_SPREAD_UNAVAILABLE" in runtime
+    assert "perSymbolScanBlockers.forEach" in runtime
+    assert "it.symbol !in perSymbolScanBlockers" in runtime
+    assert "executionReadyWithHistory(candidateHistoryCurrent(candidate))" in runtime
+    assert "H1_CANDIDATE_OR_SHARED_GATE_CHANGED_BEFORE_SUBMISSION" in runtime
+    assert "SYMBOL_SPREAD_UNAVAILABLE" not in runtime
     assert "if (!completeScan) { coreSymbols.forEach { rejectDecision" not in runtime
     assert "marketDataFresh = marketDataFresh()" in runtime
     assert "coarseMetadataMissing.isEmpty()" not in runtime

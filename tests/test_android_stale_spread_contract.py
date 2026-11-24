@@ -45,11 +45,11 @@ def test_python_scanner_does_not_veto_future_stop_on_current_spread():
     assert "spread_pct = -1.0" in scanner
 
 
-def test_missing_spread_blocks_only_affected_symbol_and_unknown_spread_ranks_last():
+def test_missing_coarse_spread_cannot_veto_stop_and_unknown_spread_ranks_last():
     assert "spreads[symbol]=(ask-bid)/bid" in SOURCE
-    assert "scannerEntrySymbolBlockers(" in SOURCE
-    assert "spread < 0.0" in SOURCE
-    assert "it.symbol !in perSymbolEntryBlockers" in SOURCE
+    assert "scannerEntrySymbolBlockers(" not in SOURCE
+    assert "SYMBOL_SPREAD_UNAVAILABLE" not in SOURCE
+    assert "it.symbol !in perSymbolScanBlockers" in SOURCE
     assert "it.spreadPct.takeIf" in SOURCE
     assert "Double.POSITIVE_INFINITY" in SOURCE
     assert "coarseMetadataMissing.isEmpty()" not in SOURCE
