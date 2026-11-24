@@ -246,7 +246,8 @@ class MarketHistoryStore(context: Context) :
         symbol: String,
         interval: String,
         candles: List<Candle>,
-        complete: Boolean? = null
+        complete: Boolean? = null,
+        missingOnly: Boolean = false
     ) {
         if (candles.isEmpty()) return
         val db = writableDatabase
@@ -285,7 +286,7 @@ class MarketHistoryStore(context: Context) :
                         cursor.getDouble(3) == c.low && cursor.getDouble(4) == c.close &&
                         cursor.getDouble(5) == c.volume
                 }
-                if (existing == true) continue
+                if (existing == true || (missingOnly && existing != null)) continue
                 insert.clear()
                 insert.put("symbol", symbol)
                 insert.put("interval", interval)
@@ -341,6 +342,18 @@ class MarketHistoryStore(context: Context) :
                 state,
                 SQLiteDatabase.CONFLICT_REPLACE
             )
+            // If the previous database was fully scanned, every additional or
+            // corrected row in this transaction was validated above and its
+            // adjacent edges maintained by the trigger. Advance without rescanning.
+            if(changed) {
+                val priorAudit = db.rawQuery("SELECT scanned_through FROM history_gap_audit WHERE symbol=? AND interval=?",
+                    arrayOf(symbol,interval)).use { if(it.moveToFirst()) it.getLong(0) else 0L }
+                if((priorValid && prior!=null && priorAudit==prior[1]) ||
+                    (added>0L && row[2]==added)) {
+                    db.execSQL("INSERT OR REPLACE INTO history_gap_audit(symbol,interval,scanned_through) VALUES(?,?,?)",
+                        arrayOf(symbol,interval,row[1]))
+                }
+            }
             // Any overlapping REST correction or freshly CLOSED WS candle
             // invalidates the derived indicator cache, including when the
             // latest open time is unchanged but its OHLCV was corrected.
@@ -759,7 +772,8 @@ class MarketHistoryStore(context: Context) :
                 "complete",
                 "candle_count",
                 "oldest_open_time",
-                "newest_open_time"
+                "newest_open_time",
+                "last_error"
             ),
             null,
             null,
@@ -777,6 +791,7 @@ class MarketHistoryStore(context: Context) :
                     .put("count", cursor.getLong(3))
                     .put("oldest_open_time", cursor.getLong(4))
                     .put("newest_open_time", cursor.getLong(5))
+                    .put("last_error",if(cursor.isNull(6)) JSONObject.NULL else cursor.getString(6))
             }
         }
 
@@ -784,9 +799,12 @@ class MarketHistoryStore(context: Context) :
         readableDatabase.rawQuery("SELECT symbol,interval,scanned_through FROM history_gap_audit",null).use { c ->
             while(c.moveToNext()) audit[c.getString(0) to c.getString(1)]=c.getLong(2)
         }
-        val gaps = HashMap<Pair<String,String>,Pair<Long,Long>>()
-        readableDatabase.rawQuery("SELECT symbol,interval,COUNT(*),MIN(start_ms) FROM history_gap GROUP BY symbol,interval",null).use { c ->
-            while(c.moveToNext()) gaps[c.getString(0) to c.getString(1)]=c.getLong(2) to c.getLong(3)
+        val gaps = HashMap<Pair<String,String>,Triple<Long,Long,Long>>()
+        readableDatabase.rawQuery("SELECT g.symbol,g.interval,g.n,g.first_start,"+
+            "(SELECT MAX(c.open_time) FROM candles c WHERE c.symbol=g.symbol AND c.interval=g.interval "+
+            "AND c.open_time<g.first_start) FROM "+
+            "(SELECT symbol,interval,COUNT(*) AS n,MIN(start_ms) AS first_start FROM history_gap GROUP BY symbol,interval) g",null).use { c ->
+            while(c.moveToNext()) gaps[c.getString(0) to c.getString(1)]=Triple(c.getLong(2),c.getLong(3),c.getLong(4))
         }
         val invalid = HashSet<Pair<String,String>>()
         readableDatabase.rawQuery("SELECT DISTINCT symbol,interval FROM history_invalid_grid",null).use { c ->
@@ -820,7 +838,7 @@ class MarketHistoryStore(context: Context) :
                     .put("last_continuous_verified_open_ms",
                         if(key in invalid || auditedThrough==0L) JSONObject.NULL
                         else if(gap==null || gap.second>auditedThrough) auditedThrough
-                        else JSONObject.NULL)
+                        else if(gap.third>0L) minOf(auditedThrough,gap.third) else JSONObject.NULL)
                 val readiness = historyReadinessStatus(interval, count, complete)
                 row.put("full_history_complete", complete)
                     .put("minimum_working_set_count", readiness.minimumWorkingSetCount)
