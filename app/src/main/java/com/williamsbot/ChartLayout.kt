@@ -51,3 +51,34 @@ internal fun chartIntervalEnd(openAt: Long, interval: String): Long? = runCatchi
         else -> return null
     }))
 }.getOrNull()
+
+/**
+ * UI-only candle refresh cadence. Quotes remain on their independent 2s
+ * reader and exchange/STOP reconciliation is NOT rate-limited here.
+ *
+ * A 6000-candle chart fetch rebuilds indicator/fractal arrays for the
+ * whole requested history. Repeating it every 30 seconds on H1/H4/D1
+ * cannot produce a newly closed candle between candle boundaries.
+ * Refresh just after the NEXT expected close, with a bounded 5-minute
+ * liveness probe; reconnects and temporarily stale histories still retry.
+ *
+ * Phone wall time is only a UI refresh hint, NEVER a signed exchange clock
+ * or authority to trade. An invalid/not-yet-closed history retries at 30s.
+ */
+internal fun cockpitChartNextRefreshDelayMs(
+    lastClosedCandleOpenMs: Long,
+    interval: String,
+    deviceNowMs: Long,
+    minMs: Long = 30_000L,
+    maxMs: Long = 300_000L
+): Long {
+    require(minMs > 0L && maxMs >= minMs)
+    if (lastClosedCandleOpenMs <= 0L || deviceNowMs <= 0L) return minMs
+    val lastClosedAt = chartIntervalEnd(lastClosedCandleOpenMs, interval)
+        ?: return minMs
+    val nextClosedAt = chartIntervalEnd(lastClosedAt, interval)
+        ?: return minMs
+    if (nextClosedAt <= deviceNowMs) return minMs
+    val tillRefresh = (nextClosedAt - deviceNowMs).coerceAtLeast(0L) + 2_000L
+    return tillRefresh.coerceIn(minMs, maxMs)
+}
