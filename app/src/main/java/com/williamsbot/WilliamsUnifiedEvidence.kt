@@ -13,7 +13,7 @@ internal fun buildWilliamsUnifiedEvidence(
     scanner: JSONObject, status: JSONObject, nowMs: Long
 ): JSONObject {
     val selected = status.optString("strategy_profile")
-    // This deployment executes independently owned TC2/NTD lifecycles and observes Course.
+    // NEW Futures risk executes TC2 ONLY. NTD/Course are observers; any already-open legacy NTD/Course campaign retains source-pinned safety management.
     // The old evidence page required WILLIAMS_UNIFIED, thereby declaring
     // every correct 4.38 TC2-live scan WRONG_PROFILE.
     val coordinator = status.optJSONObject("futures_runtime")
@@ -266,6 +266,6 @@ internal fun buildWilliamsUnifiedEvidence(
         .put("live_tc2_opposing_symbol_count",tc2Conflicts)
         .put("live_source_opposing_symbol_count",liveSourceConflicts)
         .put("is_execution_decision", false)
-        .put("completeness_warning", "Cached H1 signals only. TC2 and NTD have independent source-owned H1 execution, risk and Binance checks; Course OBSERVE only. Source snapshots are not fills, owner evidence, or PnL. No M15 confirmation is required.")
+        .put("completeness_warning", "Cached H1 signals only. ONLY TC2 can initiate new exposure. NTD and Course are OBSERVE-only for new exposure; existing verified legacy campaigns can still be protected. Every live TC2 order independently requires signed H1/risk/Binance proofs. This snapshot is not an order fill, STOP, owner proof or PnL. No M15 confirmation is required.")
         .put("last_runtime_error_unattributed", status.optString("last_error").take(300))
 }
