@@ -4,6 +4,7 @@ Android helper lifecycle and Kotlin transaction code require separate device tes
 from pathlib import Path
 import re
 import sqlite3
+import random
 
 STORE = Path(__file__).resolve().parents[1] / "app/src/main/java/com/williamsbot/MarketHistoryStore.kt"
 HOUR = 3_600_000
@@ -93,4 +94,20 @@ def test_large_missing_range_is_one_row(tmp_path):
     with db:
         put(db, range(11, 511))
     assert gaps(db) == [(511*HOUR, 10010*HOUR)]
+    db.close()
+
+
+def test_randomized_against_independent_sorted_reference(tmp_path):
+    db = open_store(tmp_path / "market.db")
+    rng = random.Random(932)
+    seen = set()
+    for _ in range(2000):
+        h = rng.randrange(10, 2000)
+        with db:
+            put(db, [h])
+        seen.add(h)
+        ordered = sorted(seen)
+        expected = [((a + 1) * HOUR, b * HOUR)
+                    for a, b in zip(ordered, ordered[1:]) if b > a + 1]
+        assert gaps(db) == expected
     db.close()
