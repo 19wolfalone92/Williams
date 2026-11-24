@@ -459,25 +459,35 @@ class MarketHistoryStore(context: Context) :
             revision!=indicatorCacheRevision(symbol,interval)) return false
         val json=payload.toString()
         if(json.length>65_536) return false
-        // Multiple windows (150 strategy bars and 6000 chart bars) can
-        // coexist at the SAME source revision. Remove stale rows only when
-        // source OHLCV changed, not when another window was requested.
-        writableDatabase.delete("closed_indicator_cache",
-            "symbol=? AND interval=? AND source_revision<>?",
-            arrayOf(symbol,interval,revision.toString()))
-        val row=ContentValues().apply {
-            put("symbol",symbol);put("interval",interval)
-            put("model","$closedIndicatorModelVersion:$fingerprint")
-            put("source_revision",revision)
-            put("source_first_ms",firstMs)
-            put("source_last_ms",lastMs)
-            put("source_rows",rows)
-            put("payload",json)
+        val db=writableDatabase
+        return db.transaction {
+            // A matching latest timestamp is not proof of matching OHLCV.
+            // Re-read the exact persisted window under the SAME transaction.
+            val actual=loadRecentSnapshot(symbol,interval,rows,lastMs)
+            if(actual.revision!=revision || !actual.continuous ||
+                actual.candles.size!=rows || actual.candles.first().openTime!=firstMs ||
+                actual.candles.last().openTime!=lastMs || actual.fingerprint!=fingerprint)
+                return@transaction false
+            db.delete("closed_indicator_cache",
+                "symbol=? AND interval=? AND source_revision<>?",
+                arrayOf(symbol,interval,revision.toString()))
+            val row=ContentValues().apply {
+                put("symbol",symbol);put("interval",interval)
+                put("model","$closedIndicatorModelVersion:$fingerprint")
+                put("source_revision",revision)
+                put("source_first_ms",firstMs)
+                put("source_last_ms",lastMs)
+                put("source_rows",rows)
+                put("payload",json)
+            }
+            val saved=db.insertWithOnConflict("closed_indicator_cache",null,row,
+                SQLiteDatabase.CONFLICT_REPLACE)!=-1L
+            if(saved) db.execSQL(
+                "DELETE FROM closed_indicator_cache WHERE symbol=? AND interval=? AND rowid NOT IN ("+
+                "SELECT rowid FROM closed_indicator_cache WHERE symbol=? AND interval=? "+
+                "ORDER BY rowid DESC LIMIT 8)",arrayOf(symbol,interval,symbol,interval))
+            saved
         }
-        return writableDatabase.insertWithOnConflict(
-            "closed_indicator_cache",null,row,
-            SQLiteDatabase.CONFLICT_REPLACE
-        )!=-1L
     }
 
     @Synchronized
@@ -595,6 +605,35 @@ class MarketHistoryStore(context: Context) :
             }
         }
         return out.asReversed()
+    }
+
+    /** One SQLite transaction owns both the row content and its revision.
+     * Other SQLiteOpenHelper instances cannot interleave a write here. */
+    internal data class CandleSnapshot(
+        val symbol:String, val interval:String, val revision:Long,
+        val candles:List<Candle>, val fingerprint:String, val continuous:Boolean
+    ) {
+        val environment:String get() = "BINANCE_USDM_DEMO"
+        val source:String get() = "CONTRACT_PRICE"
+    }
+
+    @Synchronized
+    internal fun loadRecentSnapshot(symbol:String,interval:String,limit:Int,
+        beforeMs:Long?=null):CandleSnapshot {
+        val db=writableDatabase
+        return db.transaction {
+            val rows=java.util.Collections.unmodifiableList(
+                ArrayList(loadRecent(symbol,interval,limit,beforeMs)))
+            val continuous=rows.isNotEmpty() && rows.all {
+                nativeHistoryCloseMs(it.openTime,interval)==it.closeTime &&
+                    validNativeCandle(CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume))
+            } && rows.zipWithNext().all { (a,b)->a.closeTime+1L==b.openTime }
+            val fingerprint=closedCandleFingerprint(rows.map {
+                CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
+            })
+            CandleSnapshot(symbol,interval,indicatorCacheRevision(symbol,interval),rows,
+                fingerprint,continuous)
+        }
     }
 
     @Synchronized
