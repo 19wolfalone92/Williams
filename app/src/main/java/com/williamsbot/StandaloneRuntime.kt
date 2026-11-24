@@ -4599,7 +4599,19 @@ private class NativeEngine(
                                 incomplete++
                             } else {
                                 successes++
-                                if (!historyStore.isComplete(symbol, frame)) incomplete++
+                                // An archive may be complete backwards (reached
+                                // earliest Binance history) yet lag thousands
+                                // of newer bars after an extended offline
+                                // period. Keep the 30s bounded catch-up cycle
+                                // until BOTH ends are current; do not sleep
+                                // five minutes with 4000+ missed M5 candles.
+                                val completeBackward=historyStore.isComplete(symbol,frame)
+                                val newest=historyStore.newest(symbol,frame)
+                                val currentTail=runCatching {
+                                    futuresMarketData.isLastClosedCandleCurrent(
+                                        newest,frame,futuresMarketData.exchangeNowMs())
+                                }.getOrDefault(false)
+                                if (!completeBackward || !currentTail) incomplete++
                             }
                             // Allow new-order protection, scanning and foreground UI
                             // to consume exchange-rate and device I/O budgets first.
