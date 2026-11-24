@@ -4312,7 +4312,8 @@ private class NativeEngine(
             k.optString("v").toDoubleOrNull() ?: return,
             exchangeClosed=k.optBoolean("x",false)
         )
-        if (!validNativeCandle(candle) || nativeHistoryCloseMs(candle.t,frame)!=k.optLong("T")) {
+        if (!validNativeCandle(candle) || !futuresMarketData.nativeKlineOpenAligned(candle.t,frame) ||
+            futuresMarketData.klineCloseTimeMs(candle.t, frame)!=k.optLong("T")) {
             lastError="INVALID_MARKET_KLINE: $symbol $frame; observation ignored"
             return
         }
