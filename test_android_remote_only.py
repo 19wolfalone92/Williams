@@ -773,15 +773,19 @@ def test_android_websocket_closed_candles_are_persisted_before_history_readiness
     fetch = runtime.split("private fun fetchCandles(", 1)[1].split(
         "\n    private fun ", 1
     )[0]
-    live_cache = fetch.split("liveCandleCache[liveKey]?.let", 1)[1].split(
-        "val cacheKey =", 1
-    )[0]
-    assert "historyStore.upsertBatch(" in live_cache
-    assert "closed.takeLast(limit).map" in live_cache
-    assert "return closed.takeLast(limit)" in live_cache
-    assert live_cache.index("historyStore.upsertBatch(") < live_cache.index(
-        "return closed.takeLast(limit)"
-    )
+    # The former mutable WS cache seeded SQLite, then returned its own list.
+    # The stronger replacement admits only the revision-bound durable window.
+    assert "liveCandleCache" not in fetch
+    assert "durableWorkingHistory(normalizedSymbol,frame,limit)" in fetch
+    assert "durable.continuous" in fetch
+    assert "historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision" in fetch
+    assert fetch.index("durable.continuous") < fetch.index("return closed")
+    assert fetch.index("historyStore.upsertBatch(") < fetch.index("val committed=durableWorkingHistory")
+    assert fetch.index("==committed.revision") < fetch.index("return verified")
+    # Real SQLite mutation/restart/CAS is exercised separately on Android.
+    integration = _read(ANDROID.parent / "androidTest/java/com/williamsbot/HistoryStoreInstrumentation.kt")
+    assert "expectedRevision=rev" in integration
+    assert "historyContinuityAudited" in integration
 
 
 def test_android_settings_do_not_advertise_legacy_fixed_tp_or_position_sizing():
