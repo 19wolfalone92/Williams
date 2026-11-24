@@ -31,7 +31,7 @@ internal val closedIndicatorCacheSchema = listOf(
         PRIMARY KEY(symbol,interval,source_first_ms,source_last_ms,source_rows))"""
 )
 
-internal const val closedIndicatorModelVersion = "WILLIAMS_CLOSED_INDICATORS_V1"
+internal const val closedIndicatorModelVersion = "WILLIAMS_CLOSED_INDICATORS_V2"
 
 internal data class HistoryReadinessStatus(
     val minimumWorkingSetCount: Int,
@@ -217,8 +217,41 @@ class MarketHistoryStore(context: Context) :
         if (candles.isEmpty()) return
         val db = writableDatabase
         db.transaction {
+            // The primary key lookup also distinguishes a correction from an
+            // identical delivery. Never replace identical rows: replacement
+            // fires history/replay triggers and invalidates derived results.
+            val prior = db.query(
+                "sync_state",
+                arrayOf("oldest_open_time", "newest_open_time", "candle_count"),
+                "symbol=? AND interval=?", arrayOf(symbol, interval),
+                null, null, null
+            ).use { cursor ->
+                if (cursor.moveToFirst()) longArrayOf(cursor.getLong(0),
+                    cursor.getLong(1), cursor.getLong(2)) else null
+            }
+            var added = 0L
+            var changed = false
+            var oldest = prior?.get(0) ?: 0L
+            var newest = prior?.get(1) ?: 0L
             val insert = ContentValues()
             for (c in candles) {
+                require(c.openTime > 0L && c.closeTime >= c.openTime &&
+                    listOf(c.open, c.high, c.low, c.close).all { it.isFinite() && it > 0.0 } &&
+                    c.high >= maxOf(c.open, c.close, c.low) &&
+                    c.low <= minOf(c.open, c.close) &&
+                    c.volume.isFinite() && c.volume >= 0.0) { "INVALID_HISTORY_CANDLE" }
+                val existing = db.query(
+                    "candles", arrayOf("close_time", "open", "high", "low", "close", "volume"),
+                    "symbol=? AND interval=? AND open_time=?",
+                    arrayOf(symbol, interval, c.openTime.toString()), null, null, null
+                ).use { cursor ->
+                    if (!cursor.moveToFirst()) null else
+                        cursor.getLong(0) == c.closeTime &&
+                        cursor.getDouble(1) == c.open && cursor.getDouble(2) == c.high &&
+                        cursor.getDouble(3) == c.low && cursor.getDouble(4) == c.close &&
+                        cursor.getDouble(5) == c.volume
+                }
+                if (existing == true) continue
                 insert.clear()
                 insert.put("symbol", symbol)
                 insert.put("interval", interval)
@@ -229,38 +262,28 @@ class MarketHistoryStore(context: Context) :
                 insert.put("low", c.low)
                 insert.put("close", c.close)
                 insert.put("volume", c.volume)
-                db.insertWithOnConflict(
-                    "candles",
-                    null,
-                    insert,
-                    SQLiteDatabase.CONFLICT_REPLACE
-                )
-            }
-
-            val row = db.query(
-                "candles",
-                arrayOf(
-                    "MIN(open_time) AS oldest_open_time",
-                    "MAX(open_time) AS newest_open_time",
-                    "COUNT(*) AS candle_count"
-                ),
-                "symbol=? AND interval=?",
-                arrayOf(symbol, interval),
-                null,
-                null,
-                null
-            ).use { cursor ->
-                if (cursor.moveToFirst()) {
-                    longArrayOf(
-                        cursor.getLong(0),
-                        cursor.getLong(1),
-                        cursor.getLong(2)
-                    )
-                } else {
-                    longArrayOf(0L, 0L, 0L)
+                check(db.insertWithOnConflict("candles", null, insert,
+                    SQLiteDatabase.CONFLICT_REPLACE) != -1L) { "HISTORY_WRITE_FAILED" }
+                changed = true
+                if (existing == null) {
+                    added++
+                    oldest = if (oldest == 0L) c.openTime else minOf(oldest, c.openTime)
+                    newest = maxOf(newest, c.openTime)
                 }
             }
 
+            // Existing sync_state is maintained in the same transaction as
+            // candles. Only rebuild the aggregate for an absent/invalid row.
+            val row = if (prior != null && prior[2] > 0L &&
+                prior[0] > 0L && prior[1] >= prior[0]) {
+                longArrayOf(oldest, newest, prior[2] + added)
+            } else db.query(
+                "candles", arrayOf("MIN(open_time)", "MAX(open_time)", "COUNT(*)"),
+                "symbol=? AND interval=?", arrayOf(symbol, interval), null, null, null
+            ).use { cursor ->
+                check(cursor.moveToFirst())
+                longArrayOf(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2))
+            }
             val state = ContentValues()
             state.put("symbol", symbol)
             state.put("interval", interval)
@@ -274,6 +297,7 @@ class MarketHistoryStore(context: Context) :
                 arrayOf(symbol, interval), null, null, null
             ).use { cursor -> cursor.moveToFirst() && cursor.getInt(0) == 1 }
             val completeInt = if (historicBackfillComplete(previousComplete, complete)) 1 else 0
+            if (!changed && prior != null && (completeInt == 1) == previousComplete) return@transaction
             state.put("complete", completeInt)
             state.put("updated_at", System.currentTimeMillis())
             db.insertWithOnConflict(
@@ -286,6 +310,7 @@ class MarketHistoryStore(context: Context) :
             // invalidates the derived indicator cache, including when the
             // latest open time is unchanged but its OHLCV was corrected.
             // Portable Android SQLite syntax; no reliance on modern UPSERT.
+            if (!changed) return@transaction
             db.execSQL("INSERT OR IGNORE INTO closed_indicator_cache_revision(" +
                 "symbol,interval,revision) VALUES(?,?,0)",arrayOf(symbol,interval))
             db.execSQL("UPDATE closed_indicator_cache_revision SET revision=revision+1 " +
