@@ -568,7 +568,7 @@ fun WilliamsApp(context: Context) {
             val requestedDetails = tab == 1 || tab == 3
             val requestedSymbol = selectedChartSymbol
             val payload = withContext(Dispatchers.IO) {
-                if (scan) api.get("/api/v1/scanner?refresh=true")
+                if (scan) api.post("/api/v1/scanner/refresh")
                 api.cockpitSnapshot(includeDecisionTraces = requestedDetails,
                     selectedSymbol = if (requestedDetails) requestedSymbol else null)
             }
