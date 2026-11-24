@@ -277,6 +277,13 @@ internal class BinanceUsdMFuturesMarketData(
     val approvedSymbols: Set<String> = APPROVED_FUTURES_SYMBOLS.toSet()
     internal val supportedIntervals: Set<String> = APPROVED_FUTURES_KLINE_INTERVALS.toSet()
 
+    private val historyRequests=HistoryRequestCoordinator<String,String>(32)
+    internal fun historyRequestSnapshot():JSONObject=JSONObject()
+        .put("active",historyRequests.activeCount())
+        .put("started",historyRequests.started.get())
+        .put("joined",historyRequests.joined.get())
+        .put("rejected",historyRequests.rejected.get())
+
     fun klines(
         symbol: String,
         interval: String,
@@ -299,7 +306,9 @@ internal class BinanceUsdMFuturesMarketData(
             .addQueryParameter("limit", limit.toString())
         startTime?.let { builder.addQueryParameter("startTime", it.toString()) }
         endTime?.let { builder.addQueryParameter("endTime", it.toString()) }
-        val rows = getArray(builder.build().toString())
+        val url=builder.build().toString()
+        // Share immutable response text, not mutable JSON arrays.
+        val rows = JSONArray(historyRequests.read(url) { execute(url) })
         if (rows.length() > limit) throw IOException("USD-M Futures returned more candles than requested")
         return rows
     }
