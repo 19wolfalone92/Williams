@@ -25,6 +25,25 @@ class ScannerSymbolIsolationTest {
         assertTrue(blockers.isEmpty())
     }
 
+    @Test fun missingSpreadBlocksOnlyThatContractAndNotItsPeers() {
+        val blockers = scannerEntrySymbolBlockers(
+            approvedSymbols = listOf("BTCUSDT", "ETHUSDT", "SOLUSDT"),
+            analysisBlockers = emptyMap(),
+            spreads = mapOf("BTCUSDT" to 0.0004, "ETHUSDT" to -1.0, "SOLUSDT" to 0.0007)
+        )
+        assertEquals(setOf("ETHUSDT"), blockers.keys)
+        assertTrue(blockers.getValue("ETHUSDT").contains("SYMBOL_SPREAD_UNAVAILABLE"))
+    }
+
+    @Test fun analysisFailureRemainsThePrimaryPerSymbolBlocker() {
+        val blockers = scannerEntrySymbolBlockers(
+            approvedSymbols = listOf("BTCUSDT", "ETHUSDT"),
+            analysisBlockers = mapOf("ETHUSDT" to "SYMBOL_SCAN_INCOMPLETE: HISTORY_GAP"),
+            spreads = mapOf("BTCUSDT" to 0.0002)
+        )
+        assertEquals("SYMBOL_SCAN_INCOMPLETE: HISTORY_GAP", blockers.getValue("ETHUSDT"))
+    }
+
     @Test fun missingCompletionWithoutExceptionIsStillExplicitlyBlocked() {
         val blockers = scannerSymbolIsolationBlockers(
             approvedSymbols = listOf("BTCUSDT", "ETHUSDT"),

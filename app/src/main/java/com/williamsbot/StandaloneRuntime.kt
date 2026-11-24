@@ -770,6 +770,22 @@ internal fun scannerSymbolIsolationBlockers(
     }.toMap()
 }
 
+/** Optional market metadata is an entry blocker only for its own contract. */
+internal fun scannerEntrySymbolBlockers(
+    approvedSymbols: Collection<String>,
+    analysisBlockers: Map<String, String>,
+    spreads: Map<String, Double>
+): Map<String, String> {
+    val result = analysisBlockers.toMutableMap()
+    approvedSymbols.distinct().forEach { symbol ->
+        val spread = spreads[symbol]
+        if ((spread == null || !spread.isFinite() || spread < 0.0) && !result.containsKey(symbol)) {
+            result[symbol] = "SYMBOL_SPREAD_UNAVAILABLE: current spread metadata is not verified"
+        }
+    }
+    return result
+}
+
 /** START is the safe entry point for authoritative reconciliation. */
 internal fun runtimeStartButtonEnabled(
     binanceConfigured: Boolean,
@@ -4394,8 +4410,7 @@ private class NativeEngine(
     private val liveChartMath=IncrementalWilliamsMath()
 
     private fun cachedClosedIndicatorSnapshot(
-        candles:List<CandleN>,symbol:String,frame:String,
-        mathPoints:List<WilliamsMathPoint>?=null
+        candles:List<CandleN>,symbol:String,frame:String
     ):JSONObject {
         val closed=candles.filter { it.exchangeClosed }
         if(closed.size<40 || !cachedFixedFrameKlinesValid(closed,frame)) return JSONObject().put("symbol",symbol)
@@ -4409,9 +4424,7 @@ private class NativeEngine(
         historyStore.loadClosedIndicatorSnapshot(
             symbol,frame,first,last,closed.size,fingerprint
         )?.let { return it }
-        val calculated=buildIndicatorSnapshot(
-            closed,symbol,frame,mathPoints?.takeIf { it.size==closed.size }
-        )
+        val calculated=buildIndicatorSnapshot(closed,symbol,frame)
         // Only save when the entire latest input is actually durable and its
         // source revision has not changed under the computation. Otherwise
         // return it for display but never certify a reusable disk snapshot.
@@ -4423,32 +4436,19 @@ private class NativeEngine(
         return calculated
     }
 
-    private fun buildIndicatorSnapshot(
-        candles: List<CandleN>, symbol: String, frame: String,
-        mathPoints:List<WilliamsMathPoint>?=null
-    ): JSONObject {
+    private fun buildIndicatorSnapshot(candles: List<CandleN>, symbol: String, frame: String): JSONObject {
         if (candles.size < 40) return JSONObject().put("symbol", symbol).put("interval", frame).put("ready", false)
         val i = candles.lastIndex
-        val points=mathPoints?.takeIf { it.size==candles.size }
-        val incrementalReady=points!=null &&
-            points[i].ao.isFinite() && points[i].ac.isFinite() &&
-            points[i].jaw?.isFinite()==true && points[i].teeth?.isFinite()==true &&
-            points[i].lips?.isFinite()==true &&
-            points[i-1].ao.isFinite() && points[i-1].ac.isFinite()
-        val fullAlligator=if(incrementalReady) null else Triple(
-            williamsAlligatorLine(candles,13,8),
-            williamsAlligatorLine(candles,8,5),
-            williamsAlligatorLine(candles,5,3)
-        )
-        val jawNow = if(incrementalReady) points!![i].jaw!! else fullAlligator!!.first.getOrNull(i) ?: 0.0
-        val teethNow = if(incrementalReady) points!![i].teeth!! else fullAlligator!!.second.getOrNull(i) ?: 0.0
-        val lipsNow = if(incrementalReady) points!![i].lips!! else fullAlligator!!.third.getOrNull(i) ?: 0.0
-        val aoNow = if(incrementalReady) points!![i].ao else ao(candles, i)
-        val aoPrev = if(incrementalReady) points!![i-1].ao else ao(candles, i-1)
-        val acNow = if(incrementalReady) points!![i].ac else
-            aoNow - (0 until 5).map { ao(candles, i - it) }.average()
-        val acPrev = if(incrementalReady) points!![i-1].ac else
-            aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
+        val jaw = williamsAlligatorLine(candles, 13, 8)
+        val teeth = williamsAlligatorLine(candles, 8, 5)
+        val lips = williamsAlligatorLine(candles, 5, 3)
+        val jawNow = jaw.getOrNull(i) ?: 0.0
+        val teethNow = teeth.getOrNull(i) ?: 0.0
+        val lipsNow = lips.getOrNull(i) ?: 0.0
+        val aoNow = ao(candles, i)
+        val aoPrev = ao(candles, i - 1)
+        val acNow = aoNow - (0 until 5).map { ao(candles, i - it) }.average()
+        val acPrev = aoPrev - (0 until 5).map { ao(candles, i - 1 - it) }.average()
         val greenZone = aoNow > aoPrev && acNow > acPrev
         val redZone = aoNow < aoPrev && acNow < acPrev
         val range = max(1e-12, candles[i].h - candles[i].l)
@@ -8987,6 +8987,9 @@ private class NativeEngine(
         val perSymbolScanBlockers = scannerSymbolIsolationBlockers(
             coreSymbols, ranked.map { it.symbol }, symbolErrors
         )
+        val perSymbolEntryBlockers = scannerEntrySymbolBlockers(
+            coreSymbols, perSymbolScanBlockers, spreads
+        )
         if (completed.timedOut) scannerError = scannerError
             ?: "Futures H1 scan exceeded its shared 60s deadline; " +
                 (futures.size - completed.completedCount) + " symbol tasks unfinished"
@@ -9022,7 +9025,7 @@ private class NativeEngine(
         lastSymbolsScanned = ranked.size
         lastScannerSymbolErrors = JSONObject().apply {
             symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
-            perSymbolScanBlockers.forEach { (symbol,reason) ->
+            perSymbolEntryBlockers.forEach { (symbol,reason) ->
                 if (!has(symbol)) put(symbol,reason)
             }
         }
@@ -9125,7 +9128,7 @@ private class NativeEngine(
         // A failed/unfinished symbol remains blocked on its own. Valid symbols
         // continue through the same account-wide risk, reconciliation and
         // exchange-side preflights; partial analysis is not an account-wide veto.
-        perSymbolScanBlockers.forEach { (symbol,reason) -> rejectDecision(symbol,reason) }
+        perSymbolEntryBlockers.forEach { (symbol,reason) -> rejectDecision(symbol,reason) }
         if (ranked.isEmpty()) {
             scannerError = scannerError
                 ?: "No approved symbol completed a valid H1 analysis; no entry candidates are available"
@@ -9173,19 +9176,25 @@ private class NativeEngine(
         }
         ranked.filter { it.symbol in openSymbols }.forEach { rejectDecision(it.symbol,"SYMBOL_RESERVED_BY_POSITION_OR_PENDING_ORDER") }
         for (candidate in ranked
-            .filter { it.campaignReady && it.symbol !in openSymbols }
+            .filter { it.campaignReady && it.symbol !in openSymbols && it.symbol !in perSymbolEntryBlockers }
             .sortedWith(compareByDescending<BaseAnalysis> { it.score }.thenBy { it.wave.exhaustionRisk })
         ) {
             val intentsBefore = futuresCampaignCoordinator.intentsSnapshot().length()
-            submitNativeFuturesCampaignEntry(candidate)
-            val intentsAfter = futuresCampaignCoordinator.intentsSnapshot().length()
+            val attempt = runCatching { submitNativeFuturesCampaignEntry(candidate) }
+            val afterSnapshot = runCatching { futuresCampaignCoordinator.intentsSnapshot().length() }
+            if (afterSnapshot.isFailure) {
+                scannerError = "ENTRY_INTENT_STATE_UNVERIFIED: " +
+                    (afterSnapshot.exceptionOrNull()?.message ?: "snapshot unavailable")
+                break
+            }
+            val intentsAfter = afterSnapshot.getOrThrow()
             if (futuresCampaignCoordinator.state == NativeFuturesCampaignCoordinator.State.RECONCILE_REQUIRED ||
-                !executionReady()
+                !executionReady() || intentsAfter > intentsBefore
             ) break
-            // At most one new account mutation per scan pass. If a candidate is
-            // rejected before its intent is persisted, try the next valid symbol
-            // instead of treating an older pending campaign as this attempt.
-            if (intentsAfter > intentsBefore) break
+            // A proven pre-intent rejection is symbol-local: try the next
+            // candidate. Any persisted/uncertain intent or failed state read
+            // stops this pass so no second order can race the first.
+            if (attempt.isFailure) continue
         }
     }
 
@@ -12991,7 +13000,7 @@ private class NativeEngine(
         // Historical chart requests with an older cutoff must NEVER reuse a
         // current live-memory snapshot; the SQL key includes both window ends.
         val indicatorSnapshot = if(chartContinuous) cachedClosedIndicatorSnapshot(
-            sourceCandles,symbol,selectedInterval,mathPoints
+            sourceCandles,symbol,selectedInterval
         ) else JSONObject().put("symbol",symbol).put("interval",selectedInterval)
             .put("ready",false).put("reason","HISTORY_CONTINUITY_UNVERIFIED")
         if (!historical && indicatorSnapshot.optBoolean("ready",false) &&
