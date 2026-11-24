@@ -23,7 +23,7 @@ Binance Demo UI also displayed a *manual close* error, “ReduceOnly Order is re
 
 Canonical runtime intent: H1 decisions, D1/H4 context, M15/M5 diagnosis only, no M15 entry confirmation; three Wise Men can appear independently, confirmed five-bar fractals with no look-ahead, valid STOP entries, LONG+SHORT, one active strategy-owned campaign per pair, TC2 exit via structural trailing/opposing signal. Do not turn independent research filters into fictitious mandatory book restrictions.
 
-The earlier draft PR #271 has a separate **partial** four-book/UTC-candle audit (57 indexed sections/642 PDF pages, zero independently figure-verified rules, three UTC causal corrections, 15-asset replay SUI vs UNI). **Those fixes are NOT represented as already integrated into this diag18 branch.** Green CI is not full book fidelity.
+The earlier draft PR #271 has a separate **partial** four-book/UTC-candle audit (57 indexed sections/642 PDF pages, zero independently figure-verified rules). **After verifying unchanged parent blobs, this branch imported its 3 independently reviewed native UTC-grid code corrections + 2 associated Kotlin tests and 15-asset historical replay corrections (SUI rather than UNI) with a 480-closed-H1 SUI fixture + Python tests.** The accompanying independent audit conclusions still require separate acceptance. Green CI does not certify full book fidelity.
 
 ## 3. Root-cause review and repairs made on THIS branch
 
@@ -38,8 +38,8 @@ The earlier draft PR #271 has a separate **partial** four-book/UTC-candle audit 
 
 | Chain | Status | Requirement to pass |
 | --- | --- | --- |
-| Native Binance UTC D1/H4/H1 timestamps, bounded cache, confirmed fractal and no look-ahead | PARTIAL | PR #271 UTC fixes separately pending; inspect current candle integrity and historical false-positive fixtures. |
-| All WM1/WM2/WM3 order-independent TC2 entry long and short | NOT VERIFIED | Independently annotated book figure cases plus blind out-of-sample H1 signals and exact tick/Teeth/AO/AC test fixtures. |
+| Native Binance UTC D1/H4/H1 timestamps, bounded cache, confirmed fractal and no look-ahead | SOURCE FIX PORTED / TEST REQUIRED | PR #271 UTC grid source fixes and Kotlin negatives imported without conflict; exact-head CI and full signed runtime not yet proven. |
+| All WM1/WM2/WM3 order-independent TC2 entry long and short | NOT VERIFIED | Independently annotated book figure cases plus blind out-of-sample H1 signals and exact tick/Teeth/AO/AC test fixtures. Historical 15-asset SUI-vs-UNI research-set bug fixed, NOT human-expert signal truth. |
 | New-risk admission, 15-symbol slots, 0.60% reservation, 3% day, 3 consecutive losses, 5% breaker, 50% margin | PARTIAL | Unit tests only; open-risk projection and turnover ledger with signed Demo / day-boundary / partial fills not acceptance-proven. |
 | Original native STOP upon confirmed fill, account-wide STOP readback, partial-fill adjustments and no duplicate POST | **FAIL / P0** | Fresh private signed Binance Demo `FILLED`→`STOP_MARKET`, signed Algo detail in both scopes and closePosition evidence. |
 | Former STOP canceled, stale trigger crossed; recovered/unowned LONG emergency risk resolution | **FAIL / P0** | Signed exact historical Algo terminal/no-child proof, two stable signed account positions, pending EXIT resolution, protected-first replacement or controlled reduce-only emergency path. No blind market close/new trigger. |
