@@ -10287,11 +10287,16 @@ private class NativeEngine(
             if (source >= 0) values[source] else Double.NaN
         }
 
+    private data class ClosedEditionKey(val symbol:String,val frame:String,val tick:Double,
+        val profile:String,val exitMode:Boolean,val fingerprint:String)
+    private val closedEditionMemo=ClosedStructureMemo<ClosedEditionKey,List<CampaignSignalN>>(512)
+
     private fun editionCampaignSignals(symbol:String,candles:List<CandleN>,frame:String,tick:Double,
         profile:String=williamsUnifiedProfile,exitMode:Boolean=false):List<CampaignSignalN> {
-        val bookSeriesBlocker = williamsEditionSignalSeriesBlocker(
-            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }, frame
-        )
+        val bookSeriesBlocker = if(candles.any { !it.exchangeClosed }) "UNCONFIRMED_CLOSED_CANDLE"
+            else williamsEditionSignalSeriesBlocker(
+                candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }, frame
+            )
         if(bookSeriesBlocker != null) {
             // A gap across two supposed adjacent AO/fractal confirmation bars
             // cannot become an apparently normal TC2 signal. Invalid history
@@ -10322,6 +10327,18 @@ private class NativeEngine(
             }.distinctBy { it.signalId }.sortedWith(
                 compareBy<CampaignSignalN> { it.signalBarTimeMs }.thenBy { it.signalId })
         }
+        // Only the deterministic leaf extraction is cached. The unified
+        // wrapper still records source evidence; the caller still checks
+        // current quote, expiration, invalidation, ownership and risk.
+        val input=candles.toList()
+        val key=ClosedEditionKey(symbol,frame,tick,profile,exitMode,closedCandleFingerprint(input))
+        return closedEditionMemo.getOrCompute(key) {
+            computeClosedEditionSignals(symbol,input,frame,tick,profile,exitMode)
+        }
+    }
+
+    private fun computeClosedEditionSignals(symbol:String,candles:List<CandleN>,frame:String,
+        tick:Double,profile:String,exitMode:Boolean):List<CampaignSignalN> {
         if(profile==williamsTc2Profile) return longCampaignSignals(symbol,candles,frame,tick)+shortCampaignSignals(symbol,candles,frame,tick)
         if(profile !in williamsSourceProfiles || frame!="1h" || candles.size<45) return emptyList()
         val bars=candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
@@ -11045,6 +11062,71 @@ private class NativeEngine(
         return result
     }
 
+    private data class ClosedBaseKey(val symbol:String,val decisionFrame:String,
+        val waveFrame:String,val fingerprint:String)
+    private data class ClosedBaseMetrics(val atrPct:Double,val atrAbs:Double,
+        val bullish:Boolean,val aoPositive:Boolean,val breakout:Boolean,
+        val breakoutDistance:Double,val score:Double,val wave:WaveInfo)
+    private val closedBaseMemo=ClosedStructureMemo<ClosedBaseKey,ClosedBaseMetrics>(64)
+
+    private fun closedBaseMetrics(symbol:String,workCandles:List<CandleN>,decisionFrame:String,
+        waveFrame:String):ClosedBaseMetrics {
+        val key=ClosedBaseKey(symbol,decisionFrame,waveFrame,closedCandleFingerprint(workCandles))
+        return closedBaseMemo.getOrCompute(key) {
+            val i=workCandles.lastIndex
+            val closes = workCandles.map { it.c }
+            val atrPct = atrPct(workCandles)
+            val atrAbs =
+                atrAbs(workCandles)
+            val alligator = alligator(workCandles, i)
+            val bullish =
+                alligator.lips > alligator.teeth &&
+                    alligator.teeth > alligator.jaw &&
+                    closes[i] > alligator.lips
+            val aoValue = ao(workCandles, i)
+            val aoPositive = aoValue > 0.0
+            val fractalIndex = latestConfirmedUpFractal(workCandles, i)
+            val fractalHigh =
+                fractalIndex?.let { workCandles[it].h }
+            val teethSeries = williamsAlligatorLine(workCandles, 8, 5)
+            val fractalTeeth =
+                fractalIndex?.let { teethSeries.getOrNull(it) }
+            val externalFractal =
+                fractalHigh != null &&
+                    fractalTeeth != null &&
+                    fractalHigh > fractalTeeth
+            val breakoutDistance =
+                if (fractalHigh != null && fractalHigh > 0.0) {
+                    (closes[i] - fractalHigh) / fractalHigh
+                } else {
+                    0.0
+                }
+            val breakout =
+                fractalHigh?.let { fractal ->
+                    externalFractal &&
+                        closes[i] > fractal &&
+                        breakoutDistance <= 0.05
+                } ?: false
+            val trendScore = if (bullish) 35.0 else 0.0
+            val aoScore =
+                when {
+                    aoPositive && ao(workCandles, i - 1) <= aoValue -> 20.0
+                    aoPositive -> 12.0
+                    else -> 0.0
+                }
+            val breakoutScore =
+                if (breakout) 25.0 else if (fractalHigh != null) 8.0 else 0.0
+            val atrScore =
+                when {
+                    atrPct <= 0.0 -> 0.0
+                    atrPct <= 0.08 -> (1.0 - atrPct / 0.08) * 10.0
+                    else -> 0.0
+                }
+            ClosedBaseMetrics(atrPct,atrAbs,bullish,aoPositive,breakout,breakoutDistance,
+                trendScore+aoScore+breakoutScore+atrScore,waveInfo(workCandles,waveFrame))
+        }
+    }
+
     private fun analyseBase(
         symbol: String,
         candles: List<CandleN>,
@@ -11058,11 +11140,10 @@ private class NativeEngine(
         // Williams signals and fractals are evaluated only on exchange-confirmed
         // closed bars. A forming H1 candle must never become a decision candle.
         val decisionFrame = if (campaignEngineEnabled) campaignExecutionTimeframe else interval
-        val decisionNow = runCatching { futuresMarketData.exchangeNowMs() }
-            .getOrDefault(System.currentTimeMillis())
-        val decisionBarMs = frameSeconds(decisionFrame).coerceAtLeast(60L) * 1000L
+        val decisionNow = futuresMarketData.exchangeNowMs()
         val workCandles = rawWorkCandles.filter { candle ->
-            candle.t > 0L && candle.t + decisionBarMs <= decisionNow
+            candle.exchangeClosed &&
+                futuresMarketData.isKlineOpenTimeClosed(candle.t,decisionFrame,decisionNow)
         }
         val i = workCandles.lastIndex
         if (i < 40) {
@@ -11084,10 +11165,14 @@ private class NativeEngine(
             )
         }
 
-        val closes = workCandles.map { it.c }
-        val atrPct = atrPct(workCandles)
-        val atrAbs =
-            atrAbs(workCandles)
+        val closedMetrics=closedBaseMetrics(symbol,workCandles,decisionFrame,campaignExecutionTimeframe)
+        val atrPct=closedMetrics.atrPct
+        val atrAbs=closedMetrics.atrAbs
+        val bullish=closedMetrics.bullish
+        val aoPositive=closedMetrics.aoPositive
+        val breakout=closedMetrics.breakout
+        val breakoutDistance=closedMetrics.breakoutDistance
+        val preliminaryWave=closedMetrics.wave
 
         val campaignRules = runCatching { symbolFilters(symbol) }.getOrNull()
         val campaignTick = campaignRules?.tick ?: 0.0
@@ -11100,57 +11185,6 @@ private class NativeEngine(
             emptyList()
         }
 
-        val alligator = alligator(workCandles, i)
-        val bullish =
-            alligator.lips > alligator.teeth &&
-                alligator.teeth > alligator.jaw &&
-                closes[i] > alligator.lips
-
-        val aoValue = ao(workCandles, i)
-        val aoPositive = aoValue > 0.0
-
-        val fractalIndex = latestConfirmedUpFractal(workCandles, i)
-        val fractalHigh =
-            fractalIndex?.let { workCandles[it].h }
-        val teethSeries = williamsAlligatorLine(workCandles, 8, 5)
-        val fractalTeeth =
-            fractalIndex?.let { teethSeries.getOrNull(it) }
-        val externalFractal =
-            fractalHigh != null &&
-                fractalTeeth != null &&
-                fractalHigh > fractalTeeth
-        val breakoutDistance =
-            if (fractalHigh != null && fractalHigh > 0.0) {
-                (closes[i] - fractalHigh) / fractalHigh
-            } else {
-                0.0
-            }
-
-        val breakout =
-            fractalHigh?.let { fractal ->
-                externalFractal &&
-                    closes[i] > fractal &&
-                    breakoutDistance <= 0.05
-            } ?: false
-
-        val trendScore = if (bullish) 35.0 else 0.0
-        val aoScore =
-            when {
-                aoPositive && ao(workCandles, i - 1) <= aoValue -> 20.0
-                aoPositive -> 12.0
-                else -> 0.0
-            }
-
-        val breakoutScore =
-            if (breakout) 25.0 else if (fractalHigh != null) 8.0 else 0.0
-
-        val atrScore =
-            when {
-                atrPct <= 0.0 -> 0.0
-                atrPct <= 0.08 -> (1.0 - atrPct / 0.08) * 10.0
-                else -> 0.0
-            }
-
         val volumeScore =
             when {
                 volume >= 100_000_000.0 -> 5.0
@@ -11158,13 +11192,7 @@ private class NativeEngine(
                 else -> 1.0
             }
 
-        val preliminaryWave = waveInfo(workCandles, campaignExecutionTimeframe)
-        var score =
-            trendScore +
-                aoScore +
-                breakoutScore +
-                atrScore +
-                volumeScore
+        var score = closedMetrics.score + volumeScore
 
         var strictSignal =
             if (campaignEngineEnabled) {
@@ -12227,7 +12255,19 @@ private class NativeEngine(
             candles[i].l < candles[i + 2].l
     }
 
+    private data class ClosedWaveKey(val frame:String,val fingerprint:String)
+    private val closedWaveMemo=ClosedStructureMemo<ClosedWaveKey,WaveInfo>(96)
+
     private fun waveInfo(candles: List<CandleN>, frame: String): WaveInfo {
+        if(candles.size<40 || frame !in williamsWaveFrames || candles.any { !it.exchangeClosed })
+            return neutralWave(candles,frame)
+        val input=candles.toList()
+        return closedWaveMemo.getOrCompute(ClosedWaveKey(frame,closedCandleFingerprint(input))) {
+            calculateClosedWaveInfo(input,frame)
+        }
+    }
+
+    private fun calculateClosedWaveInfo(candles: List<CandleN>, frame: String): WaveInfo {
         if (candles.size < 40 || frame !in williamsWaveFrames) return neutralWave(candles,frame)
         val bars = candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
         val primary = williamsHypothesesFromAnchors(frame,bars,
