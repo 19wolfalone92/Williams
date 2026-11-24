@@ -3498,7 +3498,7 @@ internal class NativeFuturesCampaignCoordinator(
                     val mark = runCatching { adapter.markPrice(symbol) }.getOrNull()
                         ?.takeIf { it.isFinite() && it > 0.0 }
                     val symbolAlgos = runCatching { adapter.openAlgoOrders(symbol) }.getOrNull()
-                    val accountAlgos = runCatching { adapter.openAlgoOrders() }.getOrNull()
+                    val accountAlgos = runCatching { adapter.allOpenAlgoOrders() }.getOrNull()
                     val symbolRows = symbolAlgos?.let {
                         (0 until it.length()).mapNotNull { index -> it.optJSONObject(index) }
                     }.orEmpty()
