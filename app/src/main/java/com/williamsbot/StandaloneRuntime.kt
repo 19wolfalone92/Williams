@@ -4699,15 +4699,17 @@ private class NativeEngine(
                     !Thread.currentThread().isInterrupted) {
                     var incomplete = 0
                     var successes = 0
+                    var processed = 0
                     deepHistoryLastError = null
                     archivePass@ for (frame in durableBackfillFrames) {
                         for (symbol in coreSymbols) {
                             if (!running || generation != runtimeGeneration ||
                                 Thread.currentThread().isInterrupted) return@Thread
                             if(!archiveWorkAllowed()) {
-                                incomplete=durableBackfillFrames.size*coreSymbols.size-successes
+                                incomplete+=durableBackfillFrames.size*coreSymbols.size-processed
                                 break@archivePass
                             }
+                            processed++
                             // Leave room for the Futures journal, SQLite WAL and Android.
                             val freeBytes = runCatching {
                                 android.os.StatFs(context.filesDir.path).availableBytes
@@ -11262,7 +11264,10 @@ private class NativeEngine(
             val generation=runtimeGeneration
             queued++
             try { adaptiveWaveFetchExecutor.execute {
-                if(!running || generation!=runtimeGeneration || !archiveWorkAllowed()) return@execute
+                if(!running || generation!=runtimeGeneration || !archiveWorkAllowed()) {
+                    adaptiveWaveFetchAttemptMs.remove(key,now)
+                    return@execute
+                }
                 runCatching {
                     val free=runCatching {
                         android.os.StatFs(context.filesDir.path).availableBytes
@@ -12877,9 +12882,12 @@ private class NativeEngine(
         // Never return plausible H1 candles mislabeled as another symbol/interval after an invalid request or REST error.
         val bars = requestedBars.coerceIn(120, 6000)
         val historical = requestedEndTime != null
-        val chartExchangeNowMs = futuresMarketData.exchangeNowMs()
+        // A persisted closed bar can be displayed offline. No new trade or
+        // candle-close claim is authorized from the unverified phone clock.
+        var chartExchangeNowMs = if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+            futuresMarketData.cachedExchangeNowMs() else 0L
         val cached = displayedClosedChartCache
-        if(!historical && bars>150 && cached!=null &&
+        if(!historical && chartExchangeNowMs>0L && bars>150 && cached!=null &&
             cached.symbol==symbol && cached.frame==selectedInterval &&
             cached.bars==bars &&
             cached.sourceRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval) &&
@@ -12891,38 +12899,35 @@ private class NativeEngine(
             return liveChartEnvelope(symbol,selectedInterval,cached.candleRows,
                 cached.indicators,cached.lastOpenMs,chartExchangeNowMs)
         }
-        val chartInputRevision=historyStore.indicatorCacheRevision(symbol,selectedInterval)
-        fun chartDiskWindow():List<CandleN> =
-            historyStore.loadRecent(
-                symbol,selectedInterval,bars.coerceAtMost(6000),requestedEndTime
-            ).filter {
-                futuresMarketData.isKlineOpenTimeClosed(
-                    it.openTime,selectedInterval,chartExchangeNowMs)
-            }.map { CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
-        var stored = if(historical || bars>150) chartDiskWindow() else emptyList()
-        if(!historical && stored.size>=150 &&
-            !candleSeriesCurrent(stored,selectedInterval,chartExchangeNowMs)) {
-            // After a multi-day offline gap, fetchCandles performs a paged
-            // cursor catch-up. Restore the ENTIRE requested 6000-bar chart
-            // from durable SQLite rather than showing only the 150-bar probe.
-            fetchCandles(symbol,selectedInterval,150)
-            stored=chartDiskWindow()
+        var chartInput=historyStore.loadRecentSnapshot(symbol,selectedInterval,
+            maxOf(150,bars).coerceAtMost(6000),requestedEndTime)
+        if(!historical && (chartInput.candles.isEmpty() ||
+            chartExchangeNowMs>0L && (chartInput.candles.size<150 ||
+                !chartInput.continuous || !futuresMarketData.isLastClosedCandleCurrent(
+                    chartInput.candles.last().openTime,selectedInterval,chartExchangeNowMs)))) {
+            // A failed public request must not erase the last saved graph.
+            runCatching { fetchCandles(symbol,selectedInterval,150) }
+                .onFailure { lastError="chart catch-up: "+it.javaClass.simpleName }
+            chartInput=historyStore.loadRecentSnapshot(symbol,selectedInterval,
+                maxOf(150,bars).coerceAtMost(6000),requestedEndTime)
+            chartExchangeNowMs=if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+                futuresMarketData.cachedExchangeNowMs() else 0L
         }
-        val sourceCandles = if (historical) stored else if (stored.size >= 150 &&
-            candleSeriesCurrent(stored,selectedInterval,chartExchangeNowMs)) stored
-        else if (symbol == primarySymbol && selectedInterval == interval) {
-            if(primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval))
-                primaryCandles=fetchCandles(primarySymbol,selectedInterval,150)
-            primaryCandles
-        } else {
-            fetchCandles(symbol, selectedInterval, 150)
-        }
+        val chartInputRevision=chartInput.revision
+        val stored=chartInput.candles.filter {
+            chartExchangeNowMs<=0L || futuresMarketData.isKlineOpenTimeClosed(
+                it.openTime,selectedInterval,chartExchangeNowMs)
+        }.map { CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume) }
+        val sourceCandles=stored
+        val chartContinuous=chartInput.continuous &&
+            cachedFixedFrameKlinesValid(sourceCandles,selectedInterval)
 
         val output = JSONArray()
         val prices = sourceCandles.map { it.c }
         val medianBars=sourceCandles.map { ClosedMedianBar(it.t,(it.h+it.l)/2.0) }
         val math=if(historical) IncrementalWilliamsMath() else liveChartMath
-        val mathPoints=math.update("$symbol:$selectedInterval",medianBars)
+        val mathPoints=if(chartContinuous) math.update("$symbol:$selectedInterval",medianBars)
+            else List(sourceCandles.size) { WilliamsMathPoint(Double.NaN,Double.NaN,null,null,null) }
         // The chart fetches a moving quote frequently, but Williams indicators use only
         // confirmed closed candles. Cache the expensive wave/indicator explanation by
         // latest closed-bar timestamp so one-second quote refreshes do not recompute it.
@@ -12971,8 +12976,8 @@ private class NativeEngine(
                         // bullish Course hypothesis must never be drawn as an
                         // executable TC2 WM entry on the phone.
                         .put("signal_profiles", JSONArray(observedSignals.filter { it.optLong("signal_bar_time_ms") == c.t }.map { it.optString("strategy_profile") }))
-                        .put("fractal_up", isUpFractal(sourceCandles, i))
-                        .put("fractal_down", isDownFractal(sourceCandles, i))
+                        .put("fractal_up", chartContinuous && isUpFractal(sourceCandles, i))
+                        .put("fractal_down", chartContinuous && isDownFractal(sourceCandles, i))
                 )
             }
         }
@@ -12985,7 +12990,7 @@ private class NativeEngine(
 
         // Memoize only a CURRENT fully closed chart. A stale/offline chart
         // cannot masquerade as live and is not an execution input.
-        if(bars>150 && sourceCandles.isNotEmpty() && sourceCandles === stored &&
+        if(bars>150 && chartExchangeNowMs>0L && chartContinuous && sourceCandles.isNotEmpty() &&
             chartInputRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval) &&
             cachedFixedFrameKlinesValid(sourceCandles,selectedInterval) &&
             futuresMarketData.isLastClosedCandleCurrent(
@@ -12995,8 +13000,20 @@ private class NativeEngine(
                 chartInputRevision,
                 output,indicatorSnapshot,System.currentTimeMillis())
         }
+        val current=chartExchangeNowMs>0L && chartContinuous &&
+            chartInputRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval) &&
+            futuresMarketData.isLastClosedCandleCurrent(
+                latestClosedCandleTime,selectedInterval,chartExchangeNowMs)
+        if(!current) return JSONObject().put("symbol",symbol).put("interval",selectedInterval)
+            .put("candles",output).put("indicator_snapshot",indicatorSnapshot)
+            .put("candles_fresh",false).put("continuity_verified",chartContinuous)
+            .put("source_revision",chartInputRevision)
+            .put("last_closed_bar_open_ms",latestClosedCandleTime)
+            .put("live_price",JSONObject.NULL).put("live_price_source","UNAVAILABLE")
+            .put("live_price_at_ms",0L).put("execution_allowed",false)
         return liveChartEnvelope(symbol,selectedInterval,output,indicatorSnapshot,
             latestClosedCandleTime,chartExchangeNowMs)
+            .put("continuity_verified",true).put("source_revision",chartInputRevision)
     }
 
     fun marketQuote(requestedSymbol: String?): JSONObject {
