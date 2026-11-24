@@ -351,7 +351,7 @@ class MarketHistoryStore(context: Context) :
                 if((priorValid && prior!=null && priorAudit==prior[1]) ||
                     (added>0L && row[2]==added)) {
                     db.execSQL("INSERT OR REPLACE INTO history_gap_audit(symbol,interval,scanned_through) VALUES(?,?,?)",
-                        arrayOf(symbol,interval,row[1]))
+                        arrayOf<Any>(symbol,interval,row[1]))
                 }
             }
             // Any overlapping REST correction or freshly CLOSED WS candle
@@ -389,19 +389,19 @@ class MarketHistoryStore(context: Context) :
                     val closed = rows.getLong(1)
                     if(nativeHistoryCloseMs(opened,interval)!=closed) {
                         execSQL("INSERT OR IGNORE INTO history_invalid_grid(symbol,interval,open_ms) VALUES(?,?,?)",
-                            arrayOf(symbol,interval,opened))
+                            arrayOf<Any>(symbol,interval,opened))
                     }
                     val prior = previousClose
                     if(prior != null && prior < opened-1L) {
                         execSQL("INSERT OR REPLACE INTO history_gap(symbol,interval,right_open,start_ms) VALUES(?,?,?,?)",
-                            arrayOf(symbol,interval,opened,prior+1L))
+                            arrayOf<Any>(symbol,interval,opened,prior+1L))
                     }
                     previousClose = closed
                     last = opened
                 }
             }
             if(last>cursorMs) execSQL("INSERT OR REPLACE INTO history_gap_audit(symbol,interval,scanned_through) VALUES(?,?,?)",
-                arrayOf(symbol,interval,last))
+                arrayOf<Any>(symbol,interval,last))
         }
     }
 
