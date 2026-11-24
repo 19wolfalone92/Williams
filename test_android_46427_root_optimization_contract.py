@@ -21,13 +21,20 @@ def test_cockpit_avoids_giant_string_and_scopes_details_to_selected_symbol():
     # The UI now uses a direct JSONObject envelope; diagnostics retain full history.
     assert 'x.cockpit(includeDecisionTraces = false).toString()' in RUNTIME
     assert 'x.status(fast = fast, includeDecisionTraces = !fast).toString()' in RUNTIME
-    assert "fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null)" in RUNTIME
+    assert "fun cockpit(" in RUNTIME
+    assert "includeDecisionTraces: Boolean = true" in RUNTIME
+    assert "includeTradeHistory: Boolean = true" in RUNTIME
     assert "selectedTraceSymbols = scope" in RUNTIME
-    assert "scannerSnapshot(compactForCockpit = !includeDecisionTraces)" in RUNTIME
-    assert 'val details = tab == 1 || tab == 3' in UI
-    assert 'api.cockpitSnapshot(includeDecisionTraces = details,' in UI
-    assert 'StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces, selectedSymbol)' in UI
+    # Even detailed Market/Analysis tabs need only the candidate scalar keys;
+    # the selected symbol's full trace is in STATUS, not the 15-pair scanner list.
+    assert "scannerSnapshot(compactForCockpit = true)" in RUNTIME
+    assert 'val requestedDetails = tab == 1 || tab == 3' in UI
+    assert 'api.cockpitSnapshot(includeDecisionTraces = requestedDetails,' in UI
+    assert 'StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces,' in UI
     assert "loadAll(false, waitForLock = true)" in UI
+    assert "val decoded = withContext(Dispatchers.Default)" in UI
+    assert 'api.post("/api/v1/scanner/refresh")' in UI
+    assert 'if (includeTradeHistory) trades() else JSONArray()' in RUNTIME
 
 
 def test_compact_projection_keeps_every_field_read_by_android_candidate_parser():
