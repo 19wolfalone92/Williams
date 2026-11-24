@@ -24,3 +24,33 @@ internal fun futuresClosedCandleTimesContiguous(openTimes: List<Long>, intervalM
     }
     return true
 }
+
+/** Native UTC close boundary for the durable history store. No network or
+ * phone clock. Unsupported/off-grid input is never treated as a closed row. */
+internal fun nativeHistoryCloseMs(openMs: Long, frame: String): Long? {
+    if (openMs <= 0L) return null
+    if (frame == "1M") {
+        val utc = java.time.Instant.ofEpochMilli(openMs).atZone(java.time.ZoneOffset.UTC)
+        if (utc.dayOfMonth != 1 || utc.toLocalTime() != java.time.LocalTime.MIDNIGHT) return null
+        return runCatching { utc.plusMonths(1).toInstant().toEpochMilli() - 1L }.getOrNull()
+    }
+    val step = when(frame) {
+        "1m" -> 60_000L
+        "3m" -> 180_000L
+        "5m" -> 300_000L
+        "15m" -> 900_000L
+        "30m" -> 1_800_000L
+        "1h" -> 3_600_000L
+        "2h" -> 7_200_000L
+        "4h" -> 14_400_000L
+        "6h" -> 21_600_000L
+        "8h" -> 28_800_000L
+        "12h" -> 43_200_000L
+        "1d" -> 86_400_000L
+        "3d" -> 259_200_000L
+        "1w" -> 604_800_000L
+        else -> return null
+    }
+    if (!futuresFixedKlineOpenUtcAligned(openMs, step) || openMs > Long.MAX_VALUE-step) return null
+    return openMs+step-1L
+}
