@@ -5177,7 +5177,7 @@ private class NativeEngine(
                 expected=closed+1L
             }
             check(batch.isNotEmpty()) { "HISTORY_GAP_UNAVAILABLE: $symbol/$frame" }
-            historyStore.upsertBatch(symbol,frame,batch)
+            historyStore.upsertBatch(symbol,frame,batch,missingOnly=true)
             historyGapRetryAfter.remove(key)
         } catch(failure:Exception) {
             // Old listing/venue gaps may never be fillable. Keep proof of the
