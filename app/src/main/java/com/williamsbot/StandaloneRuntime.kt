@@ -12898,6 +12898,7 @@ private class NativeEngine(
             // AO/AC/Alligator/fractal recomputation, no JSON rebuild.
             return liveChartEnvelope(symbol,selectedInterval,cached.candleRows,
                 cached.indicators,cached.lastOpenMs,chartExchangeNowMs)
+                .put("continuity_verified",true).put("source_revision",cached.sourceRevision)
         }
         var chartInput=historyStore.loadRecentSnapshot(symbol,selectedInterval,
             maxOf(150,bars).coerceAtMost(6000),requestedEndTime)
@@ -12906,7 +12907,7 @@ private class NativeEngine(
                 !chartInput.continuous || !futuresMarketData.isLastClosedCandleCurrent(
                     chartInput.candles.last().openTime,selectedInterval,chartExchangeNowMs)))) {
             // A failed public request must not erase the last saved graph.
-            runCatching { fetchCandles(symbol,selectedInterval,150) }
+            runCatching { fetchCandles(symbol, selectedInterval, 150) }
                 .onFailure { lastError="chart catch-up: "+it.javaClass.simpleName }
             chartInput=historyStore.loadRecentSnapshot(symbol,selectedInterval,
                 maxOf(150,bars).coerceAtMost(6000),requestedEndTime)
@@ -12937,9 +12938,10 @@ private class NativeEngine(
         // persisted CLOSED window/revision, even when the app was killed.
         // Historical chart requests with an older cutoff must NEVER reuse a
         // current live-memory snapshot; the SQL key includes both window ends.
-        val indicatorSnapshot = cachedClosedIndicatorSnapshot(
+        val indicatorSnapshot = if(chartContinuous) cachedClosedIndicatorSnapshot(
             sourceCandles,symbol,selectedInterval
-        )
+        ) else JSONObject().put("symbol",symbol).put("interval",selectedInterval)
+            .put("ready",false).put("reason","HISTORY_CONTINUITY_UNVERIFIED")
         if (!historical && indicatorSnapshot.optBoolean("ready",false) &&
             latestClosedCandleTime > 0L) {
             indicatorSnapshots[indicatorKey] = indicatorSnapshot
