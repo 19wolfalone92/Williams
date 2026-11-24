@@ -8,7 +8,9 @@ RUNTIME=(ROOT/"app/src/main/java/com/williamsbot/StandaloneRuntime.kt").read_tex
 JOURNAL=(ROOT/"app/src/main/java/com/williamsbot/TradeJournal.kt").read_text(encoding="utf-8")
 
 def test_h1_scan_has_independent_read_only_startup_gate():
-    assert 'private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m")' in RUNTIME
+    # Prioritized H1 startup still gates ONLY H1, with M5 added as optional
+    # persistent diagnostic context rather than another entry filter.
+    assert 'private val startupFrames = listOf("1h", "4h", "1d", "6h", "15m", "5m")' in RUNTIME
     assert 'readOnlyH1Ready' in RUNTIME
     assert 'historyReady = h1ReadyNow==coreSymbols.size' in RUNTIME
     assert 'if(readOnlyH1Ready) {' in RUNTIME
@@ -36,7 +38,13 @@ def test_ticker_or_book_metadata_outage_only_blocks_entries_not_scanning():
 def test_chart_refetches_nonempty_but_stale_candles():
     chart=RUNTIME.split('fun klines(',1)[1].split('fun marketQuote(',1)[0]
     assert 'primaryCandles.isEmpty() || !candleSeriesCurrent(primaryCandles, selectedInterval)' in chart
-    assert '.put("candles_fresh",candleSeriesCurrent(sourceCandles,selectedInterval))' in chart
+    # Live chart freshness is computed from the same verified exchange UTC
+    # at the reusable envelope boundary, not from elapsed Android wall time.
+    assert 'return liveChartEnvelope(symbol,selectedInterval,output,indicatorSnapshot,' in chart
+    envelope=RUNTIME.split('private fun liveChartEnvelope(',1)[1].split('fun klines(',1)[0]
+    assert 'futuresMarketData.isLastClosedCandleCurrent(' in envelope
+    assert '.put("candles_fresh",' in envelope
+    assert 'cached.sourceRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval)' in chart
 
 def test_next_day_hard_pause_is_utc_and_does_not_block_read_only_scan():
     guard=RUNTIME.split('private fun futuresLossStreakGuard():',1)[1].split(
