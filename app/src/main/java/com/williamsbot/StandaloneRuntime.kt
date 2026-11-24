@@ -4840,14 +4840,14 @@ private class NativeEngine(
     ): List<CandleN> {
         val normalizedSymbol = symbol.uppercase(Locale.US)
         val liveKey = normalizedSymbol + ":" + frame
-        liveCandleCache[liveKey]?.let { live ->
-            val liveSnapshot = synchronized(live) { live.toList() }
+        liveCandleCache[liveKey]?.let { sharedLive ->
+            val live = synchronized(sharedLive) { sharedLive.toList() }
             run {
                 // WS caches also contain the currently forming kline (x=false).
                 // It is valid for display, never for a trading decision. Strategy
                 // reads are restricted to bars closed according to Binance server time.
                 val exchangeNowMs = futuresMarketData.exchangeNowMs()
-                val closed = closedNativeStrategyCandles(liveSnapshot) {
+                val closed = closedNativeStrategyCandles(live) {
                     futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
                 }
                 if (closed.size >= limit && candleSeriesCurrent(closed, frame, exchangeNowMs) &&
