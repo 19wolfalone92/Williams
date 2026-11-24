@@ -493,8 +493,13 @@ private class LocalRuntimeApi(context: Context) {
     fun diagnosticsReport(): JSONObject = StandaloneRuntime.diagnosticsReport(appContext)
 
     /** Retain full evidence for selected charts, never all 15 per-symbol traces. */
-    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
-        StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces, selectedSymbol)
+    fun cockpitSnapshot(
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject =
+        StandaloneRuntime.cockpitSnapshot(appContext, includeDecisionTraces,
+            selectedSymbol, includeTradeHistory)
 
     fun post(path: String, body: String? = null): String =
         StandaloneRuntime.request(appContext, "POST", path, body)
@@ -509,7 +514,8 @@ private data class CockpitDecodedSnapshot(
     val candidates: List<Candidate>,
     val trades: List<Trade>,
     val marketPairs: List<MarketPair>,
-    val events: List<String>
+    val events: List<String>,
+    val tradeHistoryIncluded: Boolean
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -567,10 +573,12 @@ fun WilliamsApp(context: Context) {
             // now on Dispatchers.Default/IO; MAIN publishes only finished values.
             val requestedDetails = tab == 1 || tab == 3
             val requestedSymbol = selectedChartSymbol
+            val requestedTradeHistory = tab == 2 || historicalTrade != null
             val payload = withContext(Dispatchers.IO) {
                 if (scan) api.post("/api/v1/scanner/refresh")
                 api.cockpitSnapshot(includeDecisionTraces = requestedDetails,
-                    selectedSymbol = if (requestedDetails) requestedSymbol else null)
+                    selectedSymbol = if (requestedDetails) requestedSymbol else null,
+                    includeTradeHistory = requestedTradeHistory)
             }
             val decoded = withContext(Dispatchers.Default) {
                 val source = payload.getJSONObject("status")
@@ -579,21 +587,23 @@ fun WilliamsApp(context: Context) {
                 CockpitDecodedSnapshot(
                     status = parseStatus(source),
                     candidates = parseCandidates(scanner.optJSONArray("candidates") ?: JSONArray()),
-                    trades = parseTrades(payload.optJSONArray("trades") ?: JSONArray()),
+                    trades = if (payload.optBoolean("trade_history_included", true))
+                        parseTrades(payload.optJSONArray("trades") ?: JSONArray()) else emptyList(),
                     marketPairs = APPROVED_FUTURES_CHART_SYMBOLS.map { symbol ->
                         MarketPair(symbol, prices.optDouble(symbol).takeIf { it.isFinite() && it > 0.0 })
                     },
                     events = CockpitDiagnostics.rows(payload.optJSONArray("events")).map {
                         cockpitTime(it.optLong("E")) + " • " + it.optString("state") +
                             " • " + it.optString("detail")
-                    }.reversed()
+                    }.reversed(),
+                    tradeHistoryIncluded = payload.optBoolean("trade_history_included", true)
                 )
             }
             withContext(Dispatchers.Main) {
                 // Publish one envelope together; no screen combines independent status reads.
                 status = decoded.status
                 candidates = decoded.candidates
-                trades = decoded.trades
+                if (decoded.tradeHistoryIncluded) trades = decoded.trades
                 marketPairs = decoded.marketPairs
                 logs = decoded.events
                 message = if (scan) "Сканирование запрошено" else "Данные обновлены"
@@ -1092,7 +1102,8 @@ fun WilliamsApp(context: Context) {
         }
         // Switching from a compact dashboard to the market/analysis screen
         // must not show an empty or stale decision trace for another 5s tick.
-        if (tab == 1 || tab == 7 || tab == 6) loadAll(false, waitForLock = true)
+        if (tab == 1 || tab == 2 || tab == 7 || tab == 6)
+            loadAll(false, waitForLock = true)
         if (tab == 4 && diagnosticReport == null) runDiagnostics()
     }
     BackHandler(tab in listOf(3, 4, 5)) { tab = 6 }
