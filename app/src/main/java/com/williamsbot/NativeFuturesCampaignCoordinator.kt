@@ -3482,27 +3482,6 @@ internal class NativeFuturesCampaignCoordinator(
                             put("supervisor_state",FuturesProtectionSupervisorState.PROTECTED.name)
                             put("management_mode", if (owned) "STRATEGY_OWNED" else "OBSERVE_ONLY")
                         }
-                } catch (failure: Exception) {
-                    val reason = "$symbol protection supervision failed: " +
-                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName).take(500)
-                    anyUnprotected = true
-                    actualRiskAuditBlocked = true
-                    if (actualRiskAuditBlocker == null) actualRiskAuditBlocker = reason
-                    lastBlocker = reason
-                    val ledgerPersisted = runCatching { saveIntents(persisted) }.isSuccess
-                    val existing = (0 until protectionObservations.length()).mapNotNull {
-                        protectionObservations.optJSONObject(it)
-                    }.singleOrNull { it.optString("symbol") == symbol }
-                    val observation = existing ?: JSONObject().also { protectionObservations.put(it) }
-                    observation.put("symbol",symbol).put("direction",
-                        if ((position.optString("positionAmt").toDoubleOrNull() ?: 0.0) > 0.0) "LONG" else "SHORT")
-                        .put("quantity",position.optString("positionAmt"))
-                        .put("observed_at_ms",clock()).put("stop_proof","PROTECTION_UNKNOWN")
-                        .put("supervisor_state",FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
-                        .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
-                        .put("management_mode","OBSERVE_ONLY")
-                        .put("protection_supervisor_error",reason)
-                        .put("durable_ledger_commit",if(ledgerPersisted) "CONFIRMED" else "FAILED")
                 }
                 } catch (failure: Exception) {
                     val reason = "$symbol protection supervision failed: " +
