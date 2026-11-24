@@ -66,9 +66,15 @@ object StandaloneRuntime {
     }
 
     /** In-process bounded cockpit JSON: avoid String serialization + reparsing OOM. */
-    fun cockpitSnapshot(context: Context, includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject {
+    fun cockpitSnapshot(
+        context: Context,
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject {
         start(context)
-        return requireNotNull(server).cockpitSnapshot(includeDecisionTraces, selectedSymbol)
+        return requireNotNull(server).cockpitSnapshot(
+            includeDecisionTraces, selectedSymbol, includeTradeHistory)
     }
 
     fun autostart(context: Context) {
@@ -1497,8 +1503,13 @@ private class StandaloneServer(private val context: Context) {
 
     fun diagnosticsReport(): JSONObject = e().diagnostics()
 
-    fun cockpitSnapshot(includeDecisionTraces: Boolean, selectedSymbol: String?): JSONObject =
-        e().cockpit(includeDecisionTraces = includeDecisionTraces, selectedSymbol = selectedSymbol)
+    fun cockpitSnapshot(
+        includeDecisionTraces: Boolean,
+        selectedSymbol: String?,
+        includeTradeHistory: Boolean = true
+    ): JSONObject =
+        e().cockpit(includeDecisionTraces = includeDecisionTraces,
+            selectedSymbol = selectedSymbol, includeTradeHistory = includeTradeHistory)
 
     /** Explicitly incomplete, bounded response for the legacy String transport. */
     fun briefDiagnostics(): JSONObject {
@@ -13007,7 +13018,11 @@ private class NativeEngine(
         return tests
     }
 
-    fun cockpit(includeDecisionTraces: Boolean = true, selectedSymbol: String? = null): JSONObject {
+    fun cockpit(
+        includeDecisionTraces: Boolean = true,
+        selectedSymbol: String? = null,
+        includeTradeHistory: Boolean = true
+    ): JSONObject {
         // Cockpit only needs the selected chart and current primary symbol traces.
         // The complete 15-symbol forensic history is kept in the separate ZIP.
         val scope = if (includeDecisionTraces) cockpitTraceSymbols(primarySymbol, selectedSymbol) else null
@@ -13031,8 +13046,15 @@ private class NativeEngine(
         val observedAt = System.currentTimeMillis()
         val readiness = CockpitDiagnostics.readiness(captured, coordinator, observedAt)
         captured.put("cockpit_readiness", readiness).put("snapshot_at_ms", observedAt)
+        // DIAG20: full trade-history reconciliation joins the persisted
+        // 408+ intents and operator records. It was re-run every 5 seconds
+        // even while a user looked only at the dashboard/market/system.
+        // Fetch the full history on the Trades screen or a historical chart.
+        // This is display-only; signed execution and PnL accounting unchanged.
         return JSONObject().put("snapshot_at_ms", observedAt).put("status", captured)
-            .put("scanner", scan).put("trades", trades())
+            .put("scanner", scan).put("trades",
+                if (includeTradeHistory) trades() else JSONArray())
+            .put("trade_history_included", includeTradeHistory)
             .put("events", auditStore.recentCockpitEvents(30))
     }
 
