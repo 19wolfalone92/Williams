@@ -247,7 +247,8 @@ class MarketHistoryStore(context: Context) :
         interval: String,
         candles: List<Candle>,
         complete: Boolean? = null,
-        missingOnly: Boolean = false
+        missingOnly: Boolean = false,
+        expectedRevision: Long? = null
     ) {
         if (candles.isEmpty()) return
         val db = writableDatabase
@@ -264,6 +265,8 @@ class MarketHistoryStore(context: Context) :
                 if (cursor.moveToFirst()) longArrayOf(cursor.getLong(0),
                     cursor.getLong(1), cursor.getLong(2)) else null
             }
+            val insertOnly = missingOnly || (expectedRevision!=null &&
+                expectedRevision!=indicatorCacheRevision(symbol,interval))
             var added = 0L
             var changed = false
             var oldest = prior?.get(0) ?: 0L
@@ -286,7 +289,7 @@ class MarketHistoryStore(context: Context) :
                         cursor.getDouble(3) == c.low && cursor.getDouble(4) == c.close &&
                         cursor.getDouble(5) == c.volume
                 }
-                if (existing == true || (missingOnly && existing != null)) continue
+                if (existing == true || (insertOnly && existing != null)) continue
                 insert.clear()
                 insert.put("symbol", symbol)
                 insert.put("interval", interval)
