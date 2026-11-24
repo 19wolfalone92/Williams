@@ -1185,6 +1185,22 @@ internal fun observeFuturesEquityFromPersistedBaseline(
     return breaker.observe(equity, nowMs)
 }
 
+internal fun closedCandleFingerprint(candles: List<CandleN>): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    val bytes = java.nio.ByteBuffer.allocate(48)
+    for (candle in candles) {
+        bytes.clear()
+        bytes.putLong(candle.t)
+        bytes.putLong(candle.o.toBits())
+        bytes.putLong(candle.h.toBits())
+        bytes.putLong(candle.l.toBits())
+        bytes.putLong(candle.c.toBits())
+        bytes.putLong(candle.v.toBits())
+        digest.update(bytes.array())
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 internal data class CandleN(
     val t: Long,
     val o: Double,
@@ -4361,8 +4377,11 @@ private class NativeEngine(
         val first=closed.first().t
         val last=closed.last().t
         val revision=historyStore.indicatorCacheRevision(symbol,frame)
+        // A revision alone cannot identify an already captured in-memory list.
+        // Hash the actual immutable closed input, including OHLCV corrections.
+        val fingerprint=closedCandleFingerprint(closed)
         historyStore.loadClosedIndicatorSnapshot(
-            symbol,frame,first,last,closed.size
+            symbol,frame,first,last,closed.size,fingerprint
         )?.let { return it }
         val calculated=buildIndicatorSnapshot(closed,symbol,frame)
         // Only save when the entire latest input is actually durable and its
@@ -4370,7 +4389,7 @@ private class NativeEngine(
         // return it for display but never certify a reusable disk snapshot.
         if(historyStore.newest(symbol,frame)==last) {
             historyStore.saveClosedIndicatorSnapshot(
-                symbol,frame,first,last,closed.size,revision,calculated
+                symbol,frame,first,last,closed.size,revision,fingerprint,calculated
             )
         }
         return calculated
@@ -12807,6 +12826,7 @@ private class NativeEngine(
             return liveChartEnvelope(symbol,selectedInterval,cached.candleRows,
                 cached.indicators,cached.lastOpenMs,chartExchangeNowMs)
         }
+        val chartInputRevision=historyStore.indicatorCacheRevision(symbol,selectedInterval)
         fun chartDiskWindow():List<CandleN> =
             historyStore.loadRecent(
                 symbol,selectedInterval,bars.coerceAtMost(6000),requestedEndTime
@@ -12902,13 +12922,14 @@ private class NativeEngine(
 
         // Memoize only a CURRENT fully closed chart. A stale/offline chart
         // cannot masquerade as live and is not an execution input.
-        if(bars>150 && sourceCandles.isNotEmpty() &&
+        if(bars>150 && sourceCandles.isNotEmpty() && sourceCandles === stored &&
+            chartInputRevision==historyStore.indicatorCacheRevision(symbol,selectedInterval) &&
             cachedFixedFrameKlinesValid(sourceCandles,selectedInterval) &&
             futuresMarketData.isLastClosedCandleCurrent(
                 latestClosedCandleTime,selectedInterval,chartExchangeNowMs)) {
             displayedClosedChartCache=ClosedChartDisplayCache(
                 symbol,selectedInterval,bars,latestClosedCandleTime,
-                historyStore.indicatorCacheRevision(symbol,selectedInterval),
+                chartInputRevision,
                 output,indicatorSnapshot,System.currentTimeMillis())
         }
         return liveChartEnvelope(symbol,selectedInterval,output,indicatorSnapshot,
