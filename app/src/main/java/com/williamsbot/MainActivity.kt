@@ -674,7 +674,7 @@ fun WilliamsApp(context: Context) {
             try {
                 // Parsing thousands of candles and their indicators on the Compose main
                 // thread could freeze the displayed quote even when market WS was fresh.
-                val (loaded, summary) = withContext(Dispatchers.IO) {
+                val (loaded, summary, freshnessWarning) = withContext(Dispatchers.IO) {
                     val raw = api.get("/api/v1/market/klines?symbol=" + requestSymbol +
                         "&interval=" + requestInterval + "&bars=6000" +
                         (historicalTrade?.let {
@@ -692,16 +692,21 @@ fun WilliamsApp(context: Context) {
                     require(payload.optString("interval") == requestInterval) {
                         "Runtime вернул другой таймфрейм; молчаливая подмена запрещена"
                     }
-                    parseCandles(payload.optJSONArray("candles") ?: JSONArray()) to
-                        chartIndicatorSummary(payload.optJSONObject("indicator_snapshot"))
+                    Triple(parseCandles(payload.optJSONArray("candles") ?: JSONArray()),
+                        chartIndicatorSummary(payload.optJSONObject("indicator_snapshot")),
+                        if(historicalTrade==null && !payload.optBoolean("candles_fresh",false))
+                            if(payload.optBoolean("continuity_verified",false))
+                                "Сохранённый график: актуальность свечей Binance не подтверждена"
+                            else "В истории есть непроверенные данные; индикаторы недоступны"
+                        else null)
                 }
                 if (loaded.isEmpty()) {
                     chartError = "$requestSymbol $requestInterval: закрытые свечи не получены"
                 } else {
                     chartCandles = loaded
                     chartIndicatorSummary = summary
-                    chartError = null
-                    lastChartBarOpenMs = loaded.last().time
+                    chartError = freshnessWarning
+                    lastChartBarOpenMs = if(freshnessWarning==null) loaded.last().time else 0L
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
