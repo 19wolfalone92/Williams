@@ -688,7 +688,12 @@ internal fun confirmedPendingEntriesAllowConcurrentAdmission(intents: JSONArray)
         val intent = intents.optJSONObject(i) ?: return false
         val role = intent.optString("intent_role", "ENTRY")
         if (role == "EXIT") {
-            if (intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED") {
+            // A definitive Binance HTTP -2022 POST rejection is a terminal
+            // non-placement proof, not an unresolved exit. It does not imply
+            // exchange flatness or permit entry without independent signed
+            // position, STOP, margin and risk gates.
+            if (intent.optString("exchange_status").uppercase(Locale.US) != "EXIT_CONFIRMED" &&
+                !isDurableFuturesReduceOnlyRejection(intent)) {
                 return false
             }
             continue
