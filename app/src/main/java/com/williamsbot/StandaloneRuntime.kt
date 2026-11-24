@@ -5534,20 +5534,16 @@ private class NativeEngine(
         // Mutations are serialized account-wide through one durable Execution Door.
         // This serialization does not limit the number of distinct-symbol open campaigns.
         val reservationKey = FUTURES_EXECUTION_DOOR_KEY
-        val deadlineNanos = System.nanoTime() +
-            TimeUnit.MILLISECONDS.toNanos(waitForDoorMs.coerceAtLeast(0L))
-        var reserved = executionGate.tryReserve(reservationKey)
-        while (!reserved && waitForDoorMs > 0L && System.nanoTime() < deadlineNanos) {
-            try {
-                Thread.sleep(25L)
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                error("Interrupted while waiting for the Futures Execution Door")
-            }
-            reserved = executionGate.tryReserve(reservationKey)
+        val priority = executionPriorityForPurpose(purpose)
+        val admission = try {
+            executionGate.reserve(reservationKey, priority, waitForDoorMs.coerceAtLeast(0L))
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            error("Interrupted while waiting for the Futures Execution Door")
         }
-        require(reserved) {
-            "Futures Execution Door is already reserved by another mutation"
+        require(admission == ExecutionAdmission.ACQUIRED) {
+            "Futures Execution Door is already reserved by another mutation: " +
+                admission.name + "; priority=" + priority.name + "; purpose=" + purpose
         }
         executionDoorBlocker(running, paused, reconcileRequired, killLatched,
             allowPaused, allowStopped, allowKillLatched, allowReconcileRequired)?.let {
@@ -14366,6 +14362,10 @@ private class NativeEngine(
             .put("diagnostic_contract_version", CockpitDiagnostics.VERSION)
             .put("execution_gate", JSONObject()
                 .put("scope", "TECHNICAL_EXECUTION_DOOR_ONLY")
+                .put("queue_depth", executionGate.queueDepth())
+                .put("peak_queue_depth", executionGate.peakQueueDepth())
+                .put("oldest_wait_ms", executionGate.oldestWaitMs())
+                .put("account_door_reserved", executionGate.isReserved(FUTURES_EXECUTION_DOOR_KEY))
                 .put("snapshot_non_atomic",concurrentCoordinatorTransition)
                 .put("new_entries_allowed", gateReadyAtReport &&
                     cockpitReadiness.optBoolean("new_entries_allowed"))
