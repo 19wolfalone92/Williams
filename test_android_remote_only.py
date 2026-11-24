@@ -856,7 +856,13 @@ def test_chart_cockpit_switches_all_approved_futures_symbols_without_changing_sc
     assert "entry_protective_price" in ui
     assert "смена графика не меняет торговлю" in ui
     assert 'fetchCandles(symbol, "1h", 180)' in runtime
-    assert "val completeScan = ranked.size == coreSymbols.size" in runtime
+    assert "val perSymbolScanBlockers = scannerSymbolIsolationBlockers(" in runtime
+    assert "perSymbolScanBlockers.forEach" in runtime
+    assert "if (!completeScan) { coreSymbols.forEach { rejectDecision" not in runtime
+    assert "marketDataFresh = marketDataFresh()" in runtime
+    assert "coarseMetadataMissing.isEmpty()" not in runtime
+    assert "EXCHANGE_CLOCK_UNVERIFIED" in runtime
+    assert "val completeScan = perSymbolScanBlockers.isEmpty()" in runtime
     assert "scannerState = when {" in runtime
     assert '"READY_BLOCKED"' in runtime
     assert '"PARTIAL_BLOCKED"' in runtime

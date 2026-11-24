@@ -756,6 +756,20 @@ internal fun scannerExecutionBlocker(
     else -> null
 }
 
+/** A failed H1 analysis is local to that symbol, not an account-wide safety latch. */
+internal fun scannerSymbolIsolationBlockers(
+    approvedSymbols: Collection<String>,
+    analyzedSymbols: Collection<String>,
+    symbolErrors: Map<String, String>
+): Map<String, String> {
+    val analyzed = analyzedSymbols.toSet()
+    return approvedSymbols.distinct().mapNotNull { symbol ->
+        if (symbol in analyzed) null
+        else symbol to ("SYMBOL_SCAN_INCOMPLETE: " +
+            (symbolErrors[symbol]?.takeIf { it.isNotBlank() } ?: "NO_ANALYSIS_RESULT"))
+    }.toMap()
+}
+
 /** START is the safe entry point for authoritative reconciliation. */
 internal fun runtimeStartButtonEnabled(
     binanceConfigured: Boolean,
@@ -8876,9 +8890,6 @@ private class NativeEngine(
         scanSymbols = universe.first.toMutableList()
         val volumes = universe.second
         val spreads = universe.third
-        val coarseMetadataMissing=coreSymbols.filter { symbol ->
-            (volumes[symbol] ?: 0.0)<=0.0 || spreads[symbol]==null
-        }
         val symbolErrors = java.util.concurrent.ConcurrentHashMap<String, String>()
         val completedScans = ExecutorCompletionService<BaseAnalysis?>(scanExecutor)
         val futures = scanSymbols.map { symbol ->
@@ -8957,6 +8968,9 @@ private class NativeEngine(
             completedScans, futures, System.nanoTime() + TimeUnit.SECONDS.toNanos(60L)
         )
         val ranked = completed.values.toMutableList()
+        val perSymbolScanBlockers = scannerSymbolIsolationBlockers(
+            coreSymbols, ranked.map { it.symbol }, symbolErrors
+        )
         if (completed.timedOut) scannerError = scannerError
             ?: "Futures H1 scan exceeded its shared 60s deadline; " +
                 (futures.size - completed.completedCount) + " symbol tasks unfinished"
@@ -8965,7 +8979,9 @@ private class NativeEngine(
 
         candidates = JSONArray().apply {
             ranked.sortedWith(compareByDescending<BaseAnalysis> { it.campaignReady }
-                .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }.thenBy { it.spreadPct })
+                .thenByDescending { it.score }.thenBy { it.wave.exhaustionRisk }
+                .thenBy { it.spreadPct.takeIf { spread -> spread.isFinite() && spread >= 0.0 }
+                    ?: Double.POSITIVE_INFINITY })
                 .take(20).forEach { analysis ->
                     val row=toJson(analysis)
                     val h1=analysis.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
@@ -8990,6 +9006,9 @@ private class NativeEngine(
         lastSymbolsScanned = ranked.size
         lastScannerSymbolErrors = JSONObject().apply {
             symbolErrors.toSortedMap().forEach { (symbol,reason) -> put(symbol,reason) }
+            perSymbolScanBlockers.forEach { (symbol,reason) ->
+                if (!has(symbol)) put(symbol,reason)
+            }
         }
         lastScanAt = System.currentTimeMillis()
         scanRunId = "futures-" + lastScanAt
@@ -9012,20 +9031,22 @@ private class NativeEngine(
             futuresCampaignCoordinator.status().optString("state", "RECONCILE_REQUIRED")
                 .uppercase(Locale.US)
         }.getOrDefault("RECONCILE_REQUIRED")
-        val completeScan = ranked.size == coreSymbols.size
+        val completeScan = perSymbolScanBlockers.isEmpty()
         val executionBlocker = scannerExecutionBlocker(
             paused = paused,
             reconcileRequired = reconcileRequired,
             killLatched = killLatched,
             accountReady = restAccountReady,
-            // H1 detection remains independent of coarse volume/spread REST
-            // outages. But NEVER create a Futures order while any approved
-            // symbol has unverified market metadata.
-            marketDataFresh = marketDataFresh() && coarseMetadataMissing.isEmpty(),
+            // Shared account/REST freshness is global. Missing optional 24h
+            // volume or coarse book metadata is symbol-local and must not
+            // suppress otherwise-valid H1 analysis on the other contracts.
+            // Each selected candidate still passes final exchange filters,
+            // risk checks and the execution coordinator before any mutation.
+            marketDataFresh = marketDataFresh(),
             coordinatorState = coordinatorStateForCompletion,
             coordinatorReadyForEntry = campaignCoordinatorReadyForEntry()
         )
-        val missing = coreSymbols - ranked.map { it.symbol }.toSet()
+        val missing = perSymbolScanBlockers.keys
         // A complete outage of the shared public UTC clock is a transient
         // market-data dependency, not proof all 15 independent analyzers are
         // broken. Never mark this as READY or use stale H1 signals.
@@ -9034,7 +9055,7 @@ private class NativeEngine(
         // A valid read-only scan can overlap an unrelated Binance recovery
         // and be temporarily blocked by the coordinator's in-flight marker.
         // Preserve the entry fence, but recheck promptly after it finishes.
-        if (completeScan && executionBlocker == "BLOCKED_FUTURES_RECONCILIATION" &&
+        if (executionBlocker == "BLOCKED_FUTURES_RECONCILIATION" &&
             futuresReconciliationRunning && !reconcileRequired) {
             scanRetryAfterReconciliation = true
         }
@@ -9064,11 +9085,8 @@ private class NativeEngine(
                         ?: "Futures positions/orders/protection reconciliation is required"
                     "PAUSED" -> lastError ?: "Runtime is paused; read-only market scan completed"
                     "BLOCKED_ACCOUNT" -> restAccountLastError ?: "Futures account snapshot is not ready; entries remain disabled"
-                    "WAITING_FOR_MARKET_DATA" -> if(coarseMetadataMissing.isNotEmpty())
-                        "Read-only H1 analysis completed; new entries blocked by unverified Binance quotes/volume: " +
-                            coarseMetadataMissing.joinToString(",") +
-                            (scannerMarketMetadataWarning?.let { "; $it" } ?: "")
-                        else restLastError ?: "Futures market data is stale; entries remain disabled"
+                    "WAITING_FOR_MARKET_DATA" ->
+                        restLastError ?: "Shared Futures REST market data is stale; entries remain disabled"
                     else -> executionBlocker
                 }
             }
@@ -9080,9 +9098,27 @@ private class NativeEngine(
             scannerError = "TESTNET_FORCE_MODE_ACTIVE: automatic entries suspended; select an explicit LONG/SHORT H1 entry in Cockpit"
             return
         }
-        if (executionBlocker != null) { coreSymbols.forEach { rejectDecision(it,executionBlocker) };return }
-        if (!completeScan) { coreSymbols.forEach { rejectDecision(it,"SCAN_INCOMPLETE: "+missing.joinToString(",")) };return }
-        if (!restAccountReady || !marketDataFresh()) { coreSymbols.forEach { rejectDecision(it,"ACCOUNT_OR_MARKET_DATA_NOT_READY") };return }
+        if (clockUnavailable) {
+            coreSymbols.forEach { rejectDecision(it,"EXCHANGE_CLOCK_UNVERIFIED: shared Binance UTC unavailable") }
+            return
+        }
+        if (executionBlocker != null) {
+            coreSymbols.forEach { rejectDecision(it,executionBlocker) }
+            return
+        }
+        // A failed/unfinished symbol remains blocked on its own. Valid symbols
+        // continue through the same account-wide risk, reconciliation and
+        // exchange-side preflights; partial analysis is not an account-wide veto.
+        perSymbolScanBlockers.forEach { (symbol,reason) -> rejectDecision(symbol,reason) }
+        if (ranked.isEmpty()) {
+            scannerError = scannerError
+                ?: "No approved symbol completed a valid H1 analysis; no entry candidates are available"
+            return
+        }
+        if (!restAccountReady || !marketDataFresh()) {
+            coreSymbols.forEach { rejectDecision(it,"ACCOUNT_OR_MARKET_DATA_NOT_READY") }
+            return
+        }
         if (futuresCampaignCoordinator.state !in setOf(
                 NativeFuturesCampaignCoordinator.State.READY,
                 NativeFuturesCampaignCoordinator.State.OPEN_PROTECTED,
