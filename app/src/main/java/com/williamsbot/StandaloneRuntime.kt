@@ -12988,7 +12988,10 @@ private class NativeEngine(
         val prices = sourceCandles.map { it.c }
         val medianBars=sourceCandles.map { ClosedMedianBar(it.t,(it.h+it.l)/2.0) }
         val math=if(historical) IncrementalWilliamsMath() else liveChartMath
-        val mathPoints=if(chartContinuous) math.update("$symbol:$selectedInterval",medianBars)
+        // A new tail candle is append-only; a correction or historical insert
+        // increments seedRevision and forces a fresh, consistent indicator seed.
+        val mathKey="$symbol:$selectedInterval:seed="+chartInput.seedRevision
+        val mathPoints=if(chartContinuous) math.update(mathKey,medianBars)
             else List(sourceCandles.size) { WilliamsMathPoint(Double.NaN,Double.NaN,null,null,null) }
         // The chart fetches a moving quote frequently, but Williams indicators use only
         // confirmed closed candles. Cache the expensive wave/indicator explanation by

@@ -134,7 +134,7 @@ internal fun historicBackfillComplete(prior: Boolean, update: Boolean?): Boolean
  * working set for calculations, so the complete history is never retained in RAM.
  */
 class MarketHistoryStore(context: Context, databaseName: String = "williams_market_history.db") :
-    SQLiteOpenHelper(context, databaseName, null, 5) {
+    SQLiteOpenHelper(context, databaseName, null, 6) {
 
     data class Candle(
         val openTime: Long,
@@ -177,6 +177,7 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
                 oldest_open_time INTEGER NOT NULL DEFAULT 0,
                 newest_open_time INTEGER NOT NULL DEFAULT 0,
                 candle_count INTEGER NOT NULL DEFAULT 0,
+                historical_revision INTEGER NOT NULL DEFAULT 0,
                 complete INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
@@ -239,6 +240,9 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
         if(oldVersion<3) deviceWaveReplaySchema.forEach(db::execSQL)
         if(oldVersion<4) closedIndicatorCacheSchema.forEach(db::execSQL)
         if(oldVersion<5) durableHistoryGapSchema.forEach(db::execSQL)
+        if(oldVersion<6) db.execSQL(
+            "ALTER TABLE sync_state ADD COLUMN historical_revision INTEGER NOT NULL DEFAULT 0"
+        )
     }
 
     @Synchronized
@@ -258,17 +262,20 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
             // fires history/replay triggers and invalidates derived results.
             val prior = db.query(
                 "sync_state",
-                arrayOf("oldest_open_time", "newest_open_time", "candle_count"),
+                arrayOf("oldest_open_time", "newest_open_time", "candle_count", "historical_revision"),
                 "symbol=? AND interval=?", arrayOf(symbol, interval),
                 null, null, null
             ).use { cursor ->
                 if (cursor.moveToFirst()) longArrayOf(cursor.getLong(0),
-                    cursor.getLong(1), cursor.getLong(2)) else null
+                    cursor.getLong(1), cursor.getLong(2), cursor.getLong(3)) else null
             }
             val insertOnly = missingOnly || (expectedRevision!=null &&
                 expectedRevision!=indicatorCacheRevision(symbol,interval))
+            val priorHistoricalRevision = prior?.getOrNull(3) ?: 0L
+            val priorNewestOpenTime = prior?.getOrNull(1) ?: 0L
             var added = 0L
             var changed = false
+            var historicalChanged = false
             var oldest = prior?.get(0) ?: 0L
             var newest = prior?.get(1) ?: 0L
             val insert = ContentValues()
@@ -290,6 +297,12 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
                         cursor.getDouble(5) == c.volume
                 }
                 if (existing == true || (insertOnly && existing != null)) continue
+                // Only a pure append after the previously stored newest candle
+                // can continue the recursive indicator state. A correction or
+                // any insertion inside/before the known range changes its seed.
+                if (existing == false ||
+                    (existing == null && priorNewestOpenTime > 0L && c.openTime <= priorNewestOpenTime)
+                ) historicalChanged = true
                 insert.clear()
                 insert.put("symbol", symbol)
                 insert.put("interval", interval)
@@ -329,6 +342,7 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
             state.put("oldest_open_time", row[0])
             state.put("newest_open_time", row[1])
             state.put("candle_count", row[2])
+            state.put("historical_revision", priorHistoricalRevision + if (historicalChanged) 1L else 0L)
             // "complete" records that the exchange's earliest available candle
             // was reached. Live increments must NEVER erase that durable marker.
             val previousComplete = db.query(
@@ -424,6 +438,16 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
                 "AND NOT EXISTS(SELECT 1 FROM history_invalid_grid i WHERE i.symbol=s.symbol AND i.interval=s.interval)",
             arrayOf(symbol,interval)).use { it.moveToFirst() }
 
+    private fun historySeedRevision(db:SQLiteDatabase,symbol:String,interval:String):Long =
+        db.rawQuery(
+            "SELECT historical_revision FROM sync_state WHERE symbol=? AND interval=?",
+            arrayOf(symbol,interval)
+        ).use { if(it.moveToFirst()) it.getLong(0) else 0L }
+
+    @Synchronized
+    fun historySeedRevision(symbol:String,interval:String):Long =
+        historySeedRevision(readableDatabase,symbol,interval)
+
     @Synchronized
     fun indicatorCacheRevision(symbol:String,interval:String):Long =
         readableDatabase.rawQuery(
@@ -495,39 +519,41 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
 
     @Synchronized
     fun markComplete(symbol: String, interval: String) {
-        val state = ContentValues()
-        state.put("symbol", symbol)
-        state.put("interval", interval)
-        state.put("oldest_open_time", oldest(symbol, interval))
-        state.put("newest_open_time", newest(symbol, interval))
-        state.put("candle_count", count(symbol, interval))
-        state.put("complete", 1)
-        state.put("updated_at", System.currentTimeMillis())
-        writableDatabase.insertWithOnConflict(
-            "sync_state",
-            null,
-            state,
-            SQLiteDatabase.CONFLICT_REPLACE
-        )
+        val db=writableDatabase
+        db.transaction {
+            val state = ContentValues()
+            state.put("symbol", symbol)
+            state.put("interval", interval)
+            state.put("oldest_open_time", oldest(symbol, interval))
+            state.put("newest_open_time", newest(symbol, interval))
+            state.put("candle_count", count(symbol, interval))
+            state.put("historical_revision", historySeedRevision(db,symbol,interval))
+            state.put("complete", 1)
+            state.put("updated_at", System.currentTimeMillis())
+            db.insertWithOnConflict("sync_state",null,state,SQLiteDatabase.CONFLICT_REPLACE)
+        }
     }
 
     @Synchronized
     fun setError(symbol: String, interval: String, message: String?) {
-        val values = ContentValues()
-        values.put("symbol", symbol)
-        values.put("interval", interval)
-        values.put("oldest_open_time", oldest(symbol, interval))
-        values.put("newest_open_time", newest(symbol, interval))
-        values.put("candle_count", count(symbol, interval))
-        values.put("complete", if (isComplete(symbol, interval)) 1 else 0)
-        values.put("updated_at", System.currentTimeMillis())
-        values.put("last_error", message)
-        writableDatabase.insertWithOnConflict(
-            "sync_state",
-            null,
-            values,
-            SQLiteDatabase.CONFLICT_REPLACE
-        )
+        val db=writableDatabase
+        db.transaction {
+            val complete=rawQuery(
+                "SELECT complete FROM sync_state WHERE symbol=? AND interval=?",
+                arrayOf(symbol,interval)
+            ).use { it.moveToFirst() && it.getInt(0)==1 }
+            val values = ContentValues()
+            values.put("symbol", symbol)
+            values.put("interval", interval)
+            values.put("oldest_open_time", oldest(symbol, interval))
+            values.put("newest_open_time", newest(symbol, interval))
+            values.put("candle_count", count(symbol, interval))
+            values.put("historical_revision", historySeedRevision(db,symbol,interval))
+            values.put("complete", if (complete) 1 else 0)
+            values.put("updated_at", System.currentTimeMillis())
+            values.put("last_error", message)
+            db.insertWithOnConflict("sync_state",null,values,SQLiteDatabase.CONFLICT_REPLACE)
+        }
     }
 
     @Synchronized
@@ -614,7 +640,8 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
      * Other SQLiteOpenHelper instances cannot interleave a write here. */
     internal data class CandleSnapshot(
         val symbol:String, val interval:String, val revision:Long,
-        val candles:List<Candle>, val fingerprint:String, val continuous:Boolean
+        val candles:List<Candle>, val fingerprint:String, val continuous:Boolean,
+        val seedRevision:Long=0L
     ) {
         val environment:String get() = "BINANCE_USDM_DEMO"
         val source:String get() = "CONTRACT_PRICE"
@@ -635,7 +662,7 @@ class MarketHistoryStore(context: Context, databaseName: String = "williams_mark
                 CandleN(it.openTime,it.open,it.high,it.low,it.close,it.volume)
             })
             CandleSnapshot(symbol,interval,indicatorCacheRevision(symbol,interval),rows,
-                fingerprint,continuous)
+                fingerprint,continuous,historySeedRevision(db,symbol,interval))
         }
     }
 
