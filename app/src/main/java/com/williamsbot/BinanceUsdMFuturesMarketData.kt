@@ -222,8 +222,28 @@ internal class BinanceUsdMFuturesMarketData(
      * Verify real exchange-open boundaries (including calendar months), without
      * interpolating missing candles or using a forming future bar.
      */
+    /** Closed native candlestick grids must be UTC anchored, not just periodic.
+     * Binance 1w is Monday UTC; 1M is first calendar day at 00:00 UTC.
+     * Never infer a monthly interval from a constant 30-day duration. */
+    internal fun nativeKlineOpenAligned(openTimeMs: Long, interval: String): Boolean {
+        if (openTimeMs < 0L || interval !in supportedIntervals) return false
+        if (interval == "1M") {
+            val calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                timeInMillis = openTimeMs
+            }
+            return calendar.get(Calendar.DAY_OF_MONTH) == 1 &&
+                calendar.get(Calendar.HOUR_OF_DAY) == 0 &&
+                calendar.get(Calendar.MINUTE) == 0 &&
+                calendar.get(Calendar.SECOND) == 0 &&
+                calendar.get(Calendar.MILLISECOND) == 0
+        }
+        val step = runCatching { klineCloseTimeMs(0L, interval) + 1L }.getOrNull()
+            ?: return false
+        return futuresFixedKlineOpenUtcAligned(openTimeMs, step)
+    }
+
     internal fun nativeCandleTimelineContiguous(openTimes: List<Long>, interval: String): Boolean {
-        if (openTimes.isEmpty() || openTimes.any { it < 0L }) return false
+        if (openTimes.isEmpty() || openTimes.any { !nativeKlineOpenAligned(it, interval) }) return false
         return openTimes.zipWithNext().all { (left, right) ->
             val end = runCatching { klineCloseTimeMs(left, interval) }.getOrNull()
             end != null && end < Long.MAX_VALUE && right == end + 1L
@@ -337,7 +357,7 @@ internal class BinanceUsdMFuturesMarketData(
         openTimeMs: Long,
         interval: String,
         exchangeNowMs: Long
-    ): Boolean = openTimeMs >= 0L &&
+    ): Boolean = nativeKlineOpenAligned(openTimeMs, interval) &&
         exchangeNowMs > klineCloseTimeMs(openTimeMs, interval)
 
     /**
@@ -350,7 +370,8 @@ internal class BinanceUsdMFuturesMarketData(
         interval: String,
         exchangeNowMs: Long
     ): Boolean {
-        if (openTimeMs <= 0L || exchangeNowMs <= 0L) return false
+        if (openTimeMs <= 0L || exchangeNowMs <= 0L ||
+            !nativeKlineOpenAligned(openTimeMs, interval)) return false
         val closeTimeMs = klineCloseTimeMs(openTimeMs, interval)
         if (closeTimeMs == Long.MAX_VALUE || exchangeNowMs <= closeTimeMs) return false
         // A future/forming bar is NEVER a valid cached last CLOSED candle.
