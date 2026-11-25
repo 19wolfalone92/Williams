@@ -178,15 +178,6 @@ class FuturesCandidate:
         }
 
 
-def _requires_directional_htf_confirmation(signal_type: SignalType) -> bool:
-    """TC2 WM1 is an early reversal; aligned HTF trend is context, not its entry prerequisite.
-
-    WM2/WM3 continuation-style entries retain the configured directional HTF gate.
-    Exchange/risk/trigger/protection gates still apply to every signal.
-    """
-    return signal_type != SignalType.REVERSAL
-
-
 def _pending_entry_preflight_reason(pending, intent, current_price: float, now_ms: int | None = None) -> str:
     """Fail closed if a conditional Wise-Man entry is stale or its trigger already passed."""
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
@@ -1925,12 +1916,9 @@ class FuturesWilliamsRuntime:
             if stop <= trigger:
                 raise RuntimeError("SHORT protective stop is not above entry trigger")
 
-        if (
-            self.config.require_htf_confirmation and signal.strategy_profile!=NTD
-            and _requires_directional_htf_confirmation(signal.signal_type)
-            and not candidate.htf_confirmed
-        ):
-            raise RuntimeError("HTF confirmation gate blocked initial campaign")
+        # D1/H4 are market context and candidate-ranking inputs only.
+        # TC2 WM1, WM2 and WM3 are independent H1 entries; no independent
+        # higher-timeframe directional confirmation is a prerequisite.
 
         current = float(self.client.ticker_price(symbol).get("price", 0) or 0)
         if current <= 0:

@@ -802,17 +802,18 @@ def test_dry_run_still_scans_market_data_but_never_arms_orders():
 
 
 
-def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
-    from futures_williams_runtime import _requires_directional_htf_confirmation
+def test_tc2_wm1_wm2_wm3_do_not_require_independent_htf_confirmation():
+    import inspect
+    from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
 
-    # WM1 is the early reversal signal. Requiring an already-aligned HTF trend
-    # would turn it into a late confirmation entry rather than the book's WM1.
-    assert _requires_directional_htf_confirmation(SignalType.REVERSAL) is False
-    assert _requires_directional_htf_confirmation(SignalType.SUPER_AO) is True
-    assert _requires_directional_htf_confirmation(SignalType.FRACTAL) is True
+    entry_source = inspect.getsource(FuturesWilliamsRuntime._arm_entry)
+    scanner_source = inspect.getsource(FuturesWilliamsScanner.analyse)
 
-
-
+    # D1/H4 remains available as context/ranking, but never vetoes an H1 TC2 entry.
+    assert "require_htf_confirmation" not in entry_source
+    assert "candidate.htf_confirmed" not in entry_source
+    assert "htf_confirmed=bool(htf_ok)" in scanner_source
+    assert "score_adjustment" in scanner_source
 def test_ntd_green_zone_add_on_uses_matching_ao_ac_and_price_colours_without_zero_gate():
     ind = pd.DataFrame({
         "open_time_ms": [1_699_999_700_000,1_700_000_000_000,1_700_000_300_000],
