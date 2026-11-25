@@ -1,0 +1,42 @@
+name: Williams portfolio archive gap repair qualification (read only)
+on:
+  push:
+    branches:
+      - architecture/reconstruction-safety-performance-20261124
+    paths:
+      - 'research/qualify_repaired_portfolio.py'
+      - 'research/merge_mark_price_repairs.py'
+      - 'research/mark_price_repairs/**'
+      - '.github/workflows/portfolio-archive-repair.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Reuse the fifteen original CI archive artifacts without fetching Binance again
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: '45633468011'
+          pattern: 'portfolio-archives-*'
+          path: build/original
+          merge-multiple: false
+      - name: Validate and repair only the identified Mark Price gaps
+        run: python -m research.qualify_repaired_portfolio --original-root build/original --output build/qualified --revision "$GITHUB_SHA"
+      - name: Publish repaired ZIPs and immutable provenance manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: portfolio-24m-qualified-archives-and-repairs
+          path: build/qualified/
+          if-no-files-found: error
+          retention-days: 30
