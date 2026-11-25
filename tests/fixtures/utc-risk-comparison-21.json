@@ -1,0 +1,847 @@
+{
+  "source_commit": "47ca4e4dd3158db1d9d0c58c56ea55b1ef8a0082",
+  "backend_blob_verified": "5be62c5a91ab9bec2219709b38303799bc56bb7c",
+  "scenarios": 21,
+  "A_vs_B_entry_disagreements": 4,
+  "Python_vs_A_entry_disagreements": 6,
+  "self_checks": "PASS",
+  "scope": "Synthetic independent arithmetic and exact backend class; Android formula transcription; not signed Demo or midnight reconstruction proof; no policy changes",
+  "results": [
+    {
+      "case": "flat_no_trade",
+      "inputs": {
+        "name": "flat_no_trade",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10000",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "flat_exact_3pct",
+      "inputs": {
+        "name": "flat_exact_3pct",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-300",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9700",
+      "closing_equity": "9700",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-300.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "flat_under_3pct",
+      "inputs": {
+        "name": "flat_under_3pct",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-299.99",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9700.01",
+      "closing_equity": "9700.01",
+      "android_wallet_formula_A": {
+        "baseline": "10000.00",
+        "pnl": "-299.99",
+        "loss_pct": "2.999900",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-299.99",
+        "loss_pct": "2.999900",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "long_carry_loss_recovers",
+      "inputs": {
+        "name": "long_carry_loss_recovers",
+        "w0": "10000",
+        "u0": "-500",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "-350",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "9650",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-350",
+        "loss_pct": "3.500",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "9500",
+        "pnl": "150",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-350.00000000, limit=-285.00000000",
+        "persisted_baseline": "9500"
+      },
+      "A_vs_B_different": true,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "short_carry_profit_erodes",
+      "inputs": {
+        "name": "short_carry_profit_erodes",
+        "w0": "10000",
+        "u0": "500",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "100",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10100",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "100",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10500",
+        "pnl": "-400",
+        "loss_pct": "3.809523809523809523809523810",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=100.00000000, limit=-315.00000000",
+        "persisted_baseline": "10500"
+      },
+      "A_vs_B_different": true,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "long_carry_profit_erodes",
+      "inputs": {
+        "name": "long_carry_profit_erodes",
+        "w0": "10000",
+        "u0": "600",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "200",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10200",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "200",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10600",
+        "pnl": "-400",
+        "loss_pct": "3.773584905660377358490566038",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=200.00000000, limit=-318.00000000",
+        "persisted_baseline": "10600"
+      },
+      "A_vs_B_different": true,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "short_carry_loss_recovers",
+      "inputs": {
+        "name": "short_carry_loss_recovers",
+        "w0": "10000",
+        "u0": "-500",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "-350",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "9650",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-350",
+        "loss_pct": "3.500",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "9500",
+        "pnl": "150",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-350.00000000, limit=-285.00000000",
+        "persisted_baseline": "9500"
+      },
+      "A_vs_B_different": true,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "multiple_positions_net_carry",
+      "inputs": {
+        "name": "multiple_positions_net_carry",
+        "w0": "10000",
+        "u0": "-250",
+        "realized": "50",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "-320",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10050",
+      "closing_equity": "9730",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-270",
+        "loss_pct": "2.700",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "9750",
+        "pnl": "-20",
+        "loss_pct": "0.2051282051282051282051282051",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "9750"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "partial_close",
+      "inputs": {
+        "name": "partial_close",
+        "w0": "10000",
+        "u0": "150",
+        "realized": "100",
+        "commission": "-10",
+        "funding": "0",
+        "external": "0",
+        "u1": "-140",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10090",
+      "closing_equity": "9950",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-50",
+        "loss_pct": "0.500",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10150",
+        "pnl": "-200",
+        "loss_pct": "1.970443349753694581280788177",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10150"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "fees_exactly_once",
+      "inputs": {
+        "name": "fees_exactly_once",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-270",
+        "commission": "-30",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9700",
+      "closing_equity": "9700",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-300.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "funding_exactly_once",
+      "inputs": {
+        "name": "funding_exactly_once",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-280",
+        "commission": "0",
+        "funding": "-20",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9700",
+      "closing_equity": "9700",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-300",
+        "loss_pct": "3.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-300.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "deposit_neutral",
+      "inputs": {
+        "name": "deposit_neutral",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "2000",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "12000",
+      "closing_equity": "12000",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "withdraw_neutral",
+      "inputs": {
+        "name": "withdraw_neutral",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "-2000",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "8000",
+      "closing_equity": "8000",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=0.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "deposit_masks_missing_local_funding",
+      "inputs": {
+        "name": "deposit_masks_missing_local_funding",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "-400",
+        "external": "1000",
+        "u1": "0",
+        "local_net": "0",
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10600",
+      "closing_equity": "10600",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-400",
+        "loss_pct": "4.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-400",
+        "loss_pct": "4.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "internal_transfer_neutral",
+      "inputs": {
+        "name": "internal_transfer_neutral",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "-500",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9500",
+      "closing_equity": "9500",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "0",
+        "loss_pct": "0",
+        "allow_entry": true,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=0.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "network_loss",
+      "inputs": {
+        "name": "network_loss",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": false,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10000",
+      "android_wallet_formula_A": null,
+      "independent_midnight_equity_B": null,
+      "actual_python_breaker": null,
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "restart_existing_baseline",
+      "inputs": {
+        "name": "restart_existing_baseline",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-350",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9650",
+      "closing_equity": "9650",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-350",
+        "loss_pct": "3.500",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-350",
+        "loss_pct": "3.500",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-350.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "late_first_observation_no_midnight",
+      "inputs": {
+        "name": "late_first_observation_no_midnight",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "-400",
+        "external": "0",
+        "u1": "0",
+        "local_net": "0",
+        "complete": true,
+        "midnight": false,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": false
+      },
+      "closing_wallet": "9600",
+      "closing_equity": "9600",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-400",
+        "loss_pct": "4.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": false
+      },
+      "independent_midnight_equity_B": null,
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "9600.0"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": true
+    },
+    {
+      "case": "account_identity_changed",
+      "inputs": {
+        "name": "account_identity_changed",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": false,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10000",
+      "android_wallet_formula_A": null,
+      "independent_midnight_equity_B": null,
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "income_incomplete",
+      "inputs": {
+        "name": "income_incomplete",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "0",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": false,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "10000",
+      "closing_equity": "10000",
+      "android_wallet_formula_A": null,
+      "independent_midnight_equity_B": null,
+      "actual_python_breaker": {
+        "allow_entry": true,
+        "reason": "ok",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    },
+    {
+      "case": "five_percent_emergency",
+      "inputs": {
+        "name": "five_percent_emergency",
+        "w0": "10000",
+        "u0": "0",
+        "realized": "-500",
+        "commission": "0",
+        "funding": "0",
+        "external": "0",
+        "u1": "0",
+        "local_net": null,
+        "complete": true,
+        "midnight": true,
+        "same_account": true,
+        "connected": true,
+        "existing_backend_baseline": true
+      },
+      "closing_wallet": "9500",
+      "closing_equity": "9500",
+      "android_wallet_formula_A": {
+        "baseline": "10000",
+        "pnl": "-500",
+        "loss_pct": "5.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": true
+      },
+      "independent_midnight_equity_B": {
+        "baseline": "10000",
+        "pnl": "-500",
+        "loss_pct": "5.00",
+        "allow_entry": false,
+        "emergency_5pct_threshold_reached": true
+      },
+      "actual_python_breaker": {
+        "allow_entry": false,
+        "reason": "daily equity loss circuit breaker tripped: net_pnl=-500.00000000, limit=-300.00000000",
+        "persisted_baseline": "10000"
+      },
+      "A_vs_B_different": false,
+      "Python_vs_A_different": false
+    }
+  ]
+}
