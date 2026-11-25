@@ -380,13 +380,12 @@ def _build_symbol_signals(symbol: str, h1: pd.DataFrame, tick: float, cfg: dict,
     regime = _market_regime_frame(h1)
     extracted = extract_causal_h1_signals(indicators, symbol=symbol, tick_size=tick, window_bars=180)
     events = defaultdict(list)
-    close_rows = {}
     open_ms = h1.index.asi8 // 1_000_000
+    m5_timeline = np.arange(start_ms, end_ms, M5_MS, dtype=np.int64)
+    close_rows = (np.searchsorted(open_ms + H1_MS, m5_timeline, side="right") - 1).astype(np.int32)
     for i, bar_open in enumerate(open_ms):
         known_at = int(bar_open + H1_MS)
         index = (known_at - start_ms) // M5_MS
-        if start_ms <= known_at < end_ms:
-            close_rows[int(index)] = i
         found = extracted.get(i)
         if not found or not (start_ms <= known_at < end_ms):
             continue
@@ -812,7 +811,7 @@ def main():
             "new_campaign_source": "TC2 only",
             "first_entry": "earliest valid WM1/WM2/WM3 signal",
             "pyramiding": "TC2 1:5:4:3:2 exact quantities; risk/margin may veto, never resize",
-            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; 3-bar source-policy and 4-bar non-TC2 engineering sensitivities included",
+            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; re-evaluated every M5 interval; 3-bar source-policy and 4-bar non-TC2 engineering sensitivities included",
             "M15_confirmation": False,
             "D1_H4_directional_gate": False,
             "lookahead_control": "production extract_causal_h1_signals closed-prefix replay; M5 event after H1 close",
