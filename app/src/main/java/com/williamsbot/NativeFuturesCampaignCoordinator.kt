@@ -1121,6 +1121,11 @@ internal class NativeFuturesCampaignCoordinator(
     }
     fun userTrades(symbol: String, startTime: Long, endTime: Long, limit: Int = 1000): JSONArray =
         adapterFactory().userTrades(symbol, startTime, endTime, limit)
+    fun completeUserTrades(symbol: String, startTime: Long, endTime: Long): JSONArray =
+        adapterFactory().completeUserTrades(symbol, startTime, endTime)
+
+    fun markPriceAtUtcDayStart(symbol: String, utcDayStartMs: Long): java.math.BigDecimal =
+        adapterFactory().markPriceAtUtcDayStart(symbol, utcDayStartMs)
     // intents() already parses a NEW JSONArray from the durable SQLite bytes.
     // Re-serializing that fresh object and parsing it a second time used to
     // allocate another full historical campaign ledger on every diagnostics /
