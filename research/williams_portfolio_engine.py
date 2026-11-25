@@ -29,6 +29,7 @@ from williams_tc2_pyramid import (
     next_tranche as tc2_next_tranche,
 )
 from williams_wave_hierarchy import wave_bars_from_dataframe
+from williams_scenario_lifecycle import ScenarioSignal, assess_scenario_opposition
 
 DAY_MS = 86_400_000
 H1_MS = 3_600_000
@@ -662,6 +663,135 @@ class PortfolioSimulator:
                     self._signal_status(symbol, item["signal"], item["known_at_ms"],
                                         item.get("context", {}), "IGNORED", "NO_OPEN_CAMPAIGN_FOR_ADD_ON")
 
+    def _refresh_opposition_watchers(self, symbol: str, items: list[dict], timestamp_ms: int):
+        campaign = self.active.get(symbol)
+        if not campaign or campaign["status"] != "OPEN":
+            return
+        watchers = {str(w["signal"].signal_id): w for w in campaign.get("opposition_watchers", [])}
+        for item in items:
+            signal = item["signal"]
+            if (signal.strategy_profile != TC2 or signal.side == campaign["side"]
+                    or _signal_role(signal) != SignalRole.ENTRY.value
+                    or _signal_type(signal) not in {
+                        SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
+                    }):
+                continue
+            signal_id = str(signal.signal_id)
+            actual_expiry = int(getattr(signal, "expires_at_ms", 0) or 0)
+            expires_at = min(actual_expiry if actual_expiry > 0 else timestamp_ms + H1_MS,
+                             timestamp_ms + H1_MS)
+            if signal_id in watchers:
+                watcher = watchers[signal_id]
+                watcher["last_seen_ms"] = timestamp_ms
+                watcher["expires_at_ms"] = expires_at
+                watcher["context"] = item.get("context", {})
+            else:
+                watcher = {
+                    "signal": signal, "context": item.get("context", {}),
+                    "known_at_ms": int(item["known_at_ms"]),
+                    "last_seen_ms": timestamp_ms, "expires_at_ms": expires_at,
+                }
+                watchers[signal_id] = watcher
+                self._signal_status(symbol, signal, item["known_at_ms"], item.get("context", {}),
+                                    "OPPOSITE_EXIT_WATCH")
+        kept = []
+        for signal_id, watcher in watchers.items():
+            if timestamp_ms >= int(watcher["expires_at_ms"]):
+                signal = watcher["signal"]
+                self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
+                                    "EXPIRED", "OPPOSITE_SIGNAL_NO_LONGER_REEMITTED")
+            else:
+                kept.append(watcher)
+        campaign["opposition_watchers"] = kept
+
+    def _check_opposition(self, symbol: str, campaign: dict, index: int,
+                          timestamp_ms: int, bars: list) -> bool:
+        watchers = campaign.get("opposition_watchers", [])
+        if not watchers or len(bars) < 45 or not campaign.get("entry_time_ms"):
+            return False
+        scenario_signals = []
+        by_id = {}
+        for watcher in watchers:
+            signal = watcher["signal"]
+            invalidation_value = float(getattr(signal, "invalidation_price", 0.0) or 0.0)
+            scenario = ScenarioSignal(
+                str(signal.signal_id),
+                "LONG" if signal.side == "BUY" else "SHORT",
+                str(signal.strategy_profile),
+                str(signal.execution_semantics),
+                int(signal.signal_bar_time_ms),
+                float(signal.trigger_price),
+                invalidation_value if invalidation_value > 0 else None,
+                int(watcher["expires_at_ms"]),
+            )
+            scenario_signals.append(scenario)
+            by_id[scenario.id] = watcher
+        direction = "LONG" if campaign["side"] == "BUY" else "SHORT"
+        mark = float(self.data[symbol]["mark"]["mark_open"][index])
+        now_price = float(self.data[symbol]["contract"]["open"][index])
+        try:
+            assessment = assess_scenario_opposition(
+                direction, int(campaign["entry_time_ms"]), scenario_signals,
+                bars, mark, int(timestamp_ms), H1_MS,
+            )
+        except Exception as exc:
+            campaign["opposition_advisory_error"] = type(exc).__name__
+            self._emit(timestamp_ms, "OPPOSITE_SIGNAL_ASSESSMENT_UNCERTAIN",
+                       symbol=symbol, campaign_id=campaign["campaign_id"],
+                       error=type(exc).__name__)
+            return False
+        if assessment.get("uncertain"):
+            campaign["opposition_advisory_error"] = str(assessment.get("blocker") or "H1_OPPOSITION_UNCERTAIN")
+            self._emit(timestamp_ms, "OPPOSITE_SIGNAL_ASSESSMENT_UNCERTAIN",
+                       symbol=symbol, campaign_id=campaign["campaign_id"],
+                       blocker=campaign["opposition_advisory_error"])
+            return False
+        evidence = assessment.get("opposition")
+        if evidence is None:
+            return False
+        source, event = evidence
+        watcher = by_id.get(str(source.id))
+        if watcher is None:
+            return False
+        signal = watcher["signal"]
+        trigger = float(signal.trigger_price)
+        active = (
+            signal.strategy_profile == TC2
+            and _signal_role(signal) == SignalRole.ENTRY.value
+            and _signal_type(signal) in {
+                SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
+            }
+            and event.state == "TRIGGERED"
+            and (now_price <= trigger if campaign["side"] == "BUY" else now_price >= trigger)
+        )
+        blocker = tc2_opposite_exit_profit_blocker(
+            campaign["side"], campaign["avg_entry"], now_price,
+            RISK_COST_ALLOWANCE, float(self.specs[symbol]["tick"]),
+        )
+        campaign["opposition_evidence"] = {
+            "signal_id": str(source.id), "direction": source.direction,
+            "strategy_profile": source.profile, "trigger": trigger,
+            "event": event.to_dict(), "observed_at_ms": int(timestamp_ms),
+            "contract_price": now_price, "mark_price": mark,
+        }
+        if active and blocker is None:
+            self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
+                                "TRIGGERED_EXIT")
+            self._close_campaign(symbol, campaign, now_price, index, timestamp_ms,
+                                 "OPPOSITE_SIGNAL", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            return True
+        campaign["opposition_advisory"] = {
+            "signal_id": str(source.id), "profit_exit_blocker": blocker,
+            "current_price_beyond_trigger": bool(active),
+            "observed_at_ms": int(timestamp_ms), "market_close_authorized": False,
+        }
+        self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
+                            "TRIGGERED_ADVISORY", blocker or "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
+        self._emit(timestamp_ms, "OPPOSITE_SIGNAL_ADVISORY_ONLY",
+                   symbol=symbol, campaign_id=campaign["campaign_id"],
+                   signal_id=str(source.id), blocker=blocker or "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
+        return False
+
     def _trail(self, symbol: str, index: int, timestamp_ms: int):
         campaign = self.active.get(symbol)
         if not campaign or campaign["status"] != "OPEN":
@@ -670,10 +800,12 @@ class PortfolioSimulator:
         if row_index is None:
             return
         h1 = self.data[symbol]["h1"]
-        closed = h1.iloc[max(0, row_index - 219):row_index + 1]
+        closed = h1.iloc[max(0, row_index - 499):row_index + 1]
         try:
             bars = wave_bars_from_dataframe(closed)
             current = float(self.data[symbol]["contract"]["open"][index])
+            if self._check_opposition(symbol, campaign, index, timestamp_ms, bars):
+                return
             if self.trail_bars == 4:
                 proposal = plan_williams_stop(
                     campaign["side"], campaign["stop"], campaign["avg_entry"],
