@@ -138,7 +138,7 @@ def test_public_history_research_universe_is_15_verified_usdm_perpetual_pairs():
     symbols={
         "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
         "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
-        "TRXUSDT", "DOTUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT",
+        "TRXUSDT", "DOTUSDT", "SUIUSDT", "BCHUSDT", "NEARUSDT",
     }
     assert len(symbols)==15 and set(replay.APPROVED_SYMBOLS)==symbols
     with pytest.raises(ValueError,match="outside the approved"):

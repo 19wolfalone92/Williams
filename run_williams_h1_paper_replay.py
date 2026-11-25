@@ -25,13 +25,9 @@ from williams_paper_replay import PaperReplayConfig, run_williams_paper_replay
 from williams_trade_readiness_audit import audit_williams_h1_trade_quality
 
 FUTURES_REST = "https://fapi.binance.com"
-APPROVED_SYMBOLS = (
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
-    # Public-data RESEARCH scope only; this never changes Android's
-    # independently configured live-account trading universe.
-    "TRXUSDT", "DOTUSDT", "UNIUSDT", "BCHUSDT", "NEARUSDT",
-)
+# Research replay must use the same explicitly approved fifteen-symbol universe.
+from trading_config import DEFAULT_FUTURES_SYMBOLS
+APPROVED_SYMBOLS = DEFAULT_FUTURES_SYMBOLS
 KLINE_COLUMNS = (
     "open_time", "open", "high", "low", "close", "volume",
     "close_time", "quote_volume", "trades", "taker_buy_base",
