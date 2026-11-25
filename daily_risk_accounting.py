@@ -134,7 +134,7 @@ def reverse_position_at_midnight(current_quantity, current_entry_price, trades, 
             raise DailyRiskDataError(f"{symbol}: trade outside requested UTC day")
         if snapshot_window_start_ms <= stamp <= snapshot_window_end_ms:
             raise DailyRiskDataError(f"{symbol}: trade overlaps account/position snapshot window")
-        if str(row.get("positionSide", "BOTH")).upper() != "BOTH":
+        if str(row.get("positionSide", "")).upper() != "BOTH":
             raise DailyRiskDataError(f"{symbol}: hedge-mode trade cannot be reconstructed")
         side = str(row.get("side", "")).upper()
         if side not in {"BUY", "SELL"}:
