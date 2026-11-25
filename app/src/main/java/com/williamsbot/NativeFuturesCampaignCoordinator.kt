@@ -632,6 +632,44 @@ internal fun futuresContractRuleBlocker(
     return null
 }
 
+/** Fresh Demo price grid after a definite precision rejection. Null trigger means
+ * no nearest protective grid point exists without widening the original risk.
+ * Invalid or incomplete exchange evidence throws; it is NOT proof of impossibility. */
+internal data class FuturesPrecisionRecoveryPlan(
+    val trigger: String?, val minPrice: String, val maxPrice: String, val tickSize: String
+)
+
+internal fun futuresPrecisionRecoveryPlan(
+    exchangeInfo: JSONObject, symbol: String, direction: String, originalStop: String, markPrice: String
+): FuturesPrecisionRecoveryPlan {
+    require(direction == "LONG" || direction == "SHORT")
+    val symbols = exchangeInfo.getJSONArray("symbols")
+    val row = (0 until symbols.length()).map { symbols.getJSONObject(it) }
+        .single { it.getString("symbol") == symbol }
+    require(row.getString("status") == "TRADING") { "$symbol not TRADING" }
+    val filters = row.getJSONArray("filters")
+    val price = (0 until filters.length()).map { filters.getJSONObject(it) }
+        .single { it.getString("filterType") == "PRICE_FILTER" }
+    val min = price.getString("minPrice").toBigDecimal()
+    val max = price.getString("maxPrice").toBigDecimal()
+    val tick = price.getString("tickSize").toBigDecimal()
+    val raw = originalStop.toBigDecimal()
+    val mark = markPrice.toBigDecimal()
+    require(min.signum() >= 0 && max.signum() >= 0 && tick.signum() >= 0 &&
+        (max.signum() == 0 || max >= min) && raw.signum() > 0 && mark.signum() > 0)
+    // PRICE_FILTER grid is anchored at minPrice; pricePrecision is NOT tickSize.
+    val candidate = if (tick.signum() == 0) raw else min.add(
+        raw.subtract(min).divide(tick, 0, if (direction == "LONG")
+            java.math.RoundingMode.CEILING else java.math.RoundingMode.FLOOR).multiply(tick))
+    val allowed = candidate.signum() > 0 && (min.signum() == 0 || candidate >= min) &&
+        (max.signum() == 0 || candidate <= max) &&
+        (if (direction == "LONG") candidate >= raw && candidate < mark
+         else candidate <= raw && candidate > mark)
+    fun plain(x: java.math.BigDecimal) = x.stripTrailingZeros().toPlainString()
+    return FuturesPrecisionRecoveryPlan(if (allowed) plain(candidate) else null,
+        plain(min), plain(max), plain(tick))
+}
+
 internal fun hasValidStructuralStop(direction: String, entryPrice: String, stopPrice: String): Boolean {
     val entry = entryPrice.toBigDecimalOrNull() ?: return false
     val stop = stopPrice.toBigDecimalOrNull() ?: return false
@@ -2760,6 +2798,24 @@ internal class NativeFuturesCampaignCoordinator(
                         saveIntents(persisted)
                     }
                 }
+                // A formerly impossible price grid may become usable again. Never
+                // close solely from an old filter snapshot if protection is now feasible.
+                if (matchingIntent != null && matchingIntent.optBoolean("initial_stop_grid_unplaceable", false) &&
+                    matchingIntent.optString("protection_status") == INITIAL_STOP_TRIGGER_REJECTED &&
+                    matchingIntent.optString("protection_client_id").isBlank() &&
+                    matchingIntent.optString("previous_protection_client_id").isBlank() && algos.length() == 0) {
+                    val restored = runCatching {
+                        futuresPrecisionRecoveryPlan(adapter.exchangeInfo(), symbol, direction,
+                            matchingIntent.optString("protective_stop"), adapter.markPrice(symbol).toString())
+                    }.getOrNull()
+                    if (restored?.trigger != null) {
+                        matchingIntent.remove("initial_stop_grid_unplaceable")
+                        matchingIntent.remove("unprotected_safety_guard_origin")
+                        matchingIntent.remove("unprotected_safety_exit_required_at_ms")
+                        matchingIntent.put("protection_status", "NOT_SUBMITTED")
+                        saveIntents(persisted)
+                    }
+                }
                 val currentProtectionId = matchingIntent?.optString("protection_client_id").orEmpty()
                 val previousProtectionId = matchingIntent?.optString("previous_protection_client_id").orEmpty()
                 val rejectedProtectionId = matchingIntent?.optString("initial_stop_rejection_id").orEmpty()
@@ -2785,7 +2841,8 @@ internal class NativeFuturesCampaignCoordinator(
                     isProtectiveStopOnCorrectSide(direction, liveMark.toString(), previousStopPrice)
                 val repeatedInitialPrecisionRejection = priorInitialStopGuard &&
                     matchingIntent?.optInt("initial_stop_definitive_rejection_code", 0) == -1111 &&
-                    (matchingIntent?.optInt("initial_stop_definitive_rejection_count", 0) ?: 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT
+                    ((matchingIntent?.optInt("initial_stop_definitive_rejection_count", 0) ?: 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT ||
+                        matchingIntent?.optBoolean("initial_stop_grid_unplaceable", false) == true)
                 if (matchingIntent != null && ((!currentStopSafe && !previousStopSafe) ||
                         repeatedInitialPrecisionRejection)) {
                     anyUnprotected = true
@@ -2815,7 +2872,7 @@ internal class NativeFuturesCampaignCoordinator(
                                     .takeIf { it>0L } ?: clock())
                         saveIntents(persisted)
                         lastBlocker = if (repeatedInitialPrecisionRejection) {
-                            "$symbol initial protective STOP rejected twice (-1111); verified emergency reduction required"
+                            "$symbol initial protective STOP precision recovery exhausted; verified emergency reduction required"
                         } else {
                             "$symbol initial protective stop was not accepted and MARK_PRICE crossed its level; verified emergency reduction required"
                         }
@@ -2923,9 +2980,10 @@ internal class NativeFuturesCampaignCoordinator(
                         .uppercase(Locale.US)
                     var protectionClientId = matchingIntent.optString("protection_client_id")
                     if (protectionStatus == INITIAL_STOP_TRIGGER_REJECTED &&
-                        matchingIntent.optInt("initial_stop_definitive_rejection_count", 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT) {
+                        (matchingIntent.optInt("initial_stop_definitive_rejection_count", 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT ||
+                            matchingIntent.optBoolean("initial_stop_grid_unplaceable", false))) {
                         anyUnprotected = true
-                        lastBlocker = "$symbol initial protective STOP was definitively rejected twice (-1111); emergency reduce-only exit requires signed absence proof"
+                        lastBlocker = "$symbol initial protective STOP precision recovery exhausted; emergency reduce-only exit requires signed absence proof"
                         continue
                     }
                     if (protectionStatus == "SUBMISSION_UNKNOWN" || protectionStatus == "PROTECTED") {
@@ -3106,6 +3164,52 @@ internal class NativeFuturesCampaignCoordinator(
                                 "$symbol exchange order book or foreign close-only TP changed during " +
                                     "emergency H1 STOP preparation; no STOP submitted"
                             }
+                        }
+                        if (preparedRearm == null && rejectedProtectionId.isNotBlank() &&
+                            matchingIntent.optInt("initial_stop_definitive_rejection_code", 0) == -1111) {
+                            val original = matchingIntent.optString("protective_stop")
+                            val freshMark = runCatching { adapter.markPrice(symbol).toString() }.getOrNull()
+                            val grid = freshMark?.let { mark ->
+                                runCatching { futuresPrecisionRecoveryPlan(adapter.exchangeInfo(), symbol,
+                                    direction, original, mark) }.getOrNull()
+                            }
+                            if (grid == null) {
+                                anyUnprotected = true
+                                lastBlocker = "$symbol fresh Demo PRICE_FILTER unavailable; precision retry not sent"
+                                continue
+                            }
+                            matchingIntent.put("initial_stop_precision_recovery", JSONObject()
+                                .put("original_trigger", original)
+                                .put("retry_trigger", grid.trigger ?: JSONObject.NULL)
+                                .put("min_price", grid.minPrice).put("max_price", grid.maxPrice)
+                                .put("tick_size", grid.tickSize).put("mark_price", freshMark)
+                                .put("observed_at_ms", clock()))
+                            if (grid.trigger == null) {
+                                anyUnprotected = true
+                                matchingIntent.put("initial_stop_grid_unplaceable", true)
+                                    .put("protection_status", INITIAL_STOP_TRIGGER_REJECTED)
+                                    .put("unprotected_safety_guard_origin", INITIAL_STOP_TRIGGER_REJECTED)
+                                    .put("unprotected_safety_exit_required_at_ms", clock())
+                                saveIntents(persisted)
+                                if (matchingIntent.optBoolean("strategy_ownership_verified", false) &&
+                                    previousProtectionId.isBlank() && algos.length() == 0 &&
+                                    matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
+                                        ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0) {
+                                    requiredSafetyExits.put(JSONObject().put("symbol", symbol)
+                                        .put("direction", direction)
+                                        .put("entry_client_id", matchingIntent.optString("client_id"))
+                                        .put("quantity", matchingIntent.optString("confirmed_position_qty"))
+                                        .put("missing_protection_client_id", "")
+                                        .put("guard_origin", INITIAL_STOP_TRIGGER_REJECTED)
+                                        .put("reason", "UNPROTECTED_POSITION_GUARD"))
+                                }
+                                lastBlocker = "$symbol no risk-preserving protective tick on fresh Demo grid; signed emergency revalidation required"
+                                continue
+                            }
+                            // Persist the exact value before any POST. The unchanged original
+                            // structural STOP remains in initial_protective_stop for risk audit.
+                            matchingIntent.put("protective_stop", grid.trigger)
+                            saveIntents(persisted)
                         }
                         if (protectionClientId.isBlank()) {
                             protectionClientId = stableProtectionId(symbol, matchingIntent.optString("client_id"))
@@ -3328,6 +3432,7 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("last_reconciled_ms", confirmedAt)
                     matchingIntent.remove("initial_stop_definitive_rejection_count")
                     matchingIntent.remove("initial_stop_definitive_rejection_code")
+                    matchingIntent.remove("initial_stop_grid_unplaceable")
 
                     // A currently active stop is not proof that the filled quantity still
                     // fits the original risk allocation. Recompute against live exchange
@@ -4116,10 +4221,16 @@ internal class NativeFuturesCampaignCoordinator(
         val repeatedDefinitivePrecisionRejection =
             owner.optInt("initial_stop_definitive_rejection_code", 0) == -1111 &&
                 owner.optInt("initial_stop_definitive_rejection_count", 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT
-        return absenceProven && (repeatedDefinitivePrecisionRejection ||
-            !isProtectiveStopOnCorrectSide(
-                direction, adapter.markPrice(symbol).toString(), trigger.toPlainString()
-            ))
+        if (!absenceProven) return false
+        if (repeatedDefinitivePrecisionRejection) return true
+        if (owner.optBoolean("initial_stop_grid_unplaceable", false)) {
+            // A previous snapshot cannot authorize a market close if the exchange
+            // now offers a valid risk-preserving protective trigger.
+            return futuresPrecisionRecoveryPlan(adapter.exchangeInfo(), symbol, direction,
+                trigger.toPlainString(), adapter.markPrice(symbol).toString()).trigger == null
+        }
+        return !isProtectiveStopOnCorrectSide(
+            direction, adapter.markPrice(symbol).toString(), trigger.toPlainString())
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */

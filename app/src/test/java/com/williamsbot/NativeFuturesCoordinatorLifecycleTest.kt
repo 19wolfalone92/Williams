@@ -772,6 +772,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var beforeMarkRead:(()->Unit)?=null
         var loseProtectionReply=false
         var rejectProtectionCode:Int?=null
+        var tickOverride: String? = null
         var rejectSecondCloseAll=false
         var failPendingQueries=false
         var beforeRequest: ((Request, Map<String, String>) -> Unit)? = null
@@ -818,7 +819,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"$symbol","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
-                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"${if(symbol=="ETHUSDT") "0.01" else "0.1"}"},
+                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"${tickOverride ?: if(symbol=="ETHUSDT") "0.01" else "0.1"}"},
                     {"filterType":"MIN_NOTIONAL","notional":"5"}]}]}""")
                 "/fapi/v1/leverageBracket" -> JSONObject("""{"symbol":"$symbol","brackets":[
                     {"notionalFloor":0,"notionalCap":1000000,"initialLeverage":125,"maintMarginRatio":0.005}]}""")
@@ -4692,6 +4693,64 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
             assertEquals(1, exchange.algos.values.count { it.optString("closePosition") == "true" })
             assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun precisionRetryRefreshesDemoGridAndTightensOnlyBeforePosting() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            exchange.tickOverride = "0.3"
+            exchange.rejectProtectionCode = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val result = restarted.reconcile()
+            assertTrue(result.toString(), result.getBoolean("ok"))
+            val owner = restarted.intentsSnapshot().getJSONObject(0)
+            val expected = if (direction.name == "LONG") "95.2" else "104.8"
+            assertEquals(expected, owner.getString("protective_stop"))
+            assertEquals(if (direction.name == "LONG") "95" else "105", owner.getString("initial_protective_stop"))
+            assertEquals("0.3", owner.getJSONObject("initial_stop_precision_recovery").getString("tick_size"))
+            assertEquals(expected, exchange.algos.values.single { it.optString("closePosition") == "true" }.getString("triggerPrice"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun impossiblePrecisionGridDoesNotPostOrCloseAfterGridRecovers() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            // 0.1 + multiples of 40 gives no grid point between 95 and
+            // 105 with mark=100: no protective non-widening trigger.
+            exchange.tickOverride = "40"
+            val failed = coordinator.reconcile()
+            val exits = failed.getJSONArray("required_safety_exits")
+            assertEquals(failed.toString(), 1, exits.length())
+            assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertTrue(owner.getBoolean("initial_stop_grid_unplaceable"))
+            assertEquals(1, owner.getInt("initial_stop_definitive_rejection_count"))
+            exchange.tickOverride = "0.1"
+            exchange.rejectProtectionCode = null
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(exits.getJSONObject(0)).getBoolean("ok"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertEquals("PROTECTED", restarted.intentsSnapshot().getJSONObject(0).getString("protection_status"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
         }
     }
 
