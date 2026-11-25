@@ -3703,11 +3703,21 @@ class FuturesWilliamsRuntime:
 
     def _protection_matches(self, campaign, order):
         """Require exact durable ownership, trigger, direction and full coverage."""
+        def explicit_bool(field, expected):
+            value = order.get(field)
+            if isinstance(value, bool):
+                return value is expected
+            if isinstance(value, str):
+                return value.strip().lower() == ("true" if expected else "false")
+            return False
+
         if (str(order.get("symbol", "")).upper() != campaign.symbol
-                or order.get("positionSide", "BOTH") != "BOTH"
+                or str(order.get("positionSide") or "").upper() != "BOTH"
+                or str(order.get("workingType") or "").upper() != "MARK_PRICE"
                 or str(order.get("side", "")).upper() != ("SELL" if campaign.side == "BUY" else "BUY")
                 or str(order.get("type", "")).upper() != "STOP_MARKET"
-                or str(order.get("status", "")).upper() != "NEW"):
+                or str(order.get("status", "")).upper() != "NEW"
+                or not explicit_bool("priceProtect", False)):
             return False
         cid = str(order.get("clientOrderId", ""))
         expected = {
@@ -3727,12 +3737,12 @@ class FuturesWilliamsRuntime:
             expected_stop = Decimal(str(expected[cid]))
             if not actual_stop.is_finite() or actual_stop <= 0 or actual_stop != expected_stop:
                 return False
-            if str(order.get("priceProtect", False)).lower() == "true":
-                return False
-            if str(order.get("closePosition", False)).lower() == "true":
+            if explicit_bool("closePosition", True):
                 return True
+            if not explicit_bool("closePosition", False):
+                return False
             quantity = Decimal(str(order.get("origQty", "0")))
-            return (str(order.get("reduceOnly", False)).lower() == "true"
+            return (explicit_bool("reduceOnly", True)
                     and quantity.is_finite() and quantity >= Decimal(str(campaign.position_qty)))
         except (ValueError, ArithmeticError):
             return False

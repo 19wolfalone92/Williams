@@ -17,8 +17,8 @@ if (keystorePropertiesFile.exists()) {
 
 val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 // TC2 adaptive 3/4/5 closed-H1-bar STOP management; monotonic debug
-// version preserves in-place upgrades from 4.64.54 on Demo phones.
-val resolvedVersionCode = maxOf(46457, ciRunNumber ?: 46457)
+// version preserves in-place upgrades from 4.64.57 on Demo phones.
+val resolvedVersionCode = maxOf(46458, ciRunNumber ?: 46458)
 val sourceRevision = System.getenv("GITHUB_SHA")
     ?.takeIf { Regex("[0-9a-f]{40}").matches(it) } ?: "LOCAL_UNSTAMPED"
 val cockpitPreview = providers.gradleProperty("williamsCockpitPreview").orNull == "true"
@@ -46,7 +46,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = resolvedVersionCode
-        versionName = "4.64.57"
+        versionName = "4.64.58"
         buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
     }
 

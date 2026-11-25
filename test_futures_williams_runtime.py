@@ -1349,3 +1349,48 @@ def test_verified_book_editions_are_available_but_unknown_profile_is_blocked():
     assert _signal_profile_entry_block_reason("UNKNOWN_PROFILE").startswith(
         "WILLIAMS_SIGNAL_PROFILE must be one of"
     )
+
+
+def test_python_protection_proof_requires_explicit_exchange_semantics():
+    class Cursor:
+        def fetchone(self):
+            return {"campaign_id": "C1", "purpose": "PROTECTION"}
+
+    class Connection:
+        def execute(self, *_args, **_kwargs):
+            return Cursor()
+
+    runtime = SimpleNamespace(db=SimpleNamespace(conn=Connection()))
+    campaign = SimpleNamespace(
+        symbol="BTCUSDT", side="BUY", campaign_id="C1",
+        current_stop_price=95.0, position_qty=1.0,
+        tags={"protective_order_client_id": "STOP-1", "pending_protection_client_id": ""},
+    )
+    valid = {
+        "symbol": "BTCUSDT", "side": "SELL", "type": "STOP_MARKET", "status": "NEW",
+        "clientOrderId": "STOP-1", "stopPrice": "95", "positionSide": "BOTH",
+        "workingType": "MARK_PRICE", "priceProtect": False,
+        "closePosition": True, "reduceOnly": False,
+    }
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, valid)
+
+    for missing in ("positionSide", "workingType", "priceProtect", "closePosition"):
+        incomplete = dict(valid)
+        incomplete.pop(missing)
+        if missing == "closePosition":
+            incomplete["reduceOnly"] = True
+            incomplete["origQty"] = "1"
+        assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, incomplete), missing
+
+    wrong_working_type = dict(valid, workingType="CONTRACT_PRICE")
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, wrong_working_type)
+    price_protected = dict(valid, priceProtect=True)
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, price_protected)
+    string_flags = dict(valid, priceProtect="FALSE", closePosition="TRUE")
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, string_flags)
+
+    quantity_stop = dict(valid, closePosition=False, reduceOnly=True, origQty="1")
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, quantity_stop)
+    missing_close_position = dict(quantity_stop)
+    missing_close_position.pop("closePosition")
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, missing_close_position)

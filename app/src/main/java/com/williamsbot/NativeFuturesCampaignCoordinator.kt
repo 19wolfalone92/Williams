@@ -10,6 +10,7 @@ import java.util.TimeZone
 
 
 private const val INITIAL_STOP_TRIGGER_REJECTED = "INITIAL_STOP_TRIGGER_REJECTED"
+private const val INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT = 2
 private val ENTRY_ORDER_ACTIVE_STATUSES = setOf(
     "NEW", "PENDING", "WORKING", "PARTIALLY_FILLED", "SUBMISSION_UNKNOWN",
     "ACCEPTED", "TRIGGERING", "TRIGGERED", "CANCEL_SUBMISSION_UNKNOWN"
@@ -2913,6 +2914,12 @@ internal class NativeFuturesCampaignCoordinator(
                     val protectionStatus = matchingIntent.optString("protection_status", "NOT_SUBMITTED")
                         .uppercase(Locale.US)
                     var protectionClientId = matchingIntent.optString("protection_client_id")
+                    if (protectionStatus == INITIAL_STOP_TRIGGER_REJECTED &&
+                        matchingIntent.optInt("initial_stop_definitive_rejection_count", 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT) {
+                        anyUnprotected = true
+                        lastBlocker = "$symbol initial protective STOP was definitively rejected twice (-1111); emergency reduce-only exit requires signed absence proof"
+                        continue
+                    }
                     if (protectionStatus == "SUBMISSION_UNKNOWN" || protectionStatus == "PROTECTED") {
                         if (protectionClientId.isBlank()) {
                             anyUnprotected = true
@@ -3148,6 +3155,30 @@ internal class NativeFuturesCampaignCoordinator(
                                 }
                                 saveIntents(persisted)
                                 lastBlocker = "$symbol protective STOP rejected (-2021); recheck MARK_PRICE and signed orders"
+                            } else if (failure is FuturesHttpException && failure.statusCode == 400 &&
+                                failure.exchangeCode == -1111 && failure.requestPath == "/fapi/v1/algoOrder" &&
+                                preparedRearm == null) {
+                                // -1111 is a definitive exchange rejection, not an unknown POST outcome.
+                                // Recheck the exact rejected clientAlgoId before one bounded retry. If
+                                // Binance rejects the replacement again, require a signed absence proof
+                                // and reduce-only emergency close instead of leaving an unprotected position.
+                                val rejectionCount = matchingIntent.optInt("initial_stop_definitive_rejection_count", 0) + 1
+                                matchingIntent.put("initial_stop_rejection_id", protectionClientId)
+                                    .put("initial_stop_definitive_rejection_code", -1111)
+                                    .put("initial_stop_definitive_rejection_count", rejectionCount)
+                                    .put("protection_post_attempted", true)
+                                matchingIntent.remove("protection_client_id")
+                                if (rejectionCount < INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT) {
+                                    matchingIntent.put("protection_status", "NOT_SUBMITTED")
+                                        .put("protection_preflight_rejected_at_ms", clock())
+                                    lastBlocker = "$symbol initial protective STOP rejected (-1111); one bounded signed-revalidation retry remains"
+                                } else {
+                                    matchingIntent.put("protection_status", INITIAL_STOP_TRIGGER_REJECTED)
+                                        .put("unprotected_safety_guard_origin", INITIAL_STOP_TRIGGER_REJECTED)
+                                        .put("unprotected_safety_exit_required_at_ms", clock())
+                                    lastBlocker = "$symbol initial protective STOP rejected twice (-1111); verified reduce-only emergency close required"
+                                }
+                                saveIntents(persisted)
                             } else {
                                 lastBlocker = "$symbol protective-stop placement ambiguous: ${failure.message ?: failure.javaClass.simpleName}"
                             }
@@ -3269,6 +3300,8 @@ internal class NativeFuturesCampaignCoordinator(
                         .put("position_open_observed_at_ms",
                             matchingIntent.optLong("position_open_observed_at_ms", confirmedAt).takeIf { it > 0L } ?: confirmedAt)
                         .put("last_reconciled_ms", confirmedAt)
+                    matchingIntent.remove("initial_stop_definitive_rejection_count")
+                    matchingIntent.remove("initial_stop_definitive_rejection_code")
 
                     // A currently active stop is not proof that the filled quantity still
                     // fits the original risk allocation. Recompute against live exchange
@@ -4054,9 +4087,13 @@ internal class NativeFuturesCampaignCoordinator(
                 conditionalOrderOrNull(adapter, symbol, rejectedId) == null
             else -> false
         }
-        return absenceProven && !isProtectiveStopOnCorrectSide(
-            direction, adapter.markPrice(symbol).toString(), trigger.toPlainString()
-        )
+        val repeatedDefinitivePrecisionRejection =
+            owner.optInt("initial_stop_definitive_rejection_code", 0) == -1111 &&
+                owner.optInt("initial_stop_definitive_rejection_count", 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT
+        return absenceProven && (repeatedDefinitivePrecisionRejection ||
+            !isProtectiveStopOnCorrectSide(
+                direction, adapter.markPrice(symbol).toString(), trigger.toPlainString()
+            ))
     }
 
     /** Definite pre-order rejection. No exchange mutation was attempted. */
