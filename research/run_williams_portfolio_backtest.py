@@ -38,7 +38,7 @@ from trading_config import DEFAULT_FUTURES_SYMBOLS
 START_UTC = "2024-11-01T00:00:00Z"
 END_UTC = "2026-11-01T00:00:00Z"
 START_MS = 1_730_419_200_000
-END_MS = 1_793_520_000_000
+END_MS = 1_793_491_200_000
 PREHISTORY_START = (2024, 3)
 PREHISTORY_END = (2024, 11)
 EXPECTED_MANIFEST_SHA256 = "21e5f9ce105d5aeb2ffd636bed0925b3994908e23c3dfe63f78d8683e43f3758"
@@ -671,7 +671,7 @@ def main():
     if not args.skip_sensitivity:
         for name, trail, fee, slip in (
             ("TC2_TRAIL_3", 3, 0.0005, 0.0005),
-            ("TC2_TRAIL_4", 4, 0.0005, 0.0005),
+            ("FOUR_BAR_ENGINEERING_NON_TC2", 4, 0.0005, 0.0005),
             ("COST_STRESS_2X", 5, 0.0006, 0.0010),
         ):
             result = PortfolioSimulator(**common, fee_rate=fee, slippage_rate=slip,
@@ -801,7 +801,7 @@ def main():
             "new_campaign_source": "TC2 only",
             "first_entry": "earliest valid WM1/WM2/WM3 signal",
             "pyramiding": "TC2 1:5:4:3:2 exact quantities; risk/margin may veto, never resize",
-            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; 3/4 sensitivity included",
+            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; 3-bar source-policy and 4-bar non-TC2 engineering sensitivities included",
             "M15_confirmation": False,
             "D1_H4_directional_gate": False,
             "lookahead_control": "production extract_causal_h1_signals closed-prefix replay; M5 event after H1 close",
