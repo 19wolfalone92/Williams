@@ -606,8 +606,10 @@ class PortfolioSimulator:
         items = sorted(items, key=lambda x: (int(x["signal"].signal_bar_time_ms),
                                              str(x["signal"].signal_id)))
         for item in items:
-            self._signal_status(symbol, item["signal"], item["known_at_ms"],
-                                item.get("context", {}), "OBSERVED")
+            key = (symbol, str(item["signal"].signal_id))
+            if key not in self.signal_records:
+                self._signal_status(symbol, item["signal"], item["known_at_ms"],
+                                    item.get("context", {}), "OBSERVED")
         campaign = self.active.get(symbol)
         if campaign and campaign["status"] == "PENDING_INITIAL":
             candidates = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value
@@ -628,20 +630,6 @@ class PortfolioSimulator:
                             and int(x["signal"].signal_bar_time_ms) > int(campaign["last_signal_time_ms"])]
                 if eligible:
                     self._arm_addon(campaign, eligible[0], index)
-            for item in items:
-                signal = item["signal"]
-                if (signal.strategy_profile == TC2 and signal.side != campaign["side"]
-                        and _signal_role(signal) == SignalRole.ENTRY.value
-                        and _signal_type(signal) in {
-                            SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
-                        }):
-                    watcher = {
-                        "signal": signal, "context": item.get("context", {}),
-                        "known_at_ms": int(item["known_at_ms"]),
-                    }
-                    campaign["opposition_watchers"].append(watcher)
-                    self._signal_status(symbol, signal, item["known_at_ms"], item.get("context", {}),
-                                        "OPPOSITE_EXIT_WATCH")
             return
         if campaign is not None:
             return
@@ -957,6 +945,9 @@ class PortfolioSimulator:
             "final_stop": campaign.get("stop"),
             "stop_history": _canonical(campaign.get("stop_history", [])),
             "stop_source": campaign.get("stop_source"),
+            "opposition_evidence": _canonical(campaign.get("opposition_evidence", {})),
+            "opposition_advisory": _canonical(campaign.get("opposition_advisory", {})),
+            "opposition_advisory_error": campaign.get("opposition_advisory_error", ""),
             "initial_risk_quote": campaign.get("initial_risk_quote"),
             "quantity": campaign.get("final_qty", campaign.get("qty")),
             "additions": campaign.get("additions", 0),
@@ -1011,52 +1002,7 @@ class PortfolioSimulator:
             detail = "INITIAL_STRUCTURAL_STOP" if campaign["stop_source"] == "INITIAL_SIGNAL" else campaign["stop_source"]
             self._close_campaign(symbol, campaign, raw, index, timestamp_ms, "STOP", detail)
             return
-        watchers = campaign.get("opposition_watchers", [])
-        remaining = []
-        for watcher in watchers:
-            signal = watcher["signal"]
-            expires = int(getattr(signal, "expires_at_ms", 0) or 0)
-            if expires and timestamp_ms >= expires:
-                self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                                    "EXPIRED", "OPPOSITE_SIGNAL_EXPIRED")
-                continue
-            trigger = float(signal.trigger_price)
-            invalidation = float(getattr(signal, "invalidation_price", 0.0) or signal.protective_reference)
-            hit = (contract["high"][index] >= trigger if signal.side == "BUY"
-                   else contract["low"][index] <= trigger)
-            invalid = (contract["low"][index] <= invalidation if signal.side == "BUY"
-                       else contract["high"][index] >= invalidation)
-            if hit and invalid:
-                self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                                    "AMBIGUOUS", "OPPOSITE_TRIGGER_AND_INVALIDATION_SAME_M5_BAR")
-                continue
-            if invalid:
-                self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                                    "INVALIDATED", "OPPOSITE_SIGNAL_INVALIDATED")
-                continue
-            if not hit:
-                remaining.append(watcher)
-                continue
-            mark_close = float(mark["mark_close"][index])
-            blocker = tc2_opposite_exit_profit_blocker(
-                campaign["side"], campaign["avg_entry"], mark_close,
-                RISK_COST_ALLOWANCE, float(self.specs[symbol]["tick"]),
-            )
-            if blocker:
-                self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                                    "TRIGGERED_ADVISORY", blocker)
-                self._emit(timestamp_ms, "OPPOSITE_SIGNAL_NOT_PROFITABLE", symbol=symbol,
-                           campaign_id=campaign["campaign_id"], signal_id=signal.signal_id, blocker=blocker)
-                continue
-            raw = (min(contract["open"][index], contract["low"][index], contract["close"][index])
-                   if campaign["side"] == "BUY" else
-                   max(contract["open"][index], contract["high"][index], contract["close"][index]))
-            self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                                "TRIGGERED_EXIT", "")
-            self._close_campaign(symbol, campaign, raw, index, timestamp_ms,
-                                 "OPPOSITE_SIGNAL", _signal_type(signal))
-            return
-        campaign["opposition_watchers"] = remaining
+        return
 
     def _process_pending(self, symbol: str, campaign: dict, index: int, timestamp_ms: int):
         pending = campaign.get("pending")
@@ -1238,9 +1184,10 @@ class PortfolioSimulator:
             # Live process() manages confirmed protection before scanner admission.
             if timestamp_ms % H1_MS == 0:
                 for symbol in self.symbols:
+                    current_signals = self.signals_by_index[symbol].get(index, [])
+                    self._refresh_opposition_watchers(symbol, current_signals, timestamp_ms)
                     self._trail(symbol, index, timestamp_ms)
-                    self._handle_signals(symbol, self.signals_by_index[symbol].get(index, []),
-                                         index, timestamp_ms)
+                    self._handle_signals(symbol, current_signals, index, timestamp_ms)
             # Existing protected positions are evaluated before any pending add-on.
             for symbol in self.symbols:
                 campaign = self.active.get(symbol)
