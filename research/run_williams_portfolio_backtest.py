@@ -669,14 +669,20 @@ def main():
 
     sensitivity = []
     if not args.skip_sensitivity:
-        for name, trail, fee, slip in (
-            ("TC2_TRAIL_3", 3, 0.0005, 0.0005),
-            ("FOUR_BAR_ENGINEERING_NON_TC2", 4, 0.0005, 0.0005),
-            ("COST_STRESS_2X", 5, 0.0006, 0.0010),
-        ):
-            result = PortfolioSimulator(**common, fee_rate=fee, slippage_rate=slip,
+        variants = (
+            ("TC2_TRAIL_3", 3, 0.0005, 0.0005, args.capital),
+            ("FOUR_BAR_ENGINEERING_NON_TC2", 4, 0.0005, 0.0005, args.capital),
+            ("COST_STRESS_2X", 5, 0.0006, 0.0010, args.capital),
+            ("CAPITAL_SCALE_1000", 5, 0.0005, 0.0005, 1000.0),
+            ("CAPITAL_SCALE_10000", 5, 0.0005, 0.0005, 10000.0),
+        )
+        for name, trail, fee, slip, capital in variants:
+            variant_common = dict(common)
+            variant_common["initial_capital"] = capital
+            result = PortfolioSimulator(**variant_common, fee_rate=fee, slippage_rate=slip,
                                          trail_bars=trail, collect=False).run()
-            sensitivity.append({"scenario": name, **result["metrics"]})
+            sensitivity.append({"scenario": name, "research_initial_capital_usdt": capital,
+                                **result["metrics"]})
             print(f"SENSITIVITY {name}: net={result['metrics']['total_net_pnl_usdt']:.6f} "
                   f"PF={result['metrics']['profit_factor_net']} DD={result['metrics']['maximum_drawdown_pct']:.4f}%", flush=True)
 
