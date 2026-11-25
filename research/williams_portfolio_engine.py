@@ -113,14 +113,17 @@ def _signal_role(signal) -> str:
 
 
 def _signal_record(symbol: str, signal, known_at_ms: int, context: dict) -> dict:
+    signal_type = _signal_type(signal)
+    signal_time = int(signal.signal_bar_time_ms)
+    is_fractal = signal_type == SignalType.FRACTAL.value
     return {
         "symbol": symbol,
         "signal_id": str(signal.signal_id),
         "known_at_ms": int(known_at_ms),
-        "signal_bar_time_ms": int(signal.signal_bar_time_ms),
+        "signal_bar_time_ms": signal_time,
         "direction": "LONG" if signal.side == "BUY" else "SHORT",
         "side": signal.side,
-        "signal_type": _signal_type(signal),
+        "signal_type": signal_type,
         "role": _signal_role(signal),
         "strategy_profile": str(signal.strategy_profile),
         "timeframe": str(signal.timeframe),
@@ -129,6 +132,11 @@ def _signal_record(symbol: str, signal, known_at_ms: int, context: dict) -> dict
         "protective_reference": float(signal.protective_reference),
         "invalidation_price": float(getattr(signal, "invalidation_price", 0.0) or 0.0),
         "expires_at_ms": int(getattr(signal, "expires_at_ms", 0) or 0),
+        "signal_reason": str(getattr(signal, "reason", "")),
+        "setup_context": _canonical(getattr(signal, "setup_context", {}) or {}),
+        "fractal_center_time_ms": signal_time - 2 * H1_MS if is_fractal else None,
+        "fractal_confirmation_time_ms": int(known_at_ms) if is_fractal else None,
+        "fractal_confirmed_right_bars": 2 if is_fractal else None,
         "angulation_score": float(getattr(signal, "angulation_score", 0.0) or 0.0),
         "wave_confidence": float(getattr(signal, "wave_confidence", 0.0) or 0.0),
         "wave_exhaustion_risk": float(getattr(signal, "wave_exhaustion_risk", 0.0) or 0.0),
@@ -137,6 +145,7 @@ def _signal_record(symbol: str, signal, known_at_ms: int, context: dict) -> dict
         "h1_jaw": context.get("h1_jaw"),
         "h1_teeth": context.get("h1_teeth"),
         "h1_lips": context.get("h1_lips"),
+        "h1_gator_state": context.get("h1_gator_state", "UNKNOWN"),
         "h4_context": _canonical(context.get("h4", {})),
         "d1_context": _canonical(context.get("d1", {})),
         "market_regime": context.get("market_regime", ""),
@@ -801,6 +810,11 @@ class PortfolioSimulator:
             "direction": "LONG" if campaign["side"] == "BUY" else "SHORT",
             "initial_wise_man": campaign["initial_signal_type"],
             "initial_signal_id": str(signal.signal_id),
+            "initial_signal_reason": str(getattr(signal, "reason", "")),
+            "initial_setup_context": _canonical(getattr(signal, "setup_context", {}) or {}),
+            "initial_fractal_center_time_ms": (int(signal.signal_bar_time_ms) - 2 * H1_MS if _signal_type(signal) == SignalType.FRACTAL.value else None),
+            "initial_fractal_confirmation_time_ms": (int(campaign["initial_signal_time_ms"]) + H1_MS if _signal_type(signal) == SignalType.FRACTAL.value else None),
+            "initial_fractal_confirmed_right_bars": 2 if _signal_type(signal) == SignalType.FRACTAL.value else None,
             "signal_time_ms": campaign["initial_signal_time_ms"],
             "entry_time_ms": campaign.get("entry_time_ms"),
             "exit_time_ms": campaign.get("exit_time_ms"),
@@ -829,6 +843,7 @@ class PortfolioSimulator:
             "entry_h1_alligator": _canonical({
                 "jaw": context.get("h1_jaw"), "teeth": context.get("h1_teeth"),
                 "lips": context.get("h1_lips"),
+                "state": context.get("h1_gator_state", "UNKNOWN"),
             }),
             "entry_h4_context": _canonical(context.get("h4", {})),
             "entry_d1_context": _canonical(context.get("d1", {})),
