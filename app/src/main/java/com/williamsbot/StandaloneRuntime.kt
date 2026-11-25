@@ -2454,10 +2454,12 @@ private class NativeEngine(
         utc.set(Calendar.MINUTE, 0)
         utc.set(Calendar.SECOND, 0)
         utc.set(Calendar.MILLISECOND, 0)
-        val suffix = utc.timeInMillis.toString()
-        return futuresDailyRiskBaselineEstablished(
-            executionStore.readState("futures_day_start_equity_" + suffix),
-            executionStore.readState("futures_day_start_equity_source_" + suffix)
+        val dayStart = utc.timeInMillis
+        val fingerprint = runCatching { futuresApiKeyFingerprint(key()) }.getOrNull() ?: return false
+        return futuresDailyRiskModelBSnapshotEstablished(
+            executionStore.readState("futures_daily_risk_model_b_snapshot_" + dayStart),
+            fingerprint,
+            dayStart
         )
     }
 
@@ -5907,6 +5909,12 @@ private class NativeEngine(
         synchronized(dailyRiskCheckLock) { checkFuturesDailyLossUnderLock() }
 
     private fun checkFuturesDailyLossUnderLock(): Boolean {
+        val snapshotWindowStartMs = try {
+            futuresMarketData.exchangeNowMs()
+        } catch (failure: Exception) {
+            lastError = "FUTURES_DAILY_UTC_CLOCK_UNKNOWN: " + (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
         val account = try {
             futuresCampaignCoordinator.accountSnapshot()
         } catch (failure: Exception) {
@@ -5915,185 +5923,278 @@ private class NativeEngine(
             lastError = "FUTURES_ACCOUNT_REFRESH_FAILED: " + restAccountLastError
             return false
         }
+        val accountWindowEndMs = try {
+            futuresMarketData.exchangeNowMs()
+        } catch (failure: Exception) {
+            lastError = "FUTURES_DAILY_UTC_CLOCK_UNKNOWN: " + (failure.message ?: failure.javaClass.simpleName)
+            return false
+        }
         if (!updateCachedFuturesAccount(account)) {
             lastError = "FUTURES_ACCOUNT_INVALID: " +
                 (restAccountLastError ?: "account balance/equity fields failed validation")
             return false
         }
-        val equity = liveFuturesEquity
-        if (!futuresAccountFundedForEntry(liveUsdtBalance, equity)) {
-            // Empty Demo wallets are valid for diagnostics and scanning, but can never
-            // establish a meaningful percentage-loss baseline or authorize an order.
-            lastError = "FUTURES_ACCOUNT_UNFUNDED: positive available USDT and equity are required for entries"
+        val accountSnapshot = parseFuturesAccountSnapshot(account) ?: run {
+            lastError = "FUTURES_ACCOUNT_INVALID: Model B requires wallet balance and total margin equity"
             return false
         }
-        val utc = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-        val exchangeNowMs = futuresMarketData.exchangeNowMs()
-        utc.timeInMillis = exchangeNowMs
-        utc.set(java.util.Calendar.HOUR_OF_DAY, 0)
-        utc.set(java.util.Calendar.MINUTE, 0)
-        utc.set(java.util.Calendar.SECOND, 0)
-        utc.set(java.util.Calendar.MILLISECOND, 0)
+        val currentWallet = BigDecimal.valueOf(accountSnapshot.walletUsdt)
+        val currentEquity = BigDecimal.valueOf(accountSnapshot.equityUsdt)
+        if (currentWallet < BigDecimal.ZERO || currentEquity < BigDecimal.ZERO) {
+            lastError = "FUTURES_DAILY_MODEL_B_ACCOUNT_EQUITY_INVALID"
+            return false
+        }
+        val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
+        utc.timeInMillis = accountWindowEndMs
+        utc.set(Calendar.HOUR_OF_DAY, 0)
+        utc.set(Calendar.MINUTE, 0)
+        utc.set(Calendar.SECOND, 0)
+        utc.set(Calendar.MILLISECOND, 0)
         val utcDayStartMs = utc.timeInMillis
-        val baselineKey = "futures_day_start_equity_" + utcDayStartMs
-        var incomeRowsForDay: JSONArray? = null
-
-        if (executionStore.readState(baselineKey) == null) {
-            // Reconstruct from the full UTC-day income ledger when trades already
-            // occurred. Never reset to current equity just because the local baseline
-            // disappeared: that would erase realized losses from today's 3% limit.
-            val baselineAttempt = runCatching {
-                val positions = futuresCampaignCoordinator.positionsSnapshot()
-                val hasOpenOrUnknownPosition = (0 until positions.length()).any { index ->
-                    val row = positions.optJSONObject(index) ?: return@any true
-                    val amount = row.optString("positionAmt").toDoubleOrNull()
-                    amount == null || !amount.isFinite() || amount != 0.0
-                }
-                val intents = futuresCampaignCoordinator.intentsSnapshot()
-                // Resting, freshly reconciled ZERO-fill entries are not exposure.
-                // Unknown, partial, triggering and stale intents remain blockers.
-                val hasActiveExecution = !unfilledPendingIntentsAllowFlatDailyBaseline(
-                    intents, exchangeNowMs
-                )
-                val income = futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
-                incomeRowsForDay = income
-                val incomeSummary = summarizeFuturesDailyIncome(income)
-                    ?: throw IllegalStateException("UTC-day Futures income is malformed or reached the 1000-row truncation guard")
-                val hasTradingIncome = incomeSummary.hasTradingActivity
-                val accountSnapshot = parseFuturesAccountSnapshot(account)
-                    ?: throw IllegalStateException("Cannot reconstruct daily baseline without a parsed Futures account snapshot")
-                val unrealized = accountSnapshot.unrealizedPnlUsdt ?: run {
-                    if (hasOpenOrUnknownPosition) {
-                        val values = (0 until positions.length()).map { index ->
-                            val row = positions.optJSONObject(index)
-                                ?: throw IllegalStateException("Malformed Futures position row at index $index")
-                            row.optString("unRealizedProfit").toDoubleOrNull()
-                                ?.takeIf { it.isFinite() }
-                                ?: throw IllegalStateException("Missing unrealized PnL for position row $index")
-                        }
-                        values.sum().takeIf { it.isFinite() }
-                            ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
-                    } else 0.0
-                }
-
-                val baselineDecision = selectFuturesDailyBaseline(
-                    currentEquityUsdt = equity,
-                    unrealizedPnlUsdt = unrealized,
-                    incomeRows = income,
-                    hasOpenOrUnknownPositionOrPendingExecution =
-                        hasOpenOrUnknownPosition || hasActiveExecution
-                ) ?: throw IllegalStateException(
-                    "Cannot safely reconstruct UTC-day Futures baseline from income, unrealized PnL, and exchange exposure"
-                )
-                baselineDecision.baselineEquityUsdt to baselineDecision.source
-            }
-            val baselineResult = baselineAttempt.getOrElse { failure ->
-                paused = true
-                // Distinguish an automatic, recoverable daily-baseline pause
-                // from the operator's explicit pause. Never erase either risk
-                // evidence or the 3% daily entry-loss limit.
-                check(prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()) {
-                    "Could not durably pause trades while the UTC baseline is unknown"
-                }
-                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: unable to reconstruct UTC-day equity safely: " +
-                    (failure.message ?: failure.javaClass.simpleName) + "; daily limit remains 3% and entries stay blocked"
+        if (snapshotWindowStartMs < utcDayStartMs || accountWindowEndMs < snapshotWindowStartMs) {
+            lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: account snapshot crossed or preceded UTC midnight; retry required"
+            return false
+        }
+        val accountFingerprint = runCatching { futuresApiKeyFingerprint(key()) }
+            .getOrNull()?.takeIf { it.isNotBlank() } ?: run {
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: account identity fingerprint unavailable"
                 return false
             }
-            check(executionStore.writeState(baselineKey, baselineResult.first.toString()) &&
-                executionStore.writeState("futures_day_start_equity_source_" + utcDayStartMs, baselineResult.second)
+        val snapshotKey = "futures_daily_risk_model_b_snapshot_" + utcDayStartMs
+        var snapshotRaw = executionStore.readState(snapshotKey)
+        var snapshot: JSONObject? = null
+        if (!snapshotRaw.isNullOrBlank()) {
+            if (!futuresDailyRiskModelBSnapshotEstablished(
+                    snapshotRaw, accountFingerprint, utcDayStartMs
+                )
             ) {
                 paused = true
-                // Persist a recoverable ENTRY pause, not a monitoring shutdown.
                 prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-                lastError = "FUTURES_DAILY_BASELINE_PERSIST_FAILED: SQLite could not durably store the reconstructed baseline"
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: persisted Model B baseline is invalid or belongs to another account"
                 return false
             }
-            if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true) lastError = null
+            snapshot = runCatching { JSONObject(snapshotRaw) }.getOrNull() ?: run {
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: persisted Model B snapshot JSON is malformed"
+                return false
+            }
         }
 
-        val baseline = executionStore.readState(baselineKey)?.toDoubleOrNull() ?: 0.0
-        require(baseline > 0.0 && baseline.isFinite()) { "Futures daily equity baseline is invalid" }
-        // Older builds persisted the numeric baseline and its provenance as two separate
-        // SQLite writes. A process death between those writes left a valid baseline but no
-        // source key; because initialization only ran when the numeric key was absent, the
-        // missing provenance could then persist forever. Repair metadata only when the
-        // already-persisted baseline itself validates; never replace/reset the baseline.
-        val baselineSourceKey = "futures_day_start_equity_source_" + utcDayStartMs
-        val existingBaselineSource = executionStore.readState(baselineSourceKey)
-        if (existingBaselineSource.isNullOrBlank() ||
-            existingBaselineSource.equals("UNKNOWN", ignoreCase = true) ||
-            existingBaselineSource.equals("null", ignoreCase = true)) {
-            check(executionStore.writeState(
-                baselineSourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED"
-            )) {
+        var snapshotWindowEndMs = accountWindowEndMs
+        var currentPositions: JSONArray? = null
+        if (snapshot == null) {
+            currentPositions = try {
+                futuresCampaignCoordinator.positionsSnapshot()
+            } catch (failure: Exception) {
                 paused = true
                 prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-                lastError = "FUTURES_DAILY_BASELINE_SOURCE_REPAIR_FAILED: persisted baseline is valid but provenance metadata could not be repaired"
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: position history snapshot unavailable: " +
+                    (failure.message ?: failure.javaClass.simpleName)
+                return false
+            }
+            snapshotWindowEndMs = try {
+                futuresMarketData.exchangeNowMs()
+            } catch (failure: Exception) {
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: exchange clock lost during position snapshot"
                 return false
             }
         }
-        val dailyIncomeRows = incomeRowsForDay ?: runCatching {
-            futuresCampaignCoordinator.incomeHistory(utcDayStartMs, exchangeNowMs)
-        }.getOrElse { failure ->
+        if (snapshotWindowEndMs < utcDayStartMs || snapshotWindowEndMs < snapshotWindowStartMs) {
+            lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: invalid account/position observation window"
+            return false
+        }
+
+        val incomeRows = try {
+            futuresCampaignCoordinator.incomeHistory(utcDayStartMs, snapshotWindowEndMs)
+        } catch (failure: Exception) {
             paused = true
             prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: cannot verify the UTC-day PnL ledger: " +
+            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: complete UTC-day income history unavailable: " +
                 (failure.message ?: failure.javaClass.simpleName)
             return false
         }
-        val dailyIncome = summarizeFuturesDailyIncome(dailyIncomeRows) ?: run {
+        val income = summarizeFuturesDailyIncomeModelB(
+            incomeRows, utcDayStartMs, snapshotWindowStartMs, snapshotWindowEndMs
+        ) ?: run {
             paused = true
             prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: income rows are malformed or truncated; entries remain blocked"
+            lastError = "FUTURES_DAILY_INCOME_UNKNOWN: unclassified, non-USDT, duplicate, or snapshot-overlapping income row"
             return false
         }
-        val accountSnapshot = parseFuturesAccountSnapshot(account)
-        val currentUnrealizedPnl = accountSnapshot?.unrealizedPnlUsdt ?: runCatching {
-            val positions = futuresCampaignCoordinator.positionsSnapshot()
-            val values = (0 until positions.length()).map { index ->
-                val row = positions.optJSONObject(index)
-                    ?: throw IllegalStateException("Malformed Futures position row $index")
-                row.optString("unRealizedProfit").toDoubleOrNull()
-                    ?.takeIf { it.isFinite() }
-                    ?: throw IllegalStateException("Missing unrealized PnL for Futures position row $index")
+
+        if (snapshot == null) {
+            val positions = currentPositions ?: run {
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: current positions are unavailable"
+                return false
             }
-            values.sum().takeIf { it.isFinite() }
-                ?: throw IllegalStateException("Invalid aggregate Futures unrealized PnL")
-        }.getOrElse { failure ->
+            val positionsBySymbol = linkedMapOf<String, JSONObject>()
+            for (index in 0 until positions.length()) {
+                val row = positions.optJSONObject(index) ?: run {
+                    lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: malformed position row"
+                    return false
+                }
+                val symbol = row.optString("symbol").trim().uppercase(Locale.US)
+                if (symbol.isBlank() || positionsBySymbol.put(symbol, row) != null) {
+                    lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: missing or duplicate position symbol"
+                    return false
+                }
+            }
+            val symbols = linkedSetOf(
+                "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
+                "DOGEUSDT", "ADAUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT",
+                "SUIUSDT", "NEARUSDT", "DOTUSDT", "TRXUSDT", "BCHUSDT"
+            )
+            symbols.addAll(positionsBySymbol.keys)
+            symbols.addAll(income.symbols)
+            val tradesBySymbol = linkedMapOf<String, JSONArray>()
+            val markPrices = linkedMapOf<String, BigDecimal>()
+            for (symbol in symbols.sorted()) {
+                val trades = try {
+                    futuresCampaignCoordinator.completeUserTrades(
+                        symbol, utcDayStartMs, snapshotWindowEndMs
+                    )
+                } catch (failure: Exception) {
+                    paused = true
+                    prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                    lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: complete " + symbol +
+                        " fill history unavailable: " + (failure.message ?: failure.javaClass.simpleName)
+                    return false
+                }
+                tradesBySymbol[symbol] = trades
+                val currentPosition = positionsBySymbol[symbol]
+                val currentQuantity = currentPosition?.optString("positionAmt")
+                    ?.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                val currentEntry = currentPosition?.optString("entryPrice")
+                    ?.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                val midnightPosition = reverseFuturesPositionAtMidnightB(
+                    symbol = symbol,
+                    currentQuantity = currentQuantity,
+                    currentEntryPrice = currentEntry,
+                    trades = trades,
+                    utcDayStartMs = utcDayStartMs,
+                    snapshotWindowStartMs = snapshotWindowStartMs,
+                    snapshotWindowEndMs = snapshotWindowEndMs
+                ) ?: run {
+                    paused = true
+                    prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                    lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: cannot reconstruct " + symbol +
+                        " position immediately before UTC midnight"
+                    return false
+                }
+                if (midnightPosition.quantity.compareTo(BigDecimal.ZERO) != 0) {
+                    val mark = try {
+                        futuresCampaignCoordinator.markPriceAtUtcDayStart(symbol, utcDayStartMs)
+                    } catch (failure: Exception) {
+                        paused = true
+                        prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                        lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: exact historical Mark Price unavailable for " +
+                            symbol + ": " + (failure.message ?: failure.javaClass.simpleName)
+                        return false
+                    }
+                    markPrices[symbol] = mark
+                }
+            }
+            val baseline = reconstructFuturesDailyRiskBaselineB(
+                currentWalletUsdt = currentWallet,
+                income = income,
+                currentPositions = positions,
+                tradesBySymbol = tradesBySymbol,
+                markPrices = markPrices,
+                symbols = symbols,
+                utcDayStartMs = utcDayStartMs,
+                snapshotWindowStartMs = snapshotWindowStartMs,
+                snapshotWindowEndMs = snapshotWindowEndMs
+            ) ?: run {
+                paused = true
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: complete Model B midnight equity reconstruction failed"
+                return false
+            }
+            var tradeRows = 0
+            tradesBySymbol.values.forEach { tradeRows += it.length() }
+            snapshot = JSONObject()
+                .put("schema_version", FUTURES_DAILY_RISK_MODEL_VERSION)
+                .put("utc_day_start_ms", utcDayStartMs)
+                .put("account_fingerprint", accountFingerprint)
+                .put("wallet_balance_at_midnight_usdt", baseline.walletBalanceUsdt.toPlainString())
+                .put("unrealized_pnl_at_midnight_usdt", baseline.unrealizedPnlUsdt.toPlainString())
+                .put("equity_at_midnight_usdt", baseline.equityUsdt.toPlainString())
+                .put("source", "BINANCE_INCOME_USER_TRADES_MARK_PRICE_1M")
+                .put("complete", true)
+                .put("observed_window_start_ms", snapshotWindowStartMs)
+                .put("observed_window_end_ms", snapshotWindowEndMs)
+                .put("income_rows", income.rowCount)
+                .put("trade_rows", tradeRows)
+                .put("positions_at_midnight", baseline.positionsAtMidnight)
+            snapshotRaw = snapshot.toString()
+            if (!futuresDailyRiskModelBSnapshotEstablished(
+                    snapshotRaw, accountFingerprint, utcDayStartMs
+                ) || !executionStore.writeState(snapshotKey, snapshotRaw!!)
+            ) {
+                paused = true
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                lastError = "FUTURES_DAILY_BASELINE_PERSIST_FAILED: complete Model B snapshot was not durably committed"
+                return false
+            }
+        }
+
+        val baselineEquity = snapshot?.optString("equity_at_midnight_usdt")
+            ?.toBigDecimalOrNull() ?: run {
             paused = true
             prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-            lastError = "FUTURES_DAILY_UNREALIZED_PNL_UNKNOWN: " +
-                (failure.message ?: failure.javaClass.simpleName)
+            lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: persisted E0 is malformed"
             return false
         }
-        // Calculate trading drawdown independently of transfers/deposits/withdrawals.
-        // Otherwise a deposit can hide a loss and a withdrawal can manufacture one.
-        val dailyPnlQuote = dailyIncome.tradingIncomeUsdt + currentUnrealizedPnl
-        val riskAdjustedEquity = baseline + dailyPnlQuote
-        if (!dailyPnlQuote.isFinite() || !riskAdjustedEquity.isFinite() || riskAdjustedEquity <= 0.0) {
+        val calculation = calculateFuturesDailyRiskModelB(
+            startEquityUsdt = baselineEquity,
+            currentEquityUsdt = currentEquity,
+            netExternalFlowsUsdt = income.capitalFlowUsdt
+        ) ?: run {
             paused = true
             prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-            lastError = "FUTURES_DAILY_PNL_INVALID: risk-adjusted equity is not finite and positive"
+            lastError = "FUTURES_DAILY_PNL_INVALID: Model B inputs are incomplete or E0 is not positive"
             return false
         }
-        val lossPct = ((baseline - riskAdjustedEquity) / baseline).coerceAtLeast(0.0)
-        check(
-            executionStore.writeState("futures_daily_loss_pct", lossPct.toString()) &&
-                executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString()) &&
-                executionStore.writeState("futures_daily_capital_flow_usdt", dailyIncome.capitalFlowUsdt.toString())
+        val exchangeNowMs = accountWindowEndMs
+        val dailyHaltKey = "futures_daily_entry_halt_utc_day_start_ms"
+        val lossFraction = calculation.lossPct.movePointLeft(2)
+        if (!executionStore.writeState("futures_daily_loss_pct", lossFraction.toPlainString()) ||
+            !executionStore.writeState("futures_daily_pnl_usdt", calculation.dailyPnlUsdt.toPlainString()) ||
+            !executionStore.writeState("futures_daily_capital_flow_usdt", income.capitalFlowUsdt.toPlainString())
         ) {
-            "SQLite commit failed while persisting daily Futures equity/PnL measurement"
+            paused = true
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+            lastError = "FUTURES_DAILY_PNL_PERSIST_FAILED: SQLite could not commit Model B risk metrics"
+            return false
+        }
+        if (calculation.entryBlocked) {
+            if (!executionStore.writeState(dailyHaltKey, utcDayStartMs.toString())) {
+                paused = true
+                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+                lastError = "FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: 3% Model B limit could not be committed"
+                return false
+            }
+        } else if (executionStore.readState(dailyHaltKey) == utcDayStartMs.toString()) {
+            // A previous wallet-only Model A false positive is cleared only after
+            // a complete, account-matched Model B reconstruction proves loss < 3%.
+            if (!executionStore.writeState(dailyHaltKey, "")) {
+                lastError = "FUTURES_DAILY_ENTRY_HALT_REPAIR_FAILED"
+                return false
+            }
+        }
+
+        val baselineDouble = baselineEquity.toDouble()
+        val breakerEquity = calculation.riskAdjustedEquityUsdt.max(BigDecimal.ZERO).toDouble()
+        if (!baselineDouble.isFinite() || baselineDouble <= 0.0 || !breakerEquity.isFinite()) {
+            lastError = "FUTURES_DAILY_BREAKER_EQUITY_INVALID"
+            return false
         }
         if (observeFuturesEquityFromPersistedBaseline(
-                equityCircuitBreaker, baseline, riskAdjustedEquity, exchangeNowMs
+                equityCircuitBreaker, baselineDouble, breakerEquity, exchangeNowMs
             ).tripped
         ) {
             if (!killLatched && !circuitBreakerTripInProgress) {
                 circuitBreakerTripInProgress = true
                 paused = true
-                // Persist the kill latch synchronously before scheduling network work.
-                // A process death between threshold detection and the close routine
-                // must not silently re-arm trading after the restart.
                 val killLatchPersisted = persistSafetyFlag("kill_latched", true)
                 killLatched = true
                 if (!killLatchPersisted) {
@@ -6105,9 +6206,8 @@ private class NativeEngine(
                     "5% Futures equity circuit breaker tripped"
                 )
                 prefs.edit().putBoolean("auto_run", false).commit()
-                val drawdownPct = ((baseline - riskAdjustedEquity) / baseline).coerceAtLeast(0.0) * 100.0
                 lastError = "AUTOMATIC FUTURES EQUITY CIRCUIT BREAKER: daily drawdown " +
-                    "%.2f%% reached; kill switch engaged".format(Locale.US, drawdownPct)
+                    "%.2f%% reached; kill switch engaged".format(Locale.US, calculation.lossPct.toDouble())
                 Thread {
                     try {
                         kill()
@@ -6122,20 +6222,11 @@ private class NativeEngine(
             }
             return false
         }
-        if (lossPct >= futuresDailyLossLimitPct) {
-            // A daily entry limit must expire with its UTC session. Do not turn
-            // it into the operator's indefinite pause or disable runtime auto-run.
-            if(!executionStore.writeState("futures_daily_entry_halt_utc_day_start_ms",utcDayStartMs.toString())) {
-                paused=true
-                prefs.edit().putBoolean("risk_daily_baseline_auto_paused",true).commit()
-                lastError="FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: entries paused; SQLite write failed"
-                return false
-            }
-        }
-        val halt=dailyEntryHalt(exchangeNowMs,true)
-        if(!halt.allowNewEntries) {
-            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"
-            if(!halt.available) lastError=halt.reason
+
+        val halt = dailyEntryHalt(exchangeNowMs, true)
+        if (!halt.allowNewEntries) {
+            lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked"
+            if (!halt.available) lastError = halt.reason
             runCatching {
                 withCampaignMutation(
                     symbol = "FUTURES_ACCOUNT",
@@ -6149,28 +6240,22 @@ private class NativeEngine(
             }
             return false
         }
-        if(lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:")==true) lastError=null
-        // UTC midnight clears the *loss streak*, not financial drawdown or
-        // unresolved orders. A previously automatic UNKNOWN-baseline pause may
-        // be released ONLY once the current UTC baseline, daily PnL and
-        // exchange account have all passed this exact verification.
+        if (lastError?.startsWith("FUTURES_DAILY_LOSS_LIMIT:") == true) lastError = null
         val recoverablePause = prefs.getBoolean("risk_daily_baseline_auto_paused", false) ||
-            (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
+            lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true
         if (canReleaseVerifiedUtcRiskPause(
-                baselineAndPnlVerified=true,
-                wasRiskAutoPaused=recoverablePause,
-                runtimeRunning=running,
-                operatorPaused=prefs.getBoolean("operator_entries_paused", false),
-                killLatched=killLatched,
-                reconcileRequired=reconcileRequired,
-                testnetOverrideActive=forceTestnetMode
-            )) {
-            // Other gates (coordinator, pending orders, WSS, fresh market, FSM)
-            // remain authoritative; removing this PAUSE is not an entry permit.
+                baselineAndPnlVerified = true,
+                wasRiskAutoPaused = recoverablePause,
+                runtimeRunning = running,
+                operatorPaused = prefs.getBoolean("operator_entries_paused", false),
+                killLatched = killLatched,
+                reconcileRequired = reconcileRequired,
+                testnetOverrideActive = forceTestnetMode
+            )
+        ) {
             if (prefs.edit().putBoolean("risk_daily_baseline_auto_paused", false).commit()) {
                 paused = false
-                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true)
-                    lastError = null
+                if (lastError?.startsWith("FUTURES_DAILY_BASELINE_UNKNOWN") == true) lastError = null
             }
         }
         return true
@@ -6186,19 +6271,11 @@ private class NativeEngine(
         utc.set(Calendar.SECOND, 0)
         utc.set(Calendar.MILLISECOND, 0)
         val dayStart = utc.timeInMillis
-        val baselineKey = "futures_day_start_equity_" + dayStart
-        val sourceKey = "futures_day_start_equity_source_" + dayStart
-        val source = executionStore.readState(sourceKey)
-        if (!source.isNullOrBlank() &&
-            !source.equals("UNKNOWN", ignoreCase = true) &&
-            !source.equals("null", ignoreCase = true)
-        ) return@runCatching source
-        // Recover only provenance metadata for an already persisted, valid baseline.
-        // Never manufacture a baseline from current equity here: the risk gate owns that.
-        val baselineValue = executionStore.readState(baselineKey)
-        if (canRepairDailyRiskBaselineSource(baselineValue, source) &&
-            executionStore.writeState(sourceKey, "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED")
-        ) "SQLITE_PERSISTED_BASELINE_SOURCE_RECOVERED" else "UNKNOWN"
+        val fingerprint = futuresApiKeyFingerprint(key())
+        val snapshot = executionStore.readState("futures_daily_risk_model_b_snapshot_" + dayStart)
+        if (futuresDailyRiskModelBSnapshotEstablished(snapshot, fingerprint, dayStart)) {
+            JSONObject(snapshot!!).optString("source", "UNKNOWN")
+        } else "UNKNOWN"
     }.getOrDefault("UNKNOWN")
 
     /**
