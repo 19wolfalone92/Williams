@@ -184,7 +184,7 @@ def test_python_production_breaker_uses_model_b_and_persists_utc_latch():
     assert not allowed and "Model B" in reason
     assert db.state_get("daily_equity_loss_latched_day") == today
     assert db.state_get("daily_equity_loss_latched_model") == "MODEL_B"
-    db.close()
+    db.conn.close()
 
 
 def test_python_breaker_rejects_incomplete_or_changed_account_identity():
