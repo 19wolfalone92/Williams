@@ -234,6 +234,7 @@ class PortfolioSimulator:
         self.entry_count = 0
         self.addition_count = 0
         self.stop_count = 0
+        self.structural_exit_count = 0
         self.opposite_exit_count = 0
         self.expired_count = 0
         self.replaced_count = 0
@@ -867,6 +868,9 @@ class PortfolioSimulator:
 
     def _close_campaign(self, symbol: str, campaign: dict, raw_exit: float,
                         index: int, timestamp_ms: int, reason: str, detail: str):
+        if reason == "STOP" and detail != "INITIAL_STRUCTURAL_STOP":
+            reason = "STRUCTURAL_EXIT"
+        exit_mechanism = "STOP_ORDER" if reason in ("STOP", "STRUCTURAL_EXIT") else "MARKET_ORDER"
         fill = exit_fill_price(raw_exit, campaign["side"], self.slippage_rate,
                                self.specs[symbol]["tick"])
         qty = float(campaign["qty"])
@@ -884,6 +888,7 @@ class PortfolioSimulator:
         campaign["exit_price"] = fill
         campaign["exit_reason"] = reason
         campaign["exit_detail"] = detail
+        campaign["exit_mechanism"] = exit_mechanism
         campaign["status"] = "CLOSED"
         campaign["final_net_pnl"] = campaign["gross_realized"] + campaign["funding"] - campaign["fees"]
         campaign["final_qty"] = qty
@@ -891,6 +896,9 @@ class PortfolioSimulator:
         campaign["pending"] = None
         if reason == "STOP":
             self.stop_count += 1
+        elif reason == "STRUCTURAL_EXIT":
+            self.stop_count += 1
+            self.structural_exit_count += 1
         elif reason == "OPPOSITE_SIGNAL":
             self.opposite_exit_count += 1
         summary = self._campaign_output(campaign)
@@ -902,10 +910,12 @@ class PortfolioSimulator:
                 "time_ms": timestamp_ms, "symbol": symbol, "campaign_id": campaign["campaign_id"],
                 "purpose": "EXIT", "side": "SELL" if campaign["side"] == "BUY" else "BUY",
                 "quantity": qty, "price": fill, "fee": fee, "gross_pnl": gross,
-                "funding": 0.0, "slippage_quote": slip_quote, "reason": reason, "detail": detail,
+                "funding": 0.0, "slippage_quote": slip_quote, "reason": reason,
+                "detail": detail, "exit_mechanism": exit_mechanism,
             })
         self._emit(timestamp_ms, "CAMPAIGN_CLOSED", symbol=symbol,
                    campaign_id=campaign["campaign_id"], reason=reason, detail=detail,
+                   exit_mechanism=exit_mechanism,
                    net_pnl=campaign["final_net_pnl"], gross_pnl=gross, fees=campaign["fees"],
                    funding=campaign["funding"], exit_price=fill)
         del self.active[symbol]
@@ -1255,6 +1265,7 @@ class PortfolioSimulator:
             "entry_fills": self.entry_count,
             "add_on_fills": self.addition_count,
             "stop_exits": self.stop_count,
+            "structural_stop_exits": self.structural_exit_count,
             "opposite_signal_exits": self.opposite_exit_count,
             "expired_pending_signals": self.expired_count,
             "replaced_pending_signals": self.replaced_count,
