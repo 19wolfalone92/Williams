@@ -7617,11 +7617,13 @@ private class NativeEngine(
         riskOnly: Boolean,
         eligibleSymbols: Set<String>? = null
     ) {
+        val symbolFailures = linkedMapOf<String,String>()
         for (i in 0 until positions.length()) {
             val row = positions.optJSONObject(i)
                 ?: throw IllegalStateException("Malformed Binance Futures position row during structural exit evaluation")
             val symbol = row.optString("symbol").uppercase(Locale.US)
             if (symbol !in coreSymbols || (eligibleSymbols!=null && symbol !in eligibleSymbols)) continue
+            try {
             val signedQty = row.optString("positionAmt").toDoubleOrNull()
                 ?: throw IllegalStateException("Malformed Binance Futures position amount for $symbol during structural exit evaluation")
             if (signedQty == 0.0) continue
@@ -8000,6 +8002,26 @@ private class NativeEngine(
                     )
                 }
             }
+            } catch (failure: Exception) {
+                // A single symbol's analysis/read failure must not abort STOP
+                // supervision for other independently signed positions.
+                // Preserve cancellation semantics; never swallow interruption.
+                if (failure is InterruptedException || Thread.currentThread().isInterrupted) throw failure
+                val detail = ("POSITION_MANAGEMENT_SYMBOL_FAILED: " + symbol + ": " +
+                    (failure.message ?: failure.javaClass.simpleName)).take(500)
+                symbolFailures[symbol] = detail
+                runCatching {
+                    auditStore.recordCockpitEvent(
+                        "POSITION_MANAGEMENT_SYMBOL", symbol = symbol,
+                        state = "BLOCKED", detail = detail
+                    )
+                }
+                continue
+            }
+        }
+        if (symbolFailures.isNotEmpty()) {
+            lastError = "POSITION_MANAGEMENT_SYMBOL_FAILURES: " +
+                symbolFailures.values.joinToString(" | ")
         }
     }
 

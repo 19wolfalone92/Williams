@@ -59,7 +59,7 @@ internal fun verifiedExternalStopManagementScope(
     return supported
 }
 
-/** A quarantined opposite-side campaign on one pair cannot freeze verified
+/** A quarantined or independently unresolved pair cannot freeze verified
  * TC2 protection on another. This capability permits STOP TIGHTENING only.
  * The whole signed audit must have completed before calling this function. */
 internal fun verifiedQuarantineStopManagementScope(
@@ -67,11 +67,13 @@ internal fun verifiedQuarantineStopManagementScope(
     externalOrders: JSONArray,
     durableIntents: JSONArray,
     quarantinedSymbols: Set<String>,
-    nowMs: Long
+    nowMs: Long,
+    symbolResolutionFailures: Map<String,String> = emptyMap()
 ): Set<String> {
-    if (quarantinedSymbols.isEmpty() || nowMs <= 0L) return emptySet()
+    val isolatedSymbols = quarantinedSymbols + symbolResolutionFailures.keys
+    if (isolatedSymbols.isEmpty() || nowMs <= 0L) return emptySet()
     val conflicts=JSONArray(externalOrders.toString())
-    quarantinedSymbols.forEach { conflicts.put(org.json.JSONObject().put("symbol",it)) }
+    isolatedSymbols.forEach { conflicts.put(org.json.JSONObject().put("symbol",it)) }
     return verifiedExternalStopManagementScope(protectionObservations,conflicts,durableIntents)
         .filter { symbol ->
             val owner=(0 until durableIntents.length()).mapNotNull { durableIntents.optJSONObject(it) }

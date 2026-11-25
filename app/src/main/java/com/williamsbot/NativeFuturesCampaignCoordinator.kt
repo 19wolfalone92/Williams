@@ -3809,7 +3809,8 @@ internal class NativeFuturesCampaignCoordinator(
                 requiredSafetyExits.getJSONObject(it).optString("symbol")
             }.toSet()
             val isolatedQuarantineScope=verifiedQuarantineStopManagementScope(
-                protectionObservations,externalOrders,persisted,reversedCampaignSymbols,clock()
+                protectionObservations,externalOrders,persisted,reversedCampaignSymbols,clock(),
+                symbolResolutionFailures
             ) - emergencySymbols
             val eligibleExternalStopManagement=externalOrderOnlyScope + isolatedQuarantineScope
             externalStopManagementSymbolsJson=JSONArray(eligibleExternalStopManagement.sorted()).toString()
