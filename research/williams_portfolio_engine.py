@@ -372,6 +372,8 @@ class PortfolioSimulator:
                 campaign["funding"] += payment
                 self.total_funding += payment
                 self._emit(timestamp_ms, "FUNDING", symbol=symbol, campaign_id=campaign["campaign_id"],
+                           source_event_time_ms=int(row.get("time_ms", timestamp_ms)),
+                           alignment_offset_ms=timestamp_ms - int(row.get("time_ms", timestamp_ms)),
                            rate=rate, mark_price=mark, quantity=campaign["qty"], payment=payment)
 
     def _campaign_context(self, symbol: str, signal, known_at_ms: int, context: dict) -> dict:
