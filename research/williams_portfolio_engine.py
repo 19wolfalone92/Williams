@@ -261,12 +261,12 @@ class PortfolioSimulator:
             equity += _sign(campaign["side"]) * campaign["qty"] * (mark - campaign["avg_entry"])
         return equity
 
-    def _margin_used(self, index: int) -> float:
+    def _margin_used(self, index: int, price_field: str = "mark_open") -> float:
         used = 0.0
         for symbol, campaign in self.active.items():
             leverage = float(self.specs[symbol]["leverage"])
             if campaign["status"] == "OPEN":
-                mark = float(self.data[symbol]["mark"]["mark_close"][index])
+                mark = float(self.data[symbol]["mark"][price_field][index])
                 used += campaign["qty"] * mark / leverage
             pending = campaign.get("pending")
             if pending:
@@ -985,7 +985,7 @@ class PortfolioSimulator:
             self.max_drawdown_duration_ms = max(self.max_drawdown_duration_ms,
                                                 timestamp_ms - self.drawdown_started_ms)
             self.drawdown_started_ms = None
-        margin = self._margin_used(index)
+        margin = self._margin_used(index, "mark_close")
         risk = self._reserved_risk()
         self.max_margin_pct = max(self.max_margin_pct, margin / equity if equity > 0 else 0.0)
         self.max_risk_pct = max(self.max_risk_pct, risk / equity if equity > 0 else 0.0)
