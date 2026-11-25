@@ -746,7 +746,7 @@ def main() -> None:
         "test_android_campaign_and_intents_are_sqlite_backed",
         "test_android_reconcile_and_kill_latches_are_sqlite_durable",
         "test_android_corrupt_persisted_campaign_state_fails_closed",
-        "test_android_reversal_htf_gate_matches_python_campaign_contract",
+        "test_android_and_python_tc2_h1_entries_do_not_require_independent_htf_confirmation",
         "test_android_daily_loss_is_rechecked_at_order_admission",
         "test_android_signed_execution_boundary_rejects_legacy_spot_routes",
         "test_android_user_stream_is_not_the_spot_signed_subscription_protocol",
