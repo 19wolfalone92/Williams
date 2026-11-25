@@ -1,0 +1,64 @@
+name: Williams unified portfolio backtest
+
+on:
+  push:
+    branches:
+      - 'architecture/reconstruction-safety-performance-20261124'
+    paths:
+      - 'research/williams_portfolio_engine.py'
+      - 'research/run_williams_portfolio_backtest.py'
+      - 'tests/test_williams_portfolio_engine.py'
+      - '.github/workflows/portfolio-backtest.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  unified-portfolio-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout exact source revision
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Compile and run portfolio engine unit tests
+        run: |
+          python -m py_compile research/williams_portfolio_engine.py research/run_williams_portfolio_backtest.py tests/test_williams_portfolio_engine.py
+          pytest -q tests/test_williams_portfolio_engine.py
+      - name: Retrieve the already-qualified 24-month archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p data/original data/qualified
+          for symbol in BTCUSDT ETHUSDT BNBUSDT SOLUSDT XRPUSDT DOGEUSDT ADAUSDT LINKUSDT AVAXUSDT LTCUSDT SUIUSDT NEARUSDT DOTUSDT TRXUSDT BCHUSDT; do
+            target="data/original/portfolio-archives-${symbol}"
+            mkdir -p "$target"
+            gh run download 45633468011 --repo "$GITHUB_REPOSITORY" --name "portfolio-archives-${symbol}" --dir "$target"
+          done
+          gh run download 45662218924 --repo "$GITHUB_REPOSITORY" --name portfolio-24m-qualified-archives-and-repairs --dir data/qualified
+      - name: Run smoke, full two-year portfolio replay, reproducibility and sensitivities
+        run: |
+          python research/run_williams_portfolio_backtest.py \
+            --data-root data \
+            --outdir build/portfolio-backtest \
+            --capital 5000 \
+            --smoke-days 30
+      - name: Upload complete portfolio evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: williams-bot-portfolio-backtest-2y
+          path: build/portfolio-backtest/
+          if-no-files-found: warn
+          retention-days: 30
