@@ -43,6 +43,13 @@ class EquityCircuitBreakerTest {
     }
 
     @Test
+    fun zeroEquityStillTripsTheSeparateFivePercentEmergencyBreaker() {
+        val breaker = EquityCircuitBreaker(maxDrawdownPct = 0.05)
+        breaker.observe(1000.0, 1_000L)
+        assertTrue(breaker.observe(0.0, 2_000L).tripped)
+    }
+
+    @Test
     fun resetsAtUtcDayBoundary() {
         val b = EquityCircuitBreaker()
         b.observe(1000.0, 1_000L)
