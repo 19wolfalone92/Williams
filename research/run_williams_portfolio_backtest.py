@@ -464,12 +464,12 @@ def _load_data(data_root: Path, manifest: dict, specs: dict, cfg: dict,
             event_ms = int(row.time_ms)
             if not START_MS <= event_ms < END_MS:
                 continue
-            idx = int(np.searchsorted(timeline, event_ms, side="left"))
-            if idx >= len(timeline):
+            idx = int(np.searchsorted(timeline, event_ms, side="right") - 1)
+            if idx < 0 or idx >= len(timeline):
                 continue
-            offset = int(timeline[idx] - event_ms)
-            if offset < 0 or offset > M5_MS:
-                raise RuntimeError(f"{symbol}: funding event cannot be aligned to M5 timeline")
+            offset = int(event_ms - timeline[idx])
+            if offset < 0 or offset >= M5_MS:
+                raise RuntimeError(f"{symbol}: funding event cannot be aligned to containing M5 interval")
             max_funding_offset = max(max_funding_offset, offset)
             fund_map[idx].append({
                 "time_ms": event_ms, "rate": float(row.rate),
@@ -779,7 +779,7 @@ def main():
             "entry_trigger": "contract M5 OHLC",
             "protective_stop_trigger": "Mark Price M5 OHLC",
             "stop_fill": "worst observable contract price in the M5 candle plus adverse slippage",
-            "funding": "archived fundingRate events charged/credited against Mark Price at event time",
+            "funding": "archived fundingRate events mapped to the containing M5 interval open; Mark Price open proxy and maximum timestamp offset are recorded",
             "utc_midnight_equity": "5m Mark Price open proxy; exact 1m midnight Mark Price not archived",
             "partial_fills": "not simulated; no tick/order-book depth in archive",
             "liquidation": "historical leverage brackets unavailable; 2x production default and shared 50% margin cap used",
