@@ -4716,13 +4716,21 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals(1, exits.length())
             val request = exits.getJSONObject(0)
             assertEquals("INITIAL_STOP_TRIGGER_REJECTED", request.getString("guard_origin"))
+            // A process restart must not lose the emergency request when mark
+            // remains on the original protective side of the rejected trigger.
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            val recoveredExits = recovered.getJSONArray("required_safety_exits")
+            assertEquals(recovered.toString(), 1, recoveredExits.length())
+            assertEquals(request.getString("entry_client_id"), recoveredExits.getJSONObject(0).getString("entry_client_id"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
             exchange.rejectProtectionCode = null
-            val closed = coordinator.executeRequiredUnprotectedSafetyExit(request)
+            val closed = restarted.executeRequiredUnprotectedSafetyExit(recoveredExits.getJSONObject(0))
             assertTrue(closed.toString(), closed.getBoolean("ok"))
             assertEquals(0.0, exchange.quantity, 1e-9)
             assertEquals(1, exchange.posts("/fapi/v1/order"))
             assertEquals("true", exchange.orders.values.single().optString("reduceOnly"))
-            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+            assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
             assertEquals(1, exchange.posts("/fapi/v1/order"))
             assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
         }

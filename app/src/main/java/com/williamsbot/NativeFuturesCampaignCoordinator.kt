@@ -2783,7 +2783,11 @@ internal class NativeFuturesCampaignCoordinator(
                 val previousStopSafe = matchingIntent != null && liveMark != null &&
                     previousProtectionId.isNotBlank() && previousStopPrice.isNotBlank() &&
                     isProtectiveStopOnCorrectSide(direction, liveMark.toString(), previousStopPrice)
-                if (matchingIntent != null && !currentStopSafe && !previousStopSafe) {
+                val repeatedInitialPrecisionRejection = priorInitialStopGuard &&
+                    matchingIntent?.optInt("initial_stop_definitive_rejection_code", 0) == -1111 &&
+                    (matchingIntent?.optInt("initial_stop_definitive_rejection_count", 0) ?: 0) >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT
+                if (matchingIntent != null && ((!currentStopSafe && !previousStopSafe) ||
+                        repeatedInitialPrecisionRejection)) {
                     anyUnprotected = true
                     // Missing MARK_PRICE is not proof that the initial trigger
                     // was crossed. Require a valid quote and durable evidence
@@ -2810,7 +2814,11 @@ internal class NativeFuturesCampaignCoordinator(
                                 matchingIntent.optLong("unprotected_safety_exit_required_at_ms")
                                     .takeIf { it>0L } ?: clock())
                         saveIntents(persisted)
-                        lastBlocker="$symbol initial protective stop was not accepted and MARK_PRICE crossed its level; verified emergency reduction required"
+                        lastBlocker = if (repeatedInitialPrecisionRejection) {
+                            "$symbol initial protective STOP rejected twice (-1111); verified emergency reduction required"
+                        } else {
+                            "$symbol initial protective stop was not accepted and MARK_PRICE crossed its level; verified emergency reduction required"
+                        }
                     } else {
                         // The first missing-SL rescue was masked by this
                         // stale-price guard when the market had ALREADY crossed
@@ -3179,6 +3187,24 @@ internal class NativeFuturesCampaignCoordinator(
                                     lastBlocker = "$symbol initial protective STOP rejected twice (-1111); verified reduce-only emergency close required"
                                 }
                                 saveIntents(persisted)
+                                // Emit the durable exit request in this same reconciliation.
+                                // Execution must independently revalidate exact signed absence,
+                                // both order books and the attributed exposure before mutation.
+                                if (rejectionCount >= INITIAL_STOP_DEFINITIVE_REJECTION_LIMIT &&
+                                    matchingIntent.optBoolean("strategy_ownership_verified", false) &&
+                                    previousProtectionId.isBlank() && algos.length() == 0 &&
+                                    matchingIntent.optString("confirmed_position_qty").toBigDecimalOrNull()
+                                        ?.compareTo(position.getString("positionAmt").toBigDecimal().abs()) == 0 &&
+                                    runCatching { initialStopStillUnavailable(adapter, matchingIntent, symbol, direction) }
+                                        .getOrDefault(false)) {
+                                    requiredSafetyExits.put(JSONObject().put("symbol", symbol)
+                                        .put("direction", direction)
+                                        .put("entry_client_id", matchingIntent.optString("client_id"))
+                                        .put("quantity", matchingIntent.optString("confirmed_position_qty"))
+                                        .put("missing_protection_client_id", "")
+                                        .put("guard_origin", INITIAL_STOP_TRIGGER_REJECTED)
+                                        .put("reason", "UNPROTECTED_POSITION_GUARD"))
+                                }
                             } else {
                                 lastBlocker = "$symbol protective-stop placement ambiguous: ${failure.message ?: failure.javaClass.simpleName}"
                             }

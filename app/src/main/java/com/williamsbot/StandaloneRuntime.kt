@@ -1087,10 +1087,10 @@ internal fun selectFuturesDailyBaseline(
     hasOpenOrUnknownPositionOrPendingExecution: Boolean
 ): FuturesDailyBaselineDecision? {
     if (!currentEquityUsdt.isFinite() || currentEquityUsdt <= 0.0) return null
-    // Without a persisted UTC-day baseline, current unrealized PnL cannot reveal
-    // the unrealized PnL carried across midnight. Fail closed while any exposure
-    // or pending execution exists; existing positions remain under protection.
-    if (hasOpenOrUnknownPositionOrPendingExecution) return null
+    // Existing risk policy uses opening wallet balance (equity excluding unrealized)
+    // and counts current unrealized PnL in full. It is not a midnight mark-to-market
+    // equity calculation. A complete income ledger permits wallet reconstruction
+    // even with exposure; never substitute the current equity when evidence is absent.
     val summary = summarizeFuturesDailyIncome(incomeRows) ?: return null
     if (incomeRows.length() > 0) {
         val reconstructed = reconstructFuturesDailyRiskBaseline(
@@ -1107,6 +1107,7 @@ internal fun selectFuturesDailyBaseline(
             }
         )
     }
+    if (hasOpenOrUnknownPositionOrPendingExecution) return null
     return FuturesDailyBaselineDecision(currentEquityUsdt, "INITIAL_FLAT_SNAPSHOT")
 }
 
