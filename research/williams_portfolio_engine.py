@@ -183,6 +183,7 @@ class PortfolioSimulator:
 
         self.active: dict[str, dict] = {}
         self.closed: list[dict] = []
+        self.completed_summaries: list[dict] = []
         self.signal_records: dict[tuple[str, str], dict] = {}
         self.fills: list[dict] = []
         self.risk_events: list[dict] = []
@@ -518,6 +519,7 @@ class PortfolioSimulator:
                                 "REPLACED", "NEWER_VALID_ADD_ON")
             self.replaced_count += 1
             campaign["pending"] = None
+            pending = None
         if campaign["additions"] >= 4:
             self._signal_status(symbol, signal, known_at, context, "BLOCKED", "TC2_15_UNIT_PYRAMID_COMPLETE")
             return
@@ -694,9 +696,11 @@ class PortfolioSimulator:
             self.stop_count += 1
         elif reason == "OPPOSITE_SIGNAL":
             self.opposite_exit_count += 1
-        self._signal_digest_campaign(campaign)
+        summary = self._campaign_output(campaign)
+        self.completed_summaries.append(summary)
+        self.digest.update((_canonical(summary) + "\\n").encode())
         if self.collect:
-            self.closed.append(self._campaign_output(campaign))
+            self.closed.append(summary)
             self.fills.append({
                 "time_ms": timestamp_ms, "symbol": symbol, "campaign_id": campaign["campaign_id"],
                 "purpose": "EXIT", "side": "SELL" if campaign["side"] == "BUY" else "BUY",
@@ -1034,9 +1038,6 @@ class PortfolioSimulator:
                     self._process_pending(symbol, campaign, index, timestamp_ms + M5_MS)
             self._record_equity(index, timestamp_ms + M5_MS)
             self.max_active_campaigns = max(self.max_active_campaigns, len(self.active))
-            month = timestamp_ms // (30 * DAY_MS)  # replaced by UTC calendar aggregation in report
-            if self._last_month is None:
-                self._last_month = month
         if self.drawdown_started_ms is not None:
             self.max_drawdown_duration_ms = max(
                 self.max_drawdown_duration_ms,
@@ -1046,7 +1047,7 @@ class PortfolioSimulator:
             self._finalize_open(stop_index - 1, int(self.timeline[stop_index - 1]) + M5_MS)
         final_equity = self._equity(stop_index - 1, "mark_close") if stop_index else self.initial_capital
         closed_rows = self.closed if self.collect else []
-        completed = [x for x in closed_rows if x.get("status") == "CLOSED"]
+        completed = self.completed_summaries
         nets = [float(x["net_pnl"]) for x in completed]
         wins = [x for x in nets if x > 1e-12]
         losses = [x for x in nets if x < -1e-12]
