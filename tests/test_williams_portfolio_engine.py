@@ -75,10 +75,10 @@ def test_tc2_structural_stop_is_exactly_one_exchange_tick_beyond_source():
 
 
 def test_pending_stop_replacement_requires_newer_signal_and_tick_distance():
-    old = SimpleNamespace(side="BUY", signal_bar_time_ms=1_000, trigger_price=100.0)
-    newer = SimpleNamespace(side="BUY", signal_bar_time_ms=2_000, trigger_price=101.0)
-    too_close = SimpleNamespace(side="BUY", signal_bar_time_ms=2_000, trigger_price=100.5)
-    opposite = SimpleNamespace(side="SELL", signal_bar_time_ms=2_000, trigger_price=100.0)
+    old = SimpleNamespace(symbol="BTCUSDT", signal_id="old", side="BUY", signal_bar_time_ms=1_000, trigger_price=100.0)
+    newer = SimpleNamespace(symbol="BTCUSDT", signal_id="new", side="BUY", signal_bar_time_ms=2_000, trigger_price=101.0)
+    too_close = SimpleNamespace(symbol="BTCUSDT", signal_id="close", side="BUY", signal_bar_time_ms=2_000, trigger_price=100.5)
+    opposite = SimpleNamespace(symbol="BTCUSDT", signal_id="opposite", side="SELL", signal_bar_time_ms=2_000, trigger_price=100.0)
     assert CampaignEngine.should_replace_pending(old, newer, tick_size=1.0)
     assert not CampaignEngine.should_replace_pending(old, too_close, tick_size=1.0)
     assert CampaignEngine.should_replace_pending(old, opposite, tick_size=1.0)
