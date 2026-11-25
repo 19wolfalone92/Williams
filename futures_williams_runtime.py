@@ -337,7 +337,7 @@ class FuturesWilliamsScanner:
         return (ask - bid) / bid
 
     def _htf(self, symbol: str) -> tuple[bool, bool]:
-        """D1 macro airbag + H4 directional context; H1 remains the decision TF."""
+        """Closed D1/H4 context flags; H1 TC2 signals remain the entry decision."""
         if not _env_bool("REQUIRE_HTF_CONFIRMATION", True):
             return True, True
 
@@ -356,13 +356,15 @@ class FuturesWilliamsScanner:
 
         daily = closed_context("1d")
         four_hour = closed_context("4h")
-        # Missing context is not bullish or bearish evidence: block both directions.
+        # Missing context is UNKNOWN. Keep both H1 directions eligible; the caller records
+        # this as unconfirmed context rather than using it as an entry veto.
         if daily is None or four_hour is None:
             return False, False
         d1_bull, d1_bear = daily
         h4_bull, h4_bear = four_hour
-        # D1 is an airbag, not an entry trigger. H4 must support the direction,
-        # while a clear opposite D1 trend vetoes the trade. No M15/M5 entry path.
+        # D1/H4 provide directional context for diagnostics and ranking only.
+        # Neither timeframe is a mandatory confirmation or veto for an H1 TC2 entry.
+        # No M15/M5 entry path.
         return h4_bull and not d1_bear, h4_bear and not d1_bull
 
     def wave_hierarchy(self, symbol: str, h1_frame=None, *, refresh=False) -> WaveHierarchy:
@@ -566,8 +568,7 @@ class FuturesWilliamsScanner:
             signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
             correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
             # Keep both-direction signals visible to the campaign
-            # manager. HTF confirmation is an initial-entry gate, not an
-            # exit/add-on visibility gate.
+            # manager. D1/H4 context is not an initial-entry, exit or add-on gate.
             age_bonus = max(
                 0.0,
                 20.0 - max(0, int((int(time.time() * 1000) - signal.signal_bar_time_ms) / 60000))
@@ -587,8 +588,8 @@ class FuturesWilliamsScanner:
             if signal.alligator_awake:
                 score += 10.0
             # Bounded, explainable, explicitly uncalibrated structure overlay.
-            # Existing signal expiry, HTF execution gates, protective stops,
-            # Futures Risk Engine and campaign state machine stay authoritative.
+            # Existing signal expiry, protective stops, Futures Risk Engine and
+            # campaign state machine stay authoritative; D1/H4 remain context only.
             score += float(contexts[side]["score_adjustment"])
             out.append(
                 FuturesCandidate(

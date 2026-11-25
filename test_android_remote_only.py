@@ -210,21 +210,21 @@ def test_android_daily_loss_is_rechecked_at_order_admission():
     assert 'if (lossPct >= futuresDailyLossLimitPct)' in runtime
 
 
-def test_android_reversal_htf_gate_matches_python_campaign_contract():
+def test_android_and_python_tc2_h1_entries_do_not_require_independent_htf_confirmation():
     android = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     python = _read(ROOT / "futures_williams_runtime.py")
 
-    # Directional context is ranked only after both H1 hypotheses are preserved.
-    # TC2 chapter 12 requires its H1 book signal, not H4/D1 alignment; D1/H4 remain traced as context.
+    # D1/H4 are context only. WM1, WM2 and WM3 are independent H1 TC2 entries.
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
     assert "fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(" in android
     assert 'williamsInitialHigherFrameHistoryRequired(it.strategyProfile)' in android
     assert "internal fun campaignSignalDirection(signalType: String): String?" in android
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
-    assert "return signal_type != SignalType.REVERSAL" in python
-
-
+    assert "def _requires_directional_htf_confirmation" not in python
+    assert "HTF confirmation gate blocked initial campaign" not in python
+    assert "TC2 WM1, WM2 and WM3 are independent H1 entries" in python
+    assert "htf_confirmed=bool(htf_ok)" in python
 def test_android_manual_direction_override_is_removed_fail_closed_and_legacy_orders_recover():
     """Product requirement: no forced trading UI or exchange admission on old API routes.
 
