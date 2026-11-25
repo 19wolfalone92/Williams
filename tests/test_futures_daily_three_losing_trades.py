@@ -25,7 +25,8 @@ def _runtime_with_closed_pnl(pnls):
     runtime.cooldown_minutes = 30
     runtime._equity = lambda: 1000.0
     runtime.open_trades = lambda: []
-    runtime.equity_breaker = SimpleNamespace(check=lambda *args: (True, None))
+    # Isolate the consecutive-loss gate; Model B has its own production-path tests.
+    runtime._daily_model_b_entry_guard = lambda: (True, None)
     return runtime
 
 

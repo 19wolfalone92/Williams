@@ -63,7 +63,8 @@ class DemoExchangeModel:
             positions = [] if not self.amount else [{"symbol":self.symbol, "positionSide":"BOTH",
                 "positionAmt":str(self.amount), "initialMargin":margin, "isolatedWallet":margin,
                 "isolatedMargin":margin, "updateTime":100}]
-            return self.account_transform({"canTrade": True, "totalWalletBalance": "10000", "totalMarginBalance":"10000",
+            return self.account_transform({"canTrade": True, "multiAssetsMargin": False, "dualSidePosition": False,
+                "totalWalletBalance": "10000", "totalMarginBalance":"10000",
                 "totalUnrealizedProfit": "0", "availableBalance": "10000", "totalInitialMargin":margin,
                 "totalPositionInitialMargin":margin, "totalOpenOrderInitialMargin":"0", "positions":positions,
                 "assets":[{"asset":"USDT", "walletBalance":"10000", "initialMargin":margin,
@@ -138,7 +139,15 @@ class DemoExchangeModel:
                 row["executedQty"] = row["origQty"]
                 self.amount = float(row["origQty"]) * (1 if row["side"] == "BUY" else -1)
             return dict(row)
+        if path.endswith("/income"):
+            # Transport fixture models no fees, funding or external flows.
+            return []
         if path.endswith("userTrades"):
+            if "orderId" not in p:
+                # Midnight reconstruction in this fixture begins before its first fill.
+                if self.orders and p.get("symbol") == self.symbol:
+                    raise AssertionError("Transport fixture has no complete historical fill ledger")
+                return []
             row = self.orders[int(p["orderId"])]
             qty=float(row["executedQty"]);price=float(row["avgPrice"])
             pnl=qty*(price-self.entry_price)*(1 if row["side"]=="SELL" else -1) if row.get("reduceOnly")=="true" else 0
@@ -1069,7 +1078,7 @@ def half_margin_entry(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('side', ['BUY','SELL'])
 @pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN','POSITION_CHANGED'])
-def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, side, fault):
+def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, monkeypatch, side, fault):
     bot, exchange, candidate = half_margin_entry
     def corrupt(account):
         if fault=='OVER_HALF': account['totalInitialMargin']='5500'
@@ -1078,7 +1087,12 @@ def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half
             'positionAmt':'1','initialMargin':'50','isolatedWallet':'50','isolatedMargin':'50','updateTime':100}]
         else: account['multiAssetsMargin']='false'
         return account
-    exchange.account_transform=corrupt
+    # Inject the fault at the final margin assessment, not at the earlier Model B gate.
+    assess = bot._assess_half_margin
+    def corrupt_at_assessment(intent):
+        exchange.account_transform = corrupt
+        return assess(intent)
+    monkeypatch.setattr(bot, '_assess_half_margin', corrupt_at_assessment)
     with pytest.raises(RuntimeError, match='FUTURES_HALF_MARGIN'):
         bot._arm_entry(candidate(side))
     assert not any(method=='POST' and path in {'/fapi/v1/order','/fapi/v1/algoOrder'}

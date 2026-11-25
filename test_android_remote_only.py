@@ -178,8 +178,10 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "private val executionStore = FuturesExecutionStore(context)" in runtime
     assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
     assert "executionStore.writeRuntimeState" in runtime
-    assert 'executionStore.writeState("futures_daily_loss_pct", lossPct.toString())' in runtime
-    assert 'executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())' in runtime
+    assert "executionStore.writeDailyRiskMetrics(" in runtime
+    assert '"futures_daily_loss_pct" to lossFraction' in store
+    assert '"futures_daily_pnl_usdt" to pnl' in store
+    assert "db.transaction {" in store
     assert 'executionStore.readState("futures_daily_pnl_usdt")' in runtime
     assert "executionStore.readState" in runtime
     assert "private val executionStore: FuturesCampaignStateStore" in coordinator
@@ -387,8 +389,8 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
     assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
     assert '.put("max_daily_loss_pct", futuresDailyLossLimitPct)' in runtime
-    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
-    assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked" in runtime
+    assert "val dailyHaltSaved = !calculation.entryBlocked" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked" in runtime
 
 
 def test_android_diagnostics_do_not_fake_self_heal_readiness():

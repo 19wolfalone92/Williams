@@ -25,7 +25,7 @@ def test_recoverable_utc_risk_failures_do_not_cancel_monitor_autorun():
     assert 'putBoolean("auto_run", false)' not in src[s:e]
     for token in (
         "FUTURES_DAILY_BASELINE_PERSIST_FAILED",
-        "FUTURES_DAILY_BASELINE_SOURCE_REPAIR_FAILED",
+        "FUTURES_DAILY_PNL_PERSIST_FAILED",
         "FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED",
         "FUTURES_DAILY_LOSS_CHECK_FAILED",
     ):

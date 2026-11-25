@@ -55,8 +55,8 @@ def test_no_stale_spread_veto_on_deferred_h1_stop_but_market_quote_veto_kept():
 
 def test_trading_daily_halt_is_three_percent_with_stop_and_fees_preserved():
     runtime = source("StandaloneRuntime.kt")
-    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
-    assert '"FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked"' in runtime
+    assert "val dailyHaltSaved = !calculation.entryBlocked" in runtime
+    assert '"FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked"' in runtime
     assert runtime.count('put("max_daily_loss_pct", futuresDailyLossLimitPct)') >= 2
     assert "futuresCampaignCoordinator.cancelPendingEntries(\"DAILY_LOSS_LIMIT\")" in runtime
     assert "val effectiveLoss = stopFraction + 2.0 * feeBufferPerSidePct + maxSlippagePct" in runtime
