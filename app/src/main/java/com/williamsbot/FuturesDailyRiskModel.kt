@@ -152,7 +152,7 @@ internal fun reverseFuturesPositionAtMidnightB(
     for (index in 0 until trades.length()) {
         val row = trades.optJSONObject(index) ?: return null
         if (row.optString("symbol").uppercase(Locale.US) != symbol.uppercase(Locale.US)) return null
-        if (!row.optString("positionSide", "BOTH").equals("BOTH", true)) return null
+        if (!row.optString("positionSide").equals("BOTH", true)) return null
         val id = row.optString("id").toLongOrNull() ?: return null
         val stamp = row.optString("time").toLongOrNull() ?: return null
         if (id <= 0L || !seenIds.add(id) || stamp < utcDayStartMs || stamp > snapshotWindowEndMs) return null
