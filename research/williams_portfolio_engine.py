@@ -593,18 +593,23 @@ class PortfolioSimulator:
             return
         items = sorted(items, key=lambda x: (int(x["signal"].signal_bar_time_ms),
                                              str(x["signal"].signal_id)))
+        for item in items:
+            self._signal_status(symbol, item["signal"], item["known_at_ms"],
+                                item.get("context", {}), "OBSERVED")
         campaign = self.active.get(symbol)
         if campaign and campaign["status"] == "PENDING_INITIAL":
             candidates = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value
                           and x["signal"].strategy_profile == TC2]
+            if len({x["signal"].side for x in candidates}) > 1:
+                for item in candidates:
+                    self._signal_status(symbol, item["signal"], item["known_at_ms"], item.get("context", {}),
+                                        "BLOCKED", "OPPOSING_ENTRIES_BEFORE_CONTEXT")
+                return
             if candidates:
                 self._replace_pending_initial(campaign, candidates[0], index)
             return
         if campaign and campaign["status"] == "OPEN":
-            entry_signals = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value]
-            sides = {x["signal"].side for x in entry_signals}
-            conflict = len(sides) > 1
-            if not conflict and not campaign.get("pending"):
+            if not campaign.get("pending"):
                 eligible = [x for x in items
                             if x["signal"].side == campaign["side"]
                             and x["signal"].strategy_profile == TC2
@@ -613,7 +618,7 @@ class PortfolioSimulator:
                     self._arm_addon(campaign, eligible[0], index)
             for item in items:
                 signal = item["signal"]
-                if (not conflict and signal.side != campaign["side"]
+                if (signal.strategy_profile == TC2 and signal.side != campaign["side"]
                         and _signal_role(signal) == SignalRole.ENTRY.value
                         and _signal_type(signal) in {
                             SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
@@ -637,6 +642,14 @@ class PortfolioSimulator:
             return
         if entries:
             self._arm_initial(symbol, entries[0], index)
+        else:
+            for item in items:
+                if item["signal"].strategy_profile != TC2:
+                    self._signal_status(symbol, item["signal"], item["known_at_ms"],
+                                        item.get("context", {}), "OBSERVATION_ONLY_NON_TC2")
+                elif _signal_role(item["signal"]) == SignalRole.ADD_ON.value:
+                    self._signal_status(symbol, item["signal"], item["known_at_ms"],
+                                        item.get("context", {}), "IGNORED", "NO_OPEN_CAMPAIGN_FOR_ADD_ON")
 
     def _trail(self, symbol: str, index: int, timestamp_ms: int):
         campaign = self.active.get(symbol)
