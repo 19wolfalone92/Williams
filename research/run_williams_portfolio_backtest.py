@@ -16,6 +16,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 import time
 import zipfile
 import io
@@ -23,6 +24,10 @@ import io
 import numpy as np
 import pandas as pd
 import requests
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from research.fetch_portfolio_archives import (
     BASE, DATASETS, archive_path, month_bounds, validate,
