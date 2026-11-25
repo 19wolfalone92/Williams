@@ -637,8 +637,31 @@ def main() -> None:
     must(legacy_runtime, '.put("ok", running && !reconcileRequired && !killLatched &&', "StandaloneRuntime.kt")
     must(legacy_runtime, 'coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'if (lossPct >= futuresDailyLossLimitPct)', "StandaloneRuntime.kt")
-    must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked', "StandaloneRuntime.kt")
+    must(legacy_runtime, "calculateFuturesDailyRiskModelB(", "StandaloneRuntime.kt")
+    must(legacy_runtime, "if (calculation.entryBlocked)", "StandaloneRuntime.kt")
+    must(legacy_runtime, "futures_daily_risk_model_b_snapshot_", "StandaloneRuntime.kt")
+    must(legacy_runtime, "completeUserTrades(", "StandaloneRuntime.kt")
+    must(legacy_runtime, "markPriceAtUtcDayStart(", "StandaloneRuntime.kt")
+    must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked', "StandaloneRuntime.kt")
+    must(legacy_runtime, "FUTURES_DAILY_EMERGENCY_BREAKER_5PCT_LATCHED", "StandaloneRuntime.kt")
+    model_b_android = read("app/src/main/java/com/williamsbot/FuturesDailyRiskModel.kt")
+    for needle in (
+        "calculateFuturesDailyRiskModelB(",
+        'MODEL_B_ENTRY_LIMIT = BigDecimal("0.03")',
+        'MODEL_B_EMERGENCY_LIMIT = BigDecimal("0.05")',
+        "summarizeFuturesDailyIncomeModelB(",
+        "reverseFuturesPositionAtMidnightB(",
+        "futuresDailyRiskModelBSnapshotEstablished(",
+    ):
+        must(model_b_android, needle, "FuturesDailyRiskModel.kt")
+    model_b_python = read("daily_risk_accounting.py")
+    must(model_b_python, "def calculate_daily_risk_model_b(", "daily_risk_accounting.py")
+    must(model_b_python, 'DAILY_ENTRY_LOSS_LIMIT = Decimal("0.03")', "daily_risk_accounting.py")
+    must(model_b_python, 'EMERGENCY_BREAKER_LIMIT = Decimal("0.05")', "daily_risk_accounting.py")
+    must(read("futures_williams_runtime.py"), "_daily_model_b_entry_guard(", "futures_williams_runtime.py")
+    must(read("tests/test_daily_risk_model_b.py"), "test_replay_exact_previous_21_daily_risk_scenarios_under_model_b", "Model B Python tests")
+    must(read("app/src/test/java/com/williamsbot/FuturesDailyRiskModelBTest.kt"),
+         "replaysTheExactPreviousTwentyOneCasesAgainstModelB", "Model B Android tests")
 
     # UI single-source diagnosis and forced-order retirement are safety
     # contracts, not merely cosmetic requests. Preserve these through merges.
