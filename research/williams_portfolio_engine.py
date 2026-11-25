@@ -591,32 +591,36 @@ class PortfolioSimulator:
                                              str(x["signal"].signal_id)))
         campaign = self.active.get(symbol)
         if campaign and campaign["status"] == "PENDING_INITIAL":
-            for item in items:
-                signal = item["signal"]
-                if _signal_role(signal) == SignalRole.ENTRY.value and signal.strategy_profile == TC2:
-                    self._replace_pending_initial(campaign, item, index)
-                    campaign = self.active.get(symbol)
+            candidates = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value
+                          and x["signal"].strategy_profile == TC2]
+            if candidates:
+                self._replace_pending_initial(campaign, candidates[0], index)
             return
         if campaign and campaign["status"] == "OPEN":
             entry_signals = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value]
             sides = {x["signal"].side for x in entry_signals}
             conflict = len(sides) > 1
+            if not conflict and not campaign.get("pending"):
+                eligible = [x for x in items
+                            if x["signal"].side == campaign["side"]
+                            and x["signal"].strategy_profile == TC2
+                            and int(x["signal"].signal_bar_time_ms) > int(campaign["last_signal_time_ms"])]
+                if eligible:
+                    self._arm_addon(campaign, eligible[0], index)
             for item in items:
                 signal = item["signal"]
-                if signal.side == campaign["side"] and signal.strategy_profile == TC2:
-                    if not conflict:
-                        self._arm_addon(campaign, item, index)
-                elif signal.side != campaign["side"] and _signal_role(signal) == SignalRole.ENTRY.value:
-                    if not conflict and _signal_type(signal) in {
-                        SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
-                    }:
-                        watcher = {
-                            "signal": signal, "context": item.get("context", {}),
-                            "known_at_ms": int(item["known_at_ms"]),
-                        }
-                        campaign["opposition_watchers"].append(watcher)
-                        self._signal_status(symbol, signal, item["known_at_ms"], item.get("context", {}),
-                                            "OPPOSITE_EXIT_WATCH")
+                if (not conflict and signal.side != campaign["side"]
+                        and _signal_role(signal) == SignalRole.ENTRY.value
+                        and _signal_type(signal) in {
+                            SignalType.REVERSAL.value, SignalType.SUPER_AO.value, SignalType.FRACTAL.value
+                        }):
+                    watcher = {
+                        "signal": signal, "context": item.get("context", {}),
+                        "known_at_ms": int(item["known_at_ms"]),
+                    }
+                    campaign["opposition_watchers"].append(watcher)
+                    self._signal_status(symbol, signal, item["known_at_ms"], item.get("context", {}),
+                                        "OPPOSITE_EXIT_WATCH")
             return
         if campaign is not None:
             return
