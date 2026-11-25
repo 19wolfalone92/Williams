@@ -17,6 +17,7 @@ import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
+import java.math.BigDecimal
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.ArrayDeque
@@ -5998,7 +5999,8 @@ private class NativeEngine(
                 return false
             }
         }
-        if (snapshotWindowEndMs < utcDayStartMs || snapshotWindowEndMs < snapshotWindowStartMs) {
+        if (snapshotWindowEndMs < utcDayStartMs || snapshotWindowEndMs >= utcDayStartMs + 86_400_000L ||
+            snapshotWindowEndMs < snapshotWindowStartMs) {
             lastError = "FUTURES_DAILY_BASELINE_UNKNOWN: invalid account/position observation window"
             return false
         }
