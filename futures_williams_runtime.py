@@ -59,6 +59,11 @@ from williams_tc2_pyramid import (
 from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
+from daily_risk_accounting import (
+    UTC_DAY_MS, account_fingerprint, calculate_daily_risk_model_b,
+    model_b_snapshot_is_valid, reconstruct_midnight_equity,
+    reverse_position_at_midnight, summarize_income_rows,
+)
 from campaign_model import (
     CampaignState,
     SignalRole,
@@ -856,23 +861,122 @@ class FuturesWilliamsRuntime:
         if self.max_consecutive_losses and streak >= self.max_consecutive_losses:
             return False, f"MAX_CONSECUTIVE_LOSSES reached: {streak}"
 
-        equity = self._equity()
-        unrealized = 0.0
-        for symbol in {str(x["symbol"]).upper() for x in self.open_trades()}:
-            try:
-                unrealized += float(
-                    self.client.position(symbol).get("unRealizedProfit", 0) or 0
-                )
-            except Exception:
-                return False, f"Risk gate cannot value {symbol} unrealized PnL"
+        return self._daily_model_b_entry_guard()
 
-        return self.equity_breaker.check(
-            self.db,
-            equity,
-            None,
-            unrealized,
-            0.0,
-        )
+    def _daily_model_b_entry_guard(self):
+        """Use full UTC-midnight portfolio equity; never double-count fee/funding rows."""
+        try:
+            identity = account_fingerprint(self.client.api_key)
+            window_start = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            account = self.client.account()
+            account_window_end = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            if account.get("multiAssetsMargin") is not False:
+                raise ValueError("FUTURES_MODEL_B_REQUIRES_SINGLE_ASSET_MODE")
+            wallet_now = Decimal(str(account.get("totalWalletBalance")))
+            unrealized_now = Decimal(str(account.get("totalUnrealizedProfit")))
+            current_equity = Decimal(str(account.get("totalMarginBalance", wallet_now + unrealized_now)))
+            if not all(x.is_finite() for x in (wallet_now, unrealized_now, current_equity)):
+                raise ValueError("FUTURES_MODEL_B_ACCOUNT_EQUITY_NONFINITE")
+            if wallet_now < 0 or current_equity < 0:
+                raise ValueError("FUTURES_MODEL_B_ACCOUNT_EQUITY_NEGATIVE")
+
+            now_ms = account_window_end
+            day_start_ms = now_ms - (now_ms % UTC_DAY_MS)
+            today = datetime.fromtimestamp(day_start_ms / 1000, tz=timezone.utc).date().isoformat()
+            snapshot_key = f"futures_daily_risk_model_b_snapshot:{day_start_ms}"
+            stored = self.db.state_get(snapshot_key)
+            positions = None
+            if stored is None:
+                positions = self.client.position_risk()
+                window_end = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            else:
+                window_end = account_window_end
+            if window_end < day_start_ms or window_start > window_end:
+                raise ValueError("FUTURES_MODEL_B_EXCHANGE_TIME_WINDOW_INVALID")
+
+            income_rows = self.client.income_history(day_start_ms, window_end)
+            income_summary = summarize_income_rows(
+                income_rows, day_start_ms=day_start_ms, end_ms=window_end,
+                snapshot_window_start_ms=window_start,
+                snapshot_window_end_ms=window_end,
+            )
+
+            if stored is None:
+                positions_by_symbol = {}
+                for row in positions:
+                    symbol = str(row.get("symbol", "")).strip().upper()
+                    if not symbol or symbol in positions_by_symbol:
+                        raise ValueError("FUTURES_MODEL_B_POSITION_IDENTITY_INVALID")
+                    positions_by_symbol[symbol] = row
+                symbols = set(DEFAULT_FUTURES_SYMBOLS)
+                symbols.update(positions_by_symbol)
+                symbols.update(income_summary["symbols"])
+                trades_by_symbol = {}
+                mark_prices = {}
+                for symbol in sorted(symbols):
+                    trades = self.client.user_trades_history(symbol, day_start_ms, window_end)
+                    trades_by_symbol[symbol] = trades
+                    position = positions_by_symbol.get(
+                        symbol, {"positionAmt": "0", "entryPrice": "0"}
+                    )
+                    midnight_qty, midnight_entry = reverse_position_at_midnight(
+                        position.get("positionAmt", "0"), position.get("entryPrice", "0"),
+                        trades, symbol=symbol, day_start_ms=day_start_ms,
+                        snapshot_window_start_ms=window_start,
+                        snapshot_window_end_ms=window_end,
+                    )
+                    if midnight_qty != 0:
+                        mark_rows = self.client.mark_price_klines(
+                            symbol, "1m", day_start_ms, day_start_ms + 59_999, 1
+                        )
+                        if len(mark_rows) != 1 or int(mark_rows[0][0]) != day_start_ms:
+                            raise ValueError(f"{symbol}: exact UTC-midnight Mark Price candle unavailable")
+                        mark_prices[symbol] = str(mark_rows[0][1])
+                snapshot = reconstruct_midnight_equity(
+                    account, positions, income_rows, trades_by_symbol, mark_prices,
+                    day_start_ms=day_start_ms,
+                    snapshot_window_start_ms=window_start,
+                    snapshot_window_end_ms=window_end,
+                    account_identity=identity, symbols=symbols,
+                )
+                snapshot_json = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+                with self.db.transaction():
+                    existing = self.db.state_get(snapshot_key)
+                    if existing is not None and existing != snapshot_json:
+                        raise ValueError("FUTURES_MODEL_B_BASELINE_WRITE_CONFLICT")
+                    self.db.state_set(snapshot_key, snapshot_json)
+            else:
+                try:
+                    snapshot = json.loads(stored)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("FUTURES_MODEL_B_BASELINE_JSON_INVALID") from exc
+                if not model_b_snapshot_is_valid(
+                    snapshot, day_start_ms=day_start_ms, account_identity=identity
+                ):
+                    raise ValueError("FUTURES_MODEL_B_BASELINE_IDENTITY_OR_SCHEMA_MISMATCH")
+
+            result = calculate_daily_risk_model_b(
+                snapshot["equity_at_midnight_usdt"],
+                current_equity,
+                income_summary["capital_flow"],
+            )
+            allowed, reason = self.equity_breaker.check_model_b(
+                self.db, current_equity, snapshot["equity_at_midnight_usdt"],
+                income_summary["capital_flow"], complete=True,
+                account_identity=identity,
+                expected_account_identity=snapshot["account_fingerprint"],
+                today=today,
+            )
+            if result["emergency_breaker_tripped"]:
+                # The native Android runtime owns exchange-side flattening. The
+                # Python shadow runtime durably latches the same 5% emergency
+                # condition and refuses all further exposure.
+                self.db.state_set("kill_switch_latched", "true")
+                self.db.state_set("entry_admission_paused", "true")
+                return False, "FUTURES_DAILY_EMERGENCY_BREAKER_5PCT_LATCHED"
+            return allowed, reason
+        except Exception as exc:
+            return False, "FUTURES_DAILY_MODEL_B_UNKNOWN: " + str(exc)
 
     def _filters(self, symbol):
         info = self.client.exchange_info(symbol)
