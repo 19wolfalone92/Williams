@@ -91,8 +91,7 @@ class DemoExchangeModel:
                        "positionSide": p.get("positionSide", "BOTH"),
                        "workingType": p.get("workingType", "MARK_PRICE"),
                        "priceProtect": p.get("priceProtect", False),
-                       "closePosition": p.get("closePosition", False),
-                       "reduceOnly": p.get("reduceOnly", False)}
+                       "closePosition": p.get("closePosition", False)}
                 self.algos[aid] = row
                 return dict(row)
             row = (self.algos[int(p["algoId"])] if "algoId" in p else
