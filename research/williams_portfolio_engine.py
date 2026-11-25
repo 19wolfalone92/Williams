@@ -21,7 +21,7 @@ from campaign_model import SignalRole, SignalType
 from daily_risk_accounting import calculate_daily_risk_model_b
 from williams_edition_rules import TC2
 from williams_execution_policy import tc2_opposite_exit_profit_blocker
-from williams_exit_policy import plan_williams_stop
+from williams_exit_policy import plan_williams_stop, tc2_exact_structural_stop
 from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY,
     cap_book_tranche,
@@ -213,6 +213,10 @@ class PortfolioSimulator:
         self.max_margin_pct = 0.0
         self.max_risk_pct = 0.0
         self.max_active_campaigns = 0
+        self.risk_breach_active = False
+        self.margin_breach_active = False
+        self.risk_cap_breach_count = 0
+        self.margin_cap_breach_count = 0
         self.total_funding = 0.0
         self.total_fees = 0.0
         self.total_slippage = 0.0
@@ -646,12 +650,38 @@ class PortfolioSimulator:
         try:
             bars = wave_bars_from_dataframe(closed)
             current = float(self.data[symbol]["contract"]["open"][index])
-            proposal = plan_williams_stop(
-                campaign["side"], campaign["stop"], campaign["avg_entry"],
-                campaign["initial_stop"], current, float(self.specs[symbol]["tick"]),
-                int(campaign["entry_time_ms"]), bars, window=self.trail_bars,
-                fee_allowance=RISK_COST_ALLOWANCE,
-            )
+            if self.trail_bars == 4:
+                proposal = plan_williams_stop(
+                    campaign["side"], campaign["stop"], campaign["avg_entry"],
+                    campaign["initial_stop"], current, float(self.specs[symbol]["tick"]),
+                    int(campaign["entry_time_ms"]), bars, window=None,
+                    fee_allowance=RISK_COST_ALLOWANCE,
+                )
+                if len(bars) >= 4 and bars[-1].t + H1_MS > int(campaign["entry_time_ms"]):
+                    long_side = campaign["side"] == "BUY"
+                    extreme = min(x.l for x in bars[-4:]) if long_side else max(x.h for x in bars[-4:])
+                    four_stop = tc2_exact_structural_stop(campaign["side"], extreme,
+                                                          float(self.specs[symbol]["tick"]))
+                    gap = max(2 * float(self.specs[symbol]["tick"]), current * 0.00025)
+                    safe = (four_stop is not None and
+                            ((four_stop > campaign["stop"] + float(self.specs[symbol]["tick"]) * 0.5
+                              and four_stop + gap < current) if long_side else
+                             (four_stop < campaign["stop"] - float(self.specs[symbol]["tick"]) * 0.5
+                              and four_stop - gap > current)))
+                    if safe:
+                        candidate = {"stop": four_stop, "reason": "ENGINEERING_LAST_4_CLOSED_BARS_NON_TC2"}
+                        if proposal is None:
+                            proposal = candidate
+                        elif (candidate["stop"] > proposal["stop"] if long_side
+                              else candidate["stop"] < proposal["stop"]):
+                            proposal = candidate
+            else:
+                proposal = plan_williams_stop(
+                    campaign["side"], campaign["stop"], campaign["avg_entry"],
+                    campaign["initial_stop"], current, float(self.specs[symbol]["tick"]),
+                    int(campaign["entry_time_ms"]), bars, window=self.trail_bars,
+                    fee_allowance=RISK_COST_ALLOWANCE,
+                )
         except Exception as exc:
             self._emit(timestamp_ms, "TRAIL_ANALYSIS_UNAVAILABLE", symbol=symbol,
                        campaign_id=campaign["campaign_id"], error=type(exc).__name__)
@@ -671,6 +701,20 @@ class PortfolioSimulator:
             self._emit(timestamp_ms, "PROTECTIVE_STOP_TIGHTENED", symbol=symbol,
                        campaign_id=campaign["campaign_id"], old_stop=old_stop,
                        new_stop=new_stop, reason=str(proposal["reason"]))
+
+    def _cancel_pending_exposure(self, timestamp_ms: int, reason: str):
+        for symbol, campaign in list(self.active.items()):
+            pending = campaign.get("pending")
+            if not pending:
+                continue
+            self._signal_status(symbol, pending["signal"], pending["known_at_ms"],
+                                pending.get("context", {}), "CANCELLED", reason)
+            if pending["kind"] == "INITIAL":
+                del self.active[symbol]
+            else:
+                campaign["pending"] = None
+            self._emit(timestamp_ms, "PENDING_EXPOSURE_CANCELLED", symbol=symbol,
+                       campaign_id=campaign["campaign_id"], kind=pending["kind"], reason=reason)
 
     def _close_campaign(self, symbol: str, campaign: dict, raw_exit: float,
                         index: int, timestamp_ms: int, reason: str, detail: str):
@@ -728,6 +772,7 @@ class PortfolioSimulator:
             self.consecutive_loss_days.add(self.current_day)
             self._risk_event(timestamp_ms, self.daily_block_reason, symbol=symbol,
                              loss_streak=self.loss_streak, utc_day=self.current_day)
+            self._cancel_pending_exposure(timestamp_ms, self.daily_block_reason)
 
     def _signal_digest_campaign(self, campaign: dict):
         row = self._campaign_output(campaign)
@@ -955,6 +1000,7 @@ class PortfolioSimulator:
             self.daily_3pct_days.add(self.current_day)
             self._risk_event(timestamp_ms, self.daily_block_reason,
                              baseline=self.daily_start_equity, equity=equity, loss_pct=loss_pct)
+            self._cancel_pending_exposure(timestamp_ms, self.daily_block_reason)
         if model_b["emergency_breaker_tripped"] and not self.emergency_latched:
             self.emergency_latched = True
             self.emergency_latched_at_ms = timestamp_ms
@@ -966,16 +1012,7 @@ class PortfolioSimulator:
             # The Python shadow runtime latches and blocks new exposure. The
             # Android owner performs exchange-side flattening; no fabricated
             # Android liquidation is inserted into this Python replay.
-            for symbol, campaign in list(self.active.items()):
-                pending = campaign.get("pending")
-                if pending:
-                    self._signal_status(symbol, pending["signal"], pending["known_at_ms"],
-                                        pending.get("context", {}), "CANCELLED",
-                                        "EMERGENCY_BREAKER_NEW_EXPOSURE_PAUSED")
-                    if pending["kind"] == "INITIAL":
-                        del self.active[symbol]
-                    else:
-                        campaign["pending"] = None
+            self._cancel_pending_exposure(timestamp_ms, "EMERGENCY_BREAKER_NEW_EXPOSURE_PAUSED")
         self.peak_equity = max(self.peak_equity, equity)
         drawdown = (equity / self.peak_equity - 1.0) if self.peak_equity > 0 else 0.0
         self.max_drawdown = min(self.max_drawdown, drawdown)
@@ -987,6 +1024,18 @@ class PortfolioSimulator:
             self.drawdown_started_ms = None
         margin = self._margin_used(index, "mark_close")
         risk = self._reserved_risk()
+        margin_breach = equity > 0 and margin > equity * MAX_MARGIN_FRACTION + 1e-8
+        risk_breach = equity > 0 and risk > equity * MAX_TOTAL_RISK_PCT + 1e-8
+        if margin_breach and not self.margin_breach_active:
+            self.margin_cap_breach_count += 1
+            self._risk_event(timestamp_ms, "PORTFOLIO_MARGIN_CAP_BREACH_AFTER_MARK_OR_FILL",
+                             margin_used=margin, equity=equity, margin_pct=margin / equity * 100.0)
+        if risk_breach and not self.risk_breach_active:
+            self.risk_cap_breach_count += 1
+            self._risk_event(timestamp_ms, "PORTFOLIO_RISK_CAP_BREACH_AFTER_FILL_OR_MARK",
+                             reserved_risk=risk, equity=equity, risk_pct=risk / equity * 100.0)
+        self.margin_breach_active = margin_breach
+        self.risk_breach_active = risk_breach
         self.max_margin_pct = max(self.max_margin_pct, margin / equity if equity > 0 else 0.0)
         self.max_risk_pct = max(self.max_risk_pct, risk / equity if equity > 0 else 0.0)
         self._last_equity = equity
@@ -1094,6 +1143,12 @@ class PortfolioSimulator:
             "expired_pending_signals": self.expired_count,
             "replaced_pending_signals": self.replaced_count,
             "blocked_signal_decisions": self.blocked_count,
+            "signals_generated": len(self.signal_records),
+            "signal_status_counts": dict(__import__("collections").Counter(
+                row.get("decision_status", "UNKNOWN") for row in self.signal_records.values()
+            )),
+            "risk_cap_breach_transitions": self.risk_cap_breach_count,
+            "margin_cap_breach_transitions": self.margin_cap_breach_count,
             "daily_3pct_block_days": len(self.daily_3pct_days),
             "daily_5pct_emergency_days": len(self.daily_5pct_days),
             "three_consecutive_loss_days": len(self.consecutive_loss_days),
