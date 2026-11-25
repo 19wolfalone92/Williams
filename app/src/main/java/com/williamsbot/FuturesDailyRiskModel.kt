@@ -92,7 +92,8 @@ internal fun summarizeFuturesDailyIncomeModelB(
     snapshotWindowEndMs: Long
 ): FuturesDailyIncomeSummaryB? {
     if (utcDayStartMs < 0L || snapshotWindowStartMs < utcDayStartMs ||
-        snapshotWindowEndMs < snapshotWindowStartMs) return null
+        snapshotWindowEndMs < snapshotWindowStartMs ||
+        snapshotWindowEndMs >= utcDayStartMs + 86_400_000L) return null
     var total = MODEL_B_ZERO
     var capital = MODEL_B_ZERO
     var trading = MODEL_B_ZERO
@@ -274,6 +275,7 @@ internal fun futuresDailyRiskModelBSnapshotEstablished(
             wallet != null && wallet >= MODEL_B_ZERO &&
             unrealized != null && equity != null && equity > MODEL_B_ZERO &&
             windowStart >= utcDayStartMs && windowEnd >= windowStart &&
+            windowEnd < utcDayStartMs + 86_400_000L &&
             row.optJSONArray("positions_at_midnight") != null
     }.getOrDefault(false)
 }
