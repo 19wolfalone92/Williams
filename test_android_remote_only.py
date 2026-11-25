@@ -207,7 +207,10 @@ def test_android_daily_loss_is_rechecked_at_order_admission():
     assert "val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }" in runtime
     assert "if (!dailyLossAllowsEntry) return" in runtime
     assert "FUTURES_DAILY_LOSS_CHECK_FAILED" in runtime
-    assert 'if (lossPct >= futuresDailyLossLimitPct)' in runtime
+    assert "calculateFuturesDailyRiskModelB(" in runtime
+    assert "if (calculation.entryBlocked)" in runtime
+    assert "futures_daily_risk_model_b_snapshot_" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked" in runtime
 
 
 def test_android_and_python_tc2_h1_entries_do_not_require_independent_htf_confirmation():
