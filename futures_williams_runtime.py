@@ -673,6 +673,17 @@ class FuturesWilliamsScanner:
         return result
 
 
+def active_campaign_slot_count(open_symbols, pending_symbols):
+    """Count distinct campaign slots, including unfilled pending entries.
+
+    A pending add-on belongs to an already-counted open campaign and must not
+    consume a second slot. A pending initial entry is a campaign and does.
+    """
+    opened = {str(symbol).strip().upper() for symbol in open_symbols if str(symbol).strip()}
+    pending = {str(symbol).strip().upper() for symbol in pending_symbols if str(symbol).strip()}
+    return len(opened | pending)
+
+
 class FuturesWilliamsRuntime:
     """Production-facing bidirectional Williams Futures runtime."""
 
@@ -4258,6 +4269,7 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
+        active_campaign_count = active_campaign_slot_count(active_symbols, pending_symbols)
         unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
         conflicts={symbol for symbol,rows in by_symbol.items()
                    if unified and unified_direction_conflict(
@@ -4268,7 +4280,7 @@ class FuturesWilliamsRuntime:
         for candidate in candidates:
             skip_reason=("OPPOSING_ENTRIES_BEFORE_CONTEXT" if candidate.symbol in conflicts else
                 "SYMBOL_RESERVED_BY_POSITION" if candidate.symbol in active_symbols else
-                "POSITION_LIMIT" if len(self.open_positions())>=self.max_open_positions else
+                "POSITION_LIMIT" if active_campaign_count>=self.max_open_positions else
                 "SYMBOL_RESERVED_BY_PENDING_ORDER" if candidate.symbol in pending_symbols or candidate.symbol in self._locks else
                 "EXCHANGE_RECONCILIATION_REQUIRED" if self.unresolved_symbols() else "")
             if skip_reason:
@@ -4285,7 +4297,7 @@ class FuturesWilliamsRuntime:
                 if valid:candidate=__import__("dataclasses").replace(candidate,signal=min(valid,key=lambda s:s.signal_bar_time_ms))
             if candidate.signal.role != SignalRole.ENTRY and not (candidate.signal.strategy_profile==NTD and self._ntd_reentry_source(candidate.signal)):
                 continue
-            if len(self.open_positions()) >= self.max_open_positions:
+            if active_campaign_count >= self.max_open_positions:
                 break
             if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
                 continue
@@ -4304,6 +4316,7 @@ class FuturesWilliamsRuntime:
                     active_symbols.add(candidate.symbol)
                 if any(s == candidate.symbol for s, _ in self._pending_entries()):
                     pending_symbols.add(candidate.symbol)
+                active_campaign_count = active_campaign_slot_count(active_symbols, pending_symbols)
 
         self.recover()
 
