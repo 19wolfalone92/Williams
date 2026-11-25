@@ -128,7 +128,7 @@
       "first_open_time_ms": 1782691200000,
       "last_open_time_ms": 1782777300000,
       "bytes": 24882,
-      "sha256": "6ba30cb814c4a4b59c116bd6aa46c2036fc7ac1f73adf1fae7cf604b8bf1c8bc"
+      "sha256": "580c30a9fe484cbbde5b1cdabc33c513b334e97918a816a313e2865ef7bb3796"
     },
     {
       "symbol": "NEARUSDT",
@@ -136,7 +136,7 @@
       "first_open_time_ms": 1782691200000,
       "last_open_time_ms": 1782777300000,
       "bytes": 24882,
-      "sha256": "c9942a5f579018c67de732fd97f8dc0fae16bcbb98453989a4e1579f9773a311"
+      "sha256": "2cd1a80f92d9ce35975a7f9df32254e82a61853f04e48d2302b13db8743c1736"
     },
     {
       "symbol": "DOTUSDT",
@@ -144,7 +144,7 @@
       "first_open_time_ms": 1782691200000,
       "last_open_time_ms": 1782777300000,
       "bytes": 24882,
-      "sha256": "3f7a2cb74431887d9816a40b4ba639ce5249de78cd1ceb72e13a934fffd871f7"
+      "sha256": "49647c47ef45256a71733d920402ac11313701fe7bf570750368d6c1e9285099"
     },
     {
       "symbol": "TRXUSDT",
@@ -152,7 +152,7 @@
       "first_open_time_ms": 1782691200000,
       "last_open_time_ms": 1782777300000,
       "bytes": 24882,
-      "sha256": "d6607877ca8144601aa6827cbc57daff5a8cc48505f3dea126e79ce6346f6c57"
+      "sha256": "c03aa8fbbc434b9e0a24fd056d728143a26ef9b137ab0d4d2f584e5c87657b39"
     },
     {
       "symbol": "BCHUSDT",
@@ -160,7 +160,7 @@
       "first_open_time_ms": 1782691200000,
       "last_open_time_ms": 1782777300000,
       "bytes": 27186,
-      "sha256": "05b5c8ba4b489673e09fbe901884fce982c8b97ca669b40a74b34a5900a31321"
+      "sha256": "d1209d93580a0c49e7b6c7f52bff250389681b626044fcef6c27cfe14a069881"
     }
   ]
 }
