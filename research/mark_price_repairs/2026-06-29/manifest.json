@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "dataset": "Binance USD-M Futures Mark Price Kline repair overlay",
+  "status": "VERIFIED_REPAIR_OVERLAY",
+  "source_endpoint": "GET https://fapi.binance.com/fapi/v1/markPriceKlines",
+  "source_description": "Official Binance USDⓈ-M Futures public Mark Price Kline API; interval=5m",
+  "retrieval_time_utc": "2026-11-25T15:55:16.107Z",
+  "original_archive_run_id": 45633468011,
+  "original_archive_gap": {
+    "archive_count": 15,
+    "missing_rows_per_archive": 288,
+    "missing_utc_start": "2026-06-29T00:00:00.000Z",
+    "missing_utc_end_inclusive": "2026-06-29T23:55:00.000Z",
+    "identical_gap_confirmed_for_all_symbols": true
+  },
+  "utc_start": "2026-06-29T00:00:00.000Z",
+  "utc_end_exclusive": "2026-06-30T00:00:00.000Z",
+  "start_time_ms": 1782691200000,
+  "end_time_exclusive_ms": 1782777600000,
+  "interval": "5m",
+  "interval_ms": 300000,
+  "expected_rows_per_symbol": 288,
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "ADAUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "LTCUSDT",
+    "SUIUSDT",
+    "NEARUSDT",
+    "DOTUSDT",
+    "TRXUSDT",
+    "BCHUSDT"
+  ],
+  "total_recovered_rows": 4320,
+  "original_archives_modified": false,
+  "overlay_must_be_merged_before_backtest": true,
+  "merge_policy": "Append by open_time, sort UTC ascending, reject duplicate timestamps, then require exactly 8640 unique 5m candles for each June 2026 symbol. No interpolation and no contract-price substitution.",
+  "files": [
+    {
+      "symbol": "BTCUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 29490,
+      "sha256": "c62eea90d342e832e3ec73b5d43d5db5e200ab2b118f751ca570013ad7c26ef6"
+    },
+    {
+      "symbol": "ETHUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 28338,
+      "sha256": "5bdccd1564f2b4aa1557e62c7575d2805c4dc3f91a99b358dd49aa850f27a32c"
+    },
+    {
+      "symbol": "BNBUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 27186,
+      "sha256": "c86a4685a2d1b67c739b72d0588c88cd5a0047494039870b7634ad9ec598d516"
+    },
+    {
+      "symbol": "SOLUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 26034,
+      "sha256": "c0816494885b11fe3efc77009a5abd06416be14cf84b32c6691291780c55a42e"
+    },
+    {
+      "symbol": "XRPUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "224dfa7956ab2d425655d09c1e00b45a5d4c8488633d0515dcc7f2f48d302406"
+    },
+    {
+      "symbol": "DOGEUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "abf5e77166e951cba7f28ebf0121fb9472a4494eb5618379f0e297e189809dc4"
+    },
+    {
+      "symbol": "ADAUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "fb340df0dfb5a3e6ce0f6dc76b01202eb76071002d372ac719115b7082537d13"
+    },
+    {
+      "symbol": "LINKUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "fa06cc1c270fcc9c4938d6c16d5807d7d8055eb295b599494601a9aa0f4abb51"
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "cd668ed35816411e23057c6b5c49f1531f0a36b38d4ca083cf5e8855eb40b90f"
+    },
+    {
+      "symbol": "LTCUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 26034,
+      "sha256": "22ba0c030fb1530514244d137d3e9c1274b6cd0ac314a1d808b1fcf34b3921d1"
+    },
+    {
+      "symbol": "SUIUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "6ba30cb814c4a4b59c116bd6aa46c2036fc7ac1f73adf1fae7cf604b8bf1c8bc"
+    },
+    {
+      "symbol": "NEARUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "c9942a5f579018c67de732fd97f8dc0fae16bcbb98453989a4e1579f9773a311"
+    },
+    {
+      "symbol": "DOTUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "3f7a2cb74431887d9816a40b4ba639ce5249de78cd1ceb72e13a934fffd871f7"
+    },
+    {
+      "symbol": "TRXUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 24882,
+      "sha256": "d6607877ca8144601aa6827cbc57daff5a8cc48505f3dea126e79ce6346f6c57"
+    },
+    {
+      "symbol": "BCHUSDT",
+      "rows": 288,
+      "first_open_time_ms": 1782691200000,
+      "last_open_time_ms": 1782777300000,
+      "bytes": 27186,
+      "sha256": "05b5c8ba4b489673e09fbe901884fce982c8b97ca669b40a74b34a5900a31321"
+    }
+  ]
+}
