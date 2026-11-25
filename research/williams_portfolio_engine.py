@@ -227,6 +227,7 @@ class PortfolioSimulator:
         self.margin_breach_active = False
         self.risk_cap_breach_count = 0
         self.margin_cap_breach_count = 0
+        self._wave_cache = {symbol: (-1, None) for symbol in self.symbols}
         self.total_funding = 0.0
         self.total_fees = 0.0
         self.total_slippage = 0.0
@@ -784,13 +785,17 @@ class PortfolioSimulator:
         campaign = self.active.get(symbol)
         if not campaign or campaign["status"] != "OPEN":
             return
-        row_index = self.data[symbol]["h1_close_rows"].get(index)
-        if row_index is None:
+        close_rows = self.data[symbol]["h1_close_rows"]
+        row_index = close_rows.get(index) if isinstance(close_rows, dict) else int(close_rows[index])
+        if row_index is None or row_index < 0:
             return
         h1 = self.data[symbol]["h1"]
-        closed = h1.iloc[max(0, row_index - 499):row_index + 1]
-        try:
+        cached_index, bars = self._wave_cache[symbol]
+        if cached_index != row_index or bars is None:
+            closed = h1.iloc[max(0, row_index - 499):row_index + 1]
             bars = wave_bars_from_dataframe(closed)
+            self._wave_cache[symbol] = (row_index, bars)
+        try:
             current = float(self.data[symbol]["contract"]["open"][index])
             if self._check_opposition(symbol, campaign, index, timestamp_ms, bars):
                 return
@@ -1182,12 +1187,14 @@ class PortfolioSimulator:
             self._new_day(index, timestamp_ms)
             self._apply_funding(index, timestamp_ms)
             # Live process() manages confirmed protection before scanner admission.
-            if timestamp_ms % H1_MS == 0:
-                for symbol in self.symbols:
+            for symbol in self.symbols:
+                if timestamp_ms % H1_MS == 0:
                     current_signals = self.signals_by_index[symbol].get(index, [])
                     self._refresh_opposition_watchers(symbol, current_signals, timestamp_ms)
                     self._trail(symbol, index, timestamp_ms)
                     self._handle_signals(symbol, current_signals, index, timestamp_ms)
+                else:
+                    self._trail(symbol, index, timestamp_ms)
             # Existing protected positions are evaluated before any pending add-on.
             for symbol in self.symbols:
                 campaign = self.active.get(symbol)
