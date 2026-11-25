@@ -62,6 +62,23 @@ class FuturesDailyRiskModelBTest {
     }
 
     @Test
+    fun rawAccountPreservesDecimalThresholdAndRejectsMissingOrContradictoryEvidence() {
+        val account = JSONObject().put("multiAssetsMargin", false)
+            .put("totalWalletBalance", "1000.00000000000001")
+            .put("totalUnrealizedProfit", "-30.00000000000001")
+            .put("totalMarginBalance", "970")
+        val parsed = checkNotNull(parseFuturesDailyRiskAccountB(account))
+        assertTrue(checkNotNull(calculateFuturesDailyRiskModelB(
+            parsed.walletUsdt, parsed.equityUsdt, BigDecimal.ZERO)).entryBlocked)
+        for (key in listOf("multiAssetsMargin", "totalWalletBalance", "totalUnrealizedProfit", "totalMarginBalance")) {
+            val incomplete = JSONObject(account.toString())
+            incomplete.remove(key)
+            assertNull(parseFuturesDailyRiskAccountB(incomplete))
+        }
+        assertNull(parseFuturesDailyRiskAccountB(JSONObject(account.toString()).put("totalMarginBalance", "971")))
+    }
+
+    @Test
     fun exactThreeAndFivePercentBoundariesAndFullDepletionAreHandled() {
         assertFalse(checkNotNull(calculateFuturesDailyRiskModelB(
             BigDecimal("1000"), BigDecimal("970.1"), BigDecimal.ZERO

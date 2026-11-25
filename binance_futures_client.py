@@ -371,8 +371,8 @@ class BinanceFuturesClient:
             "status": "TRADING" if raw["canTrade"] else "NOT_TRADING",
             "accountType": "FUTURES",
             "balances": balances,
-            "totalWalletBalance": raw.get("totalWalletBalance", "0"),
-            "totalUnrealizedProfit": raw.get("totalUnrealizedProfit", "0"),
+            "totalWalletBalance": raw.get("totalWalletBalance"),
+            "totalUnrealizedProfit": raw.get("totalUnrealizedProfit"),
             "availableBalance": raw.get("availableBalance", "0"),
         }
 

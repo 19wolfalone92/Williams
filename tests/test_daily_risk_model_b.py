@@ -10,6 +10,7 @@ from daily_risk_accounting import (
     DailyRiskDataError,
     calculate_daily_risk_model_b,
     model_b_snapshot_is_valid,
+    parse_model_b_account,
     reconstruct_midnight_equity,
     reverse_position_at_midnight,
     summarize_income_rows,
@@ -217,3 +218,17 @@ def test_model_b_migration_keeps_legacy_halt_until_next_utc_day():
         )[0]
     finally:
         db.conn.close()
+
+
+def test_model_b_raw_account_decimal_boundary_and_missing_evidence():
+    account = {"multiAssetsMargin": False, "totalWalletBalance": "1000.00000000000001",
+               "totalUnrealizedProfit": "-30.00000000000001", "totalMarginBalance": "970"}
+    wallet, _, equity = parse_model_b_account(account)
+    assert calculate_daily_risk_model_b(wallet, equity, "0")["entry_blocked"]
+    for key in account:
+        incomplete = dict(account)
+        del incomplete[key]
+        with pytest.raises(DailyRiskDataError):
+            parse_model_b_account(incomplete)
+    with pytest.raises(DailyRiskDataError):
+        parse_model_b_account(dict(account, totalMarginBalance="971"))

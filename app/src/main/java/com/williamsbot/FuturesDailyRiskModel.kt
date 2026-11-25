@@ -63,6 +63,18 @@ private fun modelBDecimal(raw: Any?): BigDecimal? {
     return value.takeIf { it.toString().isNotBlank() }
 }
 
+internal data class FuturesDailyRiskAccountB(val walletUsdt: BigDecimal, val equityUsdt: BigDecimal)
+
+internal fun parseFuturesDailyRiskAccountB(account: JSONObject): FuturesDailyRiskAccountB? {
+    if (account.opt("multiAssetsMargin") != false) return null
+    val wallet = modelBDecimal(account.opt("totalWalletBalance")) ?: return null
+    val unrealized = modelBDecimal(account.opt("totalUnrealizedProfit")) ?: return null
+    val reported = modelBDecimal(account.opt("totalMarginBalance")) ?: return null
+    val equity = wallet.add(unrealized)
+    if (wallet < MODEL_B_ZERO || equity < MODEL_B_ZERO || reported.compareTo(equity) != 0) return null
+    return FuturesDailyRiskAccountB(wallet, equity)
+}
+
 internal fun calculateFuturesDailyRiskModelB(
     startEquityUsdt: BigDecimal?,
     currentEquityUsdt: BigDecimal?,
@@ -217,7 +229,7 @@ internal fun reconstructFuturesDailyRiskBaselineB(
         val row = currentPositions.optJSONObject(index) ?: return null
         val symbol = row.optString("symbol").trim().uppercase(Locale.US)
         if (symbol.isBlank() || positionsBySymbol.put(symbol, row) != null) return null
-        if (!row.optString("positionSide", "BOTH").equals("BOTH", true)) return null
+        if (!row.optString("positionSide").equals("BOTH", true)) return null
     }
     val allSymbols = linkedSetOf<String>().apply {
         addAll(symbols.map { it.uppercase(Locale.US) })
@@ -274,6 +286,7 @@ internal fun futuresDailyRiskModelBSnapshotEstablished(
             row.optString("source") == "BINANCE_INCOME_USER_TRADES_MARK_PRICE_1M" &&
             wallet != null && wallet >= MODEL_B_ZERO &&
             unrealized != null && equity != null && equity > MODEL_B_ZERO &&
+            wallet.add(unrealized).compareTo(equity) == 0 &&
             windowStart >= utcDayStartMs && windowEnd >= windowStart &&
             windowEnd < utcDayStartMs + 86_400_000L &&
             row.optJSONArray("positions_at_midnight") != null

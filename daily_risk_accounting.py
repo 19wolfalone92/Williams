@@ -34,6 +34,19 @@ def decimal_value(value, field):
         raise DailyRiskDataError(f"{field}: non-finite decimal")
     return result
 
+def parse_model_b_account(account):
+    """Calculate equity from explicitly observed single-asset wallet and UPNL."""
+    if not isinstance(account, dict) or account.get("multiAssetsMargin") is not False:
+        raise DailyRiskDataError("FUTURES_MODEL_B_REQUIRES_SINGLE_ASSET_MODE")
+    wallet = decimal_value(account.get("totalWalletBalance"), "totalWalletBalance")
+    unrealized = decimal_value(account.get("totalUnrealizedProfit"), "totalUnrealizedProfit")
+    equity = wallet + unrealized
+    reported = decimal_value(account.get("totalMarginBalance"), "totalMarginBalance")
+    if wallet < 0 or equity < 0 or reported != equity:
+        raise DailyRiskDataError("FUTURES_DAILY_MODEL_B_ACCOUNT_EQUITY_INVALID")
+    return wallet, unrealized, equity
+
+
 def account_fingerprint(api_key):
     value = str(api_key or "").strip()
     if not value:
@@ -179,12 +192,8 @@ def reconstruct_midnight_equity(account_snapshot, positions, income_rows, trades
                                 snapshot_window_end_ms, account_identity, symbols):
     if not isinstance(account_snapshot, dict) or not isinstance(positions, (list, tuple)):
         raise DailyRiskDataError("Account/position snapshot is malformed")
-    if account_snapshot.get("multiAssetsMargin") is not False:
-        raise DailyRiskDataError("Model B requires confirmed single-asset USD-M mode")
-    wallet_now = decimal_value(account_snapshot.get("totalWalletBalance"), "totalWalletBalance")
-    unrealized_now = decimal_value(account_snapshot.get("totalUnrealizedProfit"), "totalUnrealizedProfit")
-    current_equity = decimal_value(account_snapshot.get("totalMarginBalance", wallet_now + unrealized_now), "totalMarginBalance")
-    if wallet_now < 0 or current_equity < 0 or not account_identity:
+    wallet_now, _, _ = parse_model_b_account(account_snapshot)
+    if not account_identity:
         raise DailyRiskDataError("Account equity or identity is invalid")
     income = summarize_income_rows(income_rows, day_start_ms=day_start_ms,
         end_ms=snapshot_window_end_ms, snapshot_window_start_ms=snapshot_window_start_ms,
@@ -196,7 +205,7 @@ def reconstruct_midnight_equity(account_snapshot, positions, income_rows, trades
         symbol = str(row.get("symbol", "")).strip().upper()
         if not symbol or symbol in current_positions:
             raise DailyRiskDataError("Position symbols are missing or duplicated")
-        if str(row.get("positionSide", "BOTH")).upper() != "BOTH":
+        if str(row.get("positionSide", "")).upper() != "BOTH":
             raise DailyRiskDataError(f"{symbol}: account is not in one-way mode")
         current_positions[symbol] = row
     all_symbols = set(str(x).upper() for x in symbols if str(x).strip())
@@ -252,6 +261,9 @@ def model_b_snapshot_is_valid(snapshot, *, day_start_ms, account_identity):
             and decimal_value(snapshot.get("wallet_balance_at_midnight_usdt"), "wallet_start") >= 0
             and decimal_value(snapshot.get("unrealized_pnl_at_midnight_usdt"), "upnl_start").is_finite()
             and decimal_value(snapshot.get("equity_at_midnight_usdt"), "equity_start") > 0
+            and decimal_value(snapshot.get("wallet_balance_at_midnight_usdt"), "wallet_start")
+                + decimal_value(snapshot.get("unrealized_pnl_at_midnight_usdt"), "upnl_start")
+                == decimal_value(snapshot.get("equity_at_midnight_usdt"), "equity_start")
             and isinstance(snapshot.get("positions_at_midnight"), list)
             and int(snapshot.get("observed_window_start_ms", -1)) >= int(day_start_ms)
             and int(snapshot.get("observed_window_end_ms", -1)) >= int(snapshot.get("observed_window_start_ms", 0))

@@ -60,7 +60,7 @@ from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allow
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from daily_risk_accounting import (
-    UTC_DAY_MS, account_fingerprint, calculate_daily_risk_model_b,
+    UTC_DAY_MS, account_fingerprint, calculate_daily_risk_model_b, parse_model_b_account,
     model_b_snapshot_is_valid, reconstruct_midnight_equity,
     reverse_position_at_midnight, summarize_income_rows,
 )
@@ -870,15 +870,7 @@ class FuturesWilliamsRuntime:
             window_start = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
             account = self.client.account()
             account_window_end = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
-            if account.get("multiAssetsMargin") is not False:
-                raise ValueError("FUTURES_MODEL_B_REQUIRES_SINGLE_ASSET_MODE")
-            wallet_now = Decimal(str(account.get("totalWalletBalance")))
-            unrealized_now = Decimal(str(account.get("totalUnrealizedProfit")))
-            current_equity = Decimal(str(account.get("totalMarginBalance", wallet_now + unrealized_now)))
-            if not all(x.is_finite() for x in (wallet_now, unrealized_now, current_equity)):
-                raise ValueError("FUTURES_MODEL_B_ACCOUNT_EQUITY_NONFINITE")
-            if wallet_now < 0 or current_equity < 0:
-                raise ValueError("FUTURES_MODEL_B_ACCOUNT_EQUITY_NEGATIVE")
+            _, _, current_equity = parse_model_b_account(account)
 
             now_ms = account_window_end
             day_start_ms = now_ms - (now_ms % UTC_DAY_MS)

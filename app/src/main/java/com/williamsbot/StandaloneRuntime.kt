@@ -5935,16 +5935,12 @@ private class NativeEngine(
                 (restAccountLastError ?: "account balance/equity fields failed validation")
             return false
         }
-        val accountSnapshot = parseFuturesAccountSnapshot(account) ?: run {
-            lastError = "FUTURES_ACCOUNT_INVALID: Model B requires wallet balance and total margin equity"
-            return false
-        }
-        val currentWallet = BigDecimal.valueOf(accountSnapshot.walletUsdt)
-        val currentEquity = BigDecimal.valueOf(accountSnapshot.equityUsdt)
-        if (currentWallet < BigDecimal.ZERO || currentEquity < BigDecimal.ZERO) {
+        val accountSnapshot = parseFuturesDailyRiskAccountB(account) ?: run {
             lastError = "FUTURES_DAILY_MODEL_B_ACCOUNT_EQUITY_INVALID"
             return false
         }
+        val currentWallet = accountSnapshot.walletUsdt
+        val currentEquity = accountSnapshot.equityUsdt
         val utc = Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
         utc.timeInMillis = accountWindowEndMs
         utc.set(Calendar.HOUR_OF_DAY, 0)
