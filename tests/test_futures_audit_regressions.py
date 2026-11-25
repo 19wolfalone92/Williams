@@ -200,7 +200,8 @@ def campaign(runtime):
 
 def protective_order():
     return {"symbol": "BTCUSDT", "side": "SELL", "type": "STOP_MARKET", "status": "NEW", "stopPrice": "95",
-            "clientOrderId": "WILLF_STOP_owned", "closePosition": True, "positionSide": "BOTH"}
+            "clientOrderId": "WILLF_STOP_owned", "closePosition": True, "positionSide": "BOTH",
+            "workingType": "MARK_PRICE", "priceProtect": False}
 
 
 @pytest.mark.parametrize("change", [{"side": "BUY"}, {"symbol": "ETHUSDT"}, {"status": "CANCELED"},

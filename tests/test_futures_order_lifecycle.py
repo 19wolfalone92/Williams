@@ -79,14 +79,20 @@ class DemoExchangeModel:
                 for row in self.orders.values() if row["status"] in {"NEW","PARTIALLY_FILLED"}]
         if path.endswith("openAlgoOrders") or path.endswith("allAlgoOrders"):
             return [dict(row,positionSide=row.get("positionSide","BOTH"),reduceOnly=row.get("reduceOnly",False),
-                         closePosition=row.get("closePosition",False)) for row in self.algos.values()
+                         closePosition=row.get("closePosition",False),workingType=row.get("workingType","MARK_PRICE"),
+                         priceProtect=row.get("priceProtect",False)) for row in self.algos.values()
                     if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
         if path.endswith("algoOrder"):
             if method == "POST":
                 if p.get("closePosition") and self.protection_failure:
                     raise BinanceAPIError("simulated protection rejection", payload={"code": -2015})
                 aid = len(self.algos) + 1
-                row = {**p, "algoId": aid, "orderType": p["type"], "algoStatus": "NEW", "actualOrderId": ""}
+                row = {**p, "algoId": aid, "orderType": p["type"], "algoStatus": "NEW", "actualOrderId": "",
+                       "positionSide": p.get("positionSide", "BOTH"),
+                       "workingType": p.get("workingType", "MARK_PRICE"),
+                       "priceProtect": p.get("priceProtect", False),
+                       "closePosition": p.get("closePosition", False),
+                       "reduceOnly": p.get("reduceOnly", False)}
                 self.algos[aid] = row
                 return dict(row)
             row = (self.algos[int(p["algoId"])] if "algoId" in p else
@@ -96,7 +102,11 @@ class DemoExchangeModel:
                     self.fill_entry()
                 else:
                     row["algoStatus"] = "CANCELED"
-            return dict(row)
+            return dict(row,positionSide=row.get("positionSide","BOTH"),
+                        workingType=row.get("workingType","MARK_PRICE"),
+                        priceProtect=row.get("priceProtect",False),
+                        closePosition=row.get("closePosition",False),
+                        reduceOnly=row.get("reduceOnly",False))
         if path.endswith("/order"):
             if method == "POST":
                 oid = len(self.orders) + 100
