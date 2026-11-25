@@ -253,6 +253,7 @@ def model_b_snapshot_is_valid(snapshot, *, day_start_ms, account_identity):
             and decimal_value(snapshot.get("unrealized_pnl_at_midnight_usdt"), "upnl_start").is_finite()
             and decimal_value(snapshot.get("equity_at_midnight_usdt"), "equity_start") > 0
             and isinstance(snapshot.get("positions_at_midnight"), list)
+            and int(snapshot.get("observed_window_start_ms", -1)) >= int(day_start_ms)
             and int(snapshot.get("observed_window_end_ms", -1)) >= int(snapshot.get("observed_window_start_ms", 0))
             and int(snapshot.get("observed_window_end_ms", -1)) < int(day_start_ms) + UTC_DAY_MS)
     except (DailyRiskDataError, TypeError, ValueError, OverflowError):
