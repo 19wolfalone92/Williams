@@ -4729,7 +4729,21 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(closed.toString(), closed.getBoolean("ok"))
             assertEquals(0.0, exchange.quantity, 1e-9)
             assertEquals(1, exchange.posts("/fapi/v1/order"))
-            assertEquals("true", exchange.orders.values.single().optString("reduceOnly"))
+            // The order history contains the filled entry child AND the emergency
+            // exit. Identify the exit by the actual POST client ID, not map size.
+            val closePost = exchange.requests.single { it.method == "POST" &&
+                it.url.encodedPath == "/fapi/v1/order" }
+            val closeParams = Exchange.params(closePost)
+            assertEquals("true", closeParams["reduceOnly"])
+            assertEquals(if (direction.name == "LONG") "SELL" else "BUY", closeParams["side"])
+            val exit = exchange.orders.values.single {
+                it.optString("clientOrderId") == closeParams["newClientOrderId"]
+            }
+            assertEquals("true", exit.optString("reduceOnly"))
+            assertEquals("FILLED", exit.getString("status"))
+            assertEquals(1.0, exit.getString("executedQty").toDouble(), 1e-9)
+            assertEquals("false", exchange.orders.getValue("42").optString("reduceOnly"))
+            assertEquals(2, exchange.orders.size)
             assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
             assertEquals(1, exchange.posts("/fapi/v1/order"))
             assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
