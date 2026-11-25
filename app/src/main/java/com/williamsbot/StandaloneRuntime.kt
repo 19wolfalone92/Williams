@@ -6159,29 +6159,23 @@ private class NativeEngine(
         val exchangeNowMs = accountWindowEndMs
         val dailyHaltKey = "futures_daily_entry_halt_utc_day_start_ms"
         val lossFraction = calculation.lossPct.movePointLeft(2)
-        if (!executionStore.writeState("futures_daily_loss_pct", lossFraction.toPlainString()) ||
-            !executionStore.writeState("futures_daily_pnl_usdt", calculation.dailyPnlUsdt.toPlainString()) ||
-            !executionStore.writeState("futures_daily_capital_flow_usdt", income.capitalFlowUsdt.toPlainString())
-        ) {
+        val riskMetricsSaved = executionStore.writeDailyRiskMetrics(
+            lossFraction.toPlainString(), calculation.dailyPnlUsdt.toPlainString(),
+            income.capitalFlowUsdt.toPlainString()
+        )
+        if (!riskMetricsSaved) {
             paused = true
             prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
             lastError = "FUTURES_DAILY_PNL_PERSIST_FAILED: SQLite could not commit Model B risk metrics"
-            return false
         }
-        if (calculation.entryBlocked) {
-            if (!executionStore.writeState(dailyHaltKey, utcDayStartMs.toString())) {
-                paused = true
-                prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
-                lastError = "FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: 3% Model B limit could not be committed"
-                return false
-            }
-        } else if (executionStore.readState(dailyHaltKey) == utcDayStartMs.toString()) {
-            // A previous wallet-only Model A false positive is cleared only after
-            // a complete, account-matched Model B reconstruction proves loss < 3%.
-            if (!executionStore.writeState(dailyHaltKey, "")) {
-                lastError = "FUTURES_DAILY_ENTRY_HALT_REPAIR_FAILED"
-                return false
-            }
+        // A recovered current balance cannot disprove a prior intraday breach.
+        // Preserve both legacy and Model B daily latches until the next UTC day.
+        val dailyHaltSaved = !calculation.entryBlocked ||
+            executionStore.writeState(dailyHaltKey, utcDayStartMs.toString())
+        if (!dailyHaltSaved) {
+            paused = true
+            prefs.edit().putBoolean("risk_daily_baseline_auto_paused", true).commit()
+            lastError = "FUTURES_DAILY_ENTRY_HALT_PERSIST_FAILED: 3% Model B limit could not be committed"
         }
 
         val baselineDouble = baselineEquity.toDouble()
@@ -6190,8 +6184,8 @@ private class NativeEngine(
             lastError = "FUTURES_DAILY_BREAKER_EQUITY_INVALID"
             return false
         }
-        if (observeFuturesEquityFromPersistedBaseline(
-                equityCircuitBreaker, baselineDouble, breakerEquity, exchangeNowMs
+        if (equityCircuitBreaker.observeVerifiedModelB(
+                baselineDouble, breakerEquity, calculation.emergencyBreakerTripped, exchangeNowMs
             ).tripped
         ) {
             if (!killLatched && !circuitBreakerTripInProgress) {
@@ -6225,6 +6219,7 @@ private class NativeEngine(
             return false
         }
 
+        if (!riskMetricsSaved || !dailyHaltSaved) return false
         val halt = dailyEntryHalt(exchangeNowMs, true)
         if (!halt.allowNewEntries) {
             lastError = "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked"

@@ -102,16 +102,11 @@ class EquityCircuitBreaker:
             with db.transaction():
                 latched_day = db.state_get("daily_equity_loss_latched_day")
                 latched_model = db.state_get("daily_equity_loss_latched_model")
-                if latched_day == today and latched_model == "MODEL_B":
+                # A current equity recovery is not proof that the earlier
+                # intraday breach never occurred. Never clear a same-day or
+                # future-dated latch during migration.
+                if latched_day and latched_day >= today:
                     return False, "daily Model B loss circuit breaker remains latched for this UTC day"
-                # A prior wallet-only Model A latch is not authoritative after a
-                # complete Model B reconstruction. Re-latch below if Model B
-                # independently confirms the 3% threshold.
-                if latched_day == today and latched_model != "MODEL_B":
-                    db.conn.execute(
-                        "DELETE FROM bot_state WHERE key IN "
-                        "('daily_equity_loss_latched_day','daily_equity_loss_latched_model')"
-                    )
                 db.state_set("daily_risk_model_version", "2")
                 db.state_set("daily_risk_model_b_day", today)
                 db.state_set("daily_risk_model_b_start_equity", str(result["start_equity"]))

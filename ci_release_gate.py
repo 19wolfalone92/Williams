@@ -638,12 +638,15 @@ def main() -> None:
     must(legacy_runtime, 'coordinator.optString("state") in setOf("READY", "OPEN_PROTECTED", "ENTRY_PENDING")', "StandaloneRuntime.kt")
     must(legacy_runtime, 'userStreamSyncRequired = true', "StandaloneRuntime.kt")
     must(legacy_runtime, "calculateFuturesDailyRiskModelB(", "StandaloneRuntime.kt")
-    must(legacy_runtime, "if (calculation.entryBlocked)", "StandaloneRuntime.kt")
+    must(legacy_runtime, "val dailyHaltSaved = !calculation.entryBlocked", "StandaloneRuntime.kt")
     must(legacy_runtime, "futures_daily_risk_model_b_snapshot_", "StandaloneRuntime.kt")
     must(legacy_runtime, "completeUserTrades(", "StandaloneRuntime.kt")
     must(legacy_runtime, "markPriceAtUtcDayStart(", "StandaloneRuntime.kt")
     must(legacy_runtime, 'FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked', "StandaloneRuntime.kt")
-    must(legacy_runtime, "FUTURES_DAILY_EMERGENCY_BREAKER_5PCT_LATCHED", "StandaloneRuntime.kt")
+    must(legacy_runtime, "calculation.emergencyBreakerTripped", "StandaloneRuntime.kt")
+    must(legacy_runtime, "equityCircuitBreaker.observeVerifiedModelB(", "StandaloneRuntime.kt")
+    must(legacy_runtime, 'persistSafetyFlag("kill_latched", true)', "StandaloneRuntime.kt")
+    must(read("futures_williams_runtime.py"), "FUTURES_DAILY_EMERGENCY_BREAKER_5PCT_LATCHED", "futures_williams_runtime.py")
     model_b_android = read("app/src/main/java/com/williamsbot/FuturesDailyRiskModel.kt")
     for needle in (
         "calculateFuturesDailyRiskModelB(",

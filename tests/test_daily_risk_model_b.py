@@ -198,4 +198,22 @@ def test_python_breaker_rejects_incomplete_or_changed_account_identity():
         db, "1000", "1000", "0", complete=True,
         account_identity="new", expected_account_identity="old", today="2026-11-25",
     )[0] is False
-    db.close()
+    db.conn.close()
+
+
+def test_model_b_migration_keeps_legacy_halt_until_next_utc_day():
+    db = Database(":memory:")
+    breaker = EquityCircuitBreaker(0.03)
+    db.state_set("daily_equity_loss_latched_day", "2026-11-25")
+    try:
+        assert not breaker.check_model_b(
+            db, "1000", "1000", "0", account_identity="same",
+            expected_account_identity="same", today="2026-11-25"
+        )[0]
+        assert db.state_get("daily_equity_loss_latched_day") == "2026-11-25"
+        assert breaker.check_model_b(
+            db, "1000", "1000", "0", account_identity="same",
+            expected_account_identity="same", today="2026-11-26"
+        )[0]
+    finally:
+        db.conn.close()
