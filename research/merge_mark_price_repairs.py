@@ -12,7 +12,6 @@ import csv
 import hashlib
 import io
 import json
-import math
 import zipfile
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -104,6 +103,11 @@ def merge_mark_price_monthly_archive(
         if len(csv_members) != 1:
             raise RepairValidationError("original archive must contain exactly one CSV")
         csv_info = csv_members[0]
+        expected_csv_name = f"{symbol.upper()}-5m-2026-06.csv"
+        if Path(csv_info.filename).name != expected_csv_name:
+            raise RepairValidationError(
+                f"original archive CSV name does not match {expected_csv_name}"
+            )
         original_csv = source_zip.read(csv_info.filename)
         original_header, original_rows = _parse_csv(original_csv, "original")
         repair_header, repair_rows = _parse_csv(repair_csv, "repair")
@@ -114,6 +118,8 @@ def merge_mark_price_monthly_archive(
         original_timestamps = [_validate_row(row, interval_ms, "original") for row in original_rows]
         if len(original_timestamps) != len(set(original_timestamps)):
             raise RepairValidationError("original archive contains duplicate timestamps")
+        if original_timestamps != sorted(original_timestamps):
+            raise RepairValidationError("original archive timestamps are not chronologically ordered")
         if any(ts < expected_start_ms or ts >= expected_end_exclusive_ms for ts in original_timestamps):
             raise RepairValidationError("original archive contains timestamps outside the target month")
 
@@ -135,8 +141,11 @@ def merge_mark_price_monthly_archive(
         _validate_exact_grid(
             merged_rows, expected_start_ms, expected_end_exclusive_ms, interval_ms, "merged"
         )
-        if len(merged_rows) != MONTH_ROWS:
-            raise RepairValidationError(f"merged month must contain exactly {MONTH_ROWS} rows")
+        expected_month_rows = len(range(expected_start_ms, expected_end_exclusive_ms, interval_ms))
+        if len(merged_rows) != expected_month_rows:
+            raise RepairValidationError(
+                f"merged period must contain exactly {expected_month_rows} rows"
+            )
 
         output_csv = io.StringIO(newline="")
         writer = csv.writer(output_csv, lineterminator="\n")
@@ -183,6 +192,8 @@ def merge_archive_file(
     record = next((row for row in manifest.get("files", []) if row.get("symbol") == symbol.upper()), None)
     if record is None:
         raise RepairValidationError(f"{symbol}: no entry in repair manifest")
+    if original_path.resolve() == output_path.resolve():
+        raise RepairValidationError("output archive must not overwrite the original monthly ZIP")
     original_zip = original_path.read_bytes()
     repair_csv = overlay_path.read_bytes()
     actual_overlay_sha = hashlib.sha256(repair_csv).hexdigest()
