@@ -787,7 +787,7 @@ class PortfolioSimulator:
         try:
             assessment = assess_scenario_opposition(
                 direction, int(campaign["entry_time_ms"]), scenario_signals,
-                bars, mark, int(timestamp_ms), H1_MS,
+                bars, now_price, int(timestamp_ms), H1_MS,
             )
         except Exception as exc:
             campaign["opposition_advisory_error"] = type(exc).__name__
@@ -819,15 +819,20 @@ class PortfolioSimulator:
             and event.state == "TRIGGERED"
             and (now_price <= trigger if campaign["side"] == "BUY" else now_price >= trigger)
         )
-        blocker = tc2_opposite_exit_profit_blocker(
+        # CONTRACT_PRICE is the Wise-Man breakout basis; MARK_PRICE is the
+        # protective STOP basis. The user-approved profit overlay is separate.
+        blocker = (tc2_opposite_exit_profit_blocker(
             campaign["side"], campaign["avg_entry"], now_price,
             RISK_COST_ALLOWANCE, float(self.specs[symbol]["tick"]),
-        )
+        ) if active else None)
+        advisory_reason = blocker if active else "CURRENT_PRICE_NOT_BEYOND_TRIGGER"
         campaign["opposition_evidence"] = {
             "signal_id": str(source.id), "direction": source.direction,
             "strategy_profile": source.profile, "trigger": trigger,
             "event": event.to_dict(), "observed_at_ms": int(timestamp_ms),
             "contract_price": now_price, "mark_price": mark,
+            "trigger_price_basis": "CONTRACT_PRICE",
+            "current_price_beyond_trigger": bool(active),
         }
         if active and blocker is None:
             self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
@@ -841,10 +846,15 @@ class PortfolioSimulator:
             "observed_at_ms": int(timestamp_ms), "market_close_authorized": False,
         }
         self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
-                            "TRIGGERED_ADVISORY", blocker or "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
+                            "TRIGGERED_ADVISORY", advisory_reason)
         self._emit(timestamp_ms, "OPPOSITE_SIGNAL_ADVISORY_ONLY",
                    symbol=symbol, campaign_id=campaign["campaign_id"],
-                   signal_id=str(source.id), blocker=blocker or "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
+                   signal_id=str(source.id), blocker=advisory_reason,
+                   current_price_beyond_trigger=bool(active),
+                   trigger_price_basis="CONTRACT_PRICE", trigger=trigger,
+                   contract_price=now_price, mark_price=mark,
+                   average_entry=campaign["avg_entry"], protective_stop=campaign["stop"],
+                   quantity=campaign["qty"], signal_event=event.to_dict())
         return False
 
     def _trail(self, symbol: str, index: int, timestamp_ms: int):

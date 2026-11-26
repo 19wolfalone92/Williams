@@ -242,3 +242,50 @@ def test_emergency_latch_closes_owned_position_at_next_observed_open(side):
     sim._execute_emergency_exits(1,start+M5_MS)
     assert sim.emergency_exit_count == 1
     assert sim.emergency_latched
+
+
+@pytest.mark.parametrize("owner", ["BUY", "SELL"])
+@pytest.mark.parametrize("case", ["CONTRACT_ONLY", "MARK_ONLY", "INACTIVE_HISTORICAL", "ACTIVE_LOSS"])
+def test_replay_opposite_price_basis_and_user_profit_overlay(owner, case):
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS
+    from williams_edition_rules import TC2
+    from campaign_model import SignalType, SignalRole
+    now = 100 * H1_MS
+    symbol = "BTCUSDT"
+    long = owner == "BUY"
+    crossed, waiting = (99., 101.) if long else (101., 99.)
+    historical = case in ("INACTIVE_HISTORICAL", "ACTIVE_LOSS")
+    contract = crossed if case in ("CONTRACT_ONLY", "ACTIVE_LOSS") else waiting
+    mark = waiting if case == "CONTRACT_ONLY" else crossed
+    entry = (102. if long else 98.) if historical else (80. if long else 120.)
+    signal = SimpleNamespace(signal_id="opposite", side="SELL" if long else "BUY",
+        strategy_profile=TC2, role=SignalRole.ENTRY, signal_type=SignalType.REVERSAL,
+        execution_semantics="STOP_ENTRY", signal_bar_time_ms=now-(2 if historical else 1)*H1_MS,
+        trigger_price=100., invalidation_price=110. if long else 90.)
+    campaign = {"campaign_id":"owner", "side":owner, "entry_time_ms":now-3*H1_MS,
+        "avg_entry":entry, "stop":70. if long else 130., "qty":1.,
+        "opposition_watchers":[{"signal":signal, "known_at_ms":now-(H1_MS if historical else 0),
+                                "expires_at_ms":now+H1_MS}]}
+    sim = PortfolioSimulator.__new__(PortfolioSimulator)
+    sim.data = {symbol:{"contract":{"open":[contract]}, "mark":{"mark_open":[mark]}}}
+    sim.specs = {symbol:{"tick":Decimal("0.1")}}
+    emitted, closes = [], []
+    sim._emit = lambda *a, **k: emitted.append(k)
+    sim._signal_status = lambda *a, **k: None
+    sim._close_campaign = lambda *a, **k: closes.append(a)
+    bars = [SimpleNamespace(t=i*H1_MS,o=100.,h=101.,l=99.,c=100.) for i in range(55,100)]
+    if historical:
+        bars[-1] = SimpleNamespace(t=99*H1_MS,o=crossed,h=102.,l=98.,c=100.)
+    assert sim._check_opposition(symbol,campaign,0,now,bars) == (case == "CONTRACT_ONLY")
+    if case == "CONTRACT_ONLY":
+        assert len(closes) == 1
+        assert campaign["opposition_evidence"]["trigger_price_basis"] == "CONTRACT_PRICE"
+    elif case == "MARK_ONLY":
+        assert not closes and not emitted
+    else:
+        assert not closes and len(emitted) == 1
+        assert emitted[0]["trigger_price_basis"] == "CONTRACT_PRICE"
+        assert emitted[0]["current_price_beyond_trigger"] == (case == "ACTIVE_LOSS")
+        assert emitted[0]["blocker"] == (
+            "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE" if case == "ACTIVE_LOSS"
+            else "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
