@@ -192,7 +192,7 @@
       "now": 1792411201000,
       "snapshot_at_ms": 1792411200000,
       "current": false,
-      "state": "INVALIDATED"
+      "state": "NOT_REEMITTED"
     },
     {
       "name": "stale_scan",

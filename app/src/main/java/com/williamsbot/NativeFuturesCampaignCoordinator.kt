@@ -5641,12 +5641,12 @@ internal class NativeFuturesCampaignCoordinator(
                 // emergency reductions do not pass through this discretionary guard.
                 val (bidNow,askNow)=adapterPreflight.bestBidAsk(symbol)
                 val entryNow=liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
-                val blocker=williamsTc2UserPolicyOppositeExitBlocker(
+                val policyBlocker=williamsTc2UserPolicyOppositeExitBlocker(
                     direction.name,entryNow,markNow,bidNow,askNow)
-                if(blocker!=null)
+                if(policyBlocker!=null)
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
-                        .put("blocker",blocker).put("symbol",symbol)
+                        .put("blocker",policyBlocker).put("symbol",symbol)
             }
             if(ntdBookExit) (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
                 JSONObject(managedEntry!!.toString()),reason)
