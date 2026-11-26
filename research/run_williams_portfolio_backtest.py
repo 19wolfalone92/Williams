@@ -322,7 +322,7 @@ def _aggregate_higher(frame: pd.DataFrame, rule: str, duration_ms: int):
         "open": "first", "high": "max", "low": "min", "close": "last",
         "volume": "sum", "quote_volume": "sum", "trades": "sum",
     }).dropna(subset=["open", "high", "low", "close"])
-    close_ms = agg.index.asi8 // 1_000_000 + duration_ms
+    close_ms = agg.index.as_unit("ms").asi8 + duration_ms
     return agg, close_ms
 
 
@@ -339,6 +339,8 @@ def _indicator_diff(frame: pd.DataFrame, cfg: dict) -> dict:
         a = pd.to_numeric(full.loc[common, column], errors="coerce").to_numpy()
         b = pd.to_numeric(short.loc[common, column], errors="coerce").to_numpy()
         valid = np.isfinite(a) & np.isfinite(b)
+        if not valid.all():
+            raise ValueError(f"non-finite warmup comparison for {column}")
         diff = np.abs(a[valid] - b[valid])
         denom = np.maximum(1.0, np.abs(a[valid]))
         rel = float(np.max(diff / denom)) if len(diff) else 0.0
@@ -379,7 +381,7 @@ def _build_symbol_signals(symbol: str, h1: pd.DataFrame, tick: float, cfg: dict,
     regime = _market_regime_frame(h1)
     extracted = extract_causal_h1_signals(indicators, symbol=symbol, tick_size=tick, window_bars=180)
     events = defaultdict(list)
-    open_ms = h1.index.asi8 // 1_000_000
+    open_ms = h1.index.as_unit("ms").asi8
     m5_timeline = np.arange(start_ms, end_ms, M5_MS, dtype=np.int64)
     close_rows = (np.searchsorted(open_ms + H1_MS, m5_timeline, side="right") - 1).astype(np.int32)
     for i, bar_open in enumerate(open_ms):
@@ -449,7 +451,7 @@ def _load_data(data_root: Path, manifest: dict, specs: dict, cfg: dict,
             int(pd.Timestamp("2024-03-01T00:00:00Z").timestamp() * 1000),
             END_MS, H1_MS, dtype=np.int64,
         )
-        actual_h1 = h1.index.asi8 // 1_000_000
+        actual_h1 = h1.index.as_unit("ms").asi8
         if not np.array_equal(actual_h1, expected_h1):
             raise RuntimeError(f"{symbol}: H1 warm-up/evaluation timeline has gaps or duplicates")
         h1_eval_count = int(((actual_h1 >= START_MS) & (actual_h1 < END_MS)).sum())
@@ -457,9 +459,9 @@ def _load_data(data_root: Path, manifest: dict, specs: dict, cfg: dict,
             raise RuntimeError(f"{symbol}: evaluation H1 count mismatch")
         contract_df = _load_klines(m5_paths)
         mark_df = _load_klines(mark_paths)
-        if not np.array_equal(contract_df.index.asi8 // 1_000_000, timeline):
+        if not np.array_equal(contract_df.index.as_unit("ms").asi8, timeline):
             raise RuntimeError(f"{symbol}: contract M5 timeline is incomplete or misaligned")
-        if not np.array_equal(mark_df.index.asi8 // 1_000_000, timeline):
+        if not np.array_equal(mark_df.index.as_unit("ms").asi8, timeline):
             raise RuntimeError(f"{symbol}: Mark Price M5 timeline is incomplete or misaligned")
         funding_df = _load_funding(funding_paths)
         fund_map = defaultdict(list)
@@ -546,7 +548,7 @@ def _monthly_metrics(equity: pd.DataFrame, initial_capital: float) -> pd.DataFra
         return pd.DataFrame()
     frame = equity.copy()
     frame["datetime"] = pd.to_datetime(frame["time_ms"], unit="ms", utc=True)
-    frame["month"] = frame["datetime"].dt.strftime("%Y-%m")
+    frame["month"] = (frame["datetime"] - pd.Timedelta(milliseconds=1)).dt.strftime("%Y-%m")
     rows = []
     previous = float(initial_capital)
     for month, group in frame.groupby("month", sort=True):
@@ -604,7 +606,7 @@ def _write_charts(outdir: Path, equity: pd.DataFrame, campaigns: pd.DataFrame, d
         h1 = data[symbol]["h1"]
         start = int(row["entry_time_ms"] or row["signal_time_ms"]) - 48 * H1_MS
         end = int(row["exit_time_ms"] or row["entry_time_ms"]) + 12 * H1_MS
-        ms = h1.index.asi8 // 1_000_000
+        ms = h1.index.as_unit("ms").asi8
         view = h1.loc[(ms >= start) & (ms <= end)]
         if view.empty:
             continue
