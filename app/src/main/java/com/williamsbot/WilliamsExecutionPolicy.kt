@@ -279,3 +279,27 @@ internal fun williamsStopMoveLabel(reason: String): String = when(reason) {
     "UNSPECIFIED_STRUCTURAL_TRAIL","" -> "Основание переноса не записано"
     else -> reason
 }
+
+
+/** Chronology is primary; only exact-time candidates compete on context.
+ * An opposite tie on all ranking evidence cannot be decided by collection
+ * order. No signal proof, financial check or owner gate is bypassed here.
+ */
+internal fun <T> williamsSelectChronologicalEntry(
+    candidates:List<T>, knownTime:(T)->Long, contextRank:(T)->Int,
+    nativeRank:(T)->Double, direction:(T)->String, identity:(T)->String
+):Pair<T?,String> {
+    if(candidates.isEmpty()) return Pair(null,"WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL")
+    val firstTime=candidates.minOf(knownTime)
+    val first=candidates.filter { knownTime(it)==firstTime }
+    val topContext=first.maxOf(contextRank)
+    val contextTied=first.filter { contextRank(it)==topContext }
+    if(contextTied.map(direction).distinct().size>1 && contextTied.any { !nativeRank(it).isFinite() })
+        return Pair(null,"SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED")
+    fun finiteRank(item:T)=nativeRank(item).takeIf { it.isFinite() } ?: Double.NEGATIVE_INFINITY
+    val topRank=contextTied.maxOf { finiteRank(it) }
+    val tied=contextTied.filter { finiteRank(it)==topRank }
+    if(tied.map(direction).distinct().size>1)
+        return Pair(null,"SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED")
+    return Pair(tied.minByOrNull(identity),"")
+}

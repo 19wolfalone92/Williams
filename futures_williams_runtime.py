@@ -56,7 +56,7 @@ from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
     next_tranche as tc2_next_tranche, cap_book_tranche,
 )
-from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
+from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
 from daily_risk_accounting import (
@@ -181,6 +181,28 @@ class FuturesCandidate:
                 for s in self.all_signals
             ],
         }
+
+
+def _select_tc2_initial_candidate(candidates):
+    """Choose one source-eligible initial candidate per symbol, chronology first.
+
+    Scores are secondary context evidence, never authority to bypass risk,
+    exchange state or signal preflight. An exactly tied opposite pair is
+    unresolved; iteration order must not decide its direction.
+    """
+    eligible = [c for c in candidates if c.signal.role == SignalRole.ENTRY
+                and c.signal.strategy_profile == TC2]
+    if not eligible:
+        return None, "NO_TC2_INITIAL_CANDIDATE"
+    earliest = min(c.signal.signal_bar_time_ms for c in eligible)
+    first = [c for c in eligible if c.signal.signal_bar_time_ms == earliest]
+    if len({c.side for c in first}) > 1 and any(not math.isfinite(c.score) for c in first):
+        return None, "SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED"
+    best_score = max(c.score if math.isfinite(c.score) else float("-inf") for c in first)
+    tied = [c for c in first if (c.score if math.isfinite(c.score) else float("-inf")) == best_score]
+    if len({c.side for c in tied}) > 1:
+        return None, "SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED"
+    return min(tied, key=lambda c: c.signal.signal_id), ""
 
 
 def _pending_entry_preflight_reason(pending, intent, current_price: float, now_ms: int | None = None) -> str:
@@ -4272,15 +4294,13 @@ class FuturesWilliamsRuntime:
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
         active_campaign_count = active_campaign_slot_count(active_symbols, pending_symbols)
-        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
-        conflicts={symbol for symbol,rows in by_symbol.items()
-                   if unified and unified_direction_conflict(
-                       c.side for c in rows if c.signal.role==SignalRole.ENTRY)}
-        for symbol in sorted(conflicts):
-            self.db.log_event("WARNING","williams_unified_direction_conflict",
-                "Both LONG and SHORT entries present; no exposure admitted",{"symbol":symbol})
+        initial_selection = {symbol: _select_tc2_initial_candidate(rows)
+                             for symbol, rows in by_symbol.items()}
         for candidate in candidates:
-            skip_reason=("OPPOSING_ENTRIES_BEFORE_CONTEXT" if candidate.symbol in conflicts else
+            selected, selection_reason = initial_selection[candidate.symbol]
+            selection_block = (selection_reason or "EARLIER_OR_HIGHER_RANKED_TC2_ENTRY_SELECTED"
+                               if candidate.signal.strategy_profile == TC2 and candidate is not selected else "")
+            skip_reason=(selection_block if selection_block else
                 "SYMBOL_RESERVED_BY_POSITION" if candidate.symbol in active_symbols else
                 "POSITION_LIMIT" if active_campaign_count>=self.max_open_positions else
                 "SYMBOL_RESERVED_BY_PENDING_ORDER" if candidate.symbol in pending_symbols or candidate.symbol in self._locks else
@@ -4288,7 +4308,7 @@ class FuturesWilliamsRuntime:
             if skip_reason:
                 try:SignalJournal(self.db).decision(candidate.symbol,"PAIR_GATE",skip_reason,int(time.time()*1000),candidate.signal.signal_id)
                 except Exception:pass
-            if candidate.symbol in conflicts:
+            if selection_block:
                 continue
             if candidate.symbol in active_symbols:
                 continue

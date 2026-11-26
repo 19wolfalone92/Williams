@@ -159,4 +159,23 @@ class WilliamsExecutionPolicyTest {
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
     }
 
+
+    @Test fun chronologicalEntrySelectionDoesNotPreferLongOrShortOnAnExactTie() {
+        data class Candidate(val id:String,val side:String,val at:Long,val context:Int,val rank:Double)
+        fun select(vararg rows:Candidate)=williamsSelectChronologicalEntry(rows.toList(),
+            {it.at},{it.context},{it.rank},{it.side},{it.id})
+        for((side,other) in listOf("LONG" to "SHORT","SHORT" to "LONG")) {
+            val old=Candidate("a",side,10L,1,1.0)
+            val later=Candidate("b",other,20L,2,100.0)
+            assertEquals(old,select(later,old).first)
+            assertEquals(old,select(old,later).first)
+            val exact=Candidate("c",other,10L,1,1.0)
+            assertNull(select(old,exact).first)
+            assertNull(select(exact,old).first)
+            assertEquals("SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED",select(exact,old).second)
+            val ranked=exact.copy(context=2)
+            assertEquals(ranked,select(old,ranked).first)
+            assertEquals(ranked,select(ranked,old).first)
+        }
+    }
 }

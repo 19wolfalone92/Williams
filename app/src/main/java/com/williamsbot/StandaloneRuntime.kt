@@ -8522,13 +8522,9 @@ private class NativeEngine(
             return rejectDecision(symbol,(congestionAdmission.values.firstOrNull { it!=null }
                 ?: WILLIAMS_TC2_CONGESTION_UNVERIFIED)+
                 ": no new risk; existing position STOP and management unchanged")
-        // A pending re-anchor must never hide a contradictory confirmed
-        // hypothesis from another enabled Williams edition.
-        if(williamsProfile==williamsUnifiedProfile && williamsUnifiedDirectionsConflict(
-                allowedSignals.mapNotNull { campaignSignalDirection(it.type) })) {
-            lastError="WILLIAMS_UNIFIED_DIRECTION_CONFLICT: fresh LONG and SHORT H1 entries disagree for $symbol; no order armed"
-            return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
-        }
+        // Opposite hypotheses compete by their known H1 time and context.
+        // Do not block an earlier valid TC2 signal because a later opposite
+        // signal exists. Re-anchor ownership still pins a replacement.
         val storedReanchor = executionStore.readState("tc2_fractal_reanchor_$symbol")
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
         val reanchorLock = if(storedReanchor!=null &&
@@ -8558,11 +8554,11 @@ private class NativeEngine(
         }
         // Retired M15 cancel fences must not veto H1 book entries. The
         // separate TC2 H1 re-anchor fence still protects replacement orders.
-        val baseline = selectableSignals.minWithOrNull(
-            compareBy<CampaignSignalN> { it.signalBarTimeMs }
-                .thenByDescending { contextRank(it) }.thenByDescending { nativeRank(it.type) }
-        ) ?: run {
-            lastError = "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL: no TC2 first-Wise-Man signal survived book and risk context on $symbol"
+        val selection = williamsSelectChronologicalEntry(
+            selectableSignals, { it.signalBarTimeMs }, { contextRank(it) },
+            { nativeRank(it.type) }, { campaignSignalDirection(it.type).orEmpty() }, { it.signalId })
+        val baseline = selection.first ?: run {
+            lastError = selection.second.ifBlank { "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL" }
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
         // TC2 H1 WM3: a newer CONFIRMED same-side fractal supersedes an

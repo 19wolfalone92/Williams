@@ -1451,3 +1451,25 @@ def test_futures_scanner_does_not_veto_valid_tc2_candidates_on_high_atr(monkeypa
         monkeypatch.setenv("MAX_ATR_PCT", value)
         assert [c.signal.signal_id for c in scanner.analyse("BTCUSDT")] == [
             c.signal.signal_id for c in candidates]
+
+
+def test_tc2_initial_selection_is_chronological_and_direction_symmetric():
+    from futures_williams_runtime import _select_tc2_initial_candidate
+    from williams_edition_rules import TC2, NTD
+    def candidate(side, when, score, ident, source=TC2, role=SignalRole.ENTRY):
+        return SimpleNamespace(side=side, score=score,
+            signal=SimpleNamespace(signal_bar_time_ms=when, signal_id=ident,
+                                   role=role, strategy_profile=source))
+    for side, other in [("LONG", "SHORT"), ("SHORT", "LONG")]:
+        older = candidate(side, 10, 10.0, "old")
+        newer = candidate(other, 20, 100.0, "new")
+        observer = candidate(other, 1, 100.0, "observer", NTD)
+        addon = candidate(other, 1, 100.0, "addition", role=SignalRole.ADD_ON)
+        assert _select_tc2_initial_candidate([newer, observer, addon, older]) == (older, "")
+        assert _select_tc2_initial_candidate([older, addon, observer, newer]) == (older, "")
+        exact = candidate(other, 10, 10.0, "equal")
+        assert _select_tc2_initial_candidate([older, exact])[0] is None
+        assert _select_tc2_initial_candidate([exact, older])[0] is None
+        better = candidate(other, 10, 20.0, "better")
+        assert _select_tc2_initial_candidate([older, better]) == (better, "")
+        assert _select_tc2_initial_candidate([better, older]) == (better, "")
