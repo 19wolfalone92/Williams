@@ -8458,9 +8458,12 @@ private class NativeEngine(
             bearishDivergence = candidate.wave.aoBearishDivergence,
             bullishDivergence = candidate.wave.aoBullishDivergence
         )
-        val hierarchy = waveHierarchyFor(symbol)
-        val corrections = freshSignals.associate { it.signalId to runCatching { williamsCorrectionEntryContext(
-            hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }.getOrDefault(WilliamsCorrectionContext()) }
+        val hierarchy = runCatching { waveHierarchyFor(symbol) }.getOrNull()
+        val corrections = freshSignals.associate { signal -> signal.signalId to runCatching {
+            hierarchy?.let { williamsCorrectionEntryContext(it,
+                campaignSignalDirection(signal.type).orEmpty(),signal.signalBarTimeMs,signal.type) }
+                ?: WilliamsCorrectionContext()
+        }.getOrDefault(WilliamsCorrectionContext()) }
         // TC2 chapter 12 explicitly accepts any of WM1, WM2, WM3 as the
         // first presenting H1 entry. Older D1/H4 blanket trend veto wrongly
         // blocked initial H1 Super AO/fractal when a higher timeframe had not

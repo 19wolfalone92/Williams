@@ -1451,6 +1451,38 @@ def test_futures_scanner_does_not_veto_valid_tc2_candidates_on_high_atr(monkeypa
         monkeypatch.setenv("MAX_ATR_PCT", value)
         assert [c.signal.signal_id for c in scanner.analyse("BTCUSDT")] == [
             c.signal.signal_id for c in candidates]
+    # Exercise the actual production scanner with a positive correction
+    # classification and then a failed optional observer. The source signal
+    # is still visible; no CORRECTION execution mode is assigned to TC2.
+    monkeypatch.setattr(runtime,"correction_entry_context",lambda *a,**kw:
+        {"allowed":True,"parent_scenario_id":"test-parent"})
+    qualified=scanner.analyse("BTCUSDT")
+    assert len(qualified)==2
+    assert all(c.trade_mode=="TREND" and c.correction_context["observation_only"]
+               and c.correction_context["allowed"] for c in qualified)
+    def unavailable(*a,**kw):
+        raise RuntimeError("observer unavailable")
+    monkeypatch.setattr(scanner,"wave_hierarchy",unavailable)
+    monkeypatch.setattr(scanner,"_htf",unavailable)
+    monkeypatch.setattr(scanner.wave_engine,"build_snapshot",unavailable)
+    monkeypatch.setattr(runtime,"correction_entry_context",unavailable)
+    monkeypatch.setattr(runtime,"build_decision_trace",unavailable)
+    monkeypatch.setattr(runtime,"evaluate_direction",unavailable)
+    monkeypatch.setenv("REQUIRE_POINT_ZERO_FOR_WM1","true")
+    def actual_wm1_argument(*a,**kw):
+        assert kw["require_point_zero_for_reversal"] is False
+        return long_signals
+    monkeypatch.setattr(runtime,"extract_long_signal_specs",actual_wm1_argument)
+    qualified=scanner.analyse("BTCUSDT")
+    assert len(qualified)==2 and all(c.trade_mode=="TREND" for c in qualified)
+    assert all(c.correction_context["reason"]=="ANALYSIS_FAILED" for c in qualified)
+    errors=scanner.decision_traces["BTCUSDT"]["observer_errors"]
+    assert {"wave_snapshot","wave_hierarchy","higher_timeframe","decision_trace",
+            "directional_context_LONG","directional_context_SHORT"} <= errors.keys()
+    # Optional observers may fail, but bad H1 itself never becomes tradable.
+    frame.loc[10,"high"]=float("nan")
+    assert scanner.analyse("BTCUSDT")==[]
+    assert scanner.last_signal_profile_error=="H1_OHLC_UNVERIFIED"
 
 
 def test_tc2_initial_selection_is_chronological_and_direction_symmetric():
@@ -1473,3 +1505,38 @@ def test_tc2_initial_selection_is_chronological_and_direction_symmetric():
         better = candidate(other, 10, 20.0, "better")
         assert _select_tc2_initial_candidate([older, better]) == (better, "")
         assert _select_tc2_initial_candidate([better, older]) == (better, "")
+
+
+def test_tc2_legacy_correction_cannot_veto_final_entry_preflight(monkeypatch):
+    import pytest
+    import futures_williams_runtime as module
+    from entry_time_policy import EntryTimePolicy
+    from williams_edition_rules import TC2
+    now = 1_800_000_000_000 // 3_600_000 * 3_600_000
+    monkeypatch.setattr(module.time,"time",lambda:now/1000)
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE",TC2)
+    def unexpected(*a,**kw):
+        pytest.fail("TC2 correction observer was used at the exchange mutation door")
+    runtime=object.__new__(FuturesWilliamsRuntime)
+    runtime.config=SimpleNamespace(allow_long=True,allow_short=True,entry_time_policy=EntryTimePolicy())
+    runtime.scanner=SimpleNamespace(wave_hierarchy=unexpected)
+    runtime.client=SimpleNamespace(time_offset_ms=0,ticker_price=lambda _: {"price":"100"})
+    runtime._position=lambda _: {"positionAmt":"0"}
+    runtime._signed_position_qty=lambda p: float(p["positionAmt"])
+    for side,trigger,stop in [("BUY",110.0,90.0),("SELL",90.0,110.0)]:
+        for family in (SignalType.REVERSAL,SignalType.SUPER_AO,SignalType.FRACTAL):
+            signal=SignalSpec.new(symbol="BTCUSDT",side=side,signal_type=family,role=SignalRole.ENTRY,
+                timeframe="1h",signal_bar_time_ms=now-3_600_000,trigger_price=trigger,
+                protective_reference=stop,expires_at_ms=0 if family==SignalType.FRACTAL else now+3_600_000,
+                setup_context={"h1_closed_at_ms":now})
+            campaign=SimpleNamespace(symbol="BTCUSDT",side=side,state=CampaignState.ENTRY_PENDING,
+                tags={"strategy_profile":TC2,"trade_mode":"CORRECTION","correction_context":{},
+                      "pending_signal":{"state":"VALIDATED","signal":signal.to_dict()}})
+            runtime.engine=SimpleNamespace(load_campaign=lambda _:campaign)
+            intent=SimpleNamespace(campaign_id="owner",symbol="BTCUSDT",side=side,
+                purpose="CAMPAIGN_ENTRY",order_type="STOP_MARKET",signal_id=signal.signal_id)
+            runtime._futures_pre_submit_checks(intent)
+            runtime._position=lambda _: {"positionAmt":"0.01"}
+            with pytest.raises(RuntimeError,match="already exists"):
+                runtime._futures_pre_submit_checks(intent)
+            runtime._position=lambda _: {"positionAmt":"0"}

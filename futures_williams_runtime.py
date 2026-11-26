@@ -452,13 +452,31 @@ class FuturesWilliamsScanner:
                 "can_place_orders":False,"reason":"NTD_RESEARCH_DIAGNOSTIC_ERROR",
                 "error_type":type(exc).__name__,
             }
-        wave_snapshot = self.wave_engine.build_snapshot(
-            self.interval,
-            closed,
-            degree="EXECUTION",
-        )
-        point_zero_confirmed = bool(wave_snapshot.point_zero_confirmed)
-        point_zero_score = int(wave_snapshot.point_zero_score)
+        # A wave hypothesis must not prevent a source-valid closed-H1 setup.
+        # Fail closed on H1 itself, independently of optional wave/HTF observers.
+        if self.interval == "1h":
+            try:
+                source_bars = wave_bars_from_dataframe(closed)
+                source_error = closed_h1_history_blocker(source_bars,
+                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                if not source_error and any(
+                    not all(math.isfinite(x) for x in (bar.o,bar.h,bar.l,bar.c,bar.v))
+                    or min(bar.o,bar.l,bar.c)<=0 or bar.h<max(bar.o,bar.c,bar.l)
+                    or bar.l>min(bar.o,bar.c) or bar.v<0 for bar in source_bars):
+                    source_error = "H1_OHLC_UNVERIFIED"
+            except Exception:
+                source_error = "H1_HISTORY_UNVERIFIED"
+            if source_error:
+                self.last_signal_profile_error = source_error
+                return []
+        observer_errors = {}
+        try:
+            wave_snapshot = self.wave_engine.build_snapshot(self.interval,closed,degree="EXECUTION")
+        except Exception as exc:
+            wave_snapshot = None
+            observer_errors["wave_snapshot"] = type(exc).__name__
+        point_zero_confirmed = bool(getattr(wave_snapshot,"point_zero_confirmed",False))
+        point_zero_score = int(getattr(wave_snapshot,"point_zero_score",0) or 0)
 
         profile = os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         profile_block_reason = _signal_profile_entry_block_reason(profile)
@@ -475,9 +493,8 @@ class FuturesWilliamsScanner:
                     tick_size=tick,
                     point_zero_confirmed=point_zero_confirmed,
                     point_zero_score=point_zero_score,
-                    require_point_zero_for_reversal=os.getenv(
-                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                    ).lower() == "true",
+                    # Point zero belongs to the research context, not TC2 admission.
+                    require_point_zero_for_reversal=False,
                 )
                 short_specs = extract_short_signal_specs(
                     symbol,
@@ -486,9 +503,8 @@ class FuturesWilliamsScanner:
                     tick_size=tick,
                     point_zero_confirmed=point_zero_confirmed,
                     point_zero_score=point_zero_score,
-                    require_point_zero_for_reversal=os.getenv(
-                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                    ).lower() == "true",
+                    # Point zero belongs to the research context, not TC2 admission.
+                    require_point_zero_for_reversal=False,
                 )
             else:
                 long_specs=[];short_specs=[]
@@ -510,17 +526,29 @@ class FuturesWilliamsScanner:
         self.latest_edition_observations[symbol]=observations
         raw_signals=list({s.signal_id:s for s in [*observed,*long_specs,*short_specs]}.values())
         trace_bars=wave_bars_from_dataframe(ind) if {"open","high","low","close","volume"}.issubset(ind.columns) else []
-        hierarchy=self.wave_hierarchy(symbol,frame)
+        try:
+            hierarchy = self.wave_hierarchy(symbol,frame)
+            hierarchy_payload = hierarchy.to_dict()
+        except Exception as exc:
+            hierarchy = None
+            observer_errors["wave_hierarchy"] = type(exc).__name__
+            hierarchy_payload = {"state":"ANALYSIS_FAILED","can_place_orders":False,
+                                 "error_type":type(exc).__name__}
         def last_value(name):
             col=next((n for n in (name+"_current",name+"_shifted",name) if n in ind),None)
             return float(ind[col].iloc[-1]) if col else float("nan")
-        self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
-            {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy.to_dict())
+        try:
+            self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
+                {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy_payload)
+            failed={o["profile"]:o for o in observations if o["state"]=="ANALYSIS_FAILED"}
+            for book in self.decision_traces[symbol]["books"]:
+                if book["profile"] in failed:
+                    book.update(state="ANALYSIS_FAILED",error_type=failed[book["profile"]]["error_type"])
+        except Exception as exc:
+            observer_errors["decision_trace"]=type(exc).__name__
+            self.decision_traces[symbol]={"state":"ANALYSIS_FAILED","books":[],"can_place_orders":False}
         self.decision_traces[symbol]["edition_observations"]=observations
-        failed={o["profile"]:o for o in observations if o["state"]=="ANALYSIS_FAILED"}
-        for book in self.decision_traces[symbol]["books"]:
-            if book["profile"] in failed:
-                book.update(state="ANALYSIS_FAILED",error_type=failed[book["profile"]]["error_type"])
+        self.decision_traces[symbol]["observer_errors"]=observer_errors
         observer=getattr(self,"signal_observer",None)
         if observer:
             try:observer(symbol,signal_facts(raw_signals,trace_bars,FRAME_MS[self.interval]))
@@ -556,19 +584,24 @@ class FuturesWilliamsScanner:
                 self.last_signal_profile_error=history_error
                 return []
         self.last_signal_profile_error = None
-        long_htf, short_htf = self._htf(symbol)
-        # Rank only existing, valid Williams triggers. Divergence/wave count
-        # never manufacture an entry, order, stop, add-on, or exit on their own.
-        contexts = {
-            side: evaluate_direction(
-                side=side, snapshot=wave_snapshot,
-                last_indicator=ind.iloc[-1], closed_bar_count=len(ind),
-                htf_confirmed=htf_ok,
-            ).to_dict()
-            for side, htf_ok in (("LONG", long_htf), ("SHORT", short_htf))
-        }
+        try:
+            long_htf, short_htf = self._htf(symbol)
+        except Exception as exc:
+            long_htf, short_htf = False, False
+            observer_errors["higher_timeframe"] = type(exc).__name__
+        # Rank only existing, valid Williams triggers. Failure of an optional
+        # observation must not fabricate a signal or a direction preference.
+        contexts = {}
+        for side, htf_ok in (("LONG",long_htf),("SHORT",short_htf)):
+            try:
+                contexts[side]=evaluate_direction(side=side,snapshot=wave_snapshot,
+                    last_indicator=ind.iloc[-1],closed_bar_count=len(ind),
+                    htf_confirmed=htf_ok).to_dict()
+            except Exception as exc:
+                observer_errors["directional_context_"+side]=type(exc).__name__
+                contexts[side]={"side":side,"alignment":"UNKNOWN","score_adjustment":0.0,
+                    "calibration_status":"ANALYSIS_FAILED","can_place_orders":False}
         self.latest_directional_view[symbol] = contexts
-        hierarchy = self.wave_hierarchy(symbol, frame)
         out: list[FuturesCandidate] = []
 
         for side, specs, htf_ok in (
@@ -638,7 +671,7 @@ class FuturesWilliamsScanner:
                     directional_context=contexts[side],
                     trade_mode="CORRECTION" if signal.strategy_profile != TC2 and correction["allowed"] else "TREND",
                     correction_context=correction,
-                    wave_hierarchy=hierarchy.to_dict(),
+                    wave_hierarchy=hierarchy_payload,
                 )
             )
         return out
