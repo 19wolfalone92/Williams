@@ -634,4 +634,22 @@ class WilliamsTc2CongestionTest {
             "NO_COMPLEX_CORRECTION_EVIDENCE"))
     }
 
+
+    @Test fun productionObservationRetainsCounterfactualWithoutVetoingAnyWiseMan() {
+        val bars=triangularBars()
+        val now=bars.last().t+h
+        for(side in listOf("LONG","SHORT")) for(family in listOf("REVERSAL","SUPER_AO","FRACTAL")) {
+            val type=if(side=="LONG") family else "SHORT_"+family
+            val report=williamsTc2CongestionObservation(bars,now,type,side,115.0)
+            assertTrue(report.getBoolean("legacy_would_block"))
+            assertTrue(report.getBoolean("observation_only"))
+            assertFalse(report.getBoolean("blocked"))
+            assertFalse(report.getBoolean("can_place_orders"))
+            assertTrue(report.getInt("active_inside_entry_count")>0)
+        }
+        val missing=williamsTc2CongestionObservation(bars.takeLast(20),now,"FRACTAL","LONG",115.0)
+        assertFalse(missing.getBoolean("blocked"))
+        assertTrue(missing.getBoolean("legacy_would_block"))
+        assertNotNull(williamsClosedH1HistoryBlocker(bars.takeLast(20),now))
+    }
 }

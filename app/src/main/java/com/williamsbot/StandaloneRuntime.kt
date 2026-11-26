@@ -7069,31 +7069,11 @@ private class NativeEngine(
                         else {
                             val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
                             val waveBars=closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-                            // TC2 ch11 fig 11.7: an unfilled STOP can become a
-                            // late, unsuitable fractal as H1 enters congestion.
-                            // Revoke only clearly unfilled exchange-acknowledged
-                            // NEW/WORKING entries, not TRIGGERING, PARTIALLY_FILLED,
-                            // unknown, filled positions or protective STOPs.
-                            val correctionInvalidation=if(profile==williamsTc2Profile &&
-                                williamsTc2PendingCongestionRecheckEligible(
-                                    pending.optString("intent_role","ENTRY"),
-                                    exchangeOrderStatus(pending),pending.optString("client_id"),
-                                    knownFill=pending.optLong("fill_observed_at_ms")>0L ||
-                                        listOf("executed_qty","actual_entry_executed_qty",
-                                            "confirmed_position_qty").any { key ->
-                                            pending.has(key) &&
-                                                pending.optString(key).toBigDecimalOrNull()?.signum()!=0
-                                        }))
-                                williamsTc2CongestionEntryBlocker(profile,
-                                    pending.optString("signal_type"),pending.optString("direction"),
-                                    price,waveBars,now)
-                            else null
-                            if(correctionInvalidation!=null) correctionInvalidation
-                            else {
-                                val teeth=williamsBookH1ActivationTeeth(waveBars,now)
-                                williamsBookFractalTeethBlocker(pending.optString("signal_type"),
-                                    pending.optString("direction"),price,teeth,tick)
-                            }
+                            // Wave hypotheses cannot invalidate a resting book order.
+                            // The separately verified source parent and current Teeth remain mandatory.
+                            val teeth=williamsBookH1ActivationTeeth(waveBars,now)
+                            williamsBookFractalTeethBlocker(pending.optString("signal_type"),
+                                pending.optString("direction"),price,teeth,tick)
                         }
                     }
                 }.getOrElse { failure ->
@@ -7193,7 +7173,7 @@ private class NativeEngine(
                 invalidEdition=current.none { it.type==pending.optString("signal_type") &&
                     expected!=null && abs(it.triggerPrice-expected)<=symbolFilters(symbol).tick*.1 }
             }
-            if (pending.optString("trade_mode")=="CORRECTION") {
+            if (profile!=williamsTc2Profile && pending.optString("trade_mode")=="CORRECTION") {
                 val prior=runCatching { JSONObject(pending.optString("wave_context_at_entry")) }.getOrNull()
                 val current=williamsCorrectionEntryContext(waveHierarchyFor(symbol),pending.optString("direction"),
                     signalAt,pending.optString("signal_type"))
@@ -7716,9 +7696,10 @@ private class NativeEngine(
             val openedAt = intent.optLong("position_open_observed_at_ms",0L)
             require(mark.isFinite() && mark > 0) { "Invalid mark during Williams management" }
             val correctionProof = if (intent.optString("trade_mode") == "CORRECTION") {
-                val proof = JSONObject(intent.optString("wave_context_at_entry"))
-                require(williamsCorrectionBoundsValid(proof)) { "Correction proof invalid; retain confirmed protection" }
-                proof
+                val proof = runCatching { JSONObject(intent.optString("wave_context_at_entry")) }.getOrNull()
+                if(intent.optString("strategy_profile",williamsTc2Profile)!=williamsTc2Profile)
+                    require(proof!=null && williamsCorrectionBoundsValid(proof)) { "Correction proof invalid; retain confirmed protection" }
+                proof?.takeIf { williamsCorrectionBoundsValid(it) }
             } else null
             val boundaryExit = correctionProof != null && !williamsCorrectionPriceAllowed(correctionProof,mark)
             val profile=intent.optString("strategy_profile",williamsTc2Profile)
@@ -7950,8 +7931,8 @@ private class NativeEngine(
                 (profile!=williamsCourseProfile || courseProof!=null) &&
                 (actionableOpposing != null ||
                     profile!=williamsTc2Profile && editionExit.isNotEmpty())) {
-                val correction = if (actionableOpposing != null) williamsCorrectionEntryContext(waveHierarchyFor(symbol),
-                    if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) else WilliamsCorrectionContext()
+                val correction = if (actionableOpposing != null) runCatching { williamsCorrectionEntryContext(waveHierarchyFor(symbol),
+                    if (dir == "LONG") "SHORT" else "LONG",actionableOpposing.signalBarTimeMs,actionableOpposing.type) }.getOrDefault(WilliamsCorrectionContext()) else WilliamsCorrectionContext()
                 val exitReason = if(profile==williamsCourseProfile) courseReason!! else if(profile!=williamsTc2Profile && editionExit.isNotEmpty()) editionExit
                     else if (correction.allowed) "OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
                     else "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
@@ -8129,11 +8110,7 @@ private class NativeEngine(
             (it.executionSemantics!="MARKET_ON_CLOSE" || williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,now,it.triggerPrice,mark)==null) &&
             children.none { child -> child.optString("client_id")==additionClientId(it) } }
             .minWithOrNull(compareBy<CampaignSignalN> { it.executionSemantics!="MARKET_ON_CLOSE" }.thenBy { it.signalBarTimeMs }) ?: return
-        // Existing campaign stays protected; only an attempted ADD_ON adds risk.
-        // TC2 ch11 fig.11.7 cautions against late trades in bounded correction.
-        williamsTc2CongestionEntryBlocker(profile,signal.type,direction,signal.triggerPrice,
-            candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)
-            ?.let { return rejectDecision(symbol,it+": new add-on withheld, protected owner unchanged") }
+        // Provisional correction classification is observational only.
         val market=signal.executionSemantics=="MARKET_ON_CLOSE"
         if(market && (profile!=williamsNtdProfile || signal.type.removePrefix("SHORT_")!="ZONE_ADD_ON" ||
             williamsMarketOnCloseReason(signal.signalBarTimeMs,3_600_000L,now,signal.triggerPrice,mark)!=null)) return
@@ -8234,12 +8211,11 @@ private class NativeEngine(
             val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
             if (fresh.none { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice })
                 return@withCampaignMutation safeAddOnReadOnlyVeto("ADDITION_H1_FORMATION_INVALIDATED_BEFORE_POST")
-            val addRiskReason=williamsTc2CongestionEntryBlocker(
-                profile,signal.type,direction,signal.triggerPrice,
-                currentH1.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },submitNow)
-            if (addRiskReason!=null)
-                return@withCampaignMutation safeAddOnReadOnlyVeto(
-                    addRiskReason+": new addition withheld; existing STOP unchanged")
+            val closedAddH1=currentH1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=submitNow }
+                .map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            val addHistoryError=williamsClosedH1HistoryBlocker(closedAddH1,submitNow)
+            if(addHistoryError!=null || !validWilliamsEditionBars(closedAddH1))
+                return@withCampaignMutation safeAddOnReadOnlyVeto(addHistoryError ?: "H1_OHLC_UNVERIFIED")
             if(!market) {
                 val current=futuresMarketData.price(symbol)
                 if (!(if(direction=="LONG") current<price else current>price))
@@ -8483,8 +8459,8 @@ private class NativeEngine(
             bullishDivergence = candidate.wave.aoBullishDivergence
         )
         val hierarchy = waveHierarchyFor(symbol)
-        val corrections = freshSignals.associate { it.signalId to williamsCorrectionEntryContext(
-            hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }
+        val corrections = freshSignals.associate { it.signalId to runCatching { williamsCorrectionEntryContext(
+            hierarchy,campaignSignalDirection(it.type).orEmpty(),it.signalBarTimeMs,it.type) }.getOrDefault(WilliamsCorrectionContext()) }
         // TC2 chapter 12 explicitly accepts any of WM1, WM2, WM3 as the
         // first presenting H1 entry. Older D1/H4 blanket trend veto wrongly
         // blocked initial H1 Super AO/fractal when a higher timeframe had not
@@ -8492,36 +8468,22 @@ private class NativeEngine(
         // confirmation. Final H1 proof, ownership, stop and risk gates remain.
         fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(
             signal.strategyProfile,signal.type,d1Bull,d1Bear,h4Bull,h4Bear,
-            corrections[signal.signalId]?.allowed == true)
-        // TC2 ch11 fig.11.7: g/h/j fractals inside corrective congestion are
-        // not permission to create NEW risk. Numerical evidence is explicitly
-        // PROJECT policy; never relabel as certain Elliott wave genealogy.
-        // Screen all possible H1 Wise Men BEFORE choosing the oldest signal.
+            signal.strategyProfile!=williamsTc2Profile && corrections[signal.signalId]?.allowed == true)
+        // Retain full correction evidence without turning its provisional price
+        // grammar or observer failure into authorization or refusal of new exposure.
         val congestionBars=candidate.candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-        val congestion=freshSignals.associate { signal ->
-            signal.signalId to williamsTc2CongestionEvidence(congestionBars,contextNow,
-                signal.type,campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice)
-        }
-        val congestionAdmission=freshSignals.associate { signal ->
-            signal.signalId to if(signal.strategyProfile==williamsTc2Profile)
-                williamsTc2CongestionAdmissionBlocker(congestion[signal.signalId])
-                else null
-        }
-        check(executionStore.writeState("decision_tc2_congestion_"+symbol,JSONObject()
-            .put("as_of",contextNow).put("policy",WILLIAMS_TC2_CONGESTION_POLICY)
-            .put("signals",JSONArray(freshSignals.map { signal ->
+        runCatching {
+            val observations=JSONArray(freshSignals.map { signal ->
                 JSONObject().put("signal_id",signal.signalId)
-                    .put("report",congestion[signal.signalId])
-                    .put("new_tc2_entry_blocker",
-                        congestionAdmission[signal.signalId] ?: JSONObject.NULL)
-            })).toString())) { "TC2_CONGESTION_DECISION_NOT_DURABLE" }
-        val allowedSignals = freshSignals.filter { signal ->
-            contextRank(signal)>0 && congestionAdmission[signal.signalId]==null
+                    .put("report",williamsTc2CongestionObservation(congestionBars,contextNow,
+                        signal.type,campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice))
+                    .put("new_tc2_entry_blocker",JSONObject.NULL)
+            })
+            executionStore.writeState("decision_tc2_congestion_"+symbol,JSONObject()
+                .put("as_of",contextNow).put("policy",WILLIAMS_TC2_CONGESTION_OBSERVATION_POLICY)
+                .put("signals",observations).toString())
         }
-        if(allowedSignals.isEmpty() && congestionAdmission.values.any { it!=null })
-            return rejectDecision(symbol,(congestionAdmission.values.firstOrNull { it!=null }
-                ?: WILLIAMS_TC2_CONGESTION_UNVERIFIED)+
-                ": no new risk; existing position STOP and management unchanged")
+        val allowedSignals = freshSignals.filter { signal -> contextRank(signal)>0 }
         // Opposite hypotheses compete by their known H1 time and context.
         // Do not block an earlier valid TC2 signal because a later opposite
         // signal exists. Re-anchor ownership still pins a replacement.
@@ -8597,7 +8559,7 @@ private class NativeEngine(
         if(latestFractalId!=null && newestFractal==null) {
             return rejectDecision(symbol,
                 "TC2_NEWER_CONFIRMED_WM3_INELIGIBLE_NO_OLD_FALLBACK: "+
-                (congestionAdmission[latestFractalId] ?: "H1_ADMISSION_NOT_PROVEN"))
+                "H1_ADMISSION_NOT_PROVEN")
         }
         val signal = newestFractal ?: baseline
         if(newestFractal!=null) runCatching { auditStore.recordCockpitEvent(
@@ -8770,8 +8732,8 @@ private class NativeEngine(
             signalBarTimeMs = signal.signalBarTimeMs,
             signalReason = "BOOK H1 "+signal.reason+"; "+direction.name+
                 " stop-entry at H1 signal trigger (no M15 confirmation)",
-            tradeMode = if (correction.allowed) "CORRECTION" else "TREND",
-            waveContext = if (correction.allowed) correction.toJson().toString() else "",
+            tradeMode = if (signal.strategyProfile!=williamsTc2Profile && correction.allowed) "CORRECTION" else "TREND",
+            waveContext = if (correction.allowed) correction.toJson().put("observation_only",signal.strategyProfile==williamsTc2Profile).toString() else "",
             strategyProfile=signal.strategyProfile,executionSemantics=signal.executionSemantics,
             setupContext=(runCatching { JSONObject(signal.setupContext) }.getOrDefault(JSONObject()).apply {
                 put("parent_execution_semantics",signal.executionSemantics)
@@ -8881,7 +8843,7 @@ private class NativeEngine(
             check(williamsBookFractalTeethBlocker(signal.type,direction.name,trigger,submitTeeth,rules.tick)==null) {
                 "H1_FRACTAL_TEETH_INVALID_BEFORE_SUBMISSION"
             }
-            if (correction.allowed) {
+            if (signal.strategyProfile!=williamsTc2Profile && correction.allowed) {
                 val currentCorrection = williamsCorrectionEntryContext(waveHierarchyFor(symbol,refresh=true),
                     direction.name,signal.signalBarTimeMs,signal.type)
                 require(currentCorrection.allowed && currentCorrection.parentId == correction.parentId) {
@@ -8908,29 +8870,16 @@ private class NativeEngine(
                 signal.type,signal.strategyProfile,trigger,stop,submitNow)==null) {
                 "H1_BOOK_PROOF_INVALID_BEFORE_SUBMISSION"
             }
-            // P0: the earlier scan's correction report is an observation,
-            // not a durable authorization to POST an exchange entry.
-            // A newly CONFIRMED H1 pivot can turn the price into an active
-            // complex correction while the scanner waits on network/risk.
-            // Re-evaluate the last independently CLOSED H1 price geometry
-            // at the final mutation door, after all price/Teeth checks and
-            // immediately BEFORE coordinator.submitPendingEntry(plan).
-            // If an hour rolled over, an old snapshot must fail CLOSED and
-            // defer new risk, never treat absence of current proof as safety.
-            // Crucially this never gates existing positions/protective STOPs.
+            // Fresh CLOSED H1 integrity is mandatory independently of analytics.
             if(signal.strategyProfile==williamsTc2Profile) {
                 val finalH1AsOf=futuresMarketData.exchangeNowMs()
-                val finalTc2Reason=williamsTc2CongestionEntryBlocker(
-                    signal.strategyProfile,signal.type,direction.name,trigger,
-                    submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },
-                    finalH1AsOf)
-                if(finalTc2Reason!=null) {
+                val finalBars=submitH1Closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                val historyError=williamsClosedH1HistoryBlocker(finalBars,finalH1AsOf)
+                if(historyError!=null || !validWilliamsEditionBars(finalBars)) {
                     return@withCampaignMutation JSONObject()
                         .put("accepted",false).put("safe_rejection",true)
                         .put("mutation_attempted",false).put("order_mutation_attempted",false)
-                        .put("blocker",finalTc2Reason+
-                            ": last exchange-mutation H1 check deferred new TC2 entry; existing protective STOP unchanged")
-                        .put("final_h1_context_as_of_ms",finalH1AsOf)
+                        .put("blocker",historyError ?: "H1_OHLC_UNVERIFIED")
                 }
             }
             // Re-check the selected contract's exact durable H1 input and all
@@ -9171,7 +9120,7 @@ private class NativeEngine(
                     // Every scanned Futures symbol receives the same read-only
                     // regime diagnostics, including symbols without an entry.
                     // This is NOT a claim about exchange-owned positions.
-                    val assessment=williamsTc2CongestionEvidence(h1,System.currentTimeMillis(),
+                    val assessment=williamsTc2CongestionObservation(h1,System.currentTimeMillis(),
                         "FRACTAL","LONG",h1.lastOrNull()?.c ?: Double.NaN)
                     row.put("h1_correction_regime",assessment.put("entry_relevant",false)
                         .put("blocked",false))
@@ -9179,7 +9128,7 @@ private class NativeEngine(
                         analysis.campaignSignals.filter { it.strategyProfile==williamsTc2Profile &&
                             it.role=="ENTRY" }.map { signal ->
                             JSONObject().put("signal_id",signal.signalId)
-                                .put("classification",williamsTc2CongestionEvidence(h1,
+                                .put("classification",williamsTc2CongestionObservation(h1,
                                     System.currentTimeMillis(),signal.type,
                                     campaignSignalDirection(signal.type).orEmpty(),signal.triggerPrice))
                         }))
@@ -11145,13 +11094,9 @@ private class NativeEngine(
             check(williamsBookFractalTeethBlocker(signal.type,plan.direction.name,signal.triggerPrice,teeth,tick)==null) {
                 "TC2_REVERSAL_FRACTAL_TEETH_INVALID"
             }
-            // A confirmed FLAT reversal is still NEW directional exposure.
-            // Existing position close/reconciliation was executed separately;
-            // this check cannot hold back the old protective exit.
-            check(williamsTc2CongestionEntryBlocker(williamsTc2Profile,signal.type,
-                plan.direction.name,signal.triggerPrice,
-                bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
-                WILLIAMS_TC2_CONGESTION_BLOCKER+": REVERSAL_NEW_EXPOSURE"
+            // Reversal still requires the preceding source and H1 checks.
+            check(validWilliamsEditionBars(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
+                "H1_OHLC_UNVERIFIED"
             }
             return
         }
@@ -11168,13 +11113,13 @@ private class NativeEngine(
             williamsBookSignalRoleAllowed(it.strategyProfile,it.type,it.role,plan.entryClientId,plan.reentryOwnerId) &&
             campaignSignalDirection(it.type)==plan.direction.name }
             ?: error(h1ParentRejectionReason(plan.symbol,plan.signalId,"H1_BOOK_PARENT_NO_LONGER_VALID"))
-        // Re-evaluate H1 congestion at the final Binance mutation fence.
-        // Applies only to new exposure (entries/additions), not owned STOPs
-        // or discretionary/protective exits.
-        check(williamsTc2CongestionEntryBlocker(plan.strategyProfile,plan.signalType,
-            plan.direction.name,plan.entryPrice.toDouble(),
-            candles.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },now)==null) {
-            WILLIAMS_TC2_CONGESTION_BLOCKER
+        // Source history is required, not a particular wave classification.
+        if(plan.strategyProfile==williamsTc2Profile) {
+            val closedH1=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+                .map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            check(williamsClosedH1HistoryBlocker(closedH1,now)==null && validWilliamsEditionBars(closedH1)) {
+                "H1_BOOK_HISTORY_OR_OHLC_UNVERIFIED"
+            }
         }
         if(plan.executionSemantics=="MARKET_ON_CLOSE") {
             check(plan.strategyProfile==williamsNtdProfile && actual.executionSemantics=="MARKET_ON_CLOSE" &&

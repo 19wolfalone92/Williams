@@ -595,7 +595,12 @@ class FuturesWilliamsScanner:
             # The earliest still-unconsumed presenting Wise Man initiates a
             # campaign (TC2); each extractor already rejects consumed triggers.
             signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
-            correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
+            try:
+                correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
+            except Exception as exc:
+                correction = {"allowed": False, "reason": "ANALYSIS_FAILED", "error_type": type(exc).__name__}
+            if source == TC2:
+                correction = dict(correction, observation_only=True)
             # Keep both-direction signals visible to the campaign
             # manager. D1/H4 context is not an initial-entry, exit or add-on gate.
             age_bonus = max(
@@ -631,7 +636,7 @@ class FuturesWilliamsScanner:
                     htf_confirmed=bool(htf_ok),
                     score=max(0.0, min(100.0, score)),
                     directional_context=contexts[side],
-                    trade_mode="CORRECTION" if correction["allowed"] else "TREND",
+                    trade_mode="CORRECTION" if source != TC2 and correction["allowed"] else "TREND",
                     correction_context=correction,
                     wave_hierarchy=hierarchy.to_dict(),
                 )
@@ -1502,7 +1507,7 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("LONG entries are disabled by configuration")
             if intent.side == "SELL" and not self.config.allow_short:
                 raise RuntimeError("SHORT entries are disabled by configuration")
-            if campaign.tags.get("trade_mode") == "CORRECTION":
+            if campaign.tags.get("strategy_profile", TC2) != TC2 and campaign.tags.get("trade_mode") == "CORRECTION":
                 checked = correction_entry_context(self.scanner.wave_hierarchy(intent.symbol, refresh=True),
                     intent.side, int(campaign.tags.get("signal_bar_time_ms", 0)), campaign.current_signal_type)
                 prior = campaign.tags.get("correction_context", {})
@@ -2016,7 +2021,7 @@ class FuturesWilliamsRuntime:
         if signal.strategy_profile==COURSE and signal.signal_type not in {SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT}:
             raise RuntimeError("Course requires a Course initiating formation")
         symbol = signal.symbol
-        if candidate.trade_mode == "CORRECTION":
+        if signal.strategy_profile != TC2 and candidate.trade_mode == "CORRECTION":
             verified = correction_entry_context(self.scanner.wave_hierarchy(symbol, refresh=True),
                 candidate.side, signal.signal_bar_time_ms, signal.signal_type.value)
             if not verified["allowed"]:
@@ -2106,7 +2111,7 @@ class FuturesWilliamsRuntime:
         campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
         campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
         campaign.tags["scanner_score_at_entry"] = float(candidate.score)
-        campaign.tags["trade_mode"] = candidate.trade_mode
+        campaign.tags["trade_mode"] = "TREND" if signal.strategy_profile == TC2 else candidate.trade_mode
         campaign.tags["strategy_profile"] = signal.strategy_profile
         if signal.strategy_profile==NTD:
             campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
@@ -3416,7 +3421,7 @@ class FuturesWilliamsRuntime:
                         side="LONG" if campaign.side=="BUY" else "SHORT",timeframe=campaign.execution_timeframe,tick_size=self._tick(symbol))
                     invalid_edition=bool(history_error) or not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
                         math.isclose(s.trigger_price,float((signal_payload or {}).get("trigger_price",0)),rel_tol=1e-12) for s in setups)
-                if status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
+                if profile != TC2 and status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
                     proof=correction_entry_context(self.scanner.wave_hierarchy(symbol),campaign.side,
                         signal_at_ms,campaign.current_signal_type)
                     prior=campaign.tags.get("correction_context",{})
@@ -3990,9 +3995,10 @@ class FuturesWilliamsRuntime:
             tags = getattr(campaign,"tags",{})
             if tags.get("trade_mode") == "CORRECTION":
                 proof = tags.get("correction_context",{})
-                if not correction_bounds_valid(proof):
+                bounds_valid = correction_bounds_valid(proof)
+                if not bounds_valid and profile != TC2:
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
-                if not correction_price_allowed(proof,current_price):
+                if bounds_valid and not correction_price_allowed(proof,current_price):
                     tags["course_boundary_advisory" if profile==COURSE else "tc2_correction_boundary_advisory"] = {
                         "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
                         "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
@@ -4062,11 +4068,13 @@ class FuturesWilliamsRuntime:
                     if active and profit_blocker is None:
                         reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                         if hasattr(self,"scanner"):
-                            report=self.scanner.wave_hierarchy(symbol)
-                            ctx=correction_entry_context(report,opposing.side,
-                                opposing.signal_bar_time_ms,opposing.signal_type.value)
-                            if ctx["allowed"]:
-                                reason="OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+                            try:
+                                report=self.scanner.wave_hierarchy(symbol)
+                                ctx=correction_entry_context(report,opposing.side,
+                                    opposing.signal_bar_time_ms,opposing.signal_type.value)
+                                tags["tc2_opposing_correction_observation"] = dict(ctx, observation_only=True)
+                            except Exception as exc:
+                                tags["tc2_opposing_correction_observation"] = {"reason": "ANALYSIS_FAILED", "error_type": type(exc).__name__}
                         tags["tc2_book_exit_proof"]={
                             "reason":reason,"symbol":symbol,"observed_at_ms":now,
                             "opened_at_ms":int(tags.get("position_open_observed_at_ms",0) or 0),
