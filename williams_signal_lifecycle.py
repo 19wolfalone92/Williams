@@ -42,7 +42,10 @@ def signal_lifecycle(signal,owner,now,snapshot_at,current):
     if known<=0 or known>now:return 'DETECTED'
     expiry=signal.get('expires_at_ms',signal.get('signal_bar_time_ms',0)+18_000_000)
     if expiry and expiry<=now:return 'EXPIRED'
-    if not current:return 'INVALIDATED'
+    # A missing row in the next scan is not structural invalidation proof.
+    # The causal H1 parent lifecycle records INVALIDATED only with a price-level
+    # trigger/invalidation or a confirmed replacement event.
+    if not current:return 'NOT_REEMITTED'
     if snapshot_at<=0 or now<snapshot_at or now-snapshot_at>120_000:return 'DETECTED'
     return 'VALID'
 
@@ -84,7 +87,8 @@ class SignalJournal:
             data=self._load(symbol);known={s['signal_id']:s for s in data['signals']};ids={s['signal_id'] for s in signals}
             for s in known.values():
                 if s.get('last_seen_at_ms')==data.get('snapshot_at_ms') and s['signal_id'] not in ids:
-                    self._event(data,s,'EXPIRED' if s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'INVALIDATED','FORMATION','FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN',now)
+                    state='EXPIRED' if s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'NOT_REEMITTED'
+                    self._event(data,s,state,'FORMATION','NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF',now)
             for source in signals:
                 s=dict(deepcopy(source),first_seen_at_ms=known.get(source['signal_id'],{}).get('first_seen_at_ms',now),last_seen_at_ms=now)
                 self._event(data,s,'DETECTED','FORMATION','FORMATION_OBSERVED',now)

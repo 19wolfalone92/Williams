@@ -35,7 +35,9 @@ internal fun williamsSignalLifecycle(s:JSONObject,owner:JSONObject?,now:Long,sna
     val known=s.optLong("known_at_ms");val expiry=s.optLong("expires_at_ms",s.optLong("signal_bar_time_ms")+18_000_000L)
     if(known<=0 || known>now) return "DETECTED"
     if(expiry>0L && expiry<=now) return "EXPIRED"
-    if(!current) return "INVALIDATED"
+    // A scan omission is not proof of structural invalidation. The H1
+    // parent/level lifecycle must provide that evidence separately.
+    if(!current) return "NOT_REEMITTED"
     if(snapshotAt<=0 || now<snapshotAt || now-snapshotAt>120_000L) return "DETECTED"
     return "VALID"
 }
@@ -61,8 +63,8 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
         val data=load(symbol);val known=rows(data.getJSONArray("signals")).associateBy { it.optString("signal_id") }.toMutableMap()
         val currentIds=rows(signals).map { it.optString("signal_id") }.toSet()
         known.values.filter { it.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms") && it.optString("signal_id") !in currentIds }.forEach {
-            val state=if(it.optLong("expires_at_ms")>0L && it.optLong("expires_at_ms")<=now) "EXPIRED" else "INVALIDATED"
-            event(data,it,state,"FORMATION","FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN",now)
+            val state=if(it.optLong("expires_at_ms")>0L && it.optLong("expires_at_ms")<=now) "EXPIRED" else "NOT_REEMITTED"
+            event(data,it,state,"FORMATION","NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF",now)
         }
         rows(signals).forEach { source ->
             val raw=JSONObject(source.toString()).put("last_seen_at_ms",now)
