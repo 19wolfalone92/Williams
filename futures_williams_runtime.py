@@ -599,7 +599,7 @@ class FuturesWilliamsScanner:
                 correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
             except Exception as exc:
                 correction = {"allowed": False, "reason": "ANALYSIS_FAILED", "error_type": type(exc).__name__}
-            if source == TC2:
+            if signal.strategy_profile == TC2:
                 correction = dict(correction, observation_only=True)
             # Keep both-direction signals visible to the campaign
             # manager. D1/H4 context is not an initial-entry, exit or add-on gate.
@@ -636,7 +636,7 @@ class FuturesWilliamsScanner:
                     htf_confirmed=bool(htf_ok),
                     score=max(0.0, min(100.0, score)),
                     directional_context=contexts[side],
-                    trade_mode="CORRECTION" if source != TC2 and correction["allowed"] else "TREND",
+                    trade_mode="CORRECTION" if signal.strategy_profile != TC2 and correction["allowed"] else "TREND",
                     correction_context=correction,
                     wave_hierarchy=hierarchy.to_dict(),
                 )
