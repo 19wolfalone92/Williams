@@ -169,6 +169,33 @@ def _trigger_still_pending(
     return not bool((lows <= trigger_price).any())
 
 
+def _tc2_price_bar_still_pending(ind, signal_index, *, side, trigger_price, protective_price):
+    """Match Android H1 parent structural invalidation before arming WM1/WM2.
+
+    An unfilled setup must not be resurrected after the original trigger OR
+    original structural invalidation was touched by a later closed candle.
+    This is the existing execution lifecycle contract, not a new age limit.
+    The formation bar itself cannot invalidate its own setup.
+    """
+    if not _trigger_still_pending(ind, signal_index, side=side, trigger_price=trigger_price):
+        return False
+    if not math.isfinite(protective_price) or protective_price <= 0:
+        return False
+    is_long = side == "BUY"
+    if (protective_price >= trigger_price if is_long else protective_price <= trigger_price):
+        return False
+    col = "low" if is_long else "high"
+    if col not in ind.columns:
+        return False
+    extrema = pd.to_numeric(ind.iloc[signal_index + 1:][col], errors="coerce")
+    if not all(math.isfinite(float(v)) and float(v) > 0 for v in extrema):
+        return False
+    close = float(ind.iloc[-1]["close"])
+    if (close <= protective_price if is_long else close >= protective_price):
+        return False
+    return not bool((extrema <= protective_price if is_long else extrema >= protective_price).any())
+
+
 def _row_time_ms(row: pd.Series) -> int:
     for key in ("open_time_ms", "time_ms", "timestamp", "time", "open_time"):
         value = row.get(key)
@@ -1138,8 +1165,8 @@ def extract_long_signal_specs(
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         levels = _tc2_exact_price_bar_levels("LONG", trigger_base, protective, tick)
-        if levels is not None and _trigger_still_pending(
-                ind, i, side="BUY", trigger_price=levels[0]):
+        if levels is not None and _tc2_price_bar_still_pending(
+                ind, i, side="BUY", trigger_price=levels[0], protective_price=levels[1]):
             trigger, protective_stop = levels
             row = ind.iloc[i]
             score, _ = _angulation(ind, i, side="LONG")
@@ -1175,8 +1202,8 @@ def extract_long_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         levels = _tc2_exact_price_bar_levels("LONG", trigger_base, protective, tick)
-        if levels is not None and _trigger_still_pending(
-                ind, i, side="BUY", trigger_price=levels[0]):
+        if levels is not None and _tc2_price_bar_still_pending(
+                ind, i, side="BUY", trigger_price=levels[0], protective_price=levels[1]):
             trigger, protective_stop = levels
             row = ind.iloc[i]
             specs.append(
@@ -1321,8 +1348,8 @@ def extract_short_signal_specs(
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         levels = _tc2_exact_price_bar_levels("SHORT", trigger_base, protective, tick)
-        if levels is not None and _trigger_still_pending(
-                ind, i, side="SELL", trigger_price=levels[0]):
+        if levels is not None and _tc2_price_bar_still_pending(
+                ind, i, side="SELL", trigger_price=levels[0], protective_price=levels[1]):
             trigger, protective_stop = levels
             row = ind.iloc[i]
             score, _ = _angulation(ind, i, side="SHORT")
@@ -1356,8 +1383,8 @@ def extract_short_signal_specs(
     if super_ao is not None:
         i, trigger_base, protective = super_ao
         levels = _tc2_exact_price_bar_levels("SHORT", trigger_base, protective, tick)
-        if levels is not None and _trigger_still_pending(
-                ind, i, side="SELL", trigger_price=levels[0]):
+        if levels is not None and _tc2_price_bar_still_pending(
+                ind, i, side="SELL", trigger_price=levels[0], protective_price=levels[1]):
             trigger, protective_stop = levels
             row = ind.iloc[i]
             specs.append(

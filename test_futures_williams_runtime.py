@@ -1540,3 +1540,57 @@ def test_tc2_legacy_correction_cannot_veto_final_entry_preflight(monkeypatch):
             with pytest.raises(RuntimeError,match="already exists"):
                 runtime._futures_pre_submit_checks(intent)
             runtime._position=lambda _: {"positionAmt":"0"}
+
+
+def test_tc2_wm2_old_trigger_cannot_be_resurrected_after_structural_invalidation():
+    # The third AO bar remains at index 3 even when later AO bars turn
+    # the other colour. A later closed bar touches the invalidation, not
+    # the entry. A subsequent recovery cannot revive the old setup.
+    frame = pd.DataFrame({
+        "open_time_ms": [1795701600000+i*3600000 for i in range(10)],
+        "open": [100.0]*10, "high": [101.0,101.0,101.0,110.0]+[105.0]*6,
+        "low": [99.0,99.0,99.0,90.0]+[95.0]*6, "close": [100.0]*10,
+        "ao": [0.,1.,2.,3.,2.,2.,2.,2.,2.,2.],
+        "ao_green_streak": [0,1,2,3,0,0,0,0,0,0],
+        "ao_red_streak": [0,0,0,0,1,0,0,0,0,0],
+    })
+    for short in (False, True):
+        bars = frame.copy()
+        if short:
+            bars["high"],bars["low"] = 220-frame["low"],220-frame["high"]
+            bars["open"],bars["close"],bars["ao"] = 220-frame["open"],220-frame["close"],-frame["ao"]
+            bars["ao_green_streak"],bars["ao_red_streak"] = frame["ao_red_streak"],frame["ao_green_streak"]
+        extractor = extract_short_signal_specs if short else extract_long_signal_specs
+        def wm2(data):
+            return [s for s in extractor("BTCUSDT",data,timeframe="1h",tick_size=.1)
+                    if s.signal_type == SignalType.SUPER_AO]
+        candidates=wm2(bars)
+        assert len(candidates)==1
+        assert candidates[0].source_candle_index==3
+        assert wm2(bars.iloc[:4])
+        invalid=bars.copy()
+        invalid.loc[5,"high" if short else "low"] = candidates[0].protective_reference
+        assert not wm2(invalid)
+        consumed=bars.copy()
+        consumed.loc[5,"low" if short else "high"] = candidates[0].trigger_price
+        assert not wm2(consumed)
+        missing=bars.copy()
+        missing.loc[5,"high" if short else "low"] = float("nan")
+        assert not wm2(missing)
+
+
+def test_tc2_wm1_price_bar_lifecycle_uses_same_structural_invalidation(monkeypatch):
+    import williams_signals as signals
+    monkeypatch.setattr(signals,"_latest_reversal",lambda *a,**kw:(0,110.,90.) if kw["side"]=="LONG" else (0,90.,110.))
+    monkeypatch.setattr(signals,"_angulation",lambda *a,**kw:(1.,True))
+    for short in (False,True):
+        bars=pd.DataFrame({"open_time_ms":[1795701600000+i*3600000 for i in range(3)],
+            "open":[100.]*3,"high":[110.,105.,105.],"low":[90.,95.,95.],"close":[100.]*3})
+        extractor=extract_short_signal_specs if short else extract_long_signal_specs
+        def wm1(data):
+            return [s for s in extractor("BTCUSDT",data,timeframe="1h",tick_size=.1)
+                    if s.signal_type==SignalType.REVERSAL]
+        candidate=wm1(bars)
+        assert len(candidate)==1
+        bars.loc[1,"high" if short else "low"]=candidate[0].protective_reference
+        assert not wm1(bars)
