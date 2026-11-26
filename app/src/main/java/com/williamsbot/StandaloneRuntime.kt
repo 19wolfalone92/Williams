@@ -1797,9 +1797,9 @@ private class NativeEngine(
     @Volatile private var futuresLeverageSettings = prefs.getString("futures_leverage_settings_v1", null)?.let {
         FuturesLeverageSettings.fromJson(JSONObject(it))
     } ?: FuturesLeverageSettings()
-    @Volatile private var entryTimePolicy=prefs.getString("entry_time_policy_v1",null)?.let {
-        WilliamsEntryTimePolicy.fromJson(JSONObject(it))
-    } ?: WilliamsEntryTimePolicy()
+    // Futures is 24/7 by operator contract. Legacy saved windows cannot
+    // silently block admission or cancel an otherwise valid pending entry.
+    private val entryTimePolicy=WilliamsEntryTimePolicy()
     @Volatile private var williamsProfile=williamsRestoredExecutionSelection(
         prefs.getString("williams_strategy_profile_v1",null),prefs.getString("williams_execution_policy_v2",null))
     @Volatile private var futuresExchangeInfoCache: Pair<Long, JSONObject>? = null
@@ -14657,9 +14657,10 @@ private class NativeEngine(
         // Binance brackets and the margin available BEFORE liquidation or
         // the structural STOP are authoritative on every new order.
         val profile=payload.optString("strategy_profile",williamsProfile)
-        val nextTime=payload.optJSONObject("entry_time_policy")?.let { WilliamsEntryTimePolicy.fromJson(it) } ?: entryTimePolicy
+        // Persist the canonical 24/7 policy even for an older settings client.
+        val nextTime=entryTimePolicy
         require(profile==williamsUnifiedProfile || williamsVerifiedNewRiskSource(profile)) {
-            "Торговые источники: TC2 и NTD; Course работает в наблюдении"
+            "Новые кампании: только TC2; остальные источники — наблюдение"
         }
         fun persist() {
             check(prefs.edit().putString("entry_time_policy_v1",nextTime.toJson().toString()).putString("williams_strategy_profile_v1",profile)
@@ -14669,7 +14670,6 @@ private class NativeEngine(
             }
             futuresLeverageSettings=next
             williamsProfile=profile
-            entryTimePolicy=nextTime
         }
         if(profile!=williamsProfile) futuresCampaignCoordinator.configureWhenFlat { persist() } else persist()
         runCatching { auditStore.recordCockpitEvent("LEVERAGE_SETTINGS", detail = next.toJson().toString()) }

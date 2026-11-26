@@ -204,7 +204,9 @@ class TradingConfig:
             structural_timeframes=structural_timeframes,
             execution_timeframe=execution_timeframe,
             market=market,
-            entry_time_policy=EntryTimePolicy.from_env(source),
+            # The approved Futures contract is 24/7; retire legacy UTC windows.
+            # Keep the generic policy available for non-Futures consumers.
+            entry_time_policy=EntryTimePolicy() if market == "futures_usdt" else EntryTimePolicy.from_env(source),
             futures_leverage=futures_leverage,
             futures_symbol_leverages=futures_symbol_leverages,
             futures_margin_type=futures_margin_type,
