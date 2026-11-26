@@ -41,6 +41,16 @@ class WilliamsExecutionPolicyTest {
             williamsOppositeExitBidAskBlocker("UNKNOWN",100.0,101.0,101.1))
     }
 
+    @Test fun activeTc2PolicyUChecksExecutableBidAskAndKeepsPolicyTOutOfProduction() {
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+            williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.25,100.20,100.30))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+            williamsTc2UserPolicyOppositeExitBlocker("SHORT",100.0,99.75,99.70,99.80))
+        assertNull(williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.65,100.60,100.70))
+        assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+            williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.0,101.0,100.0))
+    }
+
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
         val at=480000L*h;val now=at+105*h
         for((direction,type,entry,stop) in listOf(

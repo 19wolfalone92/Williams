@@ -5633,20 +5633,20 @@ internal class NativeFuturesCampaignCoordinator(
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
                         .put("blocker",blocker).put("symbol",symbol)
-                // TC2 ch.12 PDF 153-165: a triggered opposing Wise Man is
-                // an EXIT/REVERSAL even when the old campaign has a loss.
-                // Never turn an engineering profit-only overlay into a
-                // fabricated book veto. Retain all signed owner/quantity,
-                // H1/CONTRACT trigger, reduce-only and STOP safety checks.
-                // Bid/ask must still be sane before any exchange mutation;
-                // a MARK snapshot alone is not an executable quote.
+                // POLICY U is the active production user contract: a valid
+                // opposite signal is not permission to realize a losing campaign.
+                // The 0.35% reserve is an engineering cost approximation, not TC2.
+                // POLICY T is isolated to research and is never used here.
+                // Initial/trailing STOPs, structural exits, manual exits and
+                // emergency reductions do not pass through this discretionary guard.
                 val (bidNow,askNow)=adapterPreflight.bestBidAsk(symbol)
-                val quoteBlocker=williamsTc2OppositeExitQuoteBlocker(
-                    direction.name,markNow,bidNow,askNow)
-                if(quoteBlocker!=null)
+                val entryNow=liveForSymbol.single().first.optString("entryPrice").toDoubleOrNull() ?: Double.NaN
+                val blocker=williamsTc2UserPolicyOppositeExitBlocker(
+                    direction.name,entryNow,markNow,bidNow,askNow)
+                if(blocker!=null)
                     return@synchronized JSONObject().put("ok",false).put("state",state.name)
                         .put("safe_rejection",true).put("mutation_attempted",false)
-                        .put("blocker",quoteBlocker).put("symbol",symbol)
+                        .put("blocker",blocker).put("symbol",symbol)
             }
             if(ntdBookExit) (bookNtdExitVerifier ?: error("NTD_FINAL_EXIT_VERIFIER_REQUIRED"))(
                 JSONObject(managedEntry!!.toString()),reason)

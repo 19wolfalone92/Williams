@@ -129,20 +129,15 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     }
 }
 
-/** NON-BOOK optional profit overlay retained ONLY for the separate
- * NTD/Course research exit implementations. This is not a TC2 rule:
- * TC2 ch.12 PDF 153-165 explicitly exits/reverses on the triggered
- * opposing signal without requiring an old campaign to be profitable.
- *
- * NTD/Course legacy discretionary exits are admitted only
- * while there is a conservative, exchange-confirmed positive mark-to-entry
- * buffer after estimated round-trip fees and slippage. The project uses 0.35%
- * (2 * 0.10% per-side fee reserve + 0.15% execution slippage); it is NOT a
- * statement that Binance can guarantee this fill or book-prescribed fee rate.
- *
- * This gate only affects strategy-initiated OPPOSITE exits. It NEVER disables
- * protective STOP_MARKET, operator risk reduction, or proven emergency exits.
- * There is deliberately no cap on how long a valid campaign may stay protected.
+/** POLICY U engineering guard for the active production user contract.
+ * It implements the user's restriction against realizing a loss solely
+ * because of an opposite Wise-Man signal using a conservative 0.35% cost
+ * reserve: 2 * 0.10% per-side fee reserve + 0.15% execution slippage.
+ * This reserve is an engineering approximation, not a TC2 source rule,
+ * a verified account fee tier, or a fill-price guarantee. It applies only
+ * to discretionary opposite-signal exits; it never gates initial/trailing
+ * STOPs, structural exits, manual exits, or emergency risk reductions.
+ * POLICY T is research-only and is not wired into this production guard.
  */
 internal const val WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER = 0.0035
 
@@ -198,6 +193,18 @@ internal fun williamsTc2OppositeExitQuoteBlocker(
         listOf(freshMark,bid,ask).any { !it.isFinite() || it<=0.0 } ||
         bid>ask) return "TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED"
     return null
+}
+
+/** Active production POLICY U: combine source/quote integrity with the
+ * existing conservative executable-price cost reserve. POLICY T is never
+ * selected by the Android production coordinator.
+ */
+internal fun williamsTc2UserPolicyOppositeExitBlocker(
+    direction:String, entry:Double, mark:Double, bid:Double, ask:Double, tick:Double=0.0
+):String? {
+    val quote=williamsTc2OppositeExitQuoteBlocker(direction,mark,bid,ask)
+    if(quote!=null) return quote
+    return williamsOppositeExitBidAskBlocker(direction,entry,bid,ask,tick)
 }
 
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
