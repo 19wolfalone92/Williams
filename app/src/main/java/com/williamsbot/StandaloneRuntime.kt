@@ -8699,7 +8699,7 @@ private class NativeEngine(
         val maxQuantity = if (marketLotEnabled) min(rules.maxQty, rules.marketMaxQty) else rules.maxQty
         var qty = floorStep(notional / trigger, quantityStep)
         val courseInitial=if(signal.strategyProfile==williamsCourseProfile) {
-            val context=williamsCourseActiveContext(hierarchy,direction.name)
+            val context=hierarchy?.let { williamsCourseActiveContext(it,direction.name) }
             if(context?.optString("phase")!="W1") return rejectDecision(symbol,"COURSE_INITIAL_PARENT_CHILD_DEGREE_UNPROVEN")
             val exact=williamsCourseInitialQuantity(qty,rules.step,rules.marketStep)
             if(exact.optString("status")!="EXACT_COURSE_QUANTITY") return rejectDecision(symbol,exact.getString("reason"))
@@ -8749,7 +8749,7 @@ private class NativeEngine(
                     reentryOwnerId=if(profitReentry(signal)) owned!!.getString("client_id") else ""))
                 if(signal.strategyProfile==williamsCourseProfile) {
                     put("course_exact_quantity",courseInitial)
-                    williamsCourseActiveContext(hierarchy,direction.name)?.let { context ->
+                    hierarchy?.let { williamsCourseActiveContext(it,direction.name) }?.let { context ->
                         put("course_origin_at",context.getLong("origin_at")).put("course_initial_stage",context.getString("phase"))
                         if(!context.isNull("w3_to_w1_ratio")) put("course_w3_to_w1_ratio",context.getDouble("w3_to_w1_ratio"))
                     }

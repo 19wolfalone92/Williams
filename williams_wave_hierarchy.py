@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from math import isfinite
+from numbers import Real
 from typing import Mapping, Sequence
 from williams_complex_waves import detect_complex_wave_patterns
 from williams_wave_subdivisions import enrich_complex_subdivisions, trace_recursive_price_grammar
@@ -32,7 +33,9 @@ def wave_bars_from_dataframe(frame):
         stamp = row.get("open_time_ms", row.get("open_time", index))
         if isinstance(stamp, pd.Timestamp):
             t = int(stamp.timestamp() * 1000)
-        elif isinstance(stamp, (int, float)):
+        elif isinstance(stamp, Real) and not isinstance(stamp, bool):
+            if not isfinite(stamp) or stamp != int(stamp):
+                raise ValueError("Invalid exchange timestamp")
             t = int(stamp)
         else:
             t = int(pd.Timestamp(stamp).timestamp() * 1000)

@@ -196,3 +196,14 @@ def test_unknown_side_rejected():
     with pytest.raises(ValueError, match="LONG or SHORT"):
         evaluate_direction(side="BUY", snapshot=snapshot(), last_indicator={},
                            closed_bar_count=200, htf_confirmed=True)
+
+
+def test_integer_ohlcv_dataframe_preserves_exchange_milliseconds():
+    from williams_wave_hierarchy import wave_bars_from_dataframe
+    timestamp = 1795701600000
+    frame = pd.DataFrame({"open_time_ms":[timestamp, timestamp+3600000],
+                          "open":[100,101],"high":[102,103],"low":[99,100],
+                          "close":[101,102],"volume":[200,300]})
+    assert [b.t for b in wave_bars_from_dataframe(frame)] == [timestamp,timestamp+3600000]
+    frame=frame.astype(float)
+    assert [b.t for b in wave_bars_from_dataframe(frame)] == [timestamp,timestamp+3600000]
