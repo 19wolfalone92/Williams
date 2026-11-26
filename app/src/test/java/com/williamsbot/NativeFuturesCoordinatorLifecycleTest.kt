@@ -2354,7 +2354,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill() {
+    @Test fun confirmedBookOppositeExitDoesNotRealizeLossUnderPolicyUAndKeepsStopProtected() {
         val h=3_600_000L
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             var time=System.currentTimeMillis()-4*h
@@ -2365,16 +2365,15 @@ class NativeFuturesCoordinatorLifecycleTest {
             val clientId=owner.getString("client_id")
             val protectionId=owner.getString("protection_client_id")
             // The mock exchange retains its authenticated open stop until
-            // the reduce-only close is confirmed FLAT.
+            // an independently permitted reduce-only close is confirmed FLAT.
             time+=4*h
             val signalAt=time-2*h
             val observed=time-1_000L
             val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
-            // TC2 p.154/158: no positive-PnL prerequisite. The CLOSED
-            // H1 Wise-Man trigger, not a loss amount, controls the exit.
+            // TC2 permits a valid Stop-and-Reverse in POLICY T; production
+            // remains under POLICY U and must not realize a losing exit.
             val trigger=if(direction.name=="LONG") 110.0 else 90.0
             exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
-            // A price that has NOT crossed the opposite stop is insufficient.
             exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
             val signalId="BOOK:OPPOSITE:"+direction.name
             val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
@@ -2399,8 +2398,6 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("observed_at_ms",observed).put("opposition_check",decision))
             coordinator.saveManagementState("BTCUSDT",clientId,management)
             val postsBefore=exchange.posts("/fapi/v1/order")
-            // No MARKET exit before the *actual CONTRACT* crosses the
-            // opposing H1 stop; preserve the original exchange STOP.
             val notTriggered=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_NOT_TRIGGERED_"+direction.name,reason)
             assertFalse(notTriggered.toString(),notTriggered.optBoolean("ok",false))
@@ -2411,22 +2408,24 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
-            // At this price the original LONG / SHORT is actually LOSING.
-            // Triggered opposite exit must be allowed, but only after all
-            // signed owner, exact quantity and signal checks have succeeded.
+            // The opposite trigger is now current, but the original campaign
+            // is losing. POLICY U must block the market close without touching
+            // the existing exchange STOP or creating an EXIT intent.
             exchange.contract=if(direction.name=="LONG") 99.0 else 101.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_BOOK_AT_LOSS_"+direction.name,reason)
-            assertTrue(result.toString(),result.optBoolean("ok",false))
-            assertEquals(postsBefore+1,exchange.posts("/fapi/v1/order"))
-            assertEquals(0.0,exchange.quantity,0.0)
-            assertFalse(exchange.algos.values.any {
+            assertFalse(result.toString(),result.optBoolean("ok",false))
+            assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+                result.optString("blocker"))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            assertEquals(1.0,exchange.quantity,0.0)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
             assertTrue(coordinator.intentsSnapshot().let { rows->
-                (0 until rows.length()).map { rows.getJSONObject(it) }.any {
-                    it.optString("intent_role")=="EXIT" &&
-                    it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
+                (0 until rows.length()).map { rows.getJSONObject(it) }.none {
+                    it.optString("intent_role")=="EXIT" && it.optString("reason")==reason
                 }
             })
         }
