@@ -1,6 +1,6 @@
 """Williams Bot UTC daily-risk Model B contract and evidence reconstruction."""
 from __future__ import annotations
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
 import hashlib
 
 MODEL_VERSION = 2
@@ -61,17 +61,28 @@ def calculate_daily_risk_model_b(start_equity, current_equity, net_external_flow
         raise DailyRiskDataError("E0 must be positive; percentage risk is undefined")
     if et < 0:
         raise DailyRiskDataError("Et cannot be negative")
+    # Match Kotlin BigDecimal: exact additions/subtractions and limit products;
+    # DECIMAL128 HALF_EVEN only for the displayed divisions.
+    values = (e0, et, cf)
+    exact_precision = max(34, max(v.adjusted() for v in values)
+                          - min(v.as_tuple().exponent for v in values) + 5)
     with localcontext() as ctx:
-        ctx.prec = 34
+        ctx.prec = exact_precision
+        ctx.rounding = ROUND_HALF_EVEN
         pnl = et - e0 - cf
         loss = max(Decimal(0), -pnl)
+        adjusted = et - cf
+        entry_blocked = loss >= e0 * DAILY_ENTRY_LOSS_LIMIT
+        emergency = loss >= e0 * EMERGENCY_BREAKER_LIMIT
+        percent_numerator = loss * Decimal(100)
+        ctx.prec = 34
         return {
             "start_equity": e0, "current_equity": et, "net_external_flows": cf,
             "daily_pnl": pnl, "daily_loss": loss,
-            "loss_fraction": loss / e0, "loss_pct": loss / e0 * Decimal(100),
-            "risk_adjusted_equity": et - cf,
-            "entry_blocked": loss >= e0 * DAILY_ENTRY_LOSS_LIMIT,
-            "emergency_breaker_tripped": loss >= e0 * EMERGENCY_BREAKER_LIMIT,
+            "loss_fraction": loss / e0, "loss_pct": percent_numerator / e0,
+            "risk_adjusted_equity": adjusted,
+            "entry_blocked": entry_blocked,
+            "emergency_breaker_tripped": emergency,
         }
 
 def summarize_income_rows(rows, *, day_start_ms, end_ms,

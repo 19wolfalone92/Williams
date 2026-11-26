@@ -669,10 +669,25 @@ def main():
     }, sort_keys=True), flush=True)
 
     baseline = PortfolioSimulator(**common, collect=True).run()
+    (args.outdir / "baseline_metrics_unqualified.json").write_text(json.dumps(baseline["metrics"], indent=2, default=str) + "\n")
     repeat = PortfolioSimulator(**common, collect=False).run()
     if baseline["digest"] != repeat["digest"]:
         raise AssertionError("identical-input portfolio replay is not reproducible")
     print("PORTFOLIO_REPRODUCIBILITY_PASS " + baseline["digest"], flush=True)
+    bm = baseline["metrics"]
+    fees = math.fsum(float(row["fee"]) for row in baseline["fills"])
+    gross = math.fsum(float(row["gross_pnl"]) for row in baseline["fills"])
+    expected_wallet = args.capital + gross - fees + float(bm["funding_usdt"])
+    ledger_ok = (math.isclose(fees, bm["commission_usdt"], rel_tol=1e-10, abs_tol=1e-8)
+                 and math.isclose(expected_wallet, bm["final_wallet_balance_usdt"], rel_tol=1e-10, abs_tol=1e-8)
+                 and len(baseline["fills"]) == bm["entry_fills"] + bm["add_on_fills"] + bm["closed_campaigns"])
+    ledger = {"status": "PASS" if ledger_ok else "FAIL", "computed_wallet": expected_wallet,
+              "reported_wallet": bm["final_wallet_balance_usdt"], "computed_fees": fees,
+              "reported_fees": bm["commission_usdt"], "fill_count": len(baseline["fills"])}
+    (args.outdir / "ledger_invariants.json").write_text(json.dumps(ledger, indent=2) + "\n")
+    if not ledger_ok:
+        raise AssertionError("portfolio fill ledger invariant failed")
+    (args.outdir / "baseline_metrics.json").write_text(json.dumps(bm, indent=2, default=str) + "\n")
 
     sensitivity = []
     if not args.skip_sensitivity:

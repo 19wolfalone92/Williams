@@ -93,3 +93,49 @@ def test_model_b_daily_limit_and_emergency_boundaries_are_inclusive():
     assert at_3["emergency_breaker_tripped"] is False
     assert at_5["entry_blocked"] is True
     assert at_5["emergency_breaker_tripped"] is True
+
+
+@pytest.mark.parametrize("threshold,above,entry,emergency", [
+    ("97", "97.0000000000000000000000000000000000000001", False, False),
+    ("95", "95.0000000000000000000000000000000000000001", True, False),
+])
+def test_model_b_extreme_precision_does_not_round_into_threshold(threshold, above, entry, emergency):
+    from fractions import Fraction
+    result = calculate_daily_risk_model_b("100", above, "0")
+    assert Fraction(result["daily_loss"]) == Fraction(100) - Fraction(above)
+    assert result["entry_blocked"] is entry
+    assert result["emergency_breaker_tripped"] is emergency
+    at = calculate_daily_risk_model_b("100", threshold, "0")
+    assert at["entry_blocked"]
+    assert at["emergency_breaker_tripped"] is (threshold == "95")
+
+
+def test_portfolio_entry_and_exit_fill_ledger_reconciles_at_expiry_boundary():
+    import numpy as np
+    from campaign_model import SignalSpec, SignalRole, SignalType
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS, M5_MS
+    start = 1730419200000
+    symbol = "BTCUSDT"
+    prices = {"open": np.array([100., 101.]), "high": np.array([102., 102.]),
+              "low": np.array([100., 98.]), "close": np.array([101., 98.])}
+    mark = {"mark_" + k: v for k, v in prices.items()}
+    signal = SignalSpec.new(symbol=symbol, side="BUY", signal_type=SignalType.REVERSAL,
+                            role=SignalRole.ENTRY, timeframe="1h",
+                            signal_bar_time_ms=start-H1_MS, trigger_price=101.,
+                            protective_reference=99., expires_at_ms=start+M5_MS)
+    sim = PortfolioSimulator(symbols=[symbol],
+        data={symbol: {"contract": prices, "mark": mark, "h1_close_rows": {}}},
+        timeline=np.array([start, start+M5_MS]),
+        signals_by_index={symbol: {0: [{"signal": signal, "known_at_ms": start, "context": {}}]}},
+        funding_by_index={symbol: {}},
+        specs={symbol: {"tick": Decimal("0.1"), "step": Decimal("0.001"),
+                        "min_qty": Decimal("0.001"), "max_qty": Decimal("1000"),
+                        "min_notional": Decimal("5"), "leverage": 2}},
+        initial_capital=5000.)
+    result = sim.run()
+    assert [row["purpose"] for row in result["fills"]] == ["INITIAL", "EXIT"]
+    assert result["campaigns"][0]["exit_reason"] == "STOP"
+    assert result["metrics"]["entry_fills"] == 1
+    assert result["metrics"]["closed_campaigns"] == 1
+    assert sum(row["fee"] for row in result["fills"]) == pytest.approx(result["metrics"]["commission_usdt"])
+    assert 5000 + sum(row["gross_pnl"] - row["fee"] for row in result["fills"]) == pytest.approx(result["metrics"]["final_equity_usdt"])

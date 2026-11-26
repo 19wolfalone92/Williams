@@ -868,7 +868,7 @@ class PortfolioSimulator:
 
     def _close_campaign(self, symbol: str, campaign: dict, raw_exit: float,
                         index: int, timestamp_ms: int, reason: str, detail: str):
-        if reason == "STOP" and detail != "INITIAL_STRUCTURAL_STOP":
+        if reason == "STOP" and detail not in ("INITIAL_STRUCTURAL_STOP", "SAME_M5_BAR_AS_INITIAL_FILL"):
             reason = "STRUCTURAL_EXIT"
         exit_mechanism = "STOP_ORDER" if reason in ("STOP", "STRUCTURAL_EXIT") else "MARKET_ORDER"
         fill = exit_fill_price(raw_exit, campaign["side"], self.slippage_rate,
@@ -975,7 +975,7 @@ class PortfolioSimulator:
                           campaign.get("initial_risk_quote", 1.0)) if campaign.get("initial_risk_quote", 0) else None,
             "MFE_usdt": campaign.get("mfe_quote", 0.0),
             "MAE_usdt": campaign.get("mae_quote", 0.0),
-            "entry_angulation_score": context.get("angulation_score", 0.0),
+            "entry_angulation_score": float(getattr(signal, "angulation_score", 0.0) or 0.0),
             "entry_h1_ao": context.get("h1_ao"),
             "entry_h1_ac": context.get("h1_ac"),
             "entry_h1_alligator": _canonical({
@@ -1024,7 +1024,7 @@ class PortfolioSimulator:
         if not pending:
             return
         expires = int(pending.get("expires_at_ms", 0) or 0)
-        if expires and timestamp_ms + M5_MS >= expires:
+        if expires and timestamp_ms - M5_MS >= expires:
             signal = pending["signal"]
             self._signal_status(symbol, signal, pending["known_at_ms"], pending.get("context", {}),
                                 "EXPIRED", "PENDING_ORDER_EXPIRED")
@@ -1096,6 +1096,14 @@ class PortfolioSimulator:
         campaign["pending"] = None
         self._signal_status(symbol, pending["signal"], pending["known_at_ms"],
                             pending.get("context", {}), signal_status)
+        if self.collect:
+            self.fills.append({
+                "time_ms": timestamp_ms, "symbol": symbol, "campaign_id": campaign["campaign_id"],
+                "purpose": pending["kind"], "side": side, "quantity": qty,
+                "price": fill, "fee": fee, "gross_pnl": 0.0, "funding": 0.0,
+                "slippage_quote": slip_quote, "reason": "STOP_ENTRY", "detail": signal_status,
+                "signal_id": str(pending["signal"].signal_id),
+            })
         self._emit(timestamp_ms, "ORDER_FILLED", symbol=symbol, campaign_id=campaign["campaign_id"],
                    purpose=pending["kind"], quantity=qty, price=fill, fee=fee,
                    tranche=campaign["additions"])
@@ -1117,7 +1125,7 @@ class PortfolioSimulator:
         loss_pct = float(model_b["loss_pct"])
         self.daily_min_equity = min(self.daily_min_equity, equity)
         self.daily_max_loss_pct = max(self.daily_max_loss_pct, loss_pct)
-        if model_b["entry_blocked"] and not self.daily_entry_blocked:
+        if model_b["entry_blocked"] and self.current_day not in self.daily_3pct_days:
             self.daily_entry_blocked = True
             self.daily_block_reason = "DAILY_RISK_MODEL_B_3PCT"
             self.daily_3pct_days.add(self.current_day)
