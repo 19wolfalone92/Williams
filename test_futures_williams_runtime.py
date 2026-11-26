@@ -1394,3 +1394,60 @@ def test_python_protection_proof_requires_explicit_exchange_semantics():
     missing_close_position = dict(quantity_stop)
     missing_close_position.pop("closePosition")
     assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, missing_close_position)
+
+
+def test_futures_scanner_does_not_veto_valid_tc2_candidates_on_high_atr(monkeypatch):
+    # Exercise the actual scanner admission path; only data/indicator and
+    # source-formation collaborators are stubbed. No exchange mutations.
+    import futures_williams_runtime as runtime
+    from williams_edition_rules import TC2
+
+    now = 1_800_000_000_000
+    hour = 3_600_000
+    now = now // hour * hour
+    frame = pd.DataFrame({
+        "open_time_ms": [now - (120-i)*hour for i in range(120)],
+        "open": 100.0, "high": 120.0, "low": 80.0,
+        "close": 100.0, "volume": 10.0,
+    })
+    client = SimpleNamespace(exchange_info=lambda _: {
+        "symbols": [{"filters": [{"filterType": "PRICE_FILTER", "tickSize": "0.1"}]}]
+    }, time_offset_ms=0)
+    scanner = FuturesWilliamsScanner(client, interval="1h")
+    monkeypatch.setattr(runtime.time, "time", lambda: now / 1000)
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", TC2)
+    monkeypatch.setenv("ALLOW_LONG", "true")
+    monkeypatch.setenv("ALLOW_SHORT", "true")
+    monkeypatch.setenv("MAX_ATR_PCT", "0.08")
+    monkeypatch.setenv("ATR_PERIOD", "14")
+    monkeypatch.setattr(runtime, "fetch_klines", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(runtime, "calculate_indicators", lambda frame, config: frame)
+    monkeypatch.setattr(scanner.wave_engine, "build_snapshot",
+        lambda *args, **kwargs: SimpleNamespace(point_zero_confirmed=False, point_zero_score=0))
+    monkeypatch.setattr(scanner, "wave_hierarchy", lambda *args, **kwargs: SimpleNamespace(to_dict=lambda: {}))
+    monkeypatch.setattr(scanner, "_spread", lambda _: 0.001)
+    monkeypatch.setattr(scanner, "_htf", lambda _: (False, False))
+    monkeypatch.setattr(runtime, "observe_edition_signals", lambda *args, **kwargs: ([], []))
+    monkeypatch.setattr(runtime, "build_decision_trace", lambda *args, **kwargs: {"books": []})
+    monkeypatch.setattr(runtime, "evaluate_direction", lambda **kwargs:
+        SimpleNamespace(to_dict=lambda: {"score_adjustment": 0.0}))
+    monkeypatch.setattr(runtime, "correction_entry_context", lambda *args, **kwargs: {"allowed": False})
+    def spec(side, kind):
+        return SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=kind,
+            role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=now-hour,
+            trigger_price=120.1 if side=="BUY" else 79.9,
+            protective_reference=79.9 if side=="BUY" else 120.1)
+    long_signals = [spec("BUY", SignalType.REVERSAL)]
+    short_signals = [spec("SELL", SignalType.SUPER_AO)]
+    monkeypatch.setattr(runtime, "extract_long_signal_specs", lambda *args, **kwargs: long_signals)
+    monkeypatch.setattr(runtime, "extract_short_signal_specs", lambda *args, **kwargs: short_signals)
+    candidates = scanner.analyse("BTCUSDT")
+    assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
+    assert {candidate.signal.signal_type for candidate in candidates} == {SignalType.REVERSAL, SignalType.SUPER_AO}
+    assert all(math.isclose(candidate.atr_pct, 0.40) for candidate in candidates)
+    # The legacy environment variable may be absent, tiny or invalid;
+    # it cannot affect this Futures scanner's source-valid signal pool.
+    for value in ("0.00001", "invalid"):
+        monkeypatch.setenv("MAX_ATR_PCT", value)
+        assert [c.signal.signal_id for c in scanner.analyse("BTCUSDT")] == [
+            c.signal.signal_id for c in candidates]

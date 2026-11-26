@@ -511,8 +511,10 @@ class FuturesWilliamsScanner:
         )
         price = float(closed.iloc[-1]["close"] or 0)
         atr_pct = atr / price if price > 0 else 1.0
-        max_atr = float(os.getenv("MAX_ATR_PCT", "0.08"))
-        if atr <= 0 or atr_pct > max_atr:
+        # ATR percentage is diagnostic: no source-defined TC2 volatility cutoff.
+        # Keep malformed/nonpositive data rejected; the structural signal,
+        # protective stop, financial risk and exchange gates remain authoritative.
+        if not math.isfinite(atr) or atr <= 0 or not math.isfinite(price) or price <= 0:
             return []
 
         # STOP_MARKET is armed now but executes on a FUTURE contract-price
