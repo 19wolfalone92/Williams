@@ -2418,7 +2418,8 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
                 result.optString("blocker"))
             assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
-            assertEquals(1.0,exchange.quantity,0.0)
+            val expectedSignedQuantity=if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) 1.0 else -1.0
+            assertEquals(expectedSignedQuantity,exchange.quantity,0.0)
             assertEquals("OPEN_PROTECTED",coordinator.state.name)
             assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
