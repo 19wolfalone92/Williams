@@ -99,6 +99,42 @@ def stop_fill_raw(side: str, contract_open: float, contract_high: float,
     return contract_open if mark_open >= stop else max(contract_high, contract_close)
 
 
+def pending_initial_path(side: str, trigger: float, invalidation: float,
+                         open_price: float, high: float, low: float,
+                         *, policy: str = "ENTRY_FIRST") -> str:
+    """A bounded causal OHLC scenario, not a reconstruction of actual trades.
+
+    Opening gaps establish the first observable event. If both levels are
+    subsequently touched, either order is possible. The conservative scenario
+    retains the potential fill; the alternative cancels first. Cancellation at
+    an observed opening invalidation assumes an immediately effective cancel.
+    """
+    if side not in ("BUY", "SELL") or policy not in ("ENTRY_FIRST", "INVALIDATION_FIRST"):
+        raise ValueError("invalid entry path side/policy")
+    if not all(math.isfinite(x) and x > 0 for x in (trigger, invalidation, open_price, high, low)):
+        raise ValueError("invalid entry path prices")
+    if not low <= open_price <= high or (side == "BUY" and invalidation >= trigger) or (
+            side == "SELL" and invalidation <= trigger):
+        raise ValueError("invalid entry path geometry")
+    if side == "BUY":
+        at_entry, at_invalid = open_price >= trigger, open_price <= invalidation
+        hit, invalid = high >= trigger, low <= invalidation
+    else:
+        at_entry, at_invalid = open_price <= trigger, open_price >= invalidation
+        hit, invalid = low <= trigger, high >= invalidation
+    if at_entry:
+        return "FILL_AT_OPEN"
+    if at_invalid:
+        return "INVALIDATE_AT_OPEN"
+    if hit and invalid:
+        return "AMBIGUOUS_FILL_FIRST" if policy == "ENTRY_FIRST" else "AMBIGUOUS_INVALIDATE_FIRST"
+    if hit:
+        return "FILL"
+    if invalid:
+        return "INVALIDATE"
+    return "WAIT"
+
+
 def active_campaign_slot_count(opened_symbols, pending_initial_symbols) -> int:
     """A pending initial order reserves one slot; a pending add-on does not."""
     return len({str(x).strip().upper() for x in opened_symbols if str(x).strip()} |
@@ -173,6 +209,7 @@ class PortfolioSimulator:
         slippage_rate: float = 0.0005,
         trail_bars: int = 5,
         collect: bool = True,
+        intrabar_policy: str = "ENTRY_FIRST",
     ):
         if trail_bars not in (3, 4, 5):
             raise ValueError("TC2 trail window must be 3, 4 or 5 closed H1 bars")
@@ -190,6 +227,12 @@ class PortfolioSimulator:
         self.slippage_rate = float(slippage_rate)
         self.trail_bars = int(trail_bars)
         self.collect = bool(collect)
+        if intrabar_policy not in ("ENTRY_FIRST", "INVALIDATION_FIRST"):
+            raise ValueError("unknown intrabar policy")
+        self.intrabar_policy = intrabar_policy
+        self.ambiguous_initial_count = 0
+        self.emergency_exit_count = 0
+        self.terminal_entry_signals = set()
 
         self.active: dict[str, dict] = {}
         self.closed: list[dict] = []
@@ -261,6 +304,8 @@ class PortfolioSimulator:
         if key not in self.signal_records:
             self.signal_records[key] = _signal_record(symbol, signal, known_at_ms, context)
         row = self.signal_records[key]
+        if status in ("FILLED_INITIAL", "FILLED_ADD_ON", "INVALIDATED", "EXPIRED", "REPLACED"):
+            self.terminal_entry_signals.add(key)
         row["decision_status"] = status
         row["block_reason"] = reason
         self.digest.update((_canonical({"signal": key, "status": status, "reason": reason}) + "\n").encode())
@@ -419,7 +464,10 @@ class PortfolioSimulator:
             return
         current = float(self.data[symbol]["contract"]["open"][index])
         if (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
-            self._signal_status(symbol, signal, known_at, context, "BLOCKED", "TRIGGER_ALREADY_CROSSED_NO_MARKET_CHASE")
+            self._signal_status(symbol, signal, known_at, context, "INVALIDATED", "TRIGGER_ALREADY_CROSSED_NO_MARKET_CHASE")
+            return
+        if (signal.side == "BUY" and current <= stop) or (signal.side == "SELL" and current >= stop):
+            self._signal_status(symbol, signal, known_at, context, "INVALIDATED", "STRUCTURAL_INVALIDATION_AT_ARM")
             return
         equity = self._equity(index, "mark_open")
         risk_pct = initial_unit_risk_pct(INITIAL_ENTRY_RISK_CAP_PCT,
@@ -499,13 +547,19 @@ class PortfolioSimulator:
         old = campaign["pending"]["signal"]
         new = item["signal"]
         tick = float(self.specs[campaign["symbol"]]["tick"])
-        if not CampaignEngine.should_replace_pending(old, new, tick_size=tick):
-            self._signal_status(campaign["symbol"], new, item["known_at_ms"], item.get("context", {}),
-                                "IGNORED", "PENDING_SIGNAL_NOT_REPLACED")
+        old_time = int(old.signal_bar_time_ms)
+        old_pivot = old_time - 2 * H1_MS if _signal_type(old) == SignalType.FRACTAL.value else old_time
+        new_time = int(new.signal_bar_time_ms)
+        new_pivot = new_time - 2 * H1_MS
+        closer = (new.trigger_price < old.trigger_price - tick / 2 if old.side == "BUY"
+                  else new.trigger_price > old.trigger_price + tick / 2)
+        if not (_signal_type(new) == SignalType.FRACTAL.value and old.side == new.side
+                and new_time > old_time and new_pivot > old_pivot
+                and new_time + H1_MS <= int(item["known_at_ms"]) and closer):
             return
         old_item = campaign["pending"]
         self._signal_status(campaign["symbol"], old, old_item["known_at_ms"], old_item.get("context", {}),
-                            "REPLACED", "NEWER_VALID_WISE_MAN")
+                            "REPLACED", "NEWER_CONFIRMED_TC2_FRACTAL")
         self.replaced_count += 1
         del self.active[campaign["symbol"]]
         self._emit(item["known_at_ms"], "PENDING_INITIAL_REPLACED", symbol=campaign["symbol"],
@@ -612,17 +666,21 @@ class PortfolioSimulator:
             if key not in self.signal_records:
                 self._signal_status(symbol, item["signal"], item["known_at_ms"],
                                     item.get("context", {}), "OBSERVED")
+        # Re-emission of a consumed, expired or structurally invalidated
+        # formation must not start a second campaign with that same identity.
+        items = [x for x in items
+                 if (symbol, str(x["signal"].signal_id)) not in self.terminal_entry_signals]
         campaign = self.active.get(symbol)
         if campaign and campaign["status"] == "PENDING_INITIAL":
             candidates = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value
                           and x["signal"].strategy_profile == TC2]
-            if len({x["signal"].side for x in candidates}) > 1:
-                for item in candidates:
-                    self._signal_status(symbol, item["signal"], item["known_at_ms"], item.get("context", {}),
-                                        "BLOCKED", "OPPOSING_ENTRIES_BEFORE_CONTEXT")
-                return
+            # An opposite setup cannot veto an already resting same-owner
+            # entry. The native coordinator only re-anchors to a newer closer
+            # same-side WM3; it does not replace the order with arbitrary WM1/2.
+            candidates = [x for x in candidates if x["signal"].side == campaign["side"]
+                          and _signal_type(x["signal"]) == SignalType.FRACTAL.value]
             if candidates:
-                self._replace_pending_initial(campaign, candidates[0], index)
+                self._replace_pending_initial(campaign, candidates[-1], index)
             return
         if campaign and campaign["status"] == "OPEN":
             if not campaign.get("pending"):
@@ -637,13 +695,20 @@ class PortfolioSimulator:
             return
         entries = [x for x in items if _signal_role(x["signal"]) == SignalRole.ENTRY.value
                    and x["signal"].strategy_profile == TC2]
-        if len({x["signal"].side for x in entries}) > 1:
-            for item in entries:
-                self._signal_status(symbol, item["signal"], item["known_at_ms"], item.get("context", {}),
-                                    "BLOCKED", "OPPOSING_ENTRIES_BEFORE_CONTEXT")
-            return
         if entries:
-            self._arm_initial(symbol, entries[0], index)
+            # Android orders by signal time BEFORE context/heuristic ties.
+            # Only a truly simultaneous opposite tie is unresolved here;
+            # never veto an older independent Wise Man merely because a
+            # newer opposite level also remains pending. Full Android
+            # secondary ranking and congestion parity are still unqualified.
+            earliest = int(entries[0]["signal"].signal_bar_time_ms)
+            tied = [x for x in entries if int(x["signal"].signal_bar_time_ms) == earliest]
+            if len({x["signal"].side for x in tied}) > 1:
+                for item in tied:
+                    self._signal_status(symbol, item["signal"], item["known_at_ms"], item.get("context", {}),
+                                        "BLOCKED", "SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED")
+                return
+            self._arm_initial(symbol, tied[0], index)
         else:
             for item in items:
                 if item["signal"].strategy_profile != TC2:
@@ -800,38 +865,13 @@ class PortfolioSimulator:
             current = float(self.data[symbol]["contract"]["open"][index])
             if self._check_opposition(symbol, campaign, index, timestamp_ms, bars):
                 return
-            if self.trail_bars == 4:
-                proposal = plan_williams_stop(
-                    campaign["side"], campaign["stop"], campaign["avg_entry"],
-                    campaign["initial_stop"], current, float(self.specs[symbol]["tick"]),
-                    int(campaign["entry_time_ms"]), bars, window=None,
-                    fee_allowance=RISK_COST_ALLOWANCE,
-                )
-                if len(bars) >= 4 and bars[-1].t + H1_MS > int(campaign["entry_time_ms"]):
-                    long_side = campaign["side"] == "BUY"
-                    extreme = min(x.l for x in bars[-4:]) if long_side else max(x.h for x in bars[-4:])
-                    four_stop = tc2_exact_structural_stop(campaign["side"], extreme,
-                                                          float(self.specs[symbol]["tick"]))
-                    gap = max(2 * float(self.specs[symbol]["tick"]), current * 0.00025)
-                    safe = (four_stop is not None and
-                            ((four_stop > campaign["stop"] + float(self.specs[symbol]["tick"]) * 0.5
-                              and four_stop + gap < current) if long_side else
-                             (four_stop < campaign["stop"] - float(self.specs[symbol]["tick"]) * 0.5
-                              and four_stop - gap > current)))
-                    if safe:
-                        candidate = {"stop": four_stop, "reason": "ENGINEERING_LAST_4_CLOSED_BARS_NON_TC2"}
-                        if proposal is None:
-                            proposal = candidate
-                        elif (candidate["stop"] > proposal["stop"] if long_side
-                              else candidate["stop"] < proposal["stop"]):
-                            proposal = candidate
-            else:
-                proposal = plan_williams_stop(
-                    campaign["side"], campaign["stop"], campaign["avg_entry"],
-                    campaign["initial_stop"], current, float(self.specs[symbol]["tick"]),
-                    int(campaign["entry_time_ms"]), bars, window=self.trail_bars,
-                    fee_allowance=RISK_COST_ALLOWANCE,
-                )
+            mark = float(self.data[symbol]["mark"]["mark_open"][index])
+            proposal = plan_williams_stop(
+                campaign["side"], campaign["stop"], campaign["avg_entry"],
+                campaign["initial_stop"], mark, float(self.specs[symbol]["tick"]),
+                int(campaign["entry_time_ms"]), bars, window=self.trail_bars,
+                fee_allowance=RISK_COST_ALLOWANCE,
+            )
         except Exception as exc:
             self._emit(timestamp_ms, "TRAIL_ANALYSIS_UNAVAILABLE", symbol=symbol,
                        campaign_id=campaign["campaign_id"], error=type(exc).__name__)
@@ -901,6 +941,8 @@ class PortfolioSimulator:
             self.structural_exit_count += 1
         elif reason == "OPPOSITE_SIGNAL":
             self.opposite_exit_count += 1
+        elif reason == "EMERGENCY_BREAKER":
+            self.emergency_exit_count += 1
         summary = self._campaign_output(campaign)
         self.completed_summaries.append(summary)
         self.digest.update((_canonical(summary) + "\\n").encode())
@@ -1041,24 +1083,24 @@ class PortfolioSimulator:
         side = campaign["side"]
         hit = (contract["high"][index] >= trigger if side == "BUY"
                else contract["low"][index] <= trigger)
+        path = None
         if pending["kind"] == "INITIAL":
-            invalidation = float(pending["stop"])
-            invalid = (contract["low"][index] <= invalidation if side == "BUY"
-                       else contract["high"][index] >= invalidation)
-            if invalid and hit:
-                signal = pending["signal"]
-                self._signal_status(symbol, signal, pending["known_at_ms"], pending.get("context", {}),
-                                    "AMBIGUOUS", "ENTRY_TRIGGER_AND_INVALIDATION_SAME_M5_BAR")
-                del self.active[symbol]
-                self._emit(timestamp_ms, "PENDING_ENTRY_AMBIGUOUS_CANCELLED", symbol=symbol,
-                           campaign_id=campaign["campaign_id"])
-                return
-            if invalid:
-                signal = pending["signal"]
-                self._signal_status(symbol, signal, pending["known_at_ms"], pending.get("context", {}),
-                                    "INVALIDATED", "STRUCTURAL_INVALIDATION_BEFORE_ENTRY")
+            path = pending_initial_path(side, trigger, float(pending["stop"]),
+                                        float(contract["open"][index]), float(contract["high"][index]),
+                                        float(contract["low"][index]), policy=self.intrabar_policy)
+            if path.startswith("AMBIGUOUS_"):
+                self.ambiguous_initial_count += 1
+                self._emit(timestamp_ms, "PENDING_ENTRY_INTRABAR_SCENARIO", symbol=symbol,
+                           campaign_id=campaign["campaign_id"], scenario=path,
+                           trigger=trigger, stop=float(pending["stop"]))
+            if path in ("INVALIDATE", "INVALIDATE_AT_OPEN", "AMBIGUOUS_INVALIDATE_FIRST"):
+                self._signal_status(symbol, pending["signal"], pending["known_at_ms"], pending.get("context", {}),
+                                    "INVALIDATED", path)
+                self._emit(timestamp_ms, "PENDING_ENTRY_INVALIDATED", symbol=symbol,
+                           campaign_id=campaign["campaign_id"], reason=path)
                 del self.active[symbol]
                 return
+            hit = path in ("FILL", "FILL_AT_OPEN", "AMBIGUOUS_FILL_FIRST")
         if not hit:
             return
         raw = (max(float(contract["open"][index]), trigger) if side == "BUY"
@@ -1111,11 +1153,47 @@ class PortfolioSimulator:
             mark = self.data[symbol]["mark"]
             if stop_triggered(side, campaign["stop"], mark["mark_open"][index],
                               mark["mark_high"][index], mark["mark_low"][index]):
-                raw_exit = stop_fill_raw(side, contract["open"][index], contract["high"][index],
-                                         contract["low"][index], contract["close"][index],
-                                         mark["mark_open"][index], campaign["stop"])
+                # For an entry not filled at the opening print, do not use
+                # that pre-entry print as a later exit price. In the adverse
+                # scenario a touched Mark stop is ordered AFTER the fill;
+                # the adverse contract extreme is a possible, not proven,
+                # execution. The alternative only exits if the opening
+                # entry or the closing Mark proves the temporal ordering.
+                close_crossed = (mark["mark_close"][index] <= campaign["stop"] if side == "BUY"
+                                 else mark["mark_close"][index] >= campaign["stop"])
+                self._emit(timestamp_ms, "INITIAL_FILL_AND_MARK_STOP_SAME_M5",
+                           symbol=symbol, campaign_id=campaign["campaign_id"],
+                           scenario=self.intrabar_policy, opening_fill=path == "FILL_AT_OPEN",
+                           mark_close_crossed=bool(close_crossed))
+                if self.intrabar_policy == "INVALIDATION_FIRST" and path != "FILL_AT_OPEN" and not close_crossed:
+                    return
+                if path == "FILL_AT_OPEN":
+                    raw_exit = stop_fill_raw(side, contract["open"][index], contract["high"][index],
+                                             contract["low"][index], contract["close"][index],
+                                             mark["mark_open"][index], campaign["stop"])
+                else:
+                    raw_exit = (min(contract["low"][index], contract["close"][index]) if side == "BUY"
+                                else max(contract["high"][index], contract["close"][index]))
                 self._close_campaign(symbol, campaign, raw_exit, index, timestamp_ms,
                                      "STOP", "SAME_M5_BAR_AS_INITIAL_FILL")
+
+    def _execute_emergency_exits(self, index: int, timestamp_ms: int):
+        if not self.emergency_latched:
+            return
+        # The research account contains only simulator-owned positions.
+        # Unknown/invalid prices leave the position and its STOP under
+        # supervision rather than asserting flatness.
+        for symbol in self.symbols:
+            campaign = self.active.get(symbol)
+            if not campaign or campaign["status"] != "OPEN":
+                continue
+            raw = float(self.data[symbol]["contract"]["open"][index])
+            if not math.isfinite(raw) or raw <= 0:
+                self._emit(timestamp_ms, "EMERGENCY_EXIT_PRICE_UNAVAILABLE",
+                           symbol=symbol, campaign_id=campaign["campaign_id"])
+                continue
+            self._close_campaign(symbol, campaign, raw, index, timestamp_ms,
+                                 "EMERGENCY_BREAKER", "KILL_SWITCH_NEXT_OBSERVED_OPEN_ASSUMPTION")
 
     def _record_equity(self, index: int, timestamp_ms: int):
         equity = self._equity(index, "mark_close")
@@ -1140,9 +1218,10 @@ class PortfolioSimulator:
             self.daily_5pct_days.add(self.current_day)
             self._risk_event(timestamp_ms, self.daily_block_reason,
                              baseline=self.daily_start_equity, equity=equity, loss_pct=loss_pct)
-            # The Python shadow runtime latches and blocks new exposure. The
-            # Android owner performs exchange-side flattening; no fabricated
-            # Android liquidation is inserted into this Python replay.
+            # Latch and cancel now; market exits are modeled at the next
+            # observed bar open, never an earlier price in this closed bar.
+            # No liquidity, partial-fill, transport or signed-flat proof is
+            # implied by a simulated market exit.
             self._cancel_pending_exposure(timestamp_ms, "EMERGENCY_BREAKER_NEW_EXPOSURE_PAUSED")
         self.peak_equity = max(self.peak_equity, equity)
         drawdown = (equity / self.peak_equity - 1.0) if self.peak_equity > 0 else 0.0
@@ -1204,6 +1283,7 @@ class PortfolioSimulator:
             timestamp_ms = int(self.timeline[index])
             self._new_day(index, timestamp_ms)
             self._apply_funding(index, timestamp_ms)
+            self._execute_emergency_exits(index, timestamp_ms)
             # Live process() manages confirmed protection before scanner admission.
             for symbol in self.symbols:
                 if timestamp_ms % H1_MS == 0:
@@ -1275,6 +1355,9 @@ class PortfolioSimulator:
             "stop_exits": self.stop_count,
             "structural_stop_exits": self.structural_exit_count,
             "opposite_signal_exits": self.opposite_exit_count,
+            "emergency_exits": self.emergency_exit_count,
+            "ambiguous_initial_cases": self.ambiguous_initial_count,
+            "intrabar_scenario": self.intrabar_policy,
             "expired_pending_signals": self.expired_count,
             "replaced_pending_signals": self.replaced_count,
             "blocked_signal_decisions": self.blocked_count,
@@ -1306,7 +1389,8 @@ class PortfolioSimulator:
                 "entry_trigger_basis": "CONTRACT_PRICE_M5_OHLC",
                 "protective_stop_trigger_basis": "MARK_PRICE_M5_OHLC",
                 "stop_fill": "WORST_OBSERVED_CONTRACT_OHLC_WITH_ADVERSE_SLIPPAGE",
-                "intrabar_ambiguity": "CONSERVATIVE_CANCEL_FOR_PENDING_ENTRY_TRIGGER_AND_INVALIDATION_SAME_BAR",
+                "intrabar_ambiguity": self.intrabar_policy + "_CAUSAL_OHLC_SCENARIO_NOT_TRADE_SEQUENCE",
+                "emergency_breaker": "LATCH_CANCEL_THEN_MARKET_EXIT_AT_NEXT_OBSERVED_OPEN_FULL_FILL_ASSUMPTION",
                 "funding": "ARCHIVED_BINANCE_FUNDING_RATE_AT_MARK_PRICE",
                 "partial_fills": "NOT_RECONSTRUCTABLE_FROM_OHLC; NOT SIMULATED",
                 "historical_contract_filters": "CURRENT_EXCHANGE_INFO_PROXY_ONLY",

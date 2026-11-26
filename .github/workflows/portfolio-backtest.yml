@@ -8,6 +8,7 @@ on:
       - 'research/williams_portfolio_engine.py'
       - 'research/run_williams_portfolio_backtest.py'
       - 'tests/test_williams_portfolio_engine.py'
+      - 'williams_exit_policy.py'
       - '.github/workflows/portfolio-backtest.yml'
 
 permissions:
@@ -16,7 +17,7 @@ permissions:
 
 concurrency:
   group: williams-portfolio-backtest-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   unified-portfolio-backtest:

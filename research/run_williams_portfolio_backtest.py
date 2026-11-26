@@ -693,8 +693,8 @@ def main():
     if not args.skip_sensitivity:
         variants = (
             ("TC2_TRAIL_3", 3, 0.0005, 0.0005, args.capital),
-            ("FOUR_BAR_ENGINEERING_NON_TC2", 4, 0.0005, 0.0005, args.capital),
-            ("COST_STRESS_2X", 5, 0.0006, 0.0010, args.capital),
+            ("TC2_TRAIL_4", 4, 0.0005, 0.0005, args.capital),
+            ("COST_STRESS_2X", 5, 0.0010, 0.0010, args.capital),
             ("CAPITAL_SCALE_1000", 5, 0.0005, 0.0005, 1000.0),
             ("CAPITAL_SCALE_10000", 5, 0.0005, 0.0005, 10000.0),
         )
@@ -707,6 +707,12 @@ def main():
                                 **result["metrics"]})
             print(f"SENSITIVITY {name}: net={result['metrics']['total_net_pnl_usdt']:.6f} "
                   f"PF={result['metrics']['profit_factor_net']} DD={result['metrics']['maximum_drawdown_pct']:.4f}%", flush=True)
+
+        alternative = PortfolioSimulator(**common, collect=False,
+                                         intrabar_policy="INVALIDATION_FIRST").run()
+        sensitivity.append({"scenario": "INTRABAR_INVALIDATION_FIRST",
+                            "research_initial_capital_usdt": args.capital,
+                            **alternative["metrics"]})
 
     campaigns = pd.DataFrame(baseline["campaigns"])
     equity = pd.DataFrame(baseline["equity_curve"])
@@ -731,8 +737,8 @@ def main():
         path = args.outdir / name
         if name == "events.jsonl":
             with path.open("w") as handle:
-                for row in frame.to_dict("records"):
-                    handle.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+                for row in baseline["events"]:
+                    handle.write(json.dumps(row, sort_keys=True, default=str, allow_nan=False) + "\n")
         else:
             frame.to_csv(path, index=False)
 
@@ -813,7 +819,8 @@ def main():
             "liquidation": "historical leverage brackets unavailable; 2x production default and shared 50% margin cap used",
             "historical_tick_step_min_notional": "not available; current exchangeInfo used only as a documented proxy",
             "opposite_signal_exit": "causal H1 signal trigger monitored on M5 OHLC; profit-after-cost gate applied; conservative OHLC ambiguity handling",
-            "emergency_breaker": "5% Model B latch blocks/cancels new exposure; existing positions remain under STOP; Android-side emergency flatten not represented",
+            "emergency_breaker": "5% observed Model B latch; cancel pending exposure and model owned-position market exits at next observed contract open with adverse slippage. Full-fill assumption; not signed Android/Demo parity.",
+            "intrabar_ordering": "Entry-first adverse causal OHLC scenario; separate invalidation-first sensitivity; no proven intrabar order.",
         },
         "model_b": {
             "daily_entry_loss_limit_pct": 3.0,
@@ -829,7 +836,7 @@ def main():
             "new_campaign_source": "TC2 only",
             "first_entry": "earliest valid WM1/WM2/WM3 signal",
             "pyramiding": "TC2 1:5:4:3:2 exact quantities; risk/margin may veto, never resize",
-            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; re-evaluated every M5 interval; 3-bar source-policy and 4-bar non-TC2 engineering sensitivities included",
+            "trailing": "production plan_williams_stop, baseline 5 closed H1 bars; re-evaluated every M5 interval; 3- and 4-bar source-permitted fixed-window sensitivities included; Android adaptive review not yet qualified",
             "M15_confirmation": False,
             "D1_H4_directional_gate": False,
             "lookahead_control": "production extract_causal_h1_signals closed-prefix replay; M5 event after H1 close",
@@ -843,6 +850,8 @@ def main():
             "5m Mark Price open is a proxy for exact UTC-midnight 1m Mark Price.",
             "Wave phase is not independently classified; no expert-labelled wave accuracy is claimed.",
             "The four-book evidence audit and non-TC2 observational replay remain separate qualification tasks.",
+            "Simultaneous opposite-entry ranking and Android congestion/adaptive trailing are not equivalent; open-position STOP/add-on ordering and historical filters remain incomplete.",
+            "Original baseline: run 45765529696 artifact 15100659656 SHA256 671c81710fbcf1923efbad0fda4d82400a8061bbb884063570534f61d13eb286.",
             "Research backtest is not Demo E2E and does not authorize real funds.",
         ],
         "elapsed_seconds": round(time.time() - started, 3),

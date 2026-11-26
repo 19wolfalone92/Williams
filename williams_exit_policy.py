@@ -55,7 +55,7 @@ def tc2_exact_structural_stop(side, source_extreme, tick):
 
 def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_at, bars,
                        *, window=5, fee_allowance=.0035, break_even=True):
-    """TC2 PDF158/163/165: verified 3/5-bar and confirmed fractal stops only.
+    """TC2 PDF158/163/165: verified 3/4/5-bar and confirmed fractal stops only.
 
     window=None selects only the confirmed-fractal component of this policy.
     Legacy keyword arguments remain accepted, but *never* authorize automatic
@@ -66,7 +66,7 @@ def plan_williams_stop(side, old_stop, entry, initial_stop, mark, tick, opened_a
     long = side in {"LONG", "BUY"}
     if not all(isfinite(v) and v > 0 for v in (old_stop, mark, tick)):
         return None
-    if window not in (None, 3, 5) or not isfinite(fee_allowance) or fee_allowance < 0:
+    if window not in (None, 3, 4, 5) or not isfinite(fee_allowance) or fee_allowance < 0:
         return None
     if any(not all(isfinite(v) and v > 0 for v in (b.h, b.l)) or b.h < b.l for b in bars):
         return None
