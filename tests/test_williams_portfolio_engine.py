@@ -369,3 +369,64 @@ def test_causal_initial_fill_excludes_unproven_pre_entry_extrema(side):
     assert row["MFE_upper_usdt"] > 0.
     assert 0. < row["MAE_usdt"] < row["MAE_upper_usdt"]
     assert row["excursion_ambiguous_intervals"] == 1
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+@pytest.mark.parametrize("case", ["SUCCESS", "INVALID_NEW", "EXPIRED_OLD", "OLD_TRIGGER_AT_OPEN", "DAILY_BLOCK", "FILTER_REJECT"])
+def test_causal_pending_reanchor_is_confirmed_only_after_new_arm(side, case):
+    import numpy as np
+    from campaign_model import SignalSpec, SignalRole, SignalType
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS
+    start = 1730419200000
+    now = start + H1_MS
+    symbol = "BTCUSDT"
+    long = side == "BUY"
+    old_trigger, old_stop = (110., 90.) if long else (90., 110.)
+    new_trigger = 105. if long else 95.
+    new_stop = (101. if long else 99.) if case in ("INVALID_NEW", "EXPIRED_OLD") else (95. if long else 105.)
+    opening = (111. if long else 89.) if case == "OLD_TRIGGER_AT_OPEN" else 100.
+    prices = {k: np.array([100., opening]) for k in ("open", "high", "low", "close")}
+    old = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=start-3*H1_MS,
+        trigger_price=old_trigger, protective_reference=old_stop,
+        expires_at_ms=now if case == "EXPIRED_OLD" else now+H1_MS)
+    new = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=start,
+        trigger_price=new_trigger, protective_reference=new_stop)
+    sim = PortfolioSimulator(symbols=[symbol], data={symbol: {"contract": prices,
+        "mark": {"mark_"+k: v for k,v in prices.items()}, "h1_close_rows": {}}},
+        timeline=np.array([start, now]), signals_by_index={symbol: {}}, funding_by_index={symbol: {}},
+        specs={symbol: {"tick": Decimal("0.1"), "step": Decimal("0.001"),
+                       "min_qty": Decimal("0.001"), "max_qty": Decimal("1000"),
+                       "min_notional": Decimal("5"), "leverage": 2}}, initial_capital=5000.)
+    sim._new_day(0, start)
+    sim._arm_initial(symbol, {"signal": old, "known_at_ms": start, "context": {}}, 0)
+    original = sim.active[symbol]
+    original_risk = sim._reserved_risk()
+    if case == "DAILY_BLOCK":
+        sim.daily_entry_blocked = True
+        sim.daily_block_reason = "TEST_DAILY_BLOCK"
+    if case == "FILTER_REJECT":
+        sim.specs[symbol]["min_notional"] = Decimal("100000")
+    sim._replace_pending_initial(original, {"signal": new, "known_at_ms": now, "context": {}}, 1)
+    names = [e["event"] for e in sim.events]
+    if case == "SUCCESS":
+        assert sim.active[symbol]["pending"]["signal"].signal_id == new.signal_id
+        assert sim.signal_records[(symbol, old.signal_id)]["decision_status"] == "REPLACED"
+        assert sim.replaced_count == 1
+        assert names.index("PENDING_INITIAL_REPLACEMENT_REQUESTED") < len(names)-1
+        assert names[-2:] == ["INITIAL_STOP_ORDER_ARMED", "PENDING_INITIAL_REPLACED"]
+    elif case in ("INVALID_NEW", "FILTER_REJECT", "OLD_TRIGGER_AT_OPEN"):
+        assert sim.active[symbol] is original
+        assert sim._reserved_risk() == original_risk
+        assert sim.signal_records[(symbol, old.signal_id)]["decision_status"] == "PENDING_INITIAL"
+        assert (symbol, old.signal_id) not in sim.terminal_entry_signals
+        assert sim.replaced_count == 0
+        assert names[-1] == ("PENDING_INITIAL_REPLACEMENT_DEFERRED_OLD_TRIGGER_AT_OPEN"
+                            if case == "OLD_TRIGGER_AT_OPEN" else "PENDING_INITIAL_REPLACEMENT_REJECTED")
+    else:
+        assert symbol not in sim.active
+        assert sim._reserved_risk() == 0.
+        assert sim.replaced_count == 0
+        assert sim.signal_records[(symbol, old.signal_id)]["decision_status"] == (
+            "EXPIRED" if case == "EXPIRED_OLD" else "CANCELLED")
+    assert len(sim.active) <= 1
