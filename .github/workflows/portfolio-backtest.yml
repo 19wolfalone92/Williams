@@ -58,12 +58,12 @@ jobs:
             --data-root data \
             --outdir build/portfolio-backtest \
             --capital 5000 \
-            --smoke-days 30
+            --smoke-days 30 --opposite-policy DUAL --skip-sensitivity
       - name: Upload complete portfolio evidence bundle
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: williams-bot-portfolio-backtest-2y
+          name: williams-bot-diagnostic-dual-U-T
           path: build/portfolio-backtest/
           if-no-files-found: warn
           retention-days: 30

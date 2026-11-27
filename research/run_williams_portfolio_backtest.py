@@ -633,6 +633,7 @@ def main():
                         help="research-only unified wallet balance in USDT; not the user's account balance")
     parser.add_argument("--smoke-days", type=int, default=30)
     parser.add_argument("--skip-sensitivity", action="store_true")
+    parser.add_argument("--opposite-policy", choices=("U", "T", "DUAL"), default="U")
     args = parser.parse_args()
 
     started = time.time()
@@ -648,7 +649,31 @@ def main():
     cfg = canonical_indicator_config_from_env()
     prepared = _load_data(args.data_root, manifest, specs, cfg, warmup_rows)
 
+    if args.opposite_policy == "DUAL":
+        parent = args.outdir
+        results = {}
+        for policy in ("U", "T"):
+            child = argparse.Namespace(**vars(args))
+            child.opposite_policy = policy
+            child.outdir = parent / ("policy_" + policy)
+            child.outdir.mkdir(parents=True, exist_ok=True)
+            for name in ("archive_validation.json", "warmup_manifest.json", "exchange_info_snapshot.json"):
+                (child.outdir / name).write_bytes((parent / name).read_bytes())
+            results[policy] = run_policy(child, prepared, specs, manifest_sha, archive_report,
+                                         warmup_rows, exchange_info_sha, cfg, started)
+        (parent / "diagnostic_U_T_comparison.json").write_text(json.dumps({
+            "status": "DIAGNOSTIC_NOT_FINAL_C", "policies": results,
+            "same_prepared_data_and_exchange_snapshot": True,
+        }, indent=2, default=str, allow_nan=False) + "\n")
+        return
+    run_policy(args, prepared, specs, manifest_sha, archive_report,
+               warmup_rows, exchange_info_sha, cfg, started)
+
+
+def run_policy(args, prepared, specs, manifest_sha, archive_report,
+               warmup_rows, exchange_info_sha, cfg, started):
     common = {
+        "opposite_policy": args.opposite_policy,
         "symbols": list(DEFAULT_FUTURES_SYMBOLS), "data": prepared["data"],
         "timeline": prepared["timeline"], "signals_by_index": prepared["signals_by_index"],
         "funding_by_index": prepared["funding_by_index"], "specs": specs,
@@ -818,7 +843,12 @@ def main():
             "partial_fills": "not simulated; no tick/order-book depth in archive",
             "liquidation": "historical leverage brackets unavailable; 2x production default and shared 50% margin cap used",
             "historical_tick_step_min_notional": "not available; current exchangeInfo used only as a documented proxy",
-            "opposite_signal_exit": "causal H1 signal trigger monitored on M5 OHLC; profit-after-cost gate applied; conservative OHLC ambiguity handling",
+            "opposite_signal_exit": (
+                "U: existing user profit-after-cost gate" if args.opposite_policy == "U"
+                else "T diagnostic: confirmed WM1/fractal opposite level, no profit gate; modeled full close then next M5 opening re-admission; not exchange execution"
+            ),
+            "opposite_policy": args.opposite_policy,
+            "qualification": "DIAGNOSTIC_NOT_FINAL_C",
             "emergency_breaker": "5% observed Model B latch; cancel pending exposure and model owned-position market exits at next observed contract open with adverse slippage. Full-fill assumption; not signed Android/Demo parity.",
             "intrabar_ordering": "Entry-first adverse causal OHLC scenario; separate invalidation-first sensitivity; no proven intrabar order.",
         },
@@ -868,6 +898,7 @@ def main():
         "reproducibility": "PASS",
         "output": str(args.outdir),
     }, sort_keys=True), flush=True)
+    return metrics
 
 
 if __name__ == "__main__":

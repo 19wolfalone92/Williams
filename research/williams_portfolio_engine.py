@@ -210,7 +210,13 @@ class PortfolioSimulator:
         trail_bars: int = 5,
         collect: bool = True,
         intrabar_policy: str = "ENTRY_FIRST",
+        opposite_policy: str = "U",
     ):
+        if opposite_policy not in ("U", "T"):
+            raise ValueError("unknown research opposite policy")
+        self.opposite_policy = opposite_policy
+        self.reversal_requests = {}
+        self.reversal_fills = 0
         if trail_bars not in (3, 4, 5):
             raise ValueError("TC2 trail window must be 3, 4 or 5 closed H1 bars")
         if initial_capital <= 0 or not math.isfinite(initial_capital):
@@ -436,7 +442,7 @@ class PortfolioSimulator:
     def _campaign_context(self, symbol: str, signal, known_at_ms: int, context: dict) -> dict:
         return _signal_record(symbol, signal, known_at_ms, context)
 
-    def _arm_initial(self, symbol: str, item: dict, index: int):
+    def _arm_initial(self, symbol: str, item: dict, index: int, *, reversal_at_open: bool = False):
         signal = item["signal"]
         known_at = int(item["known_at_ms"])
         context = item.get("context", {})
@@ -463,7 +469,15 @@ class PortfolioSimulator:
             self._signal_status(symbol, signal, known_at, context, "BLOCKED", "INVALID_INITIAL_STOP_GEOMETRY")
             return
         current = float(self.data[symbol]["contract"]["open"][index])
-        if (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger):
+        crossed = (signal.side == "BUY" and current >= trigger) or (signal.side == "SELL" and current <= trigger)
+        if reversal_at_open:
+            # A previously confirmed opposite event, not an ordinary new STOP.
+            # Size using the new observable opening price, not the old trigger.
+            if self.opposite_policy != "T" or not crossed or not math.isfinite(current) or current <= 0:
+                self._signal_status(symbol, signal, known_at, context, "BLOCKED", "REVERSAL_TRIGGER_NOT_ACTIVE_AT_ADMISSION")
+                return
+            trigger = current
+        elif crossed:
             self._signal_status(symbol, signal, known_at, context, "INVALIDATED", "TRIGGER_ALREADY_CROSSED_NO_MARKET_CHASE")
             return
         if (signal.side == "BUY" and current <= stop) or (signal.side == "SELL" and current >= stop):
@@ -511,6 +525,7 @@ class PortfolioSimulator:
                 "risk_quote": risk_quote,
                 "margin_quote": margin,
                 "expires_at_ms": int(getattr(signal, "expires_at_ms", 0) or 0),
+                "research_reversal": reversal_at_open,
             },
             "qty": 0.0,
             "avg_entry": 0.0,
@@ -538,7 +553,7 @@ class PortfolioSimulator:
         }
         self.active[symbol] = campaign
         self._signal_status(symbol, signal, known_at, context, "PENDING_INITIAL")
-        self._emit(known_at, "INITIAL_STOP_ORDER_ARMED", symbol=symbol,
+        self._emit(known_at, "REVERSAL_OPEN_EXECUTION_RESERVED" if reversal_at_open else "INITIAL_STOP_ORDER_ARMED", symbol=symbol,
                    campaign_id=campaign["campaign_id"], trigger=trigger, stop=stop,
                    quantity=float(qty), risk_quote=risk_quote, margin_quote=margin)
         self.max_active_campaigns = max(self.max_active_campaigns, len(self.active))
@@ -718,6 +733,9 @@ class PortfolioSimulator:
                    trigger=trigger, stop=stop, risk_quote=risk_quote, margin_quote=margin)
 
     def _handle_signals(self, symbol: str, items: list[dict], index: int, timestamp_ms: int):
+        if symbol in self.reversal_requests:
+            # Do not let the same scan bypass a queued close/re-admission sequence.
+            return
         if not items:
             return
         items = sorted(items, key=lambda x: (int(x["signal"].signal_bar_time_ms),
@@ -829,6 +847,13 @@ class PortfolioSimulator:
         by_id = {}
         for watcher in watchers:
             signal = watcher["signal"]
+            # TC2 pp.121-122,133,149 explicitly establish reversals for WM1
+            # and opposite fractals. Do not infer a universal WM2 reversal.
+            if getattr(self, "opposite_policy", "U") == "T" and (
+                _signal_type(signal) not in {SignalType.REVERSAL.value, SignalType.FRACTAL.value}
+                or (symbol, str(signal.signal_id)) in self.terminal_entry_signals
+            ):
+                continue
             invalidation_value = float(getattr(signal, "invalidation_price", 0.0) or 0.0)
             scenario = ScenarioSignal(
                 str(signal.signal_id),
@@ -882,10 +907,11 @@ class PortfolioSimulator:
         )
         # CONTRACT_PRICE is the Wise-Man breakout basis; MARK_PRICE is the
         # protective STOP basis. The user-approved profit overlay is separate.
+        policy = getattr(self, "opposite_policy", "U")
         blocker = (tc2_opposite_exit_profit_blocker(
             campaign["side"], campaign["avg_entry"], now_price,
             RISK_COST_ALLOWANCE, float(self.specs[symbol]["tick"]),
-        ) if active else None)
+        ) if active and policy == "U" else None)
         advisory_reason = blocker if active else "CURRENT_PRICE_NOT_BEYOND_TRIGGER"
         campaign["opposition_evidence"] = {
             "signal_id": str(source.id), "direction": source.direction,
@@ -900,6 +926,19 @@ class PortfolioSimulator:
                                 "TRIGGERED_EXIT")
             self._close_campaign(symbol, campaign, now_price, index, timestamp_ms,
                                  "OPPOSITE_SIGNAL", "OPPOSITE_WILLIAMS_LEVEL_TRIGGERED")
+            if policy == "T":
+                # Simulator-only confirmation: _close_campaign settles full
+                # fill and removes the owner. Never authorize a new position
+                # if an old owner is still present.
+                if symbol not in self.active:
+                    self.reversal_requests[symbol] = {
+                        "signal": signal, "context": watcher.get("context", {}),
+                        "known_at_ms": timestamp_ms, "next_index": index + 1,
+                        "closed_campaign_id": campaign["campaign_id"],
+                    }
+                    self._emit(timestamp_ms, "RESEARCH_REVERSAL_CLOSE_CONFIRMED",
+                               symbol=symbol, campaign_id=campaign["campaign_id"],
+                               signal_id=str(signal.signal_id), next_index=index + 1)
             return True
         campaign["opposition_advisory"] = {
             "signal_id": str(source.id), "profit_exit_blocker": blocker,
@@ -918,6 +957,41 @@ class PortfolioSimulator:
                    quantity=campaign["qty"], signal_event=event.to_dict())
         return False
 
+    def _execute_reversal_admissions(self, index: int, timestamp_ms: int):
+        for symbol, item in list(self.reversal_requests.items()):
+            if index < item["next_index"]:
+                continue
+            del self.reversal_requests[symbol]
+            signal = item["signal"]
+            # Recalculate the opening Model B loss after the old close, including
+            # fees, funding and current equity; the regular arm checks slots,
+            # exchange filters, reserved risk and margin again.
+            model_b = calculate_daily_risk_model_b(
+                Decimal(str(self.daily_start_equity)), Decimal(str(self._equity(index, "mark_open"))),
+                Decimal("0"))
+            mark = float(self.data[symbol]["mark"]["mark_open"][index])
+            stop = float(signal.protective_reference)
+            mark_protectable = math.isfinite(mark) and mark > 0 and (
+                mark > stop if signal.side == "BUY" else mark < stop)
+            reason = ("OLD_OWNER_NOT_FLAT" if symbol in self.active else
+                      "MODEL_B_OPENING_RISK_BLOCK" if model_b["entry_blocked"] else
+                      "INITIAL_MARK_STOP_ALREADY_CROSSED" if not mark_protectable else "")
+            if not reason:
+                self._arm_initial(symbol, {**item, "known_at_ms": timestamp_ms}, index,
+                                  reversal_at_open=True)
+                armed = self.active.get(symbol)
+                if armed is None:
+                    reason = self.signal_records.get((symbol, str(signal.signal_id)), {}).get(
+                        "block_reason", "REVERSAL_ADMISSION_FAILED")
+            if reason:
+                self._signal_status(symbol, signal, timestamp_ms, item["context"], "INVALIDATED",
+                                    "RESEARCH_REVERSAL_NOT_ADMITTED:" + reason)
+                self._emit(timestamp_ms, "RESEARCH_REVERSAL_REJECTED", symbol=symbol,
+                           signal_id=str(signal.signal_id), reason=reason)
+            else:
+                self._emit(timestamp_ms, "RESEARCH_REVERSAL_ADMITTED", symbol=symbol,
+                           signal_id=str(signal.signal_id), closed_campaign_id=item["closed_campaign_id"])
+
     def _trail(self, symbol: str, index: int, timestamp_ms: int):
         campaign = self.active.get(symbol)
         if not campaign or campaign["status"] != "OPEN":
@@ -934,6 +1008,12 @@ class PortfolioSimulator:
             self._wave_cache[symbol] = (row_index, bars)
         try:
             current = float(self.data[symbol]["contract"]["open"][index])
+            mark_open = float(self.data[symbol]["mark"]["mark_open"][index])
+            if (mark_open <= campaign["stop"] if campaign["side"] == "BUY"
+                    else mark_open >= campaign["stop"]):
+                # The independent protective order already triggered at this
+                # opening print. Leave it to the STOP execution path.
+                return
             if self._check_opposition(symbol, campaign, index, timestamp_ms, bars):
                 return
             mark = float(self.data[symbol]["mark"]["mark_open"][index])
@@ -1121,6 +1201,12 @@ class PortfolioSimulator:
             "entry_d1_context": _canonical(context.get("d1", {})),
             "market_regime": context.get("market_regime", ""),
             "exit_reason": campaign.get("exit_reason", "OPEN_AT_END"),
+            "strategic_exit_reason": (
+                {"STOP": "INITIAL_STOP", "STRUCTURAL_EXIT": "TRAILING_STOP",
+                 "EMERGENCY_BREAKER": "EMERGENCY_EXIT"}.get(
+                     campaign.get("exit_reason"), campaign.get("exit_reason", "OPEN_AT_END"))
+            ),
+            "exit_mechanism": campaign.get("exit_mechanism", ""),
             "exit_detail": campaign.get("exit_detail", ""),
             "status": campaign["status"],
         }
@@ -1242,6 +1328,8 @@ class PortfolioSimulator:
             campaign["entry_time_ms"] = timestamp_ms
             campaign["entry_fee"] = fee
             self.entry_count += 1
+            if pending.get("research_reversal"):
+                self.reversal_fills += 1
             signal_status = "FILLED_INITIAL"
         else:
             old_qty = campaign["qty"]
@@ -1417,6 +1505,7 @@ class PortfolioSimulator:
             self._new_day(index, timestamp_ms)
             self._apply_funding(index, timestamp_ms)
             self._execute_emergency_exits(index, timestamp_ms)
+            self._execute_reversal_admissions(index, timestamp_ms)
             # Live process() manages confirmed protection before scanner admission.
             for symbol in self.symbols:
                 if timestamp_ms % H1_MS == 0:
@@ -1488,6 +1577,9 @@ class PortfolioSimulator:
             "stop_exits": self.stop_count,
             "structural_stop_exits": self.structural_exit_count,
             "opposite_signal_exits": self.opposite_exit_count,
+            "opposite_policy": self.opposite_policy,
+            "research_reversal_fills": self.reversal_fills,
+            "research_reversals_unexecuted_at_end": len(self.reversal_requests),
             "emergency_exits": self.emergency_exit_count,
             "ambiguous_initial_cases": self.ambiguous_initial_count,
             "intrabar_scenario": self.intrabar_policy,

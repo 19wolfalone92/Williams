@@ -430,3 +430,87 @@ def test_causal_pending_reanchor_is_confirmed_only_after_new_arm(side, case):
         assert sim.signal_records[(symbol, old.signal_id)]["decision_status"] == (
             "EXPIRED" if case == "EXPIRED_OLD" else "CANCELLED")
     assert len(sim.active) <= 1
+
+@pytest.mark.parametrize("owner", ["BUY", "SELL"])
+@pytest.mark.parametrize("policy", ["U", "T"])
+@pytest.mark.parametrize("case", ["ACTIVE_LOSS", "ACTIVE_PROFIT", "WAITING", "WM2"])
+def test_dual_policy_uses_source_qualified_trigger_and_confirmed_close(owner, policy, case):
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS
+    from williams_edition_rules import TC2
+    from campaign_model import SignalType, SignalRole
+    now = 100 * H1_MS
+    symbol = "BTCUSDT"
+    long = owner == "BUY"
+    crossed, waiting = (99., 101.) if long else (101., 99.)
+    current = waiting if case == "WAITING" else crossed
+    entry = (80. if long else 120.) if case == "ACTIVE_PROFIT" else (102. if long else 98.)
+    signal = SimpleNamespace(signal_id="opposite", side="SELL" if long else "BUY",
+        strategy_profile=TC2, role=SignalRole.ENTRY,
+        signal_type=SignalType.SUPER_AO if case == "WM2" else SignalType.REVERSAL,
+        execution_semantics="STOP_ENTRY", signal_bar_time_ms=now-H1_MS,
+        trigger_price=100., invalidation_price=110. if long else 90.)
+    campaign = {"campaign_id":"owner", "side":owner, "entry_time_ms":now-3*H1_MS,
+        "avg_entry":entry, "stop":70. if long else 130., "qty":1.,
+        "opposition_watchers":[{"signal":signal, "known_at_ms":now,
+                                "expires_at_ms":now+H1_MS}]}
+    sim = PortfolioSimulator.__new__(PortfolioSimulator)
+    sim.opposite_policy = policy
+    sim.terminal_entry_signals = set()
+    sim.reversal_requests = {}
+    sim.active = {symbol: campaign}
+    sim.data = {symbol:{"contract":{"open":[current]}, "mark":{"mark_open":[current]}}}
+    sim.specs = {symbol:{"tick":Decimal("0.1")}}
+    sim._emit = lambda *a, **k: None
+    sim._signal_status = lambda *a, **k: None
+    def close(*args):
+        del sim.active[symbol]
+    sim._close_campaign = close
+    bars = [SimpleNamespace(t=i*H1_MS,o=100.,h=101.,l=99.,c=100.) for i in range(55,100)]
+    expected = case == "ACTIVE_PROFIT" or (policy == "T" and case == "ACTIVE_LOSS")
+    assert sim._check_opposition(symbol,campaign,0,now,bars) == expected
+    assert (symbol in sim.reversal_requests) == (expected and policy == "T")
+    if symbol in sim.reversal_requests:
+        assert sim.reversal_requests[symbol]["next_index"] == 1
+        assert symbol not in sim.active
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+@pytest.mark.parametrize("blocked", [False, True])
+def test_reversal_rechecks_risk_and_sizes_at_next_observable_open(side, blocked):
+    import numpy as np
+    from campaign_model import SignalSpec, SignalRole, SignalType
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS, M5_MS
+    start = 1730419200000
+    symbol = "BTCUSDT"
+    current = 102. if side == "BUY" else 98.
+    prices = {k: np.array([current, current]) for k in ("open","high","low","close")}
+    signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL,
+        role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=start-H1_MS,
+        trigger_price=101. if side=="BUY" else 99.,
+        protective_reference=90. if side=="BUY" else 110.)
+    sim = PortfolioSimulator(symbols=[symbol], data={symbol:{"contract":prices,
+        "mark":{"mark_"+k:v for k,v in prices.items()}, "h1_close_rows":{}}},
+        timeline=np.array([start,start+M5_MS]),signals_by_index={symbol:{}},
+        funding_by_index={symbol:{}},specs={symbol:{"tick":Decimal("0.1"),
+        "step":Decimal("0.001"),"min_qty":Decimal("0.001"),"max_qty":Decimal("1000"),
+        "min_notional":Decimal("5"),"leverage":2}},initial_capital=5000.,opposite_policy="T")
+    sim._new_day(0,start)
+    sim.reversal_requests[symbol] = {"signal":signal,"context":{},"known_at_ms":start,
+                                     "next_index":1,"closed_campaign_id":"old"}
+    sim._execute_reversal_admissions(0,start)
+    assert symbol not in sim.active
+    if blocked:
+        sim.balance -= 150.
+    sim._execute_reversal_admissions(1,start+M5_MS)
+    assert not sim.reversal_requests
+    if blocked:
+        assert symbol not in sim.active
+        assert sim.events[-1]["event"] == "RESEARCH_REVERSAL_REJECTED"
+    else:
+        campaign = sim.active[symbol]
+        assert campaign["pending"]["trigger"] == current
+        sim._process_pending(symbol,campaign,1,start+2*M5_MS)
+        assert campaign["status"] == "OPEN"
+        assert sim.reversal_fills == 1
+        assert campaign["stop"] == signal.protective_reference
+        assert sim.fills[-1]["fee"] > 0
