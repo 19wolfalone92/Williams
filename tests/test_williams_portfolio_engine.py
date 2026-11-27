@@ -289,3 +289,83 @@ def test_replay_opposite_price_basis_and_user_profit_overlay(owner, case):
         assert emitted[0]["blocker"] == (
             "TC2_OPPOSITE_EXIT_NOT_PROFITABLE_AFTER_COST_RESERVE" if case == "ACTIVE_LOSS"
             else "CURRENT_PRICE_NOT_BEYOND_TRIGGER")
+
+@pytest.mark.parametrize("side,opening,high,low,stop,expected", [
+    ("BUY", 95., 140., 80., 99., (0., 10., 0., 10.)),
+    ("SELL", 105., 120., 60., 101., (0., 10., 0., 10.)),
+    ("BUY", 102., 140., 80., 99., (4., 2., 80., 40.)),
+    ("SELL", 98., 120., 60., 101., (4., 2., 80., 40.)),
+])
+def test_causal_terminal_mark_excursion_bounds(side, opening, high, low, stop, expected):
+    from research.williams_portfolio_engine import PortfolioSimulator, M5_MS
+    symbol = "BTCUSDT"
+    sim = PortfolioSimulator.__new__(PortfolioSimulator)
+    sim.data = {symbol: {"contract": {"open": [opening], "high": [high],
+                                    "low": [low], "close": [100.]},
+                         "mark": {"mark_open": [opening], "mark_high": [high],
+                                  "mark_low": [low], "mark_close": [100.]}}}
+    closes = []
+    sim._close_campaign = lambda *a: closes.append(a)
+    campaign = {"side": side, "qty": 2., "avg_entry": 100., "stop": stop,
+                "stop_source": "INITIAL_SIGNAL"}
+    sim._process_open_position(symbol, campaign, 0, M5_MS)
+    assert len(closes) == 1
+    assert tuple(campaign[k] for k in ("mfe_quote", "mae_quote", "mfe_upper_quote",
+                                      "mae_upper_quote")) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_causal_full_bar_and_addon_exposure_are_separate(side):
+    from research.williams_portfolio_engine import PortfolioSimulator, M5_MS
+    symbol = "BTCUSDT"
+    sim = PortfolioSimulator.__new__(PortfolioSimulator)
+    sim.data = {symbol: {"contract": {"open": [100.], "high": [110.],
+                                    "low": [90.], "close": [101.]},
+                         "mark": {"mark_open": [100.], "mark_high": [110.],
+                                  "mark_low": [90.], "mark_close": [101.]}}}
+    base = {"side": side, "qty": 2., "avg_entry": 100.,
+            "stop": 80. if side == "BUY" else 120.}
+    full = dict(base)
+    sim._process_open_position(symbol, full, 0, M5_MS)
+    assert full["mfe_quote"] == full["mae_quote"] == 20.
+    pending = dict(base, pending={"kind": "ADD_ON",
+                     "trigger": 105. if side == "BUY" else 95.})
+    sim._process_open_position(symbol, pending, 0, M5_MS)
+    assert pending["mfe_quote"] == pending["mae_quote"] == 0.
+    assert pending["mfe_upper_quote"] == pending["mae_upper_quote"] == 20.
+    pending["qty"] = 6.
+    pending["avg_entry"] = 103. if side == "BUY" else 97.
+    sim._observe_mark_excursion(pending, (101.,), (90., 110.), ambiguous=True)
+    assert pending["excursion_ambiguous_intervals"] == 2
+    assert pending["mfe_quote"] <= pending["mfe_upper_quote"]
+    assert pending["mae_quote"] <= pending["mae_upper_quote"]
+
+
+@pytest.mark.parametrize("side", ["BUY", "SELL"])
+def test_causal_initial_fill_excludes_unproven_pre_entry_extrema(side):
+    import numpy as np
+    from campaign_model import SignalSpec, SignalRole, SignalType
+    from research.williams_portfolio_engine import PortfolioSimulator, H1_MS
+    start = 1730419200000
+    symbol = "BTCUSDT"
+    prices = {k: np.array([v]) for k, v in
+              {"open": 100., "high": 105., "low": 95., "close": 100.}.items()}
+    trigger, stop = (101., 90.) if side == "BUY" else (99., 110.)
+    signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.REVERSAL,
+                            role=SignalRole.ENTRY, timeframe="1h",
+                            signal_bar_time_ms=start-H1_MS, trigger_price=trigger,
+                            protective_reference=stop)
+    sim = PortfolioSimulator(symbols=[symbol], data={symbol: {"contract": prices,
+        "mark": {"mark_"+k: v for k,v in prices.items()}, "h1_close_rows": {}}},
+        timeline=np.array([start]), signals_by_index={symbol: {0: [{"signal": signal,
+        "known_at_ms": start, "context": {}}]}}, funding_by_index={symbol: {}},
+        specs={symbol: {"tick": Decimal("0.1"), "step": Decimal("0.001"),
+                       "min_qty": Decimal("0.001"), "max_qty": Decimal("1000"),
+                       "min_notional": Decimal("5"), "leverage": 2}}, initial_capital=5000.)
+    result = sim.run()
+    assert [row["purpose"] for row in result["fills"]] == ["INITIAL"]
+    row = result["campaigns"][0]
+    assert row["MFE_usdt"] == 0.
+    assert row["MFE_upper_usdt"] > 0.
+    assert 0. < row["MAE_usdt"] < row["MAE_upper_usdt"]
+    assert row["excursion_ambiguous_intervals"] == 1
