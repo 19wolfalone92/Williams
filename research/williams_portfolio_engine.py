@@ -558,13 +558,74 @@ class PortfolioSimulator:
                 and new_time + H1_MS <= int(item["known_at_ms"]) and closer):
             return
         old_item = campaign["pending"]
-        self._signal_status(campaign["symbol"], old, old_item["known_at_ms"], old_item.get("context", {}),
-                            "REPLACED", "NEWER_CONFIRMED_TC2_FRACTAL")
-        self.replaced_count += 1
-        del self.active[campaign["symbol"]]
-        self._emit(item["known_at_ms"], "PENDING_INITIAL_REPLACED", symbol=campaign["symbol"],
-                   old_signal_id=old.signal_id, new_signal_id=new.signal_id)
-        self._arm_initial(campaign["symbol"], item, index)
+        symbol = campaign["symbol"]
+        now = int(self.timeline[index])
+        opening = float(self.data[symbol]["contract"]["open"][index])
+        old_expiry = int(old_item.get("expires_at_ms", 0) or 0)
+        expired = bool(old_expiry and now >= old_expiry)
+        invalidated = (opening <= old_item["stop"] if old.side == "BUY"
+                       else opening >= old_item["stop"])
+        old_triggered = (opening >= old_item["trigger"] if old.side == "BUY"
+                         else opening <= old_item["trigger"])
+        block = self._entry_block_reason()
+        evidence = {
+            "symbol": symbol, "old_campaign_id": campaign["campaign_id"],
+            "old_signal_id": old.signal_id, "new_signal_id": new.signal_id,
+            "old_trigger": old_item["trigger"], "new_trigger": new.trigger_price,
+            "old_stop": old_item["stop"], "old_reserved_risk": old_item["risk_quote"],
+            "old_margin": old_item["margin_quote"],
+        }
+        if old_triggered and not expired and not block:
+            # An already resting order can execute at the opening print. Do
+            # not retrospectively cancel it in favor of a later admission.
+            self._emit(now, "PENDING_INITIAL_REPLACEMENT_DEFERRED_OLD_TRIGGER_AT_OPEN", **evidence)
+            return
+        self._emit(now, "PENDING_INITIAL_REPLACEMENT_REQUESTED", **evidence)
+        old_status = ("CANCELLED" if block else "EXPIRED" if expired else
+                      "INVALIDATED" if invalidated else None)
+        old_reason = (block if block else "PENDING_ORDER_EXPIRED" if expired else
+                      "INVALIDATE_AT_OPEN" if invalidated else "")
+        # Replay has no exchange cancel/POST latency: this is a provisional,
+        # atomic in-memory swap, not an actual cancellation acknowledgement.
+        # Release only for the new admission calculation; if admission fails,
+        # retain a still-valid resting order, without marking it consumed.
+        del self.active[symbol]
+        try:
+            self._arm_initial(symbol, item, index)
+        except Exception:
+            if old_status is None and symbol not in self.active:
+                self.active[symbol] = campaign
+            raise
+        armed = self.active.get(symbol)
+        if old_status is not None:
+            self._signal_status(symbol, old, old_item["known_at_ms"],
+                                old_item.get("context", {}), old_status, old_reason)
+            if expired and old_status == "EXPIRED":
+                self.expired_count += 1
+            self._emit(now, "PENDING_INITIAL_REPLACEMENT_OLD_RETIRED",
+                       **evidence, old_status=old_status, old_reason=old_reason)
+        if armed is not None:
+            if old_status is None:
+                self._signal_status(symbol, old, old_item["known_at_ms"],
+                                    old_item.get("context", {}), "REPLACED",
+                                    "NEWER_CONFIRMED_TC2_FRACTAL")
+                self.replaced_count += 1
+                event = "PENDING_INITIAL_REPLACED"
+            else:
+                event = "PENDING_INITIAL_NEW_ARMED_AFTER_OLD_RETIREMENT"
+            self._emit(now, event, **evidence,
+                       new_campaign_id=armed["campaign_id"],
+                       new_reserved_risk=armed["pending"]["risk_quote"],
+                       new_margin=armed["pending"]["margin_quote"])
+            return
+        if old_status is None:
+            self.active[symbol] = campaign
+        rejection = self.signal_records.get((symbol, str(new.signal_id)), {})
+        self._emit(now, "PENDING_INITIAL_REPLACEMENT_REJECTED", **evidence,
+                   old_retained=old_status is None,
+                   new_status=rejection.get("decision_status", "UNKNOWN"),
+                   new_reason=rejection.get("block_reason", "UNRECORDED"),
+                   new_reserved_risk=0.0, new_margin=0.0)
 
     def _arm_addon(self, campaign: dict, item: dict, index: int):
         signal = item["signal"]
