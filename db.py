@@ -1,8 +1,17 @@
 import os
-import json, sqlite3
+import json, sqlite3, threading, math
+from functools import wraps
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+
+
+def _db_locked(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._transaction_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class Database:
@@ -11,31 +20,35 @@ class Database:
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
         Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._transaction_lock = threading.RLock()
         self.conn = sqlite3.connect(path, check_same_thread=False, timeout=20)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA busy_timeout=20000')
         self.conn.execute('PRAGMA journal_mode=WAL')
-        self.conn.execute('PRAGMA synchronous=NORMAL')
+        # A committed risk reservation is a safety boundary before exchange POST.
+        self.conn.execute('PRAGMA synchronous=FULL')
         self._transaction_active = False
         self.init()
 
     @contextmanager
     def transaction(self):
-        """Atomic transaction for multi-step DB operations."""
-        if self._transaction_active:
-            yield self
-            return
+        """Serialize a durable read/modify/write transaction across threads and processes."""
+        with self._transaction_lock:
+            if self._transaction_active:
+                yield self
+                return
 
-        self._transaction_active = True
-        try:
-            self.conn.execute('BEGIN')
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
-        finally:
-            self._transaction_active = False
+            self._transaction_active = True
+            try:
+                # Reserve SQLite's writer lock before reading shared portfolio exposure.
+                self.conn.execute('BEGIN IMMEDIATE')
+                yield self
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
+            finally:
+                self._transaction_active = False
 
     def init(self):
         self.conn.executescript('''
@@ -265,6 +278,7 @@ class Database:
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
 
+    @_db_locked
     def _migrate_trade_columns(self):
         columns = {
             row['name']
@@ -284,6 +298,7 @@ class Database:
                     f'ALTER TABLE trades ADD COLUMN {name} {sql_type}'
                 )
 
+    @_db_locked
     def state_get(self, key, default=None):
         r = self.conn.execute(
             'SELECT value FROM bot_state WHERE key=?',
@@ -291,6 +306,7 @@ class Database:
         ).fetchone()
         return default if r is None else r['value']
 
+    @_db_locked
     def state_set(self, key, value):
         self.conn.execute(
             'INSERT INTO bot_state(key,value) VALUES(?,?) '
@@ -300,6 +316,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def try_claim_state(self, key, value) -> bool:
         """Atomically create a state key only if it does not already exist.
 
@@ -315,6 +332,7 @@ class Database:
             self.conn.commit()
         return cur.rowcount == 1
 
+    @_db_locked
     def state_delete(self, key):
         self.conn.execute(
             'DELETE FROM bot_state WHERE key=?',
@@ -323,6 +341,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_execution_intent(self, intent, status, reason=''):
         self.conn.execute(
             '''INSERT OR REPLACE INTO execution_intents(
@@ -346,6 +365,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_execution_event(self, intent_id, event, payload=None):
         self.conn.execute(
             'INSERT INTO execution_events(intent_id,event,payload_json) VALUES(?,?,?)',
@@ -354,6 +374,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def log_event(self, level, event, message, raw=None):
         self.conn.execute(
             'INSERT INTO events(level,event,message,raw_json) VALUES(?,?,?,?)',
@@ -367,6 +388,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_market_context(self, context):
         """Persist the latest immutable MTF context for restart/audit recovery."""
         payload = context.to_dict() if hasattr(context, "to_dict") else context
@@ -385,6 +407,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_wave_state(self, symbol, side, payload):
         """Persist the selected wave hypothesis/state independently of trade rows."""
         self.conn.execute(
@@ -400,6 +423,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def load_wave_state(self, symbol, side):
         row = self.conn.execute(
             "SELECT state_json FROM wave_state WHERE symbol=? AND side=?",
@@ -412,6 +436,7 @@ class Database:
         except Exception:
             return None
 
+    @_db_locked
     def save_order(self, data):
         oid = (
             str(data.get('orderId'))
@@ -480,6 +505,7 @@ class Database:
         except (TypeError, ValueError):
             return None
 
+    @_db_locked
     def open_trade(self, symbol=None):
         if symbol:
             r = self.conn.execute(
@@ -496,6 +522,7 @@ class Database:
             ).fetchone()
         return dict(r) if r else None
 
+    @_db_locked
     def open_trades(self):
         rows = self.conn.execute(
             'SELECT * FROM trades '
@@ -504,6 +531,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_db_locked
     def trade_by_entry_client_order_id(self, client_order_id):
         r = self.conn.execute(
             'SELECT * FROM trades '
@@ -513,6 +541,7 @@ class Database:
         ).fetchone()
         return dict(r) if r else None
 
+    @_db_locked
     def save_trade(self, **kwargs):
         now = datetime.now(timezone.utc).isoformat()
         kwargs.setdefault('updated_at', now)
@@ -525,6 +554,7 @@ class Database:
             self.conn.commit()
         return cur.lastrowid
 
+    @_db_locked
     def update_trade_oco(
         self,
         trade_id,
@@ -556,6 +586,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def update_trade_quantity(self, trade_id, quantity):
         self.conn.execute(
             'UPDATE trades SET quantity=?,updated_at=? '
@@ -569,6 +600,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def update_trade_position(self, trade_id, quantity, entry_price=None):
         """Synchronize the journaled position after a Futures campaign add-on."""
         assignments = ['quantity=?', 'updated_at=?']
@@ -588,6 +620,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def close_trade(
         self,
         trade_id,
@@ -620,6 +653,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_trade_journal(
         self,
         trade_id,
@@ -694,6 +728,7 @@ class Database:
         except (TypeError, ValueError, json.JSONDecodeError):
             return default
 
+    @_db_locked
     def get_trade_journal(self, trade_id):
         r = self.conn.execute(
             'SELECT * FROM trade_journal WHERE trade_id=?',
@@ -716,6 +751,7 @@ class Database:
         )
         return item
 
+    @_db_locked
     def recent_trade_journal(self, limit=100):
         rows = self.conn.execute(
             'SELECT t.*, j.diagnosis, j.mfe_pct, j.mae_pct, '
@@ -741,6 +777,7 @@ class Database:
             result.append(item)
         return result
 
+    @_db_locked
     def learning_summary(self):
         totals = self.conn.execute(
             "SELECT COUNT(*) total, "
@@ -878,6 +915,7 @@ class Database:
     # Trading campaign persistence
     # ------------------------------------------------------------------
 
+    @_db_locked
     def save_campaign(self, campaign):
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
         self.conn.execute(
@@ -922,16 +960,19 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def get_campaign(self, campaign_id):
         row=self.conn.execute("SELECT * FROM campaigns WHERE campaign_id=?",(str(campaign_id),)).fetchone()
         return dict(row) if row else None
 
+    @_db_locked
     def open_campaigns(self):
         rows=self.conn.execute(
             "SELECT * FROM campaigns WHERE state NOT IN ('CLOSED','FLAT') ORDER BY updated_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_db_locked
     def terminal_campaign_signal_state(self, signal_id):
         """Irreversible formation facts, independent of bounded UI history.
 
@@ -945,11 +986,13 @@ class Database:
         ).fetchone()
         return row["state"] if row is not None else None
 
+    @_db_locked
     def require_unconsumed_campaign_signal(self, signal_id):
         state = self.terminal_campaign_signal_state(signal_id)
         if state is not None:
             raise RuntimeError("CAMPAIGN_SIGNAL_TERMINAL:" + state)
 
+    @_db_locked
     def save_campaign_signal(self, signal, campaign_id, state="DETECTED", supersedes_signal_id=""):
         data = signal.to_dict() if hasattr(signal, "to_dict") else dict(signal)
         st = data.get("signal_type")
@@ -987,6 +1030,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def set_campaign_signal_state(self, signal_id, state):
         # A confirmed racing fill takes precedence over structural
         # invalidation. Rescans and cancellations cannot undo terminal facts.
@@ -999,6 +1043,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def active_campaign_signals(self, campaign_id):
         rows=self.conn.execute(
             "SELECT * FROM campaign_signals WHERE campaign_id=? AND state IN ('DETECTED','ARMED') ORDER BY signal_bar_time_ms",
@@ -1006,6 +1051,7 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @_db_locked
     def save_campaign_order(self, record):
         data=record.to_dict() if hasattr(record,"to_dict") else dict(record)
         self.conn.execute(
@@ -1025,6 +1071,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def save_campaign_fill(self, fill):
         data=fill if isinstance(fill,dict) else dict(fill)
         self.conn.execute(
@@ -1043,6 +1090,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def log_campaign_event(self, campaign_id, event, *, level="INFO", signal_id=None, order_id=None, reason="", payload=None):
         self.conn.execute(
             """INSERT INTO campaign_events(campaign_id,event,level,signal_id,order_id,reason,payload_json)
@@ -1053,6 +1101,7 @@ class Database:
         if not self._transaction_active:
             self.conn.commit()
 
+    @_db_locked
     def campaign_risk_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(open_risk_quote),0)+COALESCE(SUM(pending_risk_quote),0) AS risk "
@@ -1060,6 +1109,85 @@ class Database:
         ).fetchone()
         return float(row["risk"] or 0.0)
 
+    @_db_locked
+    def reserve_campaign_risk(self, campaign, *, equity_quote, portfolio_limit_pct):
+        """Atomically persist one portfolio-risk reservation before exchange submission."""
+        data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
+        equity = float(equity_quote)
+        limit = float(portfolio_limit_pct)
+        if not (math.isfinite(equity) and equity > 0 and math.isfinite(limit) and 0 < limit <= 0.006):
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_INPUTS_UNPROVEN")
+        tags = data.get("tags") or {}
+        reservation_id = str(tags.get("pending_order_client_id") or tags.get("pending_order_id") or "")
+        if not reservation_id:
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_IDENTITY_UNPROVEN")
+        campaign_id = str(data.get("campaign_id") or "")
+        if not campaign_id:
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_CAMPAIGN_ID_MISSING")
+        state = str(data.get("state") or "")
+        new_risk = float(data.get("open_risk_quote", 0) or 0) + float(data.get("pending_risk_quote", 0) or 0)
+        if not math.isfinite(new_risk) or new_risk < 0:
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_AMOUNT_INVALID")
+        if state in {"CLOSED", "FLAT"}:
+            new_risk = 0.0
+        cap = equity * limit
+        tolerance = max(1e-8, cap * 1e-9)
+        with self.transaction():
+            used_before = self.campaign_risk_reserved_quote()
+            previous = self.conn.execute(
+                "SELECT state,open_risk_quote,pending_risk_quote FROM campaigns WHERE campaign_id=?",
+                (campaign_id,),
+            ).fetchone()
+            old_risk = 0.0
+            if previous is not None and previous["state"] not in {"CLOSED", "FLAT"}:
+                old_risk = float(previous["open_risk_quote"] or 0.0) + float(previous["pending_risk_quote"] or 0.0)
+            reserved_after = max(0.0, used_before - old_risk) + new_risk
+            if reserved_after > cap + tolerance:
+                raise RuntimeError(
+                    "PORTFOLIO_RISK_RESERVATION_EXCEEDED:"
+                    f"used={used_before:.12g};old={old_risk:.12g};new={new_risk:.12g};"
+                    f"after={reserved_after:.12g};cap={cap:.12g}"
+                )
+            payload = {
+                "schema": "WILLIAMS_PORTFOLIO_RISK_RESERVATION_V1",
+                "reservation_id": reservation_id,
+                "symbol": str(data.get("symbol") or ""),
+                "equity_quote": equity,
+                "portfolio_limit_pct": limit,
+                "portfolio_limit_quote": cap,
+                "reserved_before_quote": used_before,
+                "reserved_after_quote": reserved_after,
+                "campaign_risk_before_quote": old_risk,
+                "campaign_risk_after_quote": new_risk,
+                "risk_delta_quote": new_risk - old_risk,
+                "signal_id": str(
+                    ((tags.get("pending_signal") or {}).get("signal") or {}).get("signal_id")
+                    or data.get("current_signal_id") or data.get("origin_signal_id") or ""
+                ),
+            }
+            self.save_campaign(campaign)
+            prior_event = self.conn.execute(
+                "SELECT payload_json FROM campaign_events "
+                "WHERE campaign_id=? AND event='RESERVE' AND order_id=? LIMIT 1",
+                (campaign_id, reservation_id),
+            ).fetchone()
+            if prior_event is not None:
+                try:
+                    prior_payload = json.loads(prior_event["payload_json"] or "{}")
+                    prior_risk = float(prior_payload["campaign_risk_after_quote"])
+                except Exception as exc:
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_LEDGER_CORRUPT") from exc
+                if not math.isfinite(prior_risk) or abs(prior_risk - new_risk) > tolerance:
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_IDEMPOTENCY_CONFLICT")
+            else:
+                self.log_campaign_event(
+                    campaign_id, "RESERVE", order_id=reservation_id,
+                    reason="ATOMIC_BEGIN_IMMEDIATE_PORTFOLIO_RISK_RESERVATION",
+                    payload=payload,
+                )
+        return payload
+
+    @_db_locked
     def campaign_capital_reserved_quote(self):
         row=self.conn.execute(
             "SELECT COALESCE(SUM(capital_reserved_quote),0) AS capital "
@@ -1067,6 +1195,7 @@ class Database:
         ).fetchone()
         return float(row["capital"] or 0.0)
 
+    @_db_locked
     def recent_orders(self, symbol, limit=100):
         return [
             dict(r)
@@ -1077,6 +1206,7 @@ class Database:
             ).fetchall()
         ]
 
+    @_db_locked
     def recent_all_orders(self, limit=200):
         return [
             dict(r)
@@ -1086,6 +1216,7 @@ class Database:
             ).fetchall()
         ]
 
+    @_db_locked
     def trades_today(self, symbol):
         return int(
             self.conn.execute(
@@ -1095,6 +1226,7 @@ class Database:
             ).fetchone()[0]
         )
 
+    @_db_locked
     def pnl_today(self, symbol):
         r = self.conn.execute(
             "SELECT COALESCE(SUM(pnl),0) AS pnl FROM trades "
@@ -1104,6 +1236,7 @@ class Database:
         ).fetchone()
         return float(r['pnl'] or 0)
 
+    @_db_locked
     def pnl_today_all(self):
         """Net realized PnL across the portfolio, including recorded commissions."""
         row = self.conn.execute(
@@ -1112,6 +1245,7 @@ class Database:
         ).fetchone()
         return float(row['pnl'])
 
+    @_db_locked
     def consecutive_losses(self, symbol, limit=20):
         rows = self.conn.execute(
             'SELECT pnl FROM trades WHERE symbol=? '
@@ -1126,6 +1260,7 @@ class Database:
                 break
         return n
 
+    @_db_locked
     def last_exit_time(self, symbol):
         r = self.conn.execute(
             'SELECT exit_time FROM trades '

@@ -34,6 +34,42 @@ internal fun latestConfirmedTc2FractalId(
 }
 
 /**
+ * Retire a confirmed-cancel re-anchor fence only when market structure proves
+ * that its exact replacement is no longer actionable. TC2 signals have no
+ * arbitrary wall-clock expiry: an unknown or incomplete history keeps the
+ * fence in place, while a newer confirmed WM3, structural invalidation, or
+ * already-consumed trigger retires it immediately.
+ */
+internal fun tc2ReanchorTargetRetirementReason(
+    direction:String,
+    signalId:String,
+    signalAt:Long,
+    trigger:Double,
+    protective:Double,
+    closedH1Bars:List<WilliamsWaveBar>,
+    now:Long,
+    newerConfirmedSignalId:String?=null
+):String? {
+    if(!newerConfirmedSignalId.isNullOrBlank() && newerConfirmedSignalId!=signalId)
+        return "REANCHOR_TARGET_SUPERSEDED_BY_NEWER_CONFIRMED_WM3"
+    if(direction !in setOf("LONG","SHORT") || signalId.isBlank() || signalAt<=0L || now<=0L ||
+        !trigger.isFinite() || trigger<=0.0 || !protective.isFinite() || protective<=0.0 ||
+        (if(direction=="LONG") protective>=trigger else protective<=trigger))
+        return null
+    if(williamsClosedH1HistoryBlocker(closedH1Bars,now)!=null ||
+        !validWilliamsEditionBars(closedH1Bars) ||
+        closedH1Bars.firstOrNull()?.t?.let { it<=signalAt+WILLIAMS_H1_MS }!=true)
+        return null
+    val parent=WilliamsH1Parent(signalId,direction,signalAt,trigger,protective,Long.MAX_VALUE)
+    val invalidation=williamsH1ParentInvalidation(parent,closedH1Bars,closedH1Bars.last().c,now)
+    if(invalidation=="H1_PARENT_STRUCTURAL_INVALIDATION")
+        return "REANCHOR_TARGET_STRUCTURALLY_INVALIDATED"
+    if(williamsBookH1TriggerConsumed(direction,signalAt,trigger,now,closedH1Bars))
+        return "REANCHOR_TARGET_TRIGGER_ALREADY_CONSUMED"
+    return null
+}
+
+/**
  * Find a newer, more favorable confirmed WM3 pivot to revoke a resting old
  * STOP entry. This also deliberately returns a candidate when price has
  * ALREADY crossed the newer level: the old exchange order must be reconciled

@@ -8599,14 +8599,43 @@ private class NativeEngine(
                 "FRACTAL_REANCHOR_CANCEL_RECOVERY_NOT_DURABLE"
             }
         }
-        val reanchorLock = if(storedReanchor!=null &&
-            contextNow - storedReanchor.optLong("recorded_at_ms")>18_000_000L) {
-            // Historical levels have already expired after five hours; do not
-            // permanently freeze this symbol once that guard has elapsed.
-            check(executionStore.writeState("tc2_fractal_reanchor_$symbol","")) {
-                "Failed to expire durable TC2 re-anchor guard"
-            }
-            null
+        val reanchorLock = if(storedReanchor?.optString("phase")=="CANCEL_CONFIRMED") {
+            val direction=storedReanchor.optString("direction")
+            val signalAt=storedReanchor.optLong("signal_bar_time_ms")
+            val reanchorCandidates=JSONArray(candidate.campaignSignals.map { candidateSignal ->
+                JSONObject().put("signal_id",candidateSignal.signalId)
+                    .put("type",candidateSignal.type)
+                    .put("strategy_profile",candidateSignal.strategyProfile)
+                    .put("role",candidateSignal.role)
+                    .put("execution_semantics",candidateSignal.executionSemantics)
+                    .put("signal_bar_time_ms",candidateSignal.signalBarTimeMs)
+                    .put("formation_at_ms",candidateSignal.formationAtMs)
+                    .put("trigger_price",candidateSignal.triggerPrice)
+                    .put("protective_price",candidateSignal.protectivePrice)
+            })
+            val newerConfirmed=latestConfirmedTc2FractalId(
+                direction,signalAt,reanchorCandidates,contextNow
+            )
+            val closedH1=candidate.candles.filter {
+                it.t>0L && it.t+WILLIAMS_H1_MS<=contextNow
+            }.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+            val retirement=tc2ReanchorTargetRetirementReason(
+                direction,storedReanchor.optString("signal_id"),signalAt,
+                storedReanchor.optDouble("trigger_price",Double.NaN),
+                storedReanchor.optDouble("protective_price",Double.NaN),
+                closedH1,contextNow,newerConfirmed
+            )
+            if(retirement!=null) {
+                check(executionStore.writeState("tc2_fractal_reanchor_$symbol","")) {
+                    "FRACTAL_REANCHOR_TARGET_RETIREMENT_NOT_DURABLE"
+                }
+                runCatching {
+                    auditStore.recordCockpitEvent(
+                        "FRACTAL_REANCHOR",symbol,direction,"TARGET_RETIRED",retirement
+                    )
+                }
+                null
+            } else storedReanchor
         } else storedReanchor
         // A previously confirmed cancellation pins the next attempt to its
         // exact new fractal. It must never fall back to a stale higher WM1/WM2.
@@ -8617,8 +8646,7 @@ private class NativeEngine(
                     reanchorLock.optString("direction")==
                         campaignSignalDirection(signal.type) &&
                     reanchorLock.optString("signal_id")==signal.signalId &&
-                    reanchorLock.optLong("recorded_at_ms") in 1L..contextNow &&
-                    contextNow-reanchorLock.optLong("recorded_at_ms")<=18_000_000L
+                    reanchorLock.optLong("recorded_at_ms") in 1L..contextNow
             }
         } else allowedSignals
         if(reanchorLock!=null && selectableSignals.isEmpty()) {

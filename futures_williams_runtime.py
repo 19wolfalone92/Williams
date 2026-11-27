@@ -1844,7 +1844,7 @@ class FuturesWilliamsRuntime:
         return initial_unit_risk_pct(cap,min(float(self.config.campaign_risk_limit_pct),
             float(self.config.max_total_risk_pct),0.006),min(float(self.config.risk_per_trade_pct),0.0025))
 
-    def _next_add_risk_pct(self, campaign):
+    def _next_add_risk_pct(self, campaign, equity=None):
         # Add-ons consume the same persisted campaign/portfolio risk budget;
         # this is a ceiling; pinned TC2 book quantities must fit it unchanged.
         cap = max(0.0, min(
@@ -1852,15 +1852,15 @@ class FuturesWilliamsRuntime:
             float(self.config.max_total_risk_pct),
             0.006,
         ))
-        equity = max(self._equity(), 1e-12)
+        equity = max(float(self._equity() if equity is None else equity), 1e-12)
         used = float(campaign.open_risk_quote or 0.0) + float(campaign.pending_risk_quote or 0.0)
         remaining = max(0.0, cap * equity - used)
         # Even when the legacy campaign engine asks for an add, keep its risk
         # bounded by one per-entry limit and the remaining campaign allocation.
         return min(remaining / equity, float(self.config.risk_per_trade_pct), 0.0025)
 
-    def _size_from_risk(self, symbol, trigger, stop, risk_pct):
-        equity = self._equity()
+    def _size_from_risk(self, symbol, trigger, stop, risk_pct, *, equity=None, available_margin=None):
+        equity = float(self._equity() if equity is None else equity)
         if not all(math.isfinite(value) for value in (equity, trigger, stop, risk_pct)):
             raise RuntimeError("non-finite equity/risk/price inputs")
         if risk_pct > self.config.risk_per_trade_pct + 1e-12:
@@ -1887,7 +1887,7 @@ class FuturesWilliamsRuntime:
         if not math.isfinite(configured_margin_fraction):
             raise RuntimeError("FUTURES_MARGIN_FRACTION_INVALID")
         max_margin_fraction = max(0.01, min(0.90, configured_margin_fraction))
-        available_margin = self._available_margin()
+        available_margin = float(self._available_margin() if available_margin is None else available_margin)
         if not math.isfinite(available_margin) or available_margin <= 0:
             raise RuntimeError("Fresh available Futures margin is invalid or exhausted")
         max_notional = min(equity * max_margin_fraction, available_margin * 0.95) * leverage
@@ -2127,6 +2127,7 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(entry_reason)
 
         equity = self._equity()
+        available_margin = self._available_margin()
         initial_risk_pct = min(
             self._initial_risk_pct(signal.strategy_profile),
             self._portfolio_available_risk_pct(equity),
@@ -2134,7 +2135,8 @@ class FuturesWilliamsRuntime:
         if initial_risk_pct <= 0:
             raise RuntimeError("portfolio risk budget exhausted")
         qty, risk_quote, notional = self._size_from_risk(
-            symbol, trigger, stop, initial_risk_pct
+            symbol, trigger, stop, initial_risk_pct,
+            equity=equity, available_margin=available_margin,
         )
         course_quantity=None
         course_context=None
@@ -2153,8 +2155,6 @@ class FuturesWilliamsRuntime:
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
         campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
         if reentry:
-            if not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
-                raise RuntimeError("NTD profit cycle was already consumed")
             campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
         campaign.initial_stop_price = stop
         campaign.current_stop_price = stop
@@ -2187,31 +2187,25 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_order_stop"] = stop
         campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
         if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
-        self.db.save_campaign(campaign)
-
         cid = campaign.tags["pending_order_client_id"]
-        if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.state = CampaignState.CLOSED
-            self.db.save_campaign(campaign)
-            raise RuntimeError(f"{symbol}: pending entry already exists")
-
         pending_signal = PendingSignal(signal=signal)
         pending_signal.transition(SignalState.VALIDATED)
         campaign.tags["pending_signal"] = pending_signal.to_dict()
-        self.db.set_campaign_signal_state(signal.signal_id, SignalState.VALIDATED.value)
-        self.db.save_campaign(campaign)
-        try:
+
+        # Reservation, ownership claims and signal arming commit as one unit.
+        # No exchange POST can occur before this durable transaction succeeds.
+        with self.db.transaction():
+            if reentry and not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
+                raise RuntimeError("NTD profit cycle was already consumed")
+            if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
+                raise RuntimeError(f"{symbol}: pending entry already exists")
+            self.db.reserve_campaign_risk(
+                campaign, equity_quote=equity,
+                portfolio_limit_pct=self.config.max_total_risk_pct,
+            )
+            self.db.set_campaign_signal_state(signal.signal_id, SignalState.VALIDATED.value)
             self.engine.arm_entry(campaign, signal)
-        except Exception:
-            self.db.state_delete(f"entry_client_order_id:{symbol}")
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.state = CampaignState.CLOSED
-            self.db.save_campaign(campaign)
-            raise
-        self._set_state(symbol, "ENTRY_PENDING")
+            self._set_state(symbol, "ENTRY_PENDING")
 
         intent = OrderIntent.new(
             symbol,
@@ -2342,8 +2336,9 @@ class FuturesWilliamsRuntime:
             upward=signal.side == "SELL",
         )
         equity = self._equity()
+        available_margin = self._available_margin()
         add_risk_pct = min(
-            self._next_add_risk_pct(campaign),
+            self._next_add_risk_pct(campaign, equity=equity),
             self._portfolio_available_risk_pct(equity),
         )
         if add_risk_pct <= 0:
@@ -2353,6 +2348,7 @@ class FuturesWilliamsRuntime:
             trigger,
             stop,
             add_risk_pct,
+            equity=equity, available_margin=available_margin,
         )
         if profile==TC2 and campaign.tags.get("tc2_reverse_pyramid") is not None:
             required=tc2_next_tranche(campaign.tags["tc2_reverse_pyramid"],
@@ -2382,8 +2378,6 @@ class FuturesWilliamsRuntime:
             campaign.tags["course_pending_add_target"]=target
             campaign.tags["course_pending_add_quantity"]=exact
         self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
-        if not self.db.try_claim_state(admitted_key,"true"):
-            raise RuntimeError("This campaign signal is already owned by another admission")
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_stop"]=stop
         campaign.tags["pending_risk_equity"]=equity
@@ -2394,23 +2388,30 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
         if profile==COURSE:campaign.tags["course_pending_add_client_id"]=campaign.tags["pending_order_client_id"]
         campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
-        if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
-            raise RuntimeError(f"{signal.symbol}: another pending order exists")
-
         add_signal = __import__("dataclasses").replace(signal, role=SignalRole.ADD_ON)
         pending_signal = PendingSignal(signal=add_signal)
         pending_signal.transition(SignalState.VALIDATED)
         campaign.tags["pending_signal"] = pending_signal.to_dict()
-        self.db.set_campaign_signal_state(add_signal.signal_id, SignalState.VALIDATED.value)
-        self.db.save_campaign(campaign)
-        self.engine.arm_add_on(
-            campaign,
-            add_signal,
-            risk_quote=risk_quote,
-            capital_reserved_quote=campaign.capital_reserved_quote,
-        )
+
+        # Cross-symbol risk reservation and both ownership claims are serialized
+        # by SQLite BEGIN IMMEDIATE before the add-on can reach Binance.
+        with self.db.transaction():
+            if not self.db.try_claim_state(admitted_key,"true"):
+                raise RuntimeError("This campaign signal is already owned by another admission")
+            if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
+                raise RuntimeError(f"{signal.symbol}: another pending order exists")
+            self.db.reserve_campaign_risk(
+                campaign, equity_quote=equity,
+                portfolio_limit_pct=self.config.max_total_risk_pct,
+            )
+            self.db.set_campaign_signal_state(add_signal.signal_id, SignalState.VALIDATED.value)
+            self.engine.arm_add_on(
+                campaign,
+                add_signal,
+                risk_quote=risk_quote,
+                capital_reserved_quote=campaign.capital_reserved_quote,
+            )
         intent = OrderIntent.new(
             signal.symbol,
             signal.side,
