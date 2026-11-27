@@ -924,6 +924,10 @@ class PortfolioSimulator:
         fill = exit_fill_price(raw_exit, campaign["side"], self.slippage_rate,
                                self.specs[symbol]["tick"])
         qty = float(campaign["qty"])
+        # Opening exits cannot observe any subsequent bar extrema.
+        if reason in ("OPPOSITE_SIGNAL", "EMERGENCY_BREAKER"):
+            opening = float(self.data[symbol]["mark"]["mark_open"][index])
+            self._observe_mark_excursion(campaign, (opening,), (opening,))
         gross = _sign(campaign["side"]) * qty * (fill - campaign["avg_entry"])
         fee = qty * fill * self.fee_rate
         slippage_base = raw_exit
@@ -1025,8 +1029,25 @@ class PortfolioSimulator:
             "net_pnl": campaign.get("final_net_pnl", 0.0),
             "R_multiple": (campaign.get("final_net_pnl", 0.0) /
                           campaign.get("initial_risk_quote", 1.0)) if campaign.get("initial_risk_quote", 0) else None,
+            # Legacy fields report lower bounds conditional on the modeled path.
             "MFE_usdt": campaign.get("mfe_quote", 0.0),
             "MAE_usdt": campaign.get("mae_quote", 0.0),
+            "MFE_upper_usdt": campaign.get("mfe_upper_quote", 0.0),
+            "MAE_upper_usdt": campaign.get("mae_upper_quote", 0.0),
+            "MFE_price_lower": campaign.get("mfe_price", 0.0),
+            "MAE_price_lower": campaign.get("mae_price", 0.0),
+            "MFE_price_upper": campaign.get("mfe_upper_price", 0.0),
+            "MAE_price_upper": campaign.get("mae_upper_price", 0.0),
+            "MFE_R_lower": (campaign.get("mfe_quote", 0.0) / campaign["initial_risk_quote"]
+                            if campaign.get("initial_risk_quote", 0) > 0 else None),
+            "MAE_R_lower": (campaign.get("mae_quote", 0.0) / campaign["initial_risk_quote"]
+                            if campaign.get("initial_risk_quote", 0) > 0 else None),
+            "MFE_R_upper": (campaign.get("mfe_upper_quote", 0.0) / campaign["initial_risk_quote"]
+                            if campaign.get("initial_risk_quote", 0) > 0 else None),
+            "MAE_R_upper": (campaign.get("mae_upper_quote", 0.0) / campaign["initial_risk_quote"]
+                            if campaign.get("initial_risk_quote", 0) > 0 else None),
+            "excursion_ambiguous_intervals": campaign.get("excursion_ambiguous_intervals", 0),
+            "excursion_basis": "MODEL_CONDITIONAL_MARK_PRICE_WEIGHTED_ENTRY_GROSS_UNREALIZED_BOUNDS",
             "entry_angulation_score": float(getattr(signal, "angulation_score", 0.0) or 0.0),
             "entry_h1_ao": context.get("h1_ao"),
             "entry_h1_ac": context.get("h1_ac"),
@@ -1043,33 +1064,57 @@ class PortfolioSimulator:
             "status": campaign["status"],
         }
 
-    def _update_excursions(self, campaign: dict, symbol: str, index: int):
-        mark = self.data[symbol]["mark"]
+    @staticmethod
+    def _observe_mark_excursion(campaign: dict, known: tuple, possible: tuple, *, ambiguous: bool = False):
+        """Bounds on gross Mark excursion for one fixed-size modeled exposure interval."""
         sign = _sign(campaign["side"])
-        qty = campaign["qty"]
-        entry = campaign["avg_entry"]
-        favorable = sign * qty * ((mark["mark_high"][index] if sign == 1 else mark["mark_low"][index]) - entry)
-        adverse = sign * qty * ((mark["mark_low"][index] if sign == 1 else mark["mark_high"][index]) - entry)
-        campaign["mfe_quote"] = max(campaign["mfe_quote"], favorable, 0.0)
-        campaign["mae_quote"] = max(campaign["mae_quote"], -adverse, 0.0)
-        close_unrealized = sign * qty * (mark["mark_close"][index] - entry)
-        campaign["max_unrealized"] = max(campaign["max_unrealized"], close_unrealized)
-        campaign["min_unrealized"] = min(campaign["min_unrealized"], close_unrealized)
+        qty = float(campaign["qty"])
+        entry = float(campaign["avg_entry"])
+        if qty <= 0 or entry <= 0:
+            return
+        known_moves = [sign * (float(p) - entry) for p in known if math.isfinite(float(p))]
+        possible_moves = known_moves + [sign * (float(p) - entry) for p in possible if math.isfinite(float(p))]
+        for prefix, moves in (("", known_moves), ("upper_", possible_moves)):
+            favorable = max([0.0] + moves)
+            adverse = max([0.0] + [-x for x in moves])
+            for kind, value in (("mfe", favorable), ("mae", adverse)):
+                price_key = f"{kind}_{prefix}price"
+                quote_key = f"{kind}_{prefix}quote"
+                campaign[price_key] = max(campaign.get(price_key, 0.0), value)
+                campaign[quote_key] = max(campaign.get(quote_key, 0.0), value * qty)
+        if ambiguous:
+            campaign["excursion_ambiguous_intervals"] = campaign.get("excursion_ambiguous_intervals", 0) + 1
+        campaign["max_unrealized"] = campaign.get("mfe_quote", 0.0)
+        campaign["min_unrealized"] = -campaign.get("mae_quote", 0.0)
 
     def _process_open_position(self, symbol: str, campaign: dict, index: int, timestamp_ms: int):
-        self._update_excursions(campaign, symbol, index)
         contract = self.data[symbol]["contract"]
         mark = self.data[symbol]["mark"]
-        if stop_triggered(campaign["side"], campaign["stop"], mark["mark_open"][index],
-                          mark["mark_high"][index], mark["mark_low"][index]):
+        opening, high, low, closing = (float(mark[k][index]) for k in
+            ("mark_open", "mark_high", "mark_low", "mark_close"))
+        stop = float(campaign["stop"])
+        if stop_triggered(campaign["side"], stop, opening, high, low):
+            at_open = opening <= stop if campaign["side"] == "BUY" else opening >= stop
+            # At-open protection cannot observe any later bar extrema. An
+            # intrabar STOP only establishes opening and an adverse crossing.
+            self._observe_mark_excursion(campaign, (opening,) if at_open else (opening, stop),
+                (opening,) if at_open else (low, high), ambiguous=not at_open)
             raw = stop_fill_raw(campaign["side"], contract["open"][index],
                                 contract["high"][index], contract["low"][index],
-                                contract["close"][index], mark["mark_open"][index],
-                                campaign["stop"])
+                                contract["close"][index], opening, stop)
             detail = "INITIAL_STRUCTURAL_STOP" if campaign["stop_source"] == "INITIAL_SIGNAL" else campaign["stop_source"]
             self._close_campaign(symbol, campaign, raw, index, timestamp_ms, "STOP", detail)
             return
-        return
+        pending = campaign.get("pending")
+        add_hit = pending is not None and pending["kind"] == "ADD_ON" and (
+            contract["high"][index] >= pending["trigger"] if campaign["side"] == "BUY"
+            else contract["low"][index] <= pending["trigger"])
+        if add_hit and pending.get("expires_at_ms") and timestamp_ms - M5_MS >= pending["expires_at_ms"]:
+            add_hit = False
+        if add_hit:
+            self._observe_mark_excursion(campaign, (opening,), (low, high), ambiguous=True)
+        else:
+            self._observe_mark_excursion(campaign, (opening, low, high, closing), (low, high))
 
     def _process_pending(self, symbol: str, campaign: dict, index: int, timestamp_ms: int):
         pending = campaign.get("pending")
@@ -1159,10 +1204,11 @@ class PortfolioSimulator:
         self._emit(timestamp_ms, "ORDER_FILLED", symbol=symbol, campaign_id=campaign["campaign_id"],
                    purpose=pending["kind"], quantity=qty, price=fill, fee=fee,
                    tranche=campaign["additions"])
+        mark = self.data[symbol]["mark"]
+        opening, high, low, closing = (float(mark[k][index]) for k in
+            ("mark_open", "mark_high", "mark_low", "mark_close"))
         if pending["kind"] == "INITIAL":
-            mark = self.data[symbol]["mark"]
-            if stop_triggered(side, campaign["stop"], mark["mark_open"][index],
-                              mark["mark_high"][index], mark["mark_low"][index]):
+            if stop_triggered(side, campaign["stop"], opening, high, low):
                 # For an entry not filled at the opening print, do not use
                 # that pre-entry print as a later exit price. In the adverse
                 # scenario a touched Mark stop is ordered AFTER the fill;
@@ -1176,7 +1222,15 @@ class PortfolioSimulator:
                            scenario=self.intrabar_policy, opening_fill=path == "FILL_AT_OPEN",
                            mark_close_crossed=bool(close_crossed))
                 if self.intrabar_policy == "INVALIDATION_FIRST" and path != "FILL_AT_OPEN" and not close_crossed:
+                    self._observe_mark_excursion(campaign, (closing,), (low, high), ambiguous=True)
                     return
+                at_open = path == "FILL_AT_OPEN"
+                stop_at_open = at_open and (opening <= campaign["stop"] if side == "BUY"
+                                            else opening >= campaign["stop"])
+                known = ((opening,) if stop_at_open else
+                         (opening, campaign["stop"]) if at_open else (campaign["stop"],))
+                self._observe_mark_excursion(campaign, known,
+                    (opening,) if stop_at_open else (low, high), ambiguous=not stop_at_open)
                 if path == "FILL_AT_OPEN":
                     raw_exit = stop_fill_raw(side, contract["open"][index], contract["high"][index],
                                              contract["low"][index], contract["close"][index],
@@ -1186,6 +1240,14 @@ class PortfolioSimulator:
                                 else max(contract["high"][index], contract["close"][index]))
                 self._close_campaign(symbol, campaign, raw_exit, index, timestamp_ms,
                                      "STOP", "SAME_M5_BAR_AS_INITIAL_FILL")
+                return
+        # The modeled close follows the fill. Only an opening initial fill
+        # with no exit holds the complete candle.
+        if pending["kind"] == "INITIAL" and path == "FILL_AT_OPEN":
+            self._observe_mark_excursion(campaign, (opening, low, high, closing), (low, high))
+        else:
+            self._observe_mark_excursion(campaign, (closing,), (low, high), ambiguous=True)
+
 
     def _execute_emergency_exits(self, index: int, timestamp_ms: int):
         if not self.emergency_latched:
