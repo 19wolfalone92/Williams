@@ -601,6 +601,15 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
         assert "quantity" not in stop and "reduceOnly" not in stop
         assert bot.recover()["ok"]
         exchange.price = 103 if side == "BUY" else 97
+        # Recovery advanced durable state. An old caller must not overwrite
+        # its confirmed protection, nor leave an unsent pending order record.
+        before_algos = dict(exchange.algos)
+        before_orders = bot.db.conn.execute("SELECT COUNT(*) FROM campaign_orders").fetchone()[0]
+        with pytest.raises(RuntimeError, match="CAMPAIGN_STATE_REVISION_CONFLICT"):
+            bot._replace_protection(campaign, 96 if side == "BUY" else 104)
+        assert exchange.algos == before_algos
+        assert bot.db.conn.execute("SELECT COUNT(*) FROM campaign_orders").fetchone()[0] == before_orders
+        campaign = bot.engine.load_campaign(armed["campaign_id"])
         assert bot._replace_protection(campaign, 96 if side == "BUY" else 104)
         assert exchange.algos[2]["algoStatus"] == "CANCELED"
         assert exchange.algos[3]["algoStatus"] == "NEW"

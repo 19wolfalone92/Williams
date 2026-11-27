@@ -514,3 +514,21 @@ def test_reversal_rechecks_risk_and_sizes_at_next_observable_open(side, blocked)
         assert sim.reversal_fills == 1
         assert campaign["stop"] == signal.protective_reference
         assert sim.fills[-1]["fee"] > 0
+
+
+def test_r47_fractal_audit_does_not_invent_center_or_confirmation():
+    from types import SimpleNamespace
+    from research.williams_portfolio_engine import _signal_record, H1_MS
+    from williams_signals import SignalType
+    signal = SimpleNamespace(signal_type=SignalType.FRACTAL, role="ENTRY",
+        signal_id="extended", signal_bar_time_ms=10*H1_MS, side="BUY",
+        trigger_price=100.1, protective_reference=95.0,
+        setup_context={"fractal_center_time_ms":7*H1_MS})
+    row = _signal_record("BTCUSDT", signal, 13*H1_MS, {})
+    assert row["fractal_center_time_ms"] == 7*H1_MS
+    assert row["fractal_confirmation_time_ms"] == 11*H1_MS
+    assert row["fractal_first_observed_at_ms"] == 13*H1_MS
+    signal.setup_context = {}
+    row = _signal_record("BTCUSDT", signal, 13*H1_MS, {})
+    assert row["fractal_center_time_ms"] is None
+    assert row["fractal_confirmed_right_bars"] is None

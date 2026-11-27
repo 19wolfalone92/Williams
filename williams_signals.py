@@ -1306,7 +1306,10 @@ def extract_long_signal_specs(
                     source_candle_index=center_i,
                     expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
                     setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
-                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe),
+                        "fractal_center_time_ms":_row_time_ms(ind.iloc[center_i]),
+                        "fractal_confirmation_bar_open_ms":confirmation_time,
+                        "fractal_confirmation_closed_at_ms":confirmation_time+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1488,7 +1491,10 @@ def extract_short_signal_specs(
                     source_candle_index=center_i,
                     expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
                     setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
-                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe),
+                        "fractal_center_time_ms":_row_time_ms(ind.iloc[center_i]),
+                        "fractal_confirmation_bar_open_ms":confirmation_time,
+                        "fractal_confirmation_closed_at_ms":confirmation_time+_timeframe_ms(timeframe)},
                 )
             )
 

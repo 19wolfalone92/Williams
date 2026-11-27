@@ -2596,13 +2596,15 @@ class FuturesWilliamsRuntime:
         cid = self._client_id("STOP")
         campaign.tags["pending_protection_client_id"] = cid
         campaign.tags["pending_protection_price"] = proposed
-        self.db.save_campaign_order(PendingOrderRecord(
-            order_id="", client_order_id=cid, symbol=symbol, side=side,
-            order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
-            stop_price=proposed, quantity=qty, campaign_id=campaign.campaign_id,
-            signal_id=campaign.current_signal_id,
-        ))
-        self.db.save_campaign(campaign)
+        # A stale snapshot must not leave a phantom pending protective order.
+        with self.db.transaction():
+            self.db.save_campaign(campaign)
+            self.db.save_campaign_order(PendingOrderRecord(
+                order_id="", client_order_id=cid, symbol=symbol, side=side,
+                order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
+                stop_price=proposed, quantity=qty, campaign_id=campaign.campaign_id,
+                signal_id=campaign.current_signal_id,
+            ))
         intent = OrderIntent.new(
             symbol,
             side,
