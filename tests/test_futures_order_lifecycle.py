@@ -571,6 +571,15 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
         if mode == "invalidate_race":
             from williams_scenario_lifecycle import LevelEvent
             monkeypatch.setattr(
+                "futures_williams_runtime.fetch_klines", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
+                "futures_williams_runtime.closed_strategy_frame", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
+                "futures_williams_runtime.wave_bars_from_dataframe", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
                 "futures_williams_runtime.pending_tc2_level_event",
                 lambda *args, **kwargs: LevelEvent("INVALIDATED", now, "TEST_STRUCTURAL_INVALIDATION"),
             )
