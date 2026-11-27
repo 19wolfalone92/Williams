@@ -542,7 +542,7 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 @pytest.mark.parametrize("leverage", [1, 2, 5, 10])
-@pytest.mark.parametrize("mode", ["fill", "expire_race", "partial_cancel", "protection_failure"])
+@pytest.mark.parametrize("mode", ["fill", "invalidate_race", "partial_cancel", "protection_failure"])
 def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch, tmp_path, side, leverage, mode):
     monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "lifecycle.sqlite3"))
     monkeypatch.setenv("DRY_RUN", "false")
@@ -568,10 +568,12 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
         assert campaign.capital_reserved_quote == pytest.approx(armed["quantity"] * armed["trigger_price"] / leverage)
         assert armed["order_id"].startswith("algo:")
         assert len(exchange.algos) == 1 and exchange.amount == 0
-        if mode == "expire_race":
-            campaign = bot.engine.load_campaign(armed["campaign_id"])
-            campaign.tags["pending_signal"]["signal"]["expires_at_ms"] = now - 1
-            bot.db.save_campaign(campaign)
+        if mode == "invalidate_race":
+            from williams_scenario_lifecycle import LevelEvent
+            monkeypatch.setattr(
+                "futures_williams_runtime.pending_tc2_level_event",
+                lambda *args, **kwargs: LevelEvent("INVALIDATED", now, "TEST_STRUCTURAL_INVALIDATION"),
+            )
             exchange.cancel_fill = True
         else:
             exchange.fill_entry(fraction=0.5 if mode == "partial_cancel" else 1.0)
