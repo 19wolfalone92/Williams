@@ -36,7 +36,7 @@ internal fun williamsStructuralFractal(type:String,source:String):Boolean =
  * NTD fractals retain their source-backed trigger/replacement lifecycle.
  * Fresh closed-bar proof is still required at the Binance submission door. */
 internal fun williamsSignalAgeTtlDisabled(type:String,source:String):Boolean =
-    source==williamsTc2Profile || williamsStructuralFractal(type,source)
+    source==williamsTc2Profile
 
 /** Age never invalidates a TC2 STOP formation; trigger, structural invalidation
  * and confirmed replacement are evaluated by the causal H1 lifecycle. */
