@@ -120,3 +120,15 @@ def test_replay_opposition_watcher_is_not_expired_after_one_h1_bar():
     watchers = simulator.active["BTCUSDT"]["opposition_watchers"]
     assert len(watchers) == 1
     assert watchers[0]["expires_at_ms"] == 0
+
+
+@pytest.mark.parametrize("context", [{}, {"h1_closed_at_ms": "malformed"}, {"h1_closed_at_ms": 0}])
+def test_local_intent_timestamp_never_substitutes_for_closed_h1_evidence(context):
+    now = 2_000_000_000_000
+    intent = SimpleNamespace(signal_id="wm1", side="BUY")
+    pending = {"state": "VALIDATED", "created_at_ms": now, "updated_at_ms": now,
+               "signal": {"signal_id": "wm1", "side": "BUY", "type": "REVERSAL",
+                          "strategy_profile": TC2, "signal_bar_time_ms": now-25*H1,
+                          "trigger_price": 110, "protective_reference": 90,
+                          "setup_context": context}}
+    assert _pending_entry_preflight_reason(pending, intent, 100, now) == "pending_h1_snapshot_stale_or_unverified"

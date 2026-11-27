@@ -235,9 +235,10 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
     no_age_ttl=tc2_no_age or structural
     if tc2_no_age or (structural and expires_at==0):
         setup=signal.get("setup_context") or {}
-        closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
-        if closed_at<=0:
-            closed_at=int(pending.get("updated_at_ms",pending.get("created_at_ms",0)) or 0)
+        try:
+            closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+        except (TypeError, ValueError, OverflowError):
+            closed_at=0
         if closed_at<=0 or not 0<=now-closed_at<3_600_000:
             return "pending_h1_snapshot_stale_or_unverified"
     if tc2_no_age:
@@ -1767,8 +1768,6 @@ class FuturesWilliamsRuntime:
                     if tc2_no_age or (structural and expires==0):
                         setup=pending.get("setup_context") or {}
                         closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
-                        if closed<=0:
-                            closed=int(pending_record.get("updated_at_ms",pending_record.get("created_at_ms",0)) or 0)
                         if closed<=0 or not 0<=now-closed<3_600_000:
                             raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
                 except Exception as failure:
@@ -2051,6 +2050,7 @@ class FuturesWilliamsRuntime:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
         signal = candidate.signal
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         if new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError(new_exposure_blocker(signal.strategy_profile))
         selected_profile=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
@@ -2293,6 +2293,7 @@ class FuturesWilliamsRuntime:
         admitted_key=f"campaign_signal_admitted:{campaign.campaign_id}:{signal.signal_id}"
         if self.db.state_get(admitted_key,""):
             raise RuntimeError("This campaign signal was already admitted; reconcile instead of resubmitting")
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         profile=campaign.tags.get("strategy_profile",TC2)
         if new_exposure_blocker(profile) or new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError("WILLIAMS_SOURCE_OBSERVATION_ONLY")
@@ -3467,6 +3468,17 @@ class FuturesWilliamsRuntime:
                 profile=campaign.tags.get("strategy_profile",TC2)
                 pending_invalidation_reason = None
                 family = (signal_payload or {}).get("signal_type")
+                signal_id = (signal_payload or {}).get("signal_id",campaign.current_signal_id)
+                prior_invalidation = campaign.tags.get("tc2_structural_invalidation") or {}
+                structurally_invalidated = (
+                    profile == TC2 and prior_invalidation.get("client_order_id") == cid
+                    and prior_invalidation.get("signal_id") == signal_id
+                    and prior_invalidation.get("state") == "INVALIDATED"
+                )
+                structural_event = None
+                if structurally_invalidated:
+                    invalid_edition = True
+                    pending_invalidation_reason = "H1_PARENT_STRUCTURAL_INVALIDATION"
                 if (status in {"NEW","PENDING_NEW"} and executed<=0 and not invalid_edition and conditional
                         and profile==TC2 and family in {"REVERSAL","SUPER_AO","FRACTAL","THREE_GREEN_BARS"}):
                     try:
@@ -3487,6 +3499,8 @@ class FuturesWilliamsRuntime:
                                 teeth=float(indicators["teeth"].iloc[-5])
                         pending_invalidation_reason=pending_tc2_cancel_reason(event,family,direction,trigger,teeth)
                         invalid_edition=pending_invalidation_reason is not None
+                        if event.state == "INVALIDATED":
+                            structural_event = event
                         if event.state in {"UNVERIFIED","AMBIGUOUS","TRIGGERED"}:
                             SignalJournal(self.db).decision(symbol,"PENDING_REVALIDATION",
                                 "ORDER_"+event.state+":"+event.basis,observed_now,
@@ -3511,6 +3525,18 @@ class FuturesWilliamsRuntime:
                         side="LONG" if campaign.side=="BUY" else "SHORT",timeframe=campaign.execution_timeframe,tick_size=self._tick(symbol))
                     invalid_edition=not bool(history_error) and not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
                         math.isclose(s.trigger_price,float((signal_payload or {}).get("trigger_price",0)),rel_tol=1e-12) for s in setups)
+                if structural_event is not None and invalid_edition:
+                    campaign.tags["tc2_structural_invalidation"] = {
+                        "client_order_id": cid, "signal_id": signal_id,
+                        "state": "INVALIDATED", "known_at_ms": structural_event.known_at,
+                        "basis": structural_event.basis,
+                    }
+                    # Persist the formation fact before the irreversible exchange mutation.
+                    # The reservation remains held until signed order reconciliation.
+                    with self.db.transaction():
+                        self.db.set_campaign_signal_state(signal_id, SignalState.INVALIDATED.value)
+                        self.db.save_campaign(campaign)
+                    structurally_invalidated = True
                 if profile != TC2 and status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
                     proof=correction_entry_context(self.scanner.wave_hierarchy(symbol),campaign.side,
                         signal_at_ms,campaign.current_signal_type)
@@ -3523,7 +3549,7 @@ class FuturesWilliamsRuntime:
                     and executed <= 0
                     and (outside_entry_time or invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
                 ):
-                    cancel_reason="WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else (pending_invalidation_reason or "FORMATION_INVALIDATED") if invalid_edition else "SIGNAL_EXPIRED"
+                    cancel_reason="H1_PARENT_STRUCTURAL_INVALIDATION" if structurally_invalidated else "WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else (pending_invalidation_reason or "FORMATION_INVALIDATED") if invalid_edition else "SIGNAL_EXPIRED"
                     order_id = order.get("orderId")
                     if order_id is None:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
@@ -3535,7 +3561,9 @@ class FuturesWilliamsRuntime:
                         self._submit(cancel_intent,lambda:self.client.cancel_order(symbol,order_id=order_id))
                         order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=conditional)
                         status = str(order.get("status", "")).upper()
-                        executed = float(order.get("executedQty", 0) or 0)
+                        executed = float(order.get("executedQty", order.get("cumQty", 0)) or 0)
+                        if status == "FILLED" and executed <= 0:
+                            raise RuntimeError("FILLED_WITHOUT_VERIFIED_EXECUTION_QUANTITY")
                         if status not in {"CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "FILLED"}:
                             raise RuntimeError("expired entry cancellation has no terminal exchange confirmation")
                         try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000),cancel_reason)
@@ -3547,10 +3575,10 @@ class FuturesWilliamsRuntime:
                             f"{symbol}: expired conditional order cancellation ambiguous: {exc}"
                         ) from exc
                     if executed <= 0:
-                        self._set_pending_signal_state(campaign, SignalState.EXPIRED)
-                        self.db.set_campaign_signal_state(
-                            campaign.current_signal_id, SignalState.EXPIRED.value
-                        )
+                        final_signal_state = (SignalState.INVALIDATED if structurally_invalidated else
+                            SignalState.CANCELLED if profile == TC2 else SignalState.EXPIRED)
+                        self._set_pending_signal_state(campaign, final_signal_state)
+                        self.db.set_campaign_signal_state(signal_id, final_signal_state.value)
                         campaign.pending_risk_quote = 0.0
                         campaign.capital_reserved_quote = 0.0
                         campaign.tags.pop("pending_order_id", None)
@@ -3773,8 +3801,9 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status in {"CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
-                    self._set_pending_signal_state(campaign, SignalState.CANCELLED)
-                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                    final_signal_state = SignalState.INVALIDATED if structurally_invalidated else SignalState.CANCELLED
+                    self._set_pending_signal_state(campaign, final_signal_state)
+                    self.db.set_campaign_signal_state(signal_id, final_signal_state.value)
                     campaign.pending_risk_quote = 0.0
                     campaign.capital_reserved_quote = 0.0
                     campaign.state = (

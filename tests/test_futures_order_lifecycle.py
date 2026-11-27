@@ -1169,3 +1169,43 @@ def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(hal
     with pytest.raises(RuntimeError,match='H1_SNAPSHOT_STALE_BEFORE_TRANSPORT' if fault=='STALE_H1' else 'TRANSPORT_PLAN_CHANGED'):
         bot._arm_entry(candidate(side))
     assert bot._pending_entries()==[] and bot.db.open_campaigns()==[]
+
+
+@pytest.mark.parametrize("armed_runtime", ["BUY","SELL"], indirect=True)
+def test_structurally_invalidated_pending_signal_stays_consumed_after_restart(armed_runtime, monkeypatch):
+    from williams_scenario_lifecycle import LevelEvent
+    bot, exchange, armed = armed_runtime
+    campaign = bot.engine.load_campaign(armed["campaign_id"])
+    payload = campaign.tags["pending_signal"]["signal"]
+    signal_id = payload["signal_id"]
+    now = int(time.time()*1000)
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.closed_strategy_frame", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.wave_bars_from_dataframe", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.pending_tc2_level_event",
+                        lambda *a, **k: LevelEvent("INVALIDATED", now, "TEST_STRUCTURAL_INVALIDATION"))
+    results = bot._reconcile_pending()
+    assert results[0]["reason"] == "H1_PARENT_STRUCTURAL_INVALIDATION", results
+    assert not bot._pending_entries()
+    assert bot.db.campaign_risk_reserved_quote() == 0
+    assert bot.db.terminal_campaign_signal_state(signal_id) == "INVALIDATED"
+    restarted = FuturesWilliamsRuntime("test-key","test-secret",testnet=True)
+    monkeypatch.setattr(restarted.client, "_request", exchange.request)
+    try:
+        assert restarted.db.terminal_campaign_signal_state(signal_id) == "INVALIDATED"
+        owner = restarted.engine.load_campaign(armed["campaign_id"])
+        assert owner.tags["tc2_structural_invalidation"]["signal_id"] == signal_id
+        signal = SignalSpec.new(symbol=campaign.symbol, side=campaign.side, signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=int(payload["signal_bar_time_ms"]),
+            trigger_price=float(payload["trigger_price"]), protective_reference=float(payload["protective_reference"]),
+            setup_context={"h1_closed_at_ms":now-1000})
+        assert signal.signal_id == signal_id
+        candidate = FuturesCandidate(campaign.symbol,"LONG" if campaign.side=="BUY" else "SHORT",
+                                     signal,(signal,),.01,.001,True,90)
+        before = len(exchange.calls)
+        with pytest.raises(RuntimeError, match="CAMPAIGN_SIGNAL_TERMINAL"):
+            restarted._arm_entry(candidate)
+        assert not any(m=="POST" for m,_,_ in exchange.calls[before:])
+    finally:
+        restarted.client.session.close()
+        restarted.db.conn.close()

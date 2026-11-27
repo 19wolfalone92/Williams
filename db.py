@@ -932,17 +932,41 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def terminal_campaign_signal_state(self, signal_id):
+        """Irreversible formation facts, independent of bounded UI history.
+
+        CANCELLED and EXPIRED alone are not proof that a formation is
+        consumed or structurally invalidated.
+        """
+        row = self.conn.execute(
+            "SELECT state FROM campaign_signals WHERE signal_id=? "
+            "AND state IN ('FILLED','INVALIDATED','SUPERSEDED','REPLACED')",
+            (str(signal_id),),
+        ).fetchone()
+        return row["state"] if row is not None else None
+
+    def require_unconsumed_campaign_signal(self, signal_id):
+        state = self.terminal_campaign_signal_state(signal_id)
+        if state is not None:
+            raise RuntimeError("CAMPAIGN_SIGNAL_TERMINAL:" + state)
+
     def save_campaign_signal(self, signal, campaign_id, state="DETECTED", supersedes_signal_id=""):
         data = signal.to_dict() if hasattr(signal, "to_dict") else dict(signal)
         st = data.get("signal_type")
         role = data.get("role")
-        self.conn.execute(
+        # A conditional INSERT protects consumed identities even if
+        # another SQLite connection changes the state before this write.
+        cur = self.conn.execute(
             """INSERT OR REPLACE INTO campaign_signals(
                 signal_id,campaign_id,symbol,side,signal_type,role,timeframe,
                 signal_bar_time_ms,trigger_price,protective_reference,invalidation_price,
                 teeth_at_detection,angulation_score,wave_confidence,wave_exhaustion_risk,
                 htf_confirmed,state,source_candle_index,expires_at_ms,context_versions_json,reason,supersedes_signal_id
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+              WHERE NOT EXISTS (
+                SELECT 1 FROM campaign_signals WHERE signal_id=?
+                AND state IN ('FILLED','INVALIDATED','SUPERSEDED','REPLACED')
+              )""",
             (
                 data["signal_id"], str(campaign_id), data["symbol"], data["side"],
                 st.value if hasattr(st,"value") else st, role.value if hasattr(role,"value") else role,
@@ -952,14 +976,26 @@ class Database:
                 float(data.get("wave_confidence",0) or 0), float(data.get("wave_exhaustion_risk",0) or 0),
                 1 if data.get("htf_confirmed") else 0, state, int(data.get("source_candle_index",-1) or -1),
                 int(data.get("expires_at_ms",0) or 0), json.dumps(data.get("context_versions",{}),sort_keys=True),
-                data.get("reason",""), supersedes_signal_id or None,
+                data.get("reason",""), supersedes_signal_id or None, data["signal_id"],
             ),
         )
+        if cur.rowcount != 1:
+            if not self._transaction_active:
+                self.conn.rollback()
+            self.require_unconsumed_campaign_signal(data["signal_id"])
+            raise RuntimeError("CAMPAIGN_SIGNAL_WRITE_NOT_APPLIED")
         if not self._transaction_active:
             self.conn.commit()
 
     def set_campaign_signal_state(self, signal_id, state):
-        self.conn.execute("UPDATE campaign_signals SET state=? WHERE signal_id=?",(str(state),str(signal_id)))
+        # A confirmed racing fill takes precedence over structural
+        # invalidation. Rescans and cancellations cannot undo terminal facts.
+        self.conn.execute(
+            """UPDATE campaign_signals SET state=? WHERE signal_id=?
+               AND (state NOT IN ('FILLED','INVALIDATED','SUPERSEDED','REPLACED')
+                    OR state=? OR ?='FILLED')""",
+            (str(state),str(signal_id),str(state),str(state)),
+        )
         if not self._transaction_active:
             self.conn.commit()
 

@@ -7059,7 +7059,8 @@ private class NativeEngine(
                         pending.optString("direction"),parentId,pending.optString("signal_type"),
                         pending.optString("strategy_profile",williamsTc2Profile),price,stop,now,
                         pending.optString("entry_client_id"),pending.optString("reentry_owner_id"),
-                        pending.optString("execution_semantics","STOP_ENTRY"),pending.optDouble("reference_close",0.0))
+                        pending.optString("execution_semantics","STOP_ENTRY"),pending.optDouble("reference_close",0.0),
+                        allowLegacyTc2PendingAgeProof=true)
                     if(proofError!=null) proofError
                     else {
                         val h1=fetchCandles(symbol,"1h",220)
@@ -8472,10 +8473,11 @@ private class NativeEngine(
                 (it.executionSemantics=="STOP_ENTRY" || profitReentry(it) && it.executionSemantics=="MARKET_ON_CLOSE" &&
                     williamsMarketOnCloseReason(it.signalBarTimeMs,3_600_000L,contextNow,it.triggerPrice,futuresMarketData.markPrice(symbol))==null) &&
                 williamsH1SignalTimeEligible(it.signalBarTimeMs,it.type,it.strategyProfile,contextNow) &&
-                !williamsH1ParentAlreadyFilled(existing,it.signalId,it.type,it.signalBarTimeMs)
+                !williamsH1ParentAlreadyFilled(existing,it.signalId,it.type,it.signalBarTimeMs) &&
+                    williamsTc2TerminalSignalBlocker(existing,it.signalId)==null
         }
         if (freshSignals.isEmpty()) {
-            lastError = "WILLIAMS_SIGNAL_EXPIRED: no fresh confirmed H1 hypothesis for $symbol"
+            lastError = "WILLIAMS_NO_ELIGIBLE_H1_FORMATION: $symbol"
             return rejectDecision(symbol,lastError ?: "ENTRY_GATE_BLOCKED")
         }
 

@@ -4441,6 +4441,11 @@ internal class NativeFuturesCampaignCoordinator(
             return@synchronized safePreflightRejection(it)
         }
         val currentIntents = intents()
+        if(plan.strategyProfile==williamsTc2Profile && plan.signalType!="OPERATOR_FORCED_DIRECTION") {
+            williamsTc2TerminalSignalBlocker(currentIntents,plan.signalId)?.let {
+                return@synchronized safePreflightRejection(it)
+            }
+        }
         val isReversal=plan.reversalOwnerId.isNotBlank()
         if(isReversal && (plan.kind!=EntryKind.MARKET || plan.strategyProfile!=williamsTc2Profile ||
             plan.entryClientId.isNotBlank() || plan.reentryOwnerId.isNotBlank() ||

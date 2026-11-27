@@ -1,6 +1,7 @@
 package com.williamsbot
 
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Test
 import java.time.Instant
@@ -196,5 +197,39 @@ class WilliamsBookH1EntryPolicyTest {
         assertNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",extreme+.1,lastClosedLine,.1))
         assertNotNull(williamsBookFractalTeethBlocker("FRACTAL","LONG",extreme+.1,active,.1))
         assertTrue(williamsBookH1ActivationTeeth(bars,at+WILLIAMS_H1_MS).isNaN())
+    }
+
+    @Test fun legacyPendingProofMigratesWithoutAgeCancellationButCannotAuthorizeNewPost() {
+        for(side in listOf("LONG","SHORT")) {
+            val entry=if(side=="LONG") 105.0 else 95.0
+            val stop=if(side=="LONG") 99.0 else 101.0
+            val p=proof(side)
+            val later=t+25*WILLIAMS_H1_MS
+            assertNull(blocker(side,p,entry,stop,at=later))
+            p.put("validity_policy","PROJECT_AGE_WINDOW").put("expires_at_ms",t+5*WILLIAMS_H1_MS)
+            assertNotNull(blocker(side,p,entry,stop,at=later))
+            fun pending()=williamsBookH1ProofBlocker(JSONObject().put("book_h1_entry",p).toString(),
+                side,p.getString("signal_id"),p.getString("signal_type"),williamsTc2Profile,
+                entry,stop,later,allowLegacyTc2PendingAgeProof=true)
+            assertNull(pending())
+            p.put("expires_at_ms",t+13*WILLIAMS_H1_MS)
+            assertNotNull(pending())
+        }
+    }
+
+    @Test fun terminalFormationFactsSurviveSerializationAndBlockReAdmission() {
+        val records=JSONArray()
+            .put(JSONObject().put("signal_id","invalid").put("intent_role","ENTRY")
+                .put("strategy_profile",williamsTc2Profile)
+                .put("cancel_reason","H1_PARENT_STRUCTURAL_INVALIDATION").put("cancel_attempt_at_ms",now))
+            .put(JSONObject().put("signal_id","filled-add").put("intent_role","ADD_ON")
+                .put("strategy_profile",williamsTc2Profile).put("executed_qty","0.2"))
+        val restored=JSONArray(records.toString())
+        assertEquals("TC2_SIGNAL_STRUCTURALLY_INVALIDATED",williamsTc2TerminalSignalBlocker(restored,"invalid"))
+        assertEquals("TC2_SIGNAL_ALREADY_EXECUTED_OR_FILL_UNRESOLVED",williamsTc2TerminalSignalBlocker(restored,"filled-add"))
+        assertNull(williamsBookH1RetryGeneration(restored,"invalid"))
+        assertNull(williamsBookH1RetryGeneration(restored,"filled-add"))
+        assertNull(williamsTc2TerminalSignalBlocker(restored,"new"))
+        assertEquals(0,williamsBookH1RetryGeneration(restored,"new"))
     }
 }

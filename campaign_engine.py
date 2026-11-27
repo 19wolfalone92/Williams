@@ -53,6 +53,7 @@ class CampaignEngine:
         return uuid.uuid4().hex
 
     def create_campaign(self, signal: SignalSpec, *, initial_risk_pct: float) -> TradingCampaign:
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         campaign = TradingCampaign(
             campaign_id=self.new_campaign_id(),
             symbol=signal.symbol,
@@ -80,12 +81,13 @@ class CampaignEngine:
                 "htf_confirmed": bool(signal.htf_confirmed),
             },
         )
-        self.db.save_campaign(campaign)
-        self.db.save_campaign_signal(
-            signal,
-            campaign.campaign_id,
-            state=SignalState.DETECTED.value,
-        )
+        with self.db.transaction():
+            self.db.save_campaign(campaign)
+            self.db.save_campaign_signal(
+                signal,
+                campaign.campaign_id,
+                state=SignalState.DETECTED.value,
+            )
         self.db.log_campaign_event(
             campaign.campaign_id,
             CampaignEventType.SIGNAL_DETECTED.value,
@@ -256,6 +258,7 @@ class CampaignEngine:
         return campaign
 
     def arm_add_on(self, campaign: TradingCampaign, signal: SignalSpec, *, risk_quote: float, capital_reserved_quote: float) -> TradingCampaign:
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         now_ms = int(time.time() * 1000)
         if signal.expires_at_ms and now_ms > int(signal.expires_at_ms):
             raise ValueError("cannot arm expired Williams add-on signal")
