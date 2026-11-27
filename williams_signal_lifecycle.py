@@ -90,9 +90,16 @@ class SignalJournal:
                     state='EXPIRED' if s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'NOT_REEMITTED'
                     self._event(data,s,state,'FORMATION','NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF',now)
             for source in signals:
-                s=dict(deepcopy(source),first_seen_at_ms=known.get(source['signal_id'],{}).get('first_seen_at_ms',now),last_seen_at_ms=now)
+                prior=known.get(source['signal_id'],{})
+                s=dict(deepcopy(source),first_seen_at_ms=prior.get('first_seen_at_ms',now),last_seen_at_ms=now)
+                # Re-emission is market evidence, not an exchange observation.
+                # Preserve the last order-specific signed observation across
+                # every scan and SQLite restart; otherwise FILLED/CANCELLED
+                # silently regresses to VALID and pending proof disappears.
+                if 'exchange_observation' in prior:
+                    s['exchange_observation']=deepcopy(prior['exchange_observation'])
                 self._event(data,s,'DETECTED','FORMATION','FORMATION_OBSERVED',now)
-                state=signal_lifecycle(s,None,now,now,True)
+                state=signal_lifecycle(s,s.get('exchange_observation'),now,now,True)
                 self._event(data,s,state,'CONFIRMATION','CLOSED_BAR_FORMATION_CONFIRMED' if state=='VALID' else state,now)
                 if not policy.allows(now):self._event(data,s,'BLOCKED','ENTRY_TIME','ENTRY_TIME_POLICY_BLOCKED: '+json.dumps(policy.to_dict(),sort_keys=True),now,'PAIR_GATE')
                 known[s['signal_id']]=s

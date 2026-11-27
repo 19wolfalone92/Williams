@@ -126,3 +126,21 @@ def test_legacy_spot_utc_window_remains_unchanged():
     assert config.entry_time_policy.mode == "UTC_WINDOW"
     ts = int(datetime(2026, 11, 26, 21, tzinfo=timezone.utc).timestamp()*1000)
     assert not config.entry_time_policy.allows(ts)
+
+@pytest.mark.parametrize("status,expected", [
+    ("NEW","BINANCE_PENDING"), ("PARTIALLY_FILLED","PARTIAL_FILL"),
+    ("FILLED","FILLED"), ("CANCELED","CANCELLED"),
+])
+def test_sqlite_rescan_does_not_erase_order_specific_observation(tmp_path,status,expected):
+    path=str(tmp_path/'signal-rescan.sqlite3')
+    case=CONTRACT['lifecycle_cases'][1]; now=case['now']; signal=case['signal']
+    journal=SignalJournal(Database(path))
+    journal.observe('BTCUSDT',[signal],now,EntryTimePolicy())
+    journal.order('BTCUSDT',signal['signal_id'],dict(status=status,clientOrderId='signed-order'),now+1)
+    journal.observe('BTCUSDT',[],now+2,EntryTimePolicy())
+    journal.observe('BTCUSDT',[signal],now+3,EntryTimePolicy())
+    fact=SignalJournal(Database(path)).view('BTCUSDT',now+4)['signals'][0]
+    assert fact['state']==expected
+    assert fact['first_seen_at_ms']==now
+    assert fact['exchange_observation']['client_id']=='signed-order'
+    assert fact['exchange_observation']['entry_order_observed_at_ms']==now+1

@@ -7116,12 +7116,86 @@ private class NativeEngine(
                                 .put("protective_price",signal.protectivePrice))
                         }
                     },futuresMarketData.price(symbol),tick,now)
-                    proposal?.let { it to now }
-                }.getOrNull()
+                    if(proposal==null) null else {
+                        val closed=bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                        val raw=futuresMarketData.klines(symbol,"1h",2)
+                        val recent=(0 until raw.length()).map { idx ->
+                            val row=raw.getJSONArray(idx)
+                            WilliamsWaveBar(row.getLong(0),row.getDouble(1),row.getDouble(2),
+                                row.getDouble(3),row.getDouble(4),row.getDouble(5))
+                        }
+                        val preflightNow=futuresMarketData.exchangeNowMs()
+                        val contract=futuresMarketData.price(symbol)
+                        val blocker=tc2ReanchorMarketBlocker(pending,proposal,contract,closed,recent,tick,preflightNow)
+                        if(blocker!=null || paused || killLatched || forceTestnetMode ||
+                            !entryTimePolicy.allows(preflightNow) ||
+                            williamsH1ParentAlreadyFilled(intents,proposal.optString("signal_id"),
+                                proposal.optString("type"),proposal.optLong("signal_bar_time_ms"))) {
+                            runCatching { auditStore.recordCockpitEvent("FRACTAL_REANCHOR",symbol,
+                                pending.optString("direction"),"PRE_CANCEL_REJECTED_OLD_RETAINED",
+                                blocker ?: "ENTRY_POLICY_OR_OWNERSHIP_NOT_READY") }
+                            null
+                        } else {
+                            // Preview the same scanner risk/quantity contract with
+                            // the old reservation removed only hypothetically.
+                            // The real reservation remains until terminal cancel.
+                            val rules=symbolFilters(symbol)
+                            val account=parseFuturesAccountSnapshot(futuresCampaignCoordinator.accountSnapshot())
+                            val otherRisk=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }
+                                .filter { it.optString("client_id")!=pending.optString("client_id") &&
+                                    it.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(it) }
+                                .sumOf { conservativeRiskReservation(futuresCampaignReservedRisk(it,intents),maxTotalRiskPct) }
+                            val initialCap=williamsTc2InitialUnitRisk(campaignInitialRiskPct,campaignRiskLimitPct,maxRiskPerTradePct)
+                            val riskPct=min(initialCap,min(maxRiskPerTradePct,maxTotalRiskPct-otherRisk))
+                            val long=pending.optString("direction")=="LONG"
+                            val trigger=if(long) normalizeTriggerPrice(proposal.optDouble("trigger_price"),rules.tick)
+                                else normalizePrice(proposal.optDouble("trigger_price"),rules.tick)
+                            val stop=if(long) normalizePrice(proposal.optDouble("protective_price"),rules.tick)
+                                else normalizeTriggerPrice(proposal.optDouble("protective_price"),rules.tick)
+                            val lev=futuresLeverageSettings.forSymbol(symbol)
+                            val effectiveLoss=abs(trigger-stop)/trigger+2.0*feeBufferPerSidePct+maxSlippagePct
+                            val step=ExecutionMath.commonQuantityStep(rules.step,rules.marketStep)
+                            val marketLotEnabled=rules.marketStep.isFinite() && rules.marketStep>0.0
+                            val qtyMin=if(marketLotEnabled) max(rules.minQty,rules.marketMinQty) else rules.minQty
+                            val qtyMax=if(marketLotEnabled) min(rules.maxQty,rules.marketMaxQty) else rules.maxQty
+                            val notional=if(account!=null && riskPct>0 && effectiveLoss.isFinite() && effectiveLoss>0)
+                                min(account.equityUsdt*0.25,min(account.availableUsdt*lev*0.95,
+                                    account.equityUsdt*riskPct/effectiveLoss)) else 0.0
+                            val qty=if(notional>0 && trigger>0 && step>0) floorStep(notional/trigger,step) else 0.0
+                            val sizeOk=account!=null && qty.isFinite() && qty>=qtyMin && qty<=qtyMax &&
+                                qty>0 && qty*trigger>=rules.minNotional && qty*trigger<=rules.maxNotional &&
+                                ExecutionMath.isMultiple(qty,rules.step) &&
+                                (!marketLotEnabled || ExecutionMath.isMultiple(qty,rules.marketStep)) &&
+                                assessFuturesEntryRisk(pending.optString("direction"),fmtQty(qty,rules.decimals),
+                                    fmtPrice(trigger,rules.tick),fmtPrice(stop,rules.tick),
+                                    account.equityUsdt,account.availableUsdt,riskPct,
+                                    feeBufferPerSidePct,maxSlippagePct,lev.toDouble()).blocker==null
+                            // This conservative preview does not credit released
+                            // margin until the exchange proves cancellation.
+                            if(!sizeOk) {
+                                runCatching { auditStore.recordCockpitEvent("FRACTAL_REANCHOR",symbol,
+                                    pending.optString("direction"),"PRE_CANCEL_REJECTED_OLD_RETAINED",
+                                    "REPLACEMENT_RISK_OR_EXCHANGE_SIZE_NOT_PROVEN") }
+                                null
+                            } else proposal to preflightNow
+                        }
+                    }
+                }.getOrElse { failure ->
+                    lastError="FRACTAL_REANCHOR_PREFLIGHT_UNAVAILABLE: "+symbol+": "+
+                        safeDiagnosticText(failure.message ?: failure.javaClass.simpleName)
+                    null
+                }
                 if(next!=null) {
                     val (replacement,now)=next
                     val oldClientId=pending.optString("client_id")
+                    val lock=JSONObject(replacement.toString()).put("symbol",symbol)
+                        .put("direction",pending.optString("direction"))
+                        .put("recorded_at_ms",now).put("old_client_id",oldClientId)
+                        .put("phase","CANCEL_REQUESTED")
                     val cancel=withCampaignMutation(symbol,"TC2_FRACTAL_REANCHOR_CANCEL",allowPaused=true) {
+                        check(executionStore.writeState("tc2_fractal_reanchor_$symbol",lock.toString())) {
+                            "Cannot durably record reanchor request before cancellation"
+                        }
                         // Fence concurrent scanners BEFORE releasing the durable
                         // Mutation Door. A freshly canceled old order must not
                         // be immediately resubmitted between DELETE and journaling.
@@ -7152,9 +7226,7 @@ private class NativeEngine(
                         lastError="FRACTAL_REANCHOR_CANCEL_UNRESOLVED: $symbol/$oldClientId"
                         return false
                     }
-                    val lock=JSONObject(replacement.toString()).put("symbol",symbol)
-                        .put("direction",pending.optString("direction"))
-                        .put("recorded_at_ms",now).put("old_client_id",oldClientId)
+                    lock.put("phase","CANCEL_CONFIRMED")
                     check(executionStore.writeState("tc2_fractal_reanchor_$symbol",lock.toString())) {
                         "Cannot durably record target fractal after cancel; no replacement order"
                     }
@@ -8492,6 +8564,20 @@ private class NativeEngine(
         // signal exists. Re-anchor ownership still pins a replacement.
         val storedReanchor = executionStore.readState("tc2_fractal_reanchor_$symbol")
             ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        // A crash between CANCEL and its terminal journal write must never
+        // turn a replacement hint into new-order authority. Resolve the exact
+        // old client id against the freshly reconciled coordinator first.
+        if(storedReanchor?.optString("phase")=="CANCEL_REQUESTED") {
+            val old=(0 until existing.length()).mapNotNull { existing.optJSONObject(it) }
+                .singleOrNull { it.optString("client_id")==storedReanchor.optString("old_client_id") }
+            if(old==null || exchangeOrderStatus(old) !in ENTRY_ORDER_TERMINAL_STATUSES ||
+                campaignLifecycleStatus(old)!="CLOSED_OR_STOPPED")
+                return rejectDecision(symbol,"FRACTAL_REANCHOR_OLD_CANCEL_UNCONFIRMED")
+            storedReanchor.put("phase","CANCEL_CONFIRMED")
+            check(executionStore.writeState("tc2_fractal_reanchor_$symbol",storedReanchor.toString())) {
+                "FRACTAL_REANCHOR_CANCEL_RECOVERY_NOT_DURABLE"
+            }
+        }
         val reanchorLock = if(storedReanchor!=null &&
             contextNow - storedReanchor.optLong("recorded_at_ms")>18_000_000L) {
             // Historical levels have already expired after five hours; do not

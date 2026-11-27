@@ -78,3 +78,36 @@ internal fun confirmedBetterFractal(pending:JSONObject, signals:JSONArray, mark:
                 if(side=="LONG") mark>=newer.optDouble("trigger_price") else mark<=newer.optDouble("trigger_price"))
         }
 }
+
+/** Read-only pre-cancel proof. A newer formation is not authorization to
+ * destroy an existing resting order. The exact same source/price proof must
+ * pass again after the exchange confirms cancellation; this is not atomic.
+ */
+internal fun tc2ReanchorMarketBlocker(
+    old:JSONObject, replacement:JSONObject, contract:Double,
+    closed:List<WilliamsWaveBar>, recent:List<WilliamsWaveBar>, tick:Double, now:Long
+):String? {
+    val direction=old.optString("direction")
+    val oldTrigger=old.optString("entry_price").toDoubleOrNull() ?: return "OLD_TRIGGER_UNVERIFIED"
+    val at=replacement.optLong("signal_bar_time_ms")
+    val trigger=replacement.optDouble("trigger_price",Double.NaN)
+    val stop=replacement.optDouble("protective_price",Double.NaN)
+    if(direction !in setOf("LONG","SHORT") || listOf(oldTrigger,contract,trigger,stop,tick).any { !it.isFinite() || it<=0 })
+        return "REANCHOR_PRICE_PROOF_UNVERIFIED"
+    val long=direction=="LONG"
+    if(if(long) contract>=oldTrigger else contract<=oldTrigger)
+        return "REANCHOR_OLD_ORDER_TRIGGER_CROSSED_RECONCILE"
+    if(if(long) contract>=trigger || contract<=stop || stop>=trigger
+       else contract<=trigger || contract>=stop || stop<=trigger)
+        return "REANCHOR_NEW_LEVEL_NOT_ACTIONABLE"
+    if(williamsClosedH1HistoryBlocker(closed,now)!=null || !validWilliamsEditionBars(closed))
+        return "REANCHOR_CLOSED_HISTORY_UNVERIFIED"
+    if(williamsBookH1ObservedBreakoutBlocker(direction,old.optLong("signal_bar_time_ms"),
+            oldTrigger,now,closed,recent)!=null)
+        return "REANCHOR_OLD_ORDER_TRIGGER_OR_HISTORY_UNVERIFIED"
+    val parent=WilliamsH1Parent(replacement.optString("signal_id"),direction,at,trigger,stop,Long.MAX_VALUE)
+    williamsH1ParentInvalidation(parent,closed,contract,now)?.let { return it }
+    williamsBookH1ObservedBreakoutBlocker(direction,at,trigger,now,closed,recent)?.let { return it }
+    return williamsBookFractalTeethBlocker(replacement.optString("type"),direction,trigger,
+        williamsBookH1ActivationTeeth(closed,now),tick)
+}
