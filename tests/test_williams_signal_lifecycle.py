@@ -61,6 +61,7 @@ def test_absence_from_next_scan_is_not_structural_invalidation():
 def test_explicit_expiry_remains_terminal_when_signal_is_not_reemitted():
     now = 1_800_000_000_000
     item = signal(now, now + 1_000)
+    item["strategy_profile"] = "NTD_FIVE_DIMENSIONS"
     db = FakeDB()
     journal = SignalJournal(db)
 
@@ -70,3 +71,12 @@ def test_explicit_expiry_remains_terminal_when_signal_is_not_reemitted():
     data = json.loads(db.state["signal_timeline_BTCUSDT"])
     assert data["events"][-1]["state"] == "EXPIRED"
     assert signal_lifecycle(item, None, now + 1_001, now + 1_001, False) == "EXPIRED"
+
+
+
+def test_tc2_wise_man_signal_does_not_expire_after_twenty_five_h1_bars():
+    now = 1_800_000_000_000
+    item = signal(now, now + 1_000)  # legacy stored expiry must not veto TC2
+    item["setup_context"] = {"h1_closed_at_ms": now + 25 * 3_600_000}
+    assert signal_lifecycle(item, None, now + 25 * 3_600_000,
+                             now + 25 * 3_600_000, True) == "VALID"

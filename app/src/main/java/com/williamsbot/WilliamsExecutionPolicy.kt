@@ -32,10 +32,16 @@ internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
     source in setOf(williamsTc2Profile,williamsNtdProfile) && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
 
-/** TC2 PDF149 / NTD PDF43: until trigger or replacement; zero is structural validity.
+/** TC2 STOP formations use causal trigger/invalidation/replacement evidence;
+ * NTD fractals retain their source-backed trigger/replacement lifecycle.
  * Fresh closed-bar proof is still required at the Binance submission door. */
+internal fun williamsSignalAgeTtlDisabled(type:String,source:String):Boolean =
+    source==williamsTc2Profile || williamsStructuralFractal(type,source)
+
+/** Age never invalidates a TC2 STOP formation; trigger, structural invalidation
+ * and confirmed replacement are evaluated by the causal H1 lifecycle. */
 internal fun williamsH1SignalExpiry(at:Long,type:String,source:String):Long =
-    if(williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS
+    if(williamsSignalAgeTtlDisabled(type,source)) 0L else at+5*WILLIAMS_H1_MS
 internal fun williamsH1SignalTimeEligible(at:Long,type:String,source:String,now:Long):Boolean {
     if(at<=0L || at%WILLIAMS_H1_MS!=0L || at+WILLIAMS_H1_MS>now) return false
     val expiry=williamsH1SignalExpiry(at,type,source)

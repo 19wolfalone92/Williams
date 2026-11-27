@@ -60,8 +60,12 @@ class WilliamsExecutionPolicyTest {
             assertNull(williamsBookH1ProofBlocker(JSONObject().put("book_h1_entry",proof).toString(),
                 direction,"f",type,williamsTc2Profile,entry.toDouble(),stop.toDouble(),now))
         }
-        assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsTc2Profile,now))
+        for(type in listOf("REVERSAL","SUPER_AO","FRACTAL","THREE_GREEN_BARS")) {
+            assertEquals(0L,williamsH1SignalExpiry(at,type,williamsTc2Profile))
+            assertTrue(williamsH1SignalTimeEligible(at,type,williamsTc2Profile,now))
+        }
         assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
+        assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }
         assertNull(williamsClosedH1HistoryBlocker(bars,at+45*h+1000))
         assertEquals("H1_SNAPSHOT_STALE",williamsClosedH1HistoryBlocker(bars,at+46*h+1000))

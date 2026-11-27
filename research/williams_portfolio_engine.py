@@ -812,8 +812,7 @@ class PortfolioSimulator:
                 continue
             signal_id = str(signal.signal_id)
             actual_expiry = int(getattr(signal, "expires_at_ms", 0) or 0)
-            expires_at = min(actual_expiry if actual_expiry > 0 else timestamp_ms + H1_MS,
-                             timestamp_ms + H1_MS)
+            expires_at = actual_expiry if actual_expiry > 0 else 0
             if signal_id in watchers:
                 watcher = watchers[signal_id]
                 watcher["last_seen_ms"] = timestamp_ms
@@ -830,7 +829,7 @@ class PortfolioSimulator:
                                     "OPPOSITE_EXIT_WATCH")
         kept = []
         for signal_id, watcher in watchers.items():
-            if timestamp_ms >= int(watcher["expires_at_ms"]):
+            if int(watcher.get("expires_at_ms",0) or 0)>0 and timestamp_ms >= int(watcher["expires_at_ms"]):
                 signal = watcher["signal"]
                 self._signal_status(symbol, signal, watcher["known_at_ms"], watcher.get("context", {}),
                                     "EXPIRED", "OPPOSITE_SIGNAL_NO_LONGER_REEMITTED")

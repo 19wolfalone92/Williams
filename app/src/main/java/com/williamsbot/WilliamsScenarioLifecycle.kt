@@ -20,7 +20,7 @@ internal fun evaluateWilliamsLevelEvent(
     fun event(state:String,at:Long=0L,basis:String="NONE")=WilliamsLevelEvent(state,at,basis)
     if(side !in listOf("LONG","SHORT") || !trigger.isFinite() || trigger<=0 ||
         !mark.isFinite() || mark<=0 || scopeStartedAt<=0 || signalClosedAt<=scopeStartedAt ||
-        signalClosedAt>now || frameMs<=0 || expiresAt<=signalClosedAt)
+        signalClosedAt>now || frameMs<=0 || (expiresAt>0L && expiresAt<=signalClosedAt))
         return event("UNVERIFIED",basis="INVALID_EVENT_INPUT")
     val long=side=="LONG"
     if(invalidation!=null && (!invalidation.isFinite() || invalidation<=0 ||
@@ -28,7 +28,7 @@ internal fun evaluateWilliamsLevelEvent(
         return event("UNVERIFIED",basis="INVALID_BOUNDARY")
     fun hitTrigger(price:Double)=if(long) price>=trigger else price<=trigger
     fun hitInvalid(price:Double)=invalidation!=null && if(long) price<=invalidation else price>=invalidation
-    val horizon=minOf(now,expiresAt)
+    val horizon=if(expiresAt>0L) minOf(now,expiresAt) else now
     // Ignore forming/future candles, including their extrema. Validate the
     // complete prefix only up to the first terminal event; later gaps cannot
     // erase a crossing that was already proven before them.
@@ -49,7 +49,7 @@ internal fun evaluateWilliamsLevelEvent(
         expected=known
     }
     if(expected<=horizon-frameMs) return event("UNVERIFIED",basis="CLOSED_HISTORY_NOT_PROVEN")
-    if(now>=expiresAt) return event("EXPIRED")
+    if(expiresAt>0L && now>=expiresAt) return event("EXPIRED")
     if(hitInvalid(mark)) return event("INVALIDATED",now,"LIVE_MARK")
     if(hitTrigger(mark)) return event("TRIGGERED",now,"LIVE_MARK")
     return event("WAITING")

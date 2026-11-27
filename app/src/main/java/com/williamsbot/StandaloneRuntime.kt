@@ -6980,18 +6980,21 @@ private class NativeEngine(
             .onFailure { lastError = "Futures trade audit backfill failed: " + (it.message ?: it.javaClass.simpleName) }
         val positions = futuresCampaignCoordinator.positionsSnapshot()
         val intents = futuresCampaignCoordinator.intentsSnapshot()
-        // Accepted conditional entries have a bounded H1 life. A correction
-        // additionally needs its original parent to remain valid before fill.
+        // Source-specific expiry remains for observer families. TC2 pending
+        // entries are governed by the causal trigger/invalidation lifecycle.
+        // A correction additionally needs its original parent to remain valid before fill.
         for (i in 0 until intents.length()) {
             val pending=intents.optJSONObject(i) ?: continue
             if (pending.optString("intent_role","ENTRY") !in setOf("ENTRY","ADD_ON") || campaignLifecycleStatus(pending)!="ENTRY_PENDING") continue
             val symbol=pending.optString("symbol")
             val signalAt=pending.optLong("signal_bar_time_ms",0L)
-            val expires=pending.optLong("signal_expires_at_ms",if (signalAt>0) signalAt+18_000_000L else 0L)
+            val profile=pending.optString("strategy_profile",williamsTc2Profile)
+            val ageTtlDisabled=williamsSignalAgeTtlDisabled(pending.optString("signal_type"),profile)
+            val expires=if(ageTtlDisabled) 0L else pending.optLong("signal_expires_at_ms",
+                if(signalAt>0) signalAt+18_000_000L else 0L)
             val expired=expires>0 && futuresMarketData.exchangeNowMs()>=expires
             var invalidCorrection=false
-            var invalidEdition=williamsNewExposureBlocker(pending.optString("strategy_profile",williamsTc2Profile))!=null
-            val profile=pending.optString("strategy_profile",williamsTc2Profile)
+            var invalidEdition=williamsNewExposureBlocker(profile)!=null
             // Re-anchor a still-unfilled conditional TC2 entry only after a newer
             // eligible WM3 was confirmed on closed H1 bars. Never reprice an order
             // directly on Binance; cancel its exact client id first.
@@ -10663,7 +10666,8 @@ private class NativeEngine(
 
         // WM1: bullish reversal bar. It is the context bar; execution waits
         // for a break above its high. Countertrend WM1 is intentionally allowed.
-        val reversalStart = max(2, candles.lastIndex - 20)
+        // Scan all available closed H1 history. Age alone is not structural invalidation.
+        val reversalStart = 2
         for (i in candles.lastIndex downTo reversalStart) {
             val priorLow = candles[i - 1].l
             // TC2 PDF125 expects prior-trend AO colour; PDF131 adds that
@@ -10705,6 +10709,8 @@ private class NativeEngine(
                             .put("wm1_ao_qualifies_book_countertrend",true)
                             .put("wm1_ao_color_is_mandatory",true)
                             .put("wm1_ao_rule_reference","TC2_PDF125_AND_131_COUNTERTREND_CONTEXT")
+                            .put("validity_policy","CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT")
+                            .put("h1_closed_at_ms",candles.last().t+WILLIAMS_H1_MS)
                             .toString()
                     )
                 }
@@ -10748,7 +10754,9 @@ private class NativeEngine(
                         reason = "WM2 Super AO: third rising AO bar; initial stop behind its signal price bar",
                         setupContext = JSONObject().put("initial_stop_rule","TC2_SUPER_AO_SIGNAL_BAR")
                             .put("initial_stop_window",1).put("third_ao_bar_at_ms",candles[signalIndex].t)
-                            .put("risk_stop_at_price",structuralStop).toString()
+                            .put("risk_stop_at_price",structuralStop)
+                            .put("validity_policy","CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT")
+                            .put("h1_closed_at_ms",candles.last().t+WILLIAMS_H1_MS).toString()
                         )
                     }
                 }
@@ -10788,6 +10796,8 @@ private class NativeEngine(
                         .put("fractal_group_start_time_ms",candles[fractal.groupStart].t)
                         .put("fractal_confirmation_time_ms",candles[fractal.confirmation].t)
                         .put("teeth_filter_verified",true)
+                        .put("validity_policy","CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT")
+                        .put("h1_closed_at_ms",candles.last().t+WILLIAMS_H1_MS)
                         .apply { if(sourceExchangePrices) {
                             put("book_price_source","ORIGINAL_EXCHANGE_OHLC")
                                 .put("book_pivot_high",exact.pivotHigh)
@@ -10908,7 +10918,8 @@ private class NativeEngine(
         williamsH1SignalExpiry(signal.signalBarTimeMs,signal.type,signal.strategyProfile).takeIf { it>0L } ?: Long.MAX_VALUE)
 
     /** Reconstruct causal H1 prefixes so crossing the old H1 trigger does not erase the parent
-     * while it waits for M15. Structural invalidation and the original five-hour expiry remain. */
+     * while it waits for the next fresh H1 snapshot. Structural invalidation,
+     * not age, owns TC2 signal validity. */
     private fun h1ContextCampaignSignals(symbol:String,input:List<CandleN>,tick:Double):List<CampaignSignalN> {
         val now=futuresMarketData.exchangeNowMs()
         val bars=input.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }

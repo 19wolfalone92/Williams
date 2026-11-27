@@ -42,7 +42,7 @@ from williams_signals import (
 from williams_decision_trace import build_decision_trace
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker,signal_age_ttl_disabled
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target
 from williams_course_quantity import (course_initial_quantity,course_stage_quantity,
@@ -207,7 +207,7 @@ def _select_tc2_initial_candidate(candidates):
 
 
 def _pending_entry_preflight_reason(pending, intent, current_price: float, now_ms: int | None = None) -> str:
-    """Fail closed if a conditional Wise-Man entry is stale or its trigger already passed."""
+    """Fail closed on stale H1 evidence or a crossed/invalidated conditional entry."""
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
     if not isinstance(pending, dict):
         return "pending_signal_missing"
@@ -228,17 +228,21 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
         price = float(current_price)
     except (TypeError, ValueError):
         return "pending_signal_price_or_expiry_invalid"
-    structural=structural_fractal(signal.get("signal_type"),signal.get("strategy_profile",TC2))
-    if structural and expires_at==0:
-        closed_at=int((signal.get("setup_context") or {}).get("h1_closed_at_ms",0) or 0)
+    profile=signal.get("strategy_profile",TC2)
+    signal_type=signal.get("type",signal.get("family",signal.get("signal_type","")))
+    no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
+    if no_age_ttl:
+        setup=signal.get("setup_context") or {}
+        closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
         if closed_at<=0 or not 0<=now-closed_at<3_600_000:
-            return "pending_structural_fractal_h1_snapshot_stale_or_unverified"
-    if expires_at <= 0 and not structural:
+            return "pending_h1_snapshot_stale_or_unverified"
+        expires_at=0
+    elif expires_at<=0:
         return "pending_signal_expiry_missing"
-    if expires_at>0 and now >= expires_at:
+    if expires_at>0 and now>=expires_at:
         return "pending_signal_expired"
-    signal_at = int(signal.get("signal_bar_time_ms",0) or 0)
-    if signal_at>0 and not structural and now-signal_at>=5*3_600_000:
+    signal_at=int(signal.get("signal_bar_time_ms",0) or 0)
+    if signal_at>0 and not no_age_ttl and now-signal_at>=5*3_600_000:
         return "pending_h1_signal_exceeded_project_freshness_limit"
     if not all(math.isfinite(v) and v>0 for v in (trigger,protective,price)):
         return "pending_signal_trigger_stop_or_market_price_invalid"
@@ -1747,13 +1751,17 @@ class FuturesWilliamsRuntime:
                     if intent.order_type != "MARKET" and Decimal(str(transport_trigger)) != Decimal(str(latest.tags.get("pending_order_trigger"))):
                         raise ValueError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
                     now = int(time.time()*1000) + int(getattr(self.client, "time_offset_ms", 0))
-                    expires = int(pending.get("expires_at_ms", 0))
-                    if expires > 0 and now >= expires:
+                    profile=pending.get("strategy_profile",TC2)
+                    signal_type=pending.get("type",pending.get("family",pending.get("signal_type","")))
+                    no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
+                    expires=0 if no_age_ttl else int(pending.get("expires_at_ms",0))
+                    if expires>0 and now>=expires:
                         raise ValueError("SIGNAL_EXPIRED_BEFORE_TRANSPORT")
-                    if expires == 0 and structural_fractal(pending.get("signal_type"), pending.get("strategy_profile", TC2)):
-                        closed = int((pending.get("setup_context") or {}).get("h1_closed_at_ms", 0))
-                        if closed <= 0 or not 0 <= now-closed < 3_600_000:
-                            raise ValueError("H1_SNAPSHOT_EXPIRED_BEFORE_TRANSPORT")
+                    if no_age_ttl:
+                        setup=pending.get("setup_context") or {}
+                        closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+                        if closed<=0 or not 0<=now-closed<3_600_000:
+                            raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
                 except Exception as failure:
                     raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:
@@ -3432,13 +3440,14 @@ class FuturesWilliamsRuntime:
 
                 pending = campaign.tags.get("pending_signal") or {}
                 signal_payload = pending.get("signal") if isinstance(pending, dict) else {}
-                expires_at_ms = int(
-                    (signal_payload or {}).get("expires_at_ms", 0) or 0
-                )
+                profile=campaign.tags.get("strategy_profile",TC2)
+                signal_type=(signal_payload or {}).get("type",(signal_payload or {}).get("family",(signal_payload or {}).get("signal_type","")))
+                no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
+                expires_at_ms=0 if no_age_ttl else int((signal_payload or {}).get("expires_at_ms",0) or 0)
                 try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000))
                 except Exception:pass
                 signal_at_ms=int((signal_payload or {}).get("signal_bar_time_ms",0) or 0)
-                if signal_at_ms>0 and not structural_fractal((signal_payload or {}).get("signal_type"),campaign.tags.get("strategy_profile",TC2)):
+                if signal_at_ms>0 and not no_age_ttl:
                     cap=signal_at_ms+5*3_600_000
                     expires_at_ms=min(expires_at_ms,cap) if expires_at_ms>0 else cap
                 outside_entry_time=not self.config.entry_time_policy.allows(int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))

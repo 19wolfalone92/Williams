@@ -290,12 +290,12 @@ def _latest_reversal(
     ind: pd.DataFrame,
     *,
     side: str,
-    max_age_bars: int = 20,
+    max_age_bars: int | None = None,
 ) -> tuple[int, float, float] | None:
     column = "bullish_reversal_bar" if side == "LONG" else "bearish_reversal_bar"
     if column not in ind.columns:
         return None
-    start = max(0, len(ind) - max(2, int(max_age_bars)))
+    start = 0 if max_age_bars is None else max(0, len(ind) - max(2, int(max_age_bars)))
     for i in range(len(ind) - 1, start - 1, -1):
         if bool(ind.iloc[i].get(column, False)):
             if not _tc2_reversal_bar_price_proof(ind, i, side):
@@ -323,13 +323,13 @@ def _latest_super_ao(
     ind: pd.DataFrame,
     *,
     side: str,
-    max_age_bars: int = 20,
+    max_age_bars: int | None = None,
 ) -> tuple[int, float, float] | None:
     streak_col = "ao_green_streak" if side == "LONG" else "ao_red_streak"
     if streak_col not in ind.columns:
         return None
 
-    start = max(0, len(ind) - max(2, int(max_age_bars)))
+    start = 0 if max_age_bars is None else max(0, len(ind) - max(2, int(max_age_bars)))
     for i in range(len(ind) - 1, start - 1, -1):
         row = ind.iloc[i]
         try:
@@ -341,7 +341,7 @@ def _latest_super_ao(
         streak = int(cached)
         # The third same-colour AO bar is the signal bar. If the process
         # was offline for subsequent same-colour bars, preserve that original
-        # third bar while it remains inside the signal-age window.
+        # third bar while the causal trigger/invalidation path remains intact.
         if streak >= 3:
             third_i = i - (streak - 3)
             if third_i < start or not _tc2_ao_streak_price_proof(ind, third_i, i, side):
@@ -1133,7 +1133,7 @@ def extract_long_signal_specs(
     wave_exhaustion_risk: float = 0.0,
     wave_invalidation_price: float = 0.0,
     context_versions: dict[str, int] | None = None,
-    max_reversal_age_bars: int = 20,
+    max_reversal_age_bars: int | None = None,
     point_zero_confirmed: bool = False,
     point_zero_score: int = 0,
     require_point_zero_for_reversal: bool = False,
@@ -1160,7 +1160,7 @@ def extract_long_signal_specs(
     reversal = _latest_reversal(
         ind,
         side="LONG",
-        max_age_bars=max_reversal_age_bars,
+        max_age_bars=None,  # compatibility parameter is intentionally not an age veto.
     )
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
@@ -1194,7 +1194,9 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM1 bullish reversal + increasing angulation; BUY STOP above signal bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1229,7 +1231,9 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="WM2 Super AO: third green AO bar; BUY STOP above corresponding price bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1261,7 +1265,9 @@ def extract_long_signal_specs(
                     context_versions=versions,
                     reason="TC2 continuation add-on: three bullish price bars with rising AO; BUY STOP above third bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 3),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1299,7 +1305,7 @@ def extract_long_signal_specs(
                     reason="WM3 buy fractal; trigger only while price/trigger remains above Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
-                    setup_context={"validity_policy":"UNBROKEN_UNSUPERSEDED_FRACTAL",
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
                         "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
@@ -1323,7 +1329,7 @@ def extract_short_signal_specs(
     wave_exhaustion_risk: float = 0.0,
     wave_invalidation_price: float = 0.0,
     context_versions: dict[str, int] | None = None,
-    max_reversal_age_bars: int = 20,
+    max_reversal_age_bars: int | None = None,
     point_zero_confirmed: bool = False,
     point_zero_score: int = 0,
     require_point_zero_for_reversal: bool = False,
@@ -1344,7 +1350,7 @@ def extract_short_signal_specs(
     versions = dict(context_versions or {})
     specs: list[SignalSpec] = []
 
-    reversal = _latest_reversal(ind, side="SHORT", max_age_bars=max_reversal_age_bars)
+    reversal = _latest_reversal(ind, side="SHORT", max_age_bars=None)  # compatibility parameter is intentionally not an age veto.
     if reversal is not None and (point_zero_confirmed or not require_point_zero_for_reversal):
         i, trigger_base, protective = reversal
         levels = _tc2_exact_price_bar_levels("SHORT", trigger_base, protective, tick)
@@ -1375,7 +1381,9 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM1 bearish reversal + increasing angulation; SELL STOP below signal bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, max_reversal_age_bars),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1408,7 +1416,9 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="WM2 Super AO: third red AO bar; SELL STOP below corresponding price bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 20),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1439,7 +1449,9 @@ def extract_short_signal_specs(
                     context_versions=versions,
                     reason="TC2 continuation add-on: three bearish price bars with falling AO; SELL STOP below third bar",
                     source_candle_index=i,
-                    expires_at_ms=_expiry(_row_time_ms(row), timeframe, 3),
+                    expires_at_ms=0,
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
+                        "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )
 
@@ -1475,7 +1487,7 @@ def extract_short_signal_specs(
                     reason="WM3 sell fractal; trigger only while price/trigger remains below Teeth",
                     source_candle_index=center_i,
                     expires_at_ms=0,  # TC2 ch11 PDF149: trigger or valid replacement, no age expiry.
-                    setup_context={"validity_policy":"UNBROKEN_UNSUPERSEDED_FRACTAL",
+                    setup_context={"validity_policy":"CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT",
                         "h1_closed_at_ms":_row_time_ms(current)+_timeframe_ms(timeframe)},
                 )
             )

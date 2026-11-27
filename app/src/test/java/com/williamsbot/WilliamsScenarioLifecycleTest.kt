@@ -114,4 +114,20 @@ class WilliamsScenarioLifecycleTest {
                 }
             }
     }
+    @Test fun zeroExpiryMeansCausalValidityCanSurviveTwentyFiveBars() {
+        val signalClosed=2*hour
+        val scopeStarted=hour
+        val bars=(0 until 25).map { i ->
+            WilliamsWaveBar(signalClosed+i*hour,100.0,101.0,99.0,100.0,1.0)
+        }
+        val waiting=evaluateWilliamsLevelEvent("LONG",105.0,signalClosed,scopeStarted,
+            100.0,bars,27*hour,0L,hour,95.0)
+        assertEquals("WAITING",waiting.state)
+        val triggered=bars.dropLast(1)+WilliamsWaveBar(26*hour,100.0,106.0,99.0,105.0,1.0)
+        val event=evaluateWilliamsLevelEvent("LONG",105.0,signalClosed,scopeStarted,
+            100.0,triggered,27*hour,0L,hour,95.0)
+        assertEquals("TRIGGERED",event.state)
+        assertEquals(27*hour,event.knownAt)
+    }
+
 }

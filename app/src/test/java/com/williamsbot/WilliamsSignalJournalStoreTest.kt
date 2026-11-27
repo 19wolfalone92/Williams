@@ -122,7 +122,8 @@ class WilliamsSignalJournalStoreTest {
         val journal=WilliamsSignalJournal(store)
         val policy=WilliamsEntryTimePolicy()
         val symbol="BTCUSDT"
-        val signal=sourceSignal(symbol,"signal_expired").put("expires_at_ms",now+1_000L)
+        val signal=sourceSignal(symbol,"signal_expired").put("type","COURSE_THUMB")
+            .put("strategy_profile",williamsCourseProfile).put("expires_at_ms",now+1_000L)
         journal.observe(symbol,JSONArray().put(signal),now,policy)
         journal.observe(symbol,JSONArray(),now+1_001L,policy)
         val events=JSONObject(store.values.getValue("signal_timeline_"+symbol)).getJSONArray("events")
@@ -170,6 +171,13 @@ class WilliamsSignalJournalStoreTest {
             .getJSONArray("signals").getJSONObject(0)
         assertEquals("BINANCE_PENDING",fact.getString("state"))
         assertEquals(now-1_000L,fact.getLong("exchange_observed_at_ms"))
+    }
+
+    @Test fun tc2WiseManLifecycleIgnoresLegacyAgeExpiryAfterTwentyFiveBars() {
+        val signal=sourceSignal("BTCUSDT","old_wm1").put("type","REVERSAL")
+            .put("expires_at_ms",now+5*3_600_000L)
+        val later=now+25*3_600_000L
+        assertEquals("VALID",williamsSignalLifecycle(signal,null,later,later,true))
     }
 
 }

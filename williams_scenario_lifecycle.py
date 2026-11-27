@@ -18,7 +18,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
     if (side not in {"LONG", "SHORT"} or not isfinite(trigger) or trigger <= 0
             or not isfinite(mark) or mark <= 0 or scope_started_at <= 0
             or not scope_started_at < signal_closed_at <= now
-            or frame_ms <= 0 or expires_at <= signal_closed_at):
+            or frame_ms <= 0 or (expires_at > 0 and expires_at <= signal_closed_at)):
         return LevelEvent("UNVERIFIED", basis="INVALID_EVENT_INPUT")
     long = side == "LONG"
     if invalidation is not None and (not isfinite(invalidation) or invalidation <= 0
@@ -28,7 +28,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
         return price >= trigger if long else price <= trigger
     def hit_invalid(price):
         return invalidation is not None and (price <= invalidation if long else price >= invalidation)
-    horizon = min(now, expires_at)
+    horizon = min(now, expires_at) if expires_at > 0 else now
     closed = [b for b in history if signal_closed_at <= b.t <= horizon-frame_ms]
     expected = signal_closed_at
     for b in closed:
@@ -50,7 +50,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
         expected = known
     if expected <= horizon-frame_ms:
         return LevelEvent("UNVERIFIED", basis="CLOSED_HISTORY_NOT_PROVEN")
-    if now >= expires_at:
+    if expires_at > 0 and now >= expires_at:
         return LevelEvent("EXPIRED")
     if hit_invalid(mark):
         return LevelEvent("INVALIDATED", now, "LIVE_MARK")
