@@ -523,6 +523,7 @@ def test_r47_fractal_audit_does_not_invent_center_or_confirmation():
     signal = SimpleNamespace(signal_type=SignalType.FRACTAL, role="ENTRY",
         signal_id="extended", signal_bar_time_ms=10*H1_MS, side="BUY",
         trigger_price=100.1, protective_reference=95.0,
+        strategy_profile="TC2", timeframe="1h", execution_semantics="STOP_ENTRY",
         setup_context={"fractal_center_time_ms":7*H1_MS})
     row = _signal_record("BTCUSDT", signal, 13*H1_MS, {})
     assert row["fractal_center_time_ms"] == 7*H1_MS
