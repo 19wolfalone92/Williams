@@ -4,7 +4,7 @@ import json
 import re
 from math import isfinite
 from threading import RLock
-from williams_execution_policy import h1_signal_expiry, signal_age_ttl_disabled
+from williams_execution_policy import h1_signal_expiry, signal_age_ttl_disabled, structural_fractal
 from williams_edition_rules import TC2
 
 
@@ -64,7 +64,8 @@ def signal_facts(signals,bars,frame_ms):
         setup_context=dict(s.setup_context or {})
         if bars:
             setup_context["h1_closed_at_ms"]=int(bars[-1].t)+int(frame_ms)
-        no_age_ttl=signal_age_ttl_disabled(s.signal_type.value,s.strategy_profile)
+        no_age_ttl=(signal_age_ttl_disabled(s.signal_type.value,s.strategy_profile)
+            or structural_fractal(s.signal_type.value,s.strategy_profile))
         facts.append(dict(formation_candle=candle(bars[i] if 0<=i<len(bars) else confirmation),
             confirmation_candle=candle(confirmation),teeth_at_detection=s.teeth_at_detection if isfinite(s.teeth_at_detection) else None,
             signal_id=s.signal_id,family=s.signal_type.value,type=s.signal_type.value,

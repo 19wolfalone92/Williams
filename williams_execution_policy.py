@@ -38,12 +38,12 @@ def structural_fractal(signal_type, source=TC2):
 
 
 def signal_age_ttl_disabled(signal_type, source=TC2):
-    """Age is not structural invalidation for executable TC2 STOP signals.
+    """True only for TC2's removed project age veto.
 
-    NTD confirmed fractals retain their source-backed trigger/replacement
-    lifecycle. All other observer families keep their separate project policy.
+    NTD fractals have their separate source-backed structural lifecycle;
+    preserve an explicitly stored legacy expiry when one is present.
     """
-    return source == TC2 or structural_fractal(signal_type, source)
+    return source == TC2
 
 
 def h1_signal_expiry(signal_at, signal_type, source=TC2):
@@ -53,7 +53,7 @@ def h1_signal_expiry(signal_at, signal_type, source=TC2):
     confirmed replacement. This is the project lifecycle contract, not a claim
     that every family has an author-prescribed numerical expiry.
     """
-    return 0 if signal_age_ttl_disabled(signal_type, source) else int(signal_at) + 5 * 3_600_000
+    return 0 if (signal_age_ttl_disabled(signal_type, source) or structural_fractal(signal_type, source)) else int(signal_at) + 5 * 3_600_000
 
 
 def closed_h1_history_blocker(bars, now):

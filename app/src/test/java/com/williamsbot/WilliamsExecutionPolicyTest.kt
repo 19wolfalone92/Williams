@@ -64,6 +64,8 @@ class WilliamsExecutionPolicyTest {
             assertEquals(0L,williamsH1SignalExpiry(at,type,williamsTc2Profile))
             assertTrue(williamsH1SignalTimeEligible(at,type,williamsTc2Profile,now))
         }
+        assertEquals(0L,williamsH1SignalExpiry(at,"FRACTAL",williamsNtdProfile))
+        assertFalse(williamsSignalAgeTtlDisabled("FRACTAL",williamsNtdProfile))
         assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
         assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }

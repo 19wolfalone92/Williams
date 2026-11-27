@@ -41,7 +41,7 @@ internal fun williamsSignalAgeTtlDisabled(type:String,source:String):Boolean =
 /** Age never invalidates a TC2 STOP formation; trigger, structural invalidation
  * and confirmed replacement are evaluated by the causal H1 lifecycle. */
 internal fun williamsH1SignalExpiry(at:Long,type:String,source:String):Long =
-    if(williamsSignalAgeTtlDisabled(type,source)) 0L else at+5*WILLIAMS_H1_MS
+    if(williamsSignalAgeTtlDisabled(type,source) || williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS
 internal fun williamsH1SignalTimeEligible(at:Long,type:String,source:String,now:Long):Boolean {
     if(at<=0L || at%WILLIAMS_H1_MS!=0L || at+WILLIAMS_H1_MS>now) return false
     val expiry=williamsH1SignalExpiry(at,type,source)

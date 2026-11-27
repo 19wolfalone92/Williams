@@ -229,15 +229,18 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
     except (TypeError, ValueError):
         return "pending_signal_price_or_expiry_invalid"
     profile=signal.get("strategy_profile",TC2)
-    signal_type=signal.get("type",signal.get("family",signal.get("signal_type","")))
-    no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
-    if no_age_ttl:
+    signal_type=signal.get("signal_type",signal.get("type",signal.get("family","")))
+    tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+    structural=structural_fractal(signal.get("signal_type",signal_type),profile)
+    no_age_ttl=tc2_no_age or structural
+    if tc2_no_age or (structural and expires_at==0):
         setup=signal.get("setup_context") or {}
         closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
         if closed_at<=0 or not 0<=now-closed_at<3_600_000:
             return "pending_h1_snapshot_stale_or_unverified"
+    if tc2_no_age:
         expires_at=0
-    elif expires_at<=0:
+    elif expires_at<=0 and not structural:
         return "pending_signal_expiry_missing"
     if expires_at>0 and now>=expires_at:
         return "pending_signal_expired"
@@ -1752,12 +1755,13 @@ class FuturesWilliamsRuntime:
                         raise ValueError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
                     now = int(time.time()*1000) + int(getattr(self.client, "time_offset_ms", 0))
                     profile=pending.get("strategy_profile",TC2)
-                    signal_type=pending.get("type",pending.get("family",pending.get("signal_type","")))
-                    no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
-                    expires=0 if no_age_ttl else int(pending.get("expires_at_ms",0))
+                    signal_type=pending.get("signal_type",pending.get("type",pending.get("family","")))
+                    tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+                    structural=structural_fractal(pending.get("signal_type",signal_type),profile)
+                    expires=0 if tc2_no_age else int(pending.get("expires_at_ms",0))
                     if expires>0 and now>=expires:
                         raise ValueError("SIGNAL_EXPIRED_BEFORE_TRANSPORT")
-                    if no_age_ttl:
+                    if tc2_no_age or (structural and expires==0):
                         setup=pending.get("setup_context") or {}
                         closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
                         if closed<=0 or not 0<=now-closed<3_600_000:
@@ -3441,9 +3445,11 @@ class FuturesWilliamsRuntime:
                 pending = campaign.tags.get("pending_signal") or {}
                 signal_payload = pending.get("signal") if isinstance(pending, dict) else {}
                 profile=campaign.tags.get("strategy_profile",TC2)
-                signal_type=(signal_payload or {}).get("type",(signal_payload or {}).get("family",(signal_payload or {}).get("signal_type","")))
-                no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
-                expires_at_ms=0 if no_age_ttl else int((signal_payload or {}).get("expires_at_ms",0) or 0)
+                signal_type=(signal_payload or {}).get("signal_type",(signal_payload or {}).get("type",(signal_payload or {}).get("family","")))
+                tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+                structural=structural_fractal((signal_payload or {}).get("signal_type",signal_type),profile)
+                no_age_ttl=tc2_no_age or structural
+                expires_at_ms=0 if tc2_no_age else int((signal_payload or {}).get("expires_at_ms",0) or 0)
                 try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000))
                 except Exception:pass
                 signal_at_ms=int((signal_payload or {}).get("signal_bar_time_ms",0) or 0)

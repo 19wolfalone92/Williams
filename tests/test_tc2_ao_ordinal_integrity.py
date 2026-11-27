@@ -67,7 +67,7 @@ def test_unusable_cache_cannot_crash_scanner_or_invent_an_ordinal(side, bad):
 
 
 @pytest.mark.parametrize("side", ["LONG", "SHORT"])
-def test_actual_signal_keeps_original_tick_stop_identity_and_expiry_after_bad_cache(side):
+def test_actual_signal_keeps_original_tick_stop_identity_and_no_age_expiry_after_bad_cache(side):
     frame = _frame(side)
     frame.loc[39, "ao_green_streak" if side == "LONG" else "ao_red_streak"] = 4
     extract = extract_long_signal_specs if side == "LONG" else extract_short_signal_specs
@@ -78,7 +78,7 @@ def test_actual_signal_keeps_original_tick_stop_identity_and_expiry_after_bad_ca
     original = frame.iloc[36]
     assert signal.source_candle_index == 36
     assert signal.signal_bar_time_ms == original["open_time_ms"]
-    assert signal.expires_at_ms == original["open_time_ms"] + 20 * 3_600_000
+    assert signal.expires_at_ms == 0
     if side == "LONG":
         assert signal.trigger_price == pytest.approx(original["high"] + 0.1)
         assert signal.protective_reference == pytest.approx(original["low"] - 0.1)

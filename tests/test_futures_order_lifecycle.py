@@ -199,7 +199,7 @@ def armed_runtime(monkeypatch, tmp_path, request):
     signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
-        setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
+        setup_context={"h1_closed_at_ms":now-1000, **({"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})})
     candidate = FuturesCandidate(symbol, "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     # This old NTD transport suite models a LEGACY already-owned NTD
     # campaign. Production now permits NEW risk only for TC2. Narrowly
@@ -429,24 +429,19 @@ def test_scanner_failure_does_not_skip_position_ownership_reconciliation(armed_r
     assert bot.state("BTCUSDT") == "RECONCILE_REQUIRED"
 
 
-@pytest.mark.parametrize("racing_fill",[False,True])
-def test_project_h1_expiry_cancels_a_durably_owned_old_pending_signal_and_protects_a_racing_fill(armed_runtime,monkeypatch,racing_fill):
+def test_tc2_pending_entry_is_not_cancelled_by_six_hour_age_alone(armed_runtime,monkeypatch):
     bot,exchange,_=armed_runtime
     campaign=bot._active_campaign("BTCUSDT")
     observed=time.time()
-    campaign.tags["pending_signal"]["signal"]["expires_at_ms"]=int((observed+80*3600)*1000)
+    pending=campaign.tags["pending_signal"]["signal"]
+    pending["expires_at_ms"]=0
+    pending.setdefault("setup_context",{})["h1_closed_at_ms"]=int((observed+6*3600)*1000)-1_000
     bot.db.save_campaign(campaign)
-    exchange.cancel_fill=racing_fill
     monkeypatch.setattr(time,"time",lambda:observed+6*3600)
     bot._reconcile_pending()
-    assert not bot._pending_entries()
-    assert any(method=="DELETE" and path.endswith("algoOrder") for method,path,_ in exchange.calls)
-    if racing_fill:
-        assert exchange.amount>0
-        assert any(o.get("closePosition")=="true" and o["algoStatus"]=="NEW" for o in exchange.algos.values())
-    else:
-        assert exchange.amount==0
-        assert bot.db.campaign_risk_reserved_quote()==0
+    assert bot._pending_entries()
+    assert not any(method=="DELETE" and path.endswith("algoOrder") for method,path,_ in exchange.calls)
+    assert bot.db.campaign_risk_reserved_quote()>0
 
 
 def test_five_bar_protection_still_moves_when_scanner_is_unavailable(armed_runtime,monkeypatch):
