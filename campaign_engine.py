@@ -148,6 +148,7 @@ class CampaignEngine:
             updated_at_ms=int(time.time()*1000),
             exit_reason=row.get("exit_reason") or "",
             tags={**tags, "wave_context": wave_context},
+            state_revision=int(row["state_revision"]),
         )
 
     # ------------------------------------------------------------------

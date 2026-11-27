@@ -15,7 +15,7 @@ def _db_locked(method):
 
 
 class Database:
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path=None):
         path = path or os.getenv('WILLIAMS_DB_PATH') or 'data/trader.sqlite3'
@@ -28,6 +28,7 @@ class Database:
         # A committed risk reservation is a safety boundary before exchange POST.
         self.conn.execute('PRAGMA synchronous=FULL')
         self._transaction_active = False
+        self._campaign_revision_undo = []
         self.init()
 
     @contextmanager
@@ -39,15 +40,27 @@ class Database:
                 return
 
             self._transaction_active = True
+            self._campaign_revision_undo = []
             try:
                 # Reserve SQLite's writer lock before reading shared portfolio exposure.
                 self.conn.execute('BEGIN IMMEDIATE')
                 yield self
                 self.conn.commit()
-            except Exception:
+            except BaseException:
                 self.conn.rollback()
+                # A rolled-back CAS must not leave the caller carrying a revision
+                # which was never committed to the database.
+                for campaign, previous in reversed(self._campaign_revision_undo):
+                    if isinstance(campaign, dict):
+                        if previous is None:
+                            campaign.pop("state_revision", None)
+                        else:
+                            campaign["state_revision"] = previous
+                    else:
+                        campaign.state_revision = previous
                 raise
             finally:
+                self._campaign_revision_undo = []
                 self._transaction_active = False
 
     def init(self):
@@ -183,7 +196,8 @@ class Database:
             next_action TEXT DEFAULT 'WAIT',
             reconciliation_state TEXT DEFAULT 'CLEAN',
             exit_reason TEXT,
-            tags_json TEXT
+            tags_json TEXT,
+            state_revision INTEGER NOT NULL DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS campaign_signals(
             signal_id TEXT PRIMARY KEY,
@@ -274,6 +288,15 @@ class Database:
             ON campaign_events(campaign_id, id);
         ''')
         self._migrate_trade_columns()
+        # Commit legacy trade-column migration before the versioned campaign
+        # migration. The writer transaction prevents concurrent ALTER races.
+        self.conn.commit()
+        with self.transaction():
+            columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(campaigns)")}
+            if "state_revision" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE campaigns ADD COLUMN state_revision INTEGER NOT NULL DEFAULT 1"
+                )
         self.state_set('schema_version', self.SCHEMA_VERSION)
         self.state_set('position_state', self.state_get('position_state', 'FLAT'))
         self.conn.commit()
@@ -918,7 +941,21 @@ class Database:
     @_db_locked
     def save_campaign(self, campaign):
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
-        self.conn.execute(
+        expected = data.get("state_revision", 0)
+        if type(expected) is not int or expected < 0:
+            raise RuntimeError("CAMPAIGN_REVISION_INVALID")
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT state_revision FROM campaigns WHERE campaign_id=?",
+                (str(data["campaign_id"]),),
+            ).fetchone()
+            actual = int(row["state_revision"]) if row is not None else 0
+            if actual != expected:
+                raise RuntimeError(
+                    f"CAMPAIGN_STATE_REVISION_CONFLICT:{data['campaign_id']}:expected={expected}:actual={actual}"
+                )
+            next_revision = actual + 1
+            cursor = self.conn.execute(
             """INSERT INTO campaigns(
                 campaign_id,updated_at,symbol,side,execution_timeframe,state,
                 origin_signal_id,current_signal_id,current_signal_type,
@@ -926,10 +963,10 @@ class Database:
                 structural_stop_source,additions,tranche_index,realized_pnl_quote,
                 unrealized_pnl_quote,open_risk_quote,pending_risk_quote,
                 capital_reserved_quote,wave_context_json,health,next_action,
-                reconciliation_state,exit_reason,tags_json
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                reconciliation_state,exit_reason,tags_json,state_revision
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(campaign_id) DO UPDATE SET
-                updated_at=CURRENT_TIMESTAMP,symbol=excluded.symbol,side=excluded.side,
+                updated_at=excluded.updated_at,symbol=excluded.symbol,side=excluded.side,
                 execution_timeframe=excluded.execution_timeframe,state=excluded.state,
                 origin_signal_id=excluded.origin_signal_id,current_signal_id=excluded.current_signal_id,
                 current_signal_type=excluded.current_signal_type,position_qty=excluded.position_qty,
@@ -941,7 +978,8 @@ class Database:
                 capital_reserved_quote=excluded.capital_reserved_quote,wave_context_json=excluded.wave_context_json,
                 health=excluded.health,next_action=excluded.next_action,
                 reconciliation_state=excluded.reconciliation_state,exit_reason=excluded.exit_reason,
-                tags_json=excluded.tags_json""",
+                tags_json=excluded.tags_json,state_revision=excluded.state_revision
+                WHERE campaigns.state_revision=?""",
             (
                 data["campaign_id"], datetime.now(timezone.utc).isoformat(), data["symbol"], data["side"],
                 data["execution_timeframe"], data["state"], data.get("origin_signal_id",""),
@@ -955,10 +993,17 @@ class Database:
                 json.dumps(data.get("wave_context",{}),default=str,sort_keys=True),
                 data.get("health","GREEN"),data.get("next_action","WAIT"),data.get("reconciliation_state","CLEAN"),
                 data.get("exit_reason",""),json.dumps(data.get("tags",{}),default=str,sort_keys=True),
+                next_revision, expected,
             ),
-        )
-        if not self._transaction_active:
-            self.conn.commit()
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("CAMPAIGN_STATE_REVISION_CONFLICT")
+            if isinstance(campaign, dict):
+                self._campaign_revision_undo.append((campaign, campaign.get("state_revision")))
+                campaign["state_revision"] = next_revision
+            else:
+                self._campaign_revision_undo.append((campaign, campaign.state_revision))
+                campaign.state_revision = next_revision
 
     @_db_locked
     def get_campaign(self, campaign_id):
@@ -1111,7 +1156,7 @@ class Database:
 
     @_db_locked
     def reserve_campaign_risk(self, campaign, *, equity_quote, portfolio_limit_pct):
-        """Atomically persist one portfolio-risk reservation before exchange submission."""
+        """Reserve new exposure without replacing an unresolved prior liability."""
         data = campaign.to_dict() if hasattr(campaign, "to_dict") else dict(campaign)
         equity = float(equity_quote)
         limit = float(portfolio_limit_pct)
@@ -1125,22 +1170,78 @@ class Database:
         if not campaign_id:
             raise RuntimeError("PORTFOLIO_RISK_RESERVATION_CAMPAIGN_ID_MISSING")
         state = str(data.get("state") or "")
-        new_risk = float(data.get("open_risk_quote", 0) or 0) + float(data.get("pending_risk_quote", 0) or 0)
-        if not math.isfinite(new_risk) or new_risk < 0:
+        try:
+            new_open = float(data["open_risk_quote"])
+            new_pending = float(data["pending_risk_quote"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_AMOUNT_INVALID") from exc
+        new_risk = new_open + new_pending
+        if not (math.isfinite(new_open) and new_open >= 0 and math.isfinite(new_pending)
+                and new_pending > 0 and math.isfinite(new_risk)):
             raise RuntimeError("PORTFOLIO_RISK_RESERVATION_AMOUNT_INVALID")
         if state in {"CLOSED", "FLAT"}:
-            new_risk = 0.0
+            raise RuntimeError("PORTFOLIO_RISK_RESERVATION_TERMINAL_CAMPAIGN")
         cap = equity * limit
         tolerance = max(1e-8, cap * 1e-9)
         with self.transaction():
-            used_before = self.campaign_risk_reserved_quote()
             previous = self.conn.execute(
-                "SELECT state,open_risk_quote,pending_risk_quote FROM campaigns WHERE campaign_id=?",
-                (campaign_id,),
+                "SELECT * FROM campaigns WHERE campaign_id=?", (campaign_id,),
             ).fetchone()
-            old_risk = 0.0
-            if previous is not None and previous["state"] not in {"CLOSED", "FLAT"}:
-                old_risk = float(previous["open_risk_quote"] or 0.0) + float(previous["pending_risk_quote"] or 0.0)
+            expected_revision = data.get("state_revision", 0)
+            actual_revision = int(previous["state_revision"]) if previous is not None else 0
+            if type(expected_revision) is not int or expected_revision != actual_revision:
+                raise RuntimeError("CAMPAIGN_STATE_REVISION_CONFLICT")
+            previous_tags = json.loads(previous["tags_json"] or "{}") if previous is not None else {}
+            old_open = 0.0
+            old_pending = 0.0
+            if previous is not None:
+                if previous["state"] in {"CLOSED", "FLAT"}:
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_TERMINAL_CAMPAIGN")
+                if previous["symbol"] != data.get("symbol") or previous["side"] != data.get("side"):
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_CAMPAIGN_IDENTITY_CHANGED")
+                if previous["open_risk_quote"] is None or previous["pending_risk_quote"] is None:
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_AMOUNT_INVALID")
+                old_open, old_pending = float(previous["open_risk_quote"]), float(previous["pending_risk_quote"])
+                if not all(math.isfinite(x) and x >= 0 for x in (old_open, old_pending)):
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_AMOUNT_INVALID")
+            prior_event = self.conn.execute(
+                "SELECT payload_json FROM campaign_events "
+                "WHERE campaign_id=? AND event='RESERVE' AND order_id=? LIMIT 1",
+                (campaign_id, reservation_id),
+            ).fetchone()
+            if prior_event is not None:
+                # A retry cannot write an older snapshot, revive a released
+                # reservation, or reduce a confirmed partial-fill obligation.
+                try:
+                    prior_payload = json.loads(prior_event["payload_json"] or "{}")
+                    prior_risk = float(prior_payload["campaign_risk_after_quote"])
+                except Exception as exc:
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_LEDGER_CORRUPT") from exc
+                if (previous is None or old_pending <= 0
+                        or previous_tags.get("pending_order_client_id") != reservation_id
+                        or old_open != new_open or old_pending != new_pending
+                        or not math.isfinite(prior_risk) or abs(prior_risk - new_risk) > tolerance):
+                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_IDEMPOTENCY_CONFLICT")
+                return prior_payload
+            # A different order ID must never implicitly replace an order whose
+            # exchange terminal outcome has not yet been consumed by recovery.
+            if previous is not None and (old_pending > 0 or previous["state"] in {
+                    "ENTRY_ARMING", "ENTRY_PENDING", "ADD_ON_ARMING", "ADD_ON_PENDING",
+                    "RECONCILE_REQUIRED"}):
+                raise RuntimeError("PORTFOLIO_RISK_PRIOR_RESERVATION_UNRESOLVED")
+            if previous is not None and old_open != new_open:
+                raise RuntimeError("PORTFOLIO_RISK_OPEN_EXPOSURE_CHANGED")
+            corrupt = self.conn.execute(
+                "SELECT 1 FROM campaigns WHERE state NOT IN ('CLOSED','FLAT') "
+                "AND (open_risk_quote IS NULL OR pending_risk_quote IS NULL "
+                "OR open_risk_quote<0 OR pending_risk_quote<0) LIMIT 1"
+            ).fetchone()
+            if corrupt is not None:
+                raise RuntimeError("PORTFOLIO_RISK_LEDGER_UNPROVEN")
+            used_before = self.campaign_risk_reserved_quote()
+            if not math.isfinite(used_before) or used_before < 0:
+                raise RuntimeError("PORTFOLIO_RISK_LEDGER_UNPROVEN")
+            old_risk = old_open + old_pending
             reserved_after = max(0.0, used_before - old_risk) + new_risk
             if reserved_after > cap + tolerance:
                 raise RuntimeError(
@@ -1149,7 +1250,7 @@ class Database:
                     f"after={reserved_after:.12g};cap={cap:.12g}"
                 )
             payload = {
-                "schema": "WILLIAMS_PORTFOLIO_RISK_RESERVATION_V1",
+                "schema": "WILLIAMS_PORTFOLIO_RISK_RESERVATION_V2",
                 "reservation_id": reservation_id,
                 "symbol": str(data.get("symbol") or ""),
                 "equity_quote": equity,
@@ -1160,31 +1261,19 @@ class Database:
                 "campaign_risk_before_quote": old_risk,
                 "campaign_risk_after_quote": new_risk,
                 "risk_delta_quote": new_risk - old_risk,
+                "campaign_revision_before": actual_revision,
+                "campaign_revision_after": actual_revision + 1,
                 "signal_id": str(
                     ((tags.get("pending_signal") or {}).get("signal") or {}).get("signal_id")
                     or data.get("current_signal_id") or data.get("origin_signal_id") or ""
                 ),
             }
             self.save_campaign(campaign)
-            prior_event = self.conn.execute(
-                "SELECT payload_json FROM campaign_events "
-                "WHERE campaign_id=? AND event='RESERVE' AND order_id=? LIMIT 1",
-                (campaign_id, reservation_id),
-            ).fetchone()
-            if prior_event is not None:
-                try:
-                    prior_payload = json.loads(prior_event["payload_json"] or "{}")
-                    prior_risk = float(prior_payload["campaign_risk_after_quote"])
-                except Exception as exc:
-                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_LEDGER_CORRUPT") from exc
-                if not math.isfinite(prior_risk) or abs(prior_risk - new_risk) > tolerance:
-                    raise RuntimeError("PORTFOLIO_RISK_RESERVATION_IDEMPOTENCY_CONFLICT")
-            else:
-                self.log_campaign_event(
-                    campaign_id, "RESERVE", order_id=reservation_id,
-                    reason="ATOMIC_BEGIN_IMMEDIATE_PORTFOLIO_RISK_RESERVATION",
-                    payload=payload,
-                )
+            self.log_campaign_event(
+                campaign_id, "RESERVE", order_id=reservation_id,
+                reason="ATOMIC_BEGIN_IMMEDIATE_PORTFOLIO_RISK_RESERVATION",
+                payload=payload,
+            )
         return payload
 
     @_db_locked

@@ -2153,52 +2153,51 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("COURSE_FULL_INITIAL_QUANTITY_FILTER_CHANGED")
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
-        campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
-        if reentry:
-            campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
-        campaign.initial_stop_price = stop
-        campaign.current_stop_price = stop
-        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
-        campaign.tags["scanner_score_at_entry"] = float(candidate.score)
-        campaign.tags["trade_mode"] = "TREND" if signal.strategy_profile == TC2 else candidate.trade_mode
-        campaign.tags["strategy_profile"] = signal.strategy_profile
-        if signal.strategy_profile==NTD:
-            campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
-        campaign.tags["setup_context"] = dict(signal.setup_context)
-        if signal.strategy_profile==TC2:
-            campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
-                "unit_quantity":None,"completed_quantities":[]}
-        if signal.strategy_profile==COURSE:
-            campaign.tags["course_initial_quantity"]=course_quantity
-            campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
-                "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
-        campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
-        campaign.tags["correction_context"] = dict(candidate.correction_context)
-        campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
-        campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
-        campaign.tags["pending_order_quantity"] = qty
-        campaign.tags["pending_risk_equity"]=equity
-        campaign.tags["pending_order_trigger"] = trigger
-        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["pending_order_stop"] = stop
-        campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
-        if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
-        cid = campaign.tags["pending_order_client_id"]
-        pending_signal = PendingSignal(signal=signal)
-        pending_signal.transition(SignalState.VALIDATED)
-        campaign.tags["pending_signal"] = pending_signal.to_dict()
-
         # Reservation, ownership claims and signal arming commit as one unit.
         # No exchange POST can occur before this durable transaction succeeds.
+        cid = self._client_id("ENTRY")
         with self.db.transaction():
-            if reentry and not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
-                raise RuntimeError("NTD profit cycle was already consumed")
             if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
                 raise RuntimeError(f"{symbol}: pending entry already exists")
+            campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
+            if reentry:
+                campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
+            campaign.initial_stop_price = stop
+            campaign.current_stop_price = stop
+            campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+            campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
+            campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
+            campaign.tags["scanner_score_at_entry"] = float(candidate.score)
+            campaign.tags["trade_mode"] = "TREND" if signal.strategy_profile == TC2 else candidate.trade_mode
+            campaign.tags["strategy_profile"] = signal.strategy_profile
+            if signal.strategy_profile==NTD:
+                campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
+            campaign.tags["setup_context"] = dict(signal.setup_context)
+            if signal.strategy_profile==TC2:
+                campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
+                    "unit_quantity":None,"completed_quantities":[]}
+            if signal.strategy_profile==COURSE:
+                campaign.tags["course_initial_quantity"]=course_quantity
+                campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
+                    "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
+            campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
+            campaign.tags["correction_context"] = dict(candidate.correction_context)
+            campaign.pending_risk_quote = risk_quote
+            campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
+            campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
+            campaign.tags["pending_order_quantity"] = qty
+            campaign.tags["pending_risk_equity"]=equity
+            campaign.tags["pending_order_trigger"] = trigger
+            campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
+            campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+            campaign.tags["pending_order_stop"] = stop
+            campaign.tags["pending_order_client_id"] = cid
+            if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
+            pending_signal = PendingSignal(signal=signal)
+            pending_signal.transition(SignalState.VALIDATED)
+            campaign.tags["pending_signal"] = pending_signal.to_dict()
+            if reentry and not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
+                raise RuntimeError("NTD profit cycle was already consumed")
             self.db.reserve_campaign_risk(
                 campaign, equity_quote=equity,
                 portfolio_limit_pct=self.config.max_total_risk_pct,

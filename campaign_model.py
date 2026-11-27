@@ -327,6 +327,8 @@ class TradingCampaign:
     updated_at_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     exit_reason: str = ""
     tags: dict[str, Any] = field(default_factory=dict)
+    # Persistence identity, not a market timestamp.
+    state_revision: int = field(default=0, compare=False)
 
     def transition(self, next_state: CampaignState, *, reason: str = "") -> None:
         if not campaign_transition_allowed(self.state, next_state):
