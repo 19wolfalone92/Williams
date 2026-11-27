@@ -110,3 +110,31 @@ internal fun assessWilliamsScenarioOpposition(
         .minWithOrNull(compareBy<WilliamsScenarioOpposition> { it.event.knownAt }.thenBy { it.signal.id }),
         events.filter { it.event.state in listOf("AMBIGUOUS","UNVERIFIED") })
 }
+
+/** Same objective resting TC2 STOP lifecycle as Python. Age/technical
+ * freshness and exchange status remain independent of strategy cancellation. */
+internal fun pendingTc2LevelEvent(direction:String,signalAt:Long,trigger:Double,
+    invalidation:Double,contract:Double,history:List<WilliamsWaveBar>,now:Long):WilliamsLevelEvent {
+    val frame=WILLIAMS_H1_MS
+    if(signalAt<=0 || signalAt%frame!=0L || history.size<45 ||
+        history.any { b -> b.t<=0 || b.t%frame!=0L || b.t+frame>now ||
+            listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0 } ||
+            b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.h,b.c) } ||
+        history.zipWithNext().any { (x,y) -> y.t-x.t!=frame } ||
+        now-(history.last().t+frame) !in 0 until frame)
+        return WilliamsLevelEvent("UNVERIFIED",basis="PENDING_CLOSED_H1_HISTORY_UNVERIFIED")
+    return evaluateWilliamsLevelEvent(direction,trigger,signalAt+frame,signalAt,contract,
+        history,now,Long.MAX_VALUE,frame,invalidation)
+}
+
+internal fun pendingTc2CancelReason(event:WilliamsLevelEvent,family:String,direction:String,
+    trigger:Double,activationTeeth:Double):String? {
+    if(event.state=="INVALIDATED") return "H1_PARENT_STRUCTURAL_INVALIDATION"
+    if(event.state!="WAITING" || family.removePrefix("SHORT_").removePrefix("LONG_")!="FRACTAL") return null
+    if(!activationTeeth.isFinite() || activationTeeth<=0) return null
+    return when(direction) {
+        "LONG" -> if(trigger<=activationTeeth) "H1_FRACTAL_NOT_ABOVE_TEETH" else null
+        "SHORT" -> if(trigger>=activationTeeth) "H1_FRACTAL_NOT_BELOW_TEETH" else null
+        else -> null
+    }
+}

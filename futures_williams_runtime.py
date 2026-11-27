@@ -90,7 +90,8 @@ from williams_wave_hierarchy import (
     suggested_analytical_frames,
 )
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
-from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition, assess_scenario_opposition
+from williams_scenario_lifecycle import (ScenarioSignal, scenario_opposition, assess_scenario_opposition,
+    pending_tc2_level_event, pending_tc2_cancel_reason)
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -3444,15 +3445,51 @@ class FuturesWilliamsRuntime:
                 invalid_correction=False
                 invalid_edition=new_exposure_blocker(getattr(campaign,"tags",{}).get("strategy_profile",TC2)) is not None
                 profile=campaign.tags.get("strategy_profile",TC2)
+                pending_invalidation_reason = None
+                family = (signal_payload or {}).get("signal_type")
                 if (status in {"NEW","PENDING_NEW"} and executed<=0 and not invalid_edition and conditional
-                        and structural_fractal((signal_payload or {}).get("signal_type"),profile)):
+                        and profile==TC2 and family in {"REVERSAL","SUPER_AO","FRACTAL","THREE_GREEN_BARS"}):
+                    try:
+                        observed_now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+                        closed=closed_strategy_frame(fetch_klines(self.client,symbol,"1h",limit=220),"1h",observed_now)
+                        bars=wave_bars_from_dataframe(closed)
+                        contract=float(self.client.ticker_price(symbol).get("price",0) or 0)
+                        direction="LONG" if campaign.side=="BUY" else "SHORT"
+                        trigger=float((signal_payload or {}).get("trigger_price",0) or 0)
+                        stop=float((signal_payload or {}).get("protective_reference",0) or 0)
+                        event=pending_tc2_level_event(direction,signal_at_ms,trigger,stop,contract,bars,observed_now)
+                        teeth=float("nan")
+                        if family=="FRACTAL" and event.state=="WAITING":
+                            indicators=calculate_indicators(closed,canonical_indicator_config_from_env())
+                            # The forming H1 activation line uses the value
+                            # known five bars back; no forming OHLC is read.
+                            if len(indicators)>=5 and "teeth" in indicators:
+                                teeth=float(indicators["teeth"].iloc[-5])
+                        pending_invalidation_reason=pending_tc2_cancel_reason(event,family,direction,trigger,teeth)
+                        invalid_edition=pending_invalidation_reason is not None
+                        if event.state in {"UNVERIFIED","AMBIGUOUS","TRIGGERED"}:
+                            SignalJournal(self.db).decision(symbol,"PENDING_REVALIDATION",
+                                "ORDER_"+event.state+":"+event.basis,observed_now,
+                                (signal_payload or {}).get("signal_id",campaign.current_signal_id))
+                    except Exception:
+                        # Data/transport/observation failure is not proof of
+                        # invalidity. The signed order reconciliation continues.
+                        invalid_edition=False
+                        try:
+                            SignalJournal(self.db).decision(symbol,"PENDING_REVALIDATION",
+                                "PENDING_H1_EVIDENCE_UNAVAILABLE",int(time.time()*1000),
+                                (signal_payload or {}).get("signal_id",campaign.current_signal_id))
+                        except Exception:
+                            pass
+                elif (status in {"NEW","PENDING_NEW"} and executed<=0 and not invalid_edition and conditional
+                        and profile!=TC2 and structural_fractal((signal_payload or {}).get("signal_type"),profile)):
                     closed=closed_strategy_frame(fetch_klines(self.client,symbol,campaign.execution_timeframe,limit=220),
                         campaign.execution_timeframe,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                     indicators=calculate_indicators(closed,canonical_indicator_config_from_env())
                     history_error=closed_h1_history_blocker(wave_bars_from_dataframe(closed),int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                     setups=extract_profile_signals(symbol,indicators,profile=profile,
                         side="LONG" if campaign.side=="BUY" else "SHORT",timeframe=campaign.execution_timeframe,tick_size=self._tick(symbol))
-                    invalid_edition=bool(history_error) or not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
+                    invalid_edition=not bool(history_error) and not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
                         math.isclose(s.trigger_price,float((signal_payload or {}).get("trigger_price",0)),rel_tol=1e-12) for s in setups)
                 if profile != TC2 and status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
                     proof=correction_entry_context(self.scanner.wave_hierarchy(symbol),campaign.side,
@@ -3466,7 +3503,7 @@ class FuturesWilliamsRuntime:
                     and executed <= 0
                     and (outside_entry_time or invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
                 ):
-                    cancel_reason="WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else "FORMATION_INVALIDATED" if invalid_edition else "SIGNAL_EXPIRED"
+                    cancel_reason="WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else (pending_invalidation_reason or "FORMATION_INVALIDATED") if invalid_edition else "SIGNAL_EXPIRED"
                     order_id = order.get("orderId")
                     if order_id is None:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)

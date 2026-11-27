@@ -103,3 +103,38 @@ def assess_scenario_opposition(direction, started_at, signals, bars, mark, now, 
         if any(item[1].state=="AMBIGUOUS" for item in uncertain)
         else "H1_OPPOSITION_HISTORY_UNVERIFIED" if uncertain else None)
     return {"opposition":opposition,"uncertain":uncertain,"blocker":blocker}
+
+def pending_tc2_level_event(side, signal_at, trigger, invalidation, contract, history, now):
+    """Objective lifecycle of an already resting TC2 STOP, not an admission.
+
+    A scanner omission, a missing prefix or a stale history is not cancellation
+    evidence. The separately configured order expiry remains a distinct gate.
+    """
+    frame = 3_600_000
+    if (signal_at <= 0 or signal_at % frame or len(history) < 45
+            or any(b.t <= 0 or b.t % frame or b.t + frame > now
+                   or not all(isfinite(x) and x > 0 for x in (b.o, b.h, b.l, b.c))
+                   or b.h < max(b.o, b.l, b.c) or b.l > min(b.o, b.h, b.c)
+                   for b in history)
+            or any(b.t-a.t != frame for a,b in zip(history, history[1:]))
+            or not 0 <= now-(history[-1].t+frame) < frame):
+        return LevelEvent("UNVERIFIED", basis="PENDING_CLOSED_H1_HISTORY_UNVERIFIED")
+    return evaluate_level_event(side, trigger, signal_at+frame, signal_at,
+                                contract, history, now, 2**63-1, frame, invalidation)
+
+
+def pending_tc2_cancel_reason(event, family, side, trigger, activation_teeth):
+    """Only proven invalidation can authorize a strategy cancellation.
+    TRIGGERED/AMBIGUOUS need exchange reconciliation, never inferred flatness.
+    """
+    if event.state == "INVALIDATED":
+        return "H1_PARENT_STRUCTURAL_INVALIDATION"
+    if event.state != "WAITING" or family != "FRACTAL":
+        return None
+    if not isfinite(activation_teeth) or activation_teeth <= 0:
+        return None
+    if side == "LONG" and trigger <= activation_teeth:
+        return "H1_FRACTAL_NOT_ABOVE_TEETH"
+    if side == "SHORT" and trigger >= activation_teeth:
+        return "H1_FRACTAL_NOT_BELOW_TEETH"
+    return None

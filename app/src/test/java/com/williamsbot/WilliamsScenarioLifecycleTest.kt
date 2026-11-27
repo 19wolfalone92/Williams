@@ -81,4 +81,37 @@ class WilliamsScenarioLifecycleTest {
         assertNotNull(williamsScenarioOpposition("LONG",18*hour,listOf(source),emptyList(),100.0,21*hour))
         assertNull(williamsScenarioOpposition("LONG",18*hour,listOf(source.copy(profile="TC2_THREE_WISE_MEN")),emptyList(),100.0,21*hour))
     }
+
+    @Test fun restingTc2LevelLifecycleUsesObjectivePriceEvidenceAtAllAges() {
+        val now=1000*hour+1000L
+        for(side in listOf("LONG","SHORT")) for(age in listOf(1,5,20,25))
+            for(case in listOf("WAITING","INVALIDATED","TRIGGERED","AMBIGUOUS","GAP")) {
+                val signalAt=1000*hour-(age+1)*hour
+                val long=side=="LONG"
+                val trigger=if(long) 105.0 else 95.0
+                val stop=if(long) 95.0 else 105.0
+                val history=(0 until 60).map { i ->
+                    WilliamsWaveBar((940+i)*hour,100.0,101.0,99.0,100.0,1.0)
+                }.toMutableList()
+                val idx=history.indexOfFirst { it.t==signalAt+hour }
+                val time=history[idx].t
+                when(case) {
+                    "INVALIDATED" -> history[idx]=WilliamsWaveBar(time,100.0,if(long) 101.0 else 106.0,if(long) 94.0 else 99.0,100.0,1.0)
+                    "TRIGGERED" -> history[idx]=WilliamsWaveBar(time,100.0,if(long) 106.0 else 101.0,if(long) 99.0 else 94.0,100.0,1.0)
+                    "AMBIGUOUS" -> history[idx]=WilliamsWaveBar(time,100.0,106.0,94.0,100.0,1.0)
+                    "GAP" -> history.removeAt(idx)
+                }
+                val event=pendingTc2LevelEvent(side,signalAt,trigger,stop,100.0,history,now)
+                assertEquals("$side/$age/$case",if(case=="GAP") "UNVERIFIED" else case,event.state)
+                val expected=if(case=="INVALIDATED") "H1_PARENT_STRUCTURAL_INVALIDATION" else null
+                for(family in listOf("REVERSAL","SUPER_AO","FRACTAL")) {
+                    assertEquals(expected,pendingTc2CancelReason(event,family,side,trigger,100.0))
+                }
+                if(case=="WAITING") {
+                    assertEquals(if(long) "H1_FRACTAL_NOT_ABOVE_TEETH" else "H1_FRACTAL_NOT_BELOW_TEETH",
+                        pendingTc2CancelReason(event,"FRACTAL",side,trigger,if(long) 106.0 else 94.0))
+                    assertNull(pendingTc2CancelReason(event,"FRACTAL",side,trigger,Double.NaN))
+                }
+            }
+    }
 }

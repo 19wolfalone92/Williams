@@ -7060,6 +7060,18 @@ private class NativeEngine(
                     if(proofError!=null) proofError
                     else {
                         val h1=fetchCandles(symbol,"1h",220)
+                        if(profile==williamsTc2Profile) {
+                            // A missing emission is not proof that a signed
+                            // resting order lost its structural basis. Use
+                            // the original immutable levels and causal H1 path.
+                            val closed=h1.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
+                            val waveBars=closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
+                            val direction=pending.optString("direction")
+                            val event=pendingTc2LevelEvent(direction,signalAt,price,stop,
+                                futuresMarketData.price(symbol),waveBars,now)
+                            val teeth=if(event.state=="WAITING") williamsBookH1ActivationTeeth(waveBars,now) else Double.NaN
+                            pendingTc2CancelReason(event,pending.optString("signal_type"),direction,price,teeth)
+                        } else {
                         val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
                             it.signalId==parentId && it.type==pending.optString("signal_type") &&
                             it.strategyProfile==profile && williamsBookSignalRoleAllowed(profile,it.type,it.role,
@@ -7074,6 +7086,7 @@ private class NativeEngine(
                             val teeth=williamsBookH1ActivationTeeth(waveBars,now)
                             williamsBookFractalTeethBlocker(pending.optString("signal_type"),
                                 pending.optString("direction"),price,teeth,tick)
+                        }
                         }
                     }
                 }.getOrElse { failure ->
@@ -8570,7 +8583,10 @@ private class NativeEngine(
         if(storedReanchor?.optString("phase")=="CANCEL_REQUESTED") {
             val old=(0 until existing.length()).mapNotNull { existing.optJSONObject(it) }
                 .singleOrNull { it.optString("client_id")==storedReanchor.optString("old_client_id") }
-            if(old==null || exchangeOrderStatus(old) !in ENTRY_ORDER_TERMINAL_STATUSES ||
+            if(old==null || exchangeOrderStatus(old) !in setOf("CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH","REJECTED") ||
+                old.optString("cancel_reconciled_status")!=exchangeOrderStatus(old) ||
+                old.optString("position_observed_after_cancel").toBigDecimalOrNull()?.signum()!=0 ||
+                old.optLong("fill_observed_at_ms",0L)>0L ||
                 campaignLifecycleStatus(old)!="CLOSED_OR_STOPPED")
                 return rejectDecision(symbol,"FRACTAL_REANCHOR_OLD_CANCEL_UNCONFIRMED")
             storedReanchor.put("phase","CANCEL_CONFIRMED")
