@@ -236,6 +236,8 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
     if tc2_no_age or (structural and expires_at==0):
         setup=signal.get("setup_context") or {}
         closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+        if closed_at<=0:
+            closed_at=int(pending.get("updated_at_ms",pending.get("created_at_ms",0)) or 0)
         if closed_at<=0 or not 0<=now-closed_at<3_600_000:
             return "pending_h1_snapshot_stale_or_unverified"
     if tc2_no_age:
@@ -1747,7 +1749,8 @@ class FuturesWilliamsRuntime:
                 try:
                     self._require_entry_time()
                     latest = self.engine.load_campaign(intent.campaign_id)
-                    pending = (latest.tags.get("pending_signal") or {}).get("signal") if latest else None
+                    pending_record = (latest.tags.get("pending_signal") or {}) if latest else {}
+                    pending = pending_record.get("signal") if pending_record else None
                     if not pending or pending.get("signal_id") != intent.signal_id:
                         raise ValueError("SIGNAL_CHANGED_BEFORE_TRANSPORT")
                     transport_trigger = params.get("triggerPrice", params.get("stopPrice"))
@@ -1764,6 +1767,8 @@ class FuturesWilliamsRuntime:
                     if tc2_no_age or (structural and expires==0):
                         setup=pending.get("setup_context") or {}
                         closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+                        if closed<=0:
+                            closed=int(pending_record.get("updated_at_ms",pending_record.get("created_at_ms",0)) or 0)
                         if closed<=0 or not 0<=now-closed<3_600_000:
                             raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
                 except Exception as failure:

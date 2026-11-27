@@ -7,7 +7,7 @@ import pytest
 
 from campaign_model import SignalRole, SignalType
 from williams_edition_rules import TC2, NTD
-from williams_execution_policy import h1_signal_expiry
+from williams_execution_policy import h1_signal_expiry, signal_age_ttl_disabled
 from williams_scenario_lifecycle import evaluate_level_event
 from futures_williams_runtime import _pending_entry_preflight_reason
 import williams_signals as signals
@@ -24,6 +24,8 @@ def test_all_tc2_stop_families_have_no_age_expiry(family):
 def test_observer_source_policy_is_not_broadened_to_non_fractal_families():
     assert h1_signal_expiry(100 * H1, "FRACTAL", NTD) == 0
     assert h1_signal_expiry(100 * H1, "REVERSAL", NTD) == 105 * H1
+    assert signal_age_ttl_disabled("FRACTAL", NTD) is False
+    assert signal_age_ttl_disabled("REVERSAL", TC2) is True
 
 
 def test_wm1_and_wm2_scan_history_older_than_twenty_h1_bars(monkeypatch):

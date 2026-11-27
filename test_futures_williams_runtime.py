@@ -1183,6 +1183,8 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "trigger_price": 100.0,
             "protective_reference": 97.0,
             "expires_at_ms": 5000,
+            "signal_type":"REVERSAL",
+            "strategy_profile":"PROFITUNITY_COURSE",
         },
     }
     assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=2000) == ""
@@ -1203,6 +1205,8 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "trigger_price": 200.0,
             "protective_reference": 203.0,
             "expires_at_ms": 5000,
+            "signal_type":"SUPER_AO",
+            "strategy_profile":"PROFITUNITY_COURSE",
         },
     }
     assert _pending_entry_preflight_reason(short_pending, short_intent, 200.1, now_ms=2000) == ""

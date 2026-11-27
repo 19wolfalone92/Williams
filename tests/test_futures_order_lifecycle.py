@@ -530,7 +530,7 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON, timeframe="1h", signal_bar_time_ms=now, trigger_price=103,
-        protective_reference=95, expires_at_ms=now + 3600000)
+        protective_reference=95, expires_at_ms=now + 3600000, setup_context={"h1_closed_at_ms":now-1000})
     bot._arm_add_on(campaign, signal)
     campaign = bot.engine.load_campaign(campaign.campaign_id)
     assert bot._pending_entries()
@@ -558,7 +558,7 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
                             timeframe="1h", signal_bar_time_ms=now - 1000,
                             trigger_price=101 if side == "BUY" else 99,
                             protective_reference=95 if side == "BUY" else 105,
-                            expires_at_ms=now + 3_600_000)
+                            expires_at_ms=now + 3_600_000, setup_context={"h1_closed_at_ms":now-1000})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     try:
         armed = bot._arm_entry(candidate)
@@ -618,7 +618,7 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - 1000, trigger_price=101 if side == "BUY" else 99,
-        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000, setup_context={"h1_closed_at_ms":now-1000})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     try:
         with pytest.raises((ValueError, RuntimeError)):
@@ -984,7 +984,7 @@ def test_tc2_book_quantities_survive_fills_and_restart_without_unlimited_additio
         bot._replace_protection(campaign,exchange.price-2*sign)
         signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
             role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500+i,
-            trigger_price=exchange.price+sign,protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+            trigger_price=exchange.price+sign,protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
         pending=bot._arm_add_on(campaign,signal)
         assert Decimal(str(pending["quantity"]))==unit*weight
         exchange.fill_addition(pending["client_order_id"])
@@ -1006,7 +1006,7 @@ def test_tc2_loss_or_partial_add_never_authorizes_the_next_book_tranche(armed_ru
     now=int(time.time()*1000)
     def signal():return SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
-        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
     exchange.price=exchange.entry_price
     posts=len(exchange.calls)
     with pytest.raises(RuntimeError,match="PROFITABLE_POSITION"):bot._arm_add_on(campaign,signal())
@@ -1034,7 +1034,7 @@ def test_tc2_addition_revalidates_after_sizing_before_exchange_post(armed_runtim
     now=int(time.time()*1000)
     signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
-        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
     real_check=bot._futures_pre_submit_checks
     def raced(intent):
         if intent.purpose=="CAMPAIGN_ADD_ON":
@@ -1062,7 +1062,7 @@ def half_margin_entry(monkeypatch, tmp_path):
         signal = SignalSpec.new(symbol='BTCUSDT', side=side, signal_type=SignalType.REVERSAL,
             role=SignalRole.ENTRY, timeframe='1h', signal_bar_time_ms=now-1000,
             trigger_price=101 if side=='BUY' else 99, protective_reference=95 if side=='BUY' else 105,
-            expires_at_ms=now+3600000)
+            expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
         return FuturesCandidate('BTCUSDT', 'LONG' if side=='BUY' else 'SHORT', signal, (signal,), .01, .001, True, 90)
     try:
         yield bot, exchange, candidate
@@ -1133,7 +1133,7 @@ def test_lost_initial_post_keeps_exact_id_and_reserve_and_reconciles_without_rep
 
 
 @pytest.mark.parametrize('side', ['BUY','SELL'])
-@pytest.mark.parametrize('fault', ['EXPIRY','CLIENT_ID','TRIGGER'])
+@pytest.mark.parametrize('fault', ['STALE_H1','CLIENT_ID','TRIGGER'])
 def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(half_margin_entry, monkeypatch, side, fault):
     from binance_futures_client import BinanceFuturesClient
     bot, exchange, candidate=half_margin_entry
@@ -1141,7 +1141,8 @@ def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(hal
     def expire_after_margin(intent):
         started=assess(intent)
         owner=bot.engine.load_campaign(intent.campaign_id)
-        if fault=='EXPIRY':owner.tags['pending_signal']['signal']['expires_at_ms']=int(time.time()*1000)-1
+        if fault=='STALE_H1':
+            owner.tags['pending_signal']['signal'].setdefault('setup_context',{})['h1_closed_at_ms']=int(time.time()*1000)-3_600_001
         bot.db.save_campaign(owner)
         return started
     monkeypatch.setattr(bot,'_assess_half_margin',expire_after_margin)
@@ -1154,6 +1155,6 @@ def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(hal
         return exchange.request(method,path,params,signed)
     monkeypatch.setattr(bot.client,'_request',request)
     monkeypatch.setattr(bot.client.session,'request',lambda *a,**k:pytest.fail('Expired signal reached HTTP POST'))
-    with pytest.raises(RuntimeError,match='SIGNAL_EXPIRED_BEFORE_TRANSPORT' if fault=='EXPIRY' else 'TRANSPORT_PLAN_CHANGED'):
+    with pytest.raises(RuntimeError,match='H1_SNAPSHOT_STALE_BEFORE_TRANSPORT' if fault=='STALE_H1' else 'TRANSPORT_PLAN_CHANGED'):
         bot._arm_entry(candidate(side))
     assert bot._pending_entries()==[] and bot.db.open_campaigns()==[]
