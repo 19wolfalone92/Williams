@@ -1090,9 +1090,11 @@ def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis(
     assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
     assert '},contractPrice,now)==null' in context
     assert 'futuresMarketData.markPrice' not in context
-    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
+    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('if(next!=null)', 1)[0]
     assert 'futuresMarketData.price(symbol)' in reanchor
     assert 'futuresMarketData.markPrice' not in reanchor
+    assert 'tc2ReanchorMarketBlocker(pending,proposal,contract,closed,recent,tick,preflightNow)' in reanchor
+    assert 'PRE_CANCEL_REJECTED_OLD_RETAINED' in reanchor
 
 
 def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():
