@@ -781,7 +781,7 @@ def test_android_websocket_closed_candles_are_persisted_before_history_readiness
     # The former mutable WS cache seeded SQLite, then returned its own list.
     # The stronger replacement admits only the revision-bound durable window.
     assert "liveCandleCache" not in fetch
-    assert "durableWorkingHistory(normalizedSymbol,frame,limit)" in fetch
+    assert "durableWorkingHistory(normalizedSymbol,frame,effectiveLimit)" in fetch
     assert "durable.continuous" in fetch
     assert "historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision" in fetch
     assert fetch.index("durable.continuous") < fetch.index("return closed")

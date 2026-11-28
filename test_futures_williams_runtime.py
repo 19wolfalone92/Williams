@@ -1411,7 +1411,7 @@ def test_futures_scanner_does_not_veto_valid_tc2_candidates_on_high_atr(monkeypa
     hour = 3_600_000
     now = now // hour * hour
     frame = pd.DataFrame({
-        "open_time_ms": [now - (120-i)*hour for i in range(120)],
+        "open_time_ms": [now - (501-i)*hour for i in range(501)],
         "open": 100.0, "high": 120.0, "low": 80.0,
         "close": 100.0, "volume": 10.0,
     })
