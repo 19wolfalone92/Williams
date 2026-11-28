@@ -40,6 +40,7 @@ from williams_signals import (
     extract_short_signal_specs,
 )
 from williams_decision_trace import build_decision_trace
+from williams_tc2_admission import verify_tc2_order
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
 from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker,signal_age_ttl_disabled
@@ -1716,13 +1717,19 @@ class FuturesWilliamsRuntime:
 
         new_exposure = intent.purpose.upper() in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
         margin_started = None
+        source_receipt = None
+        source_revision = None
 
         def combined_checks(snapshot):
-            nonlocal margin_started
+            nonlocal margin_started, source_receipt, source_revision
             self._futures_pre_submit_checks(intent)
             if checks is not None:
                 checks(snapshot)
             if new_exposure:
+                owner = self.engine.load_campaign(intent.campaign_id)
+                if owner is not None and owner.tags.get("strategy_profile", TC2) == TC2:
+                    source_receipt = self._revalidate_tc2_signal(owner, intent)
+                    source_revision = owner.state_revision
                 try:
                     margin_started = self._assess_half_margin(intent)
                 except Exception as failure:
@@ -1770,6 +1777,12 @@ class FuturesWilliamsRuntime:
                         closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
                         if closed<=0 or not 0<=now-closed<3_600_000:
                             raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
+                    if profile == TC2:
+                        if source_receipt is None or source_revision != latest.state_revision:
+                            raise ValueError("TC2_CANONICAL_ADMISSION:STATE_CHANGED_BEFORE_TRANSPORT")
+                        if now // 3_600_000 * 3_600_000 != source_receipt["closed_at_ms"]:
+                            raise ValueError("TC2_CANONICAL_ADMISSION:NEW_H1_BEFORE_TRANSPORT")
+                        self.db.require_unconsumed_campaign_signal(intent.signal_id)
                 except Exception as failure:
                     raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:
@@ -1786,7 +1799,7 @@ class FuturesWilliamsRuntime:
             pre_submit_checks=combined_checks,
         )
         if not result.accepted:
-            if new_exposure and ("FUTURES_HALF_MARGIN" in result.reason or "exposure_not_submitted:" in result.reason):
+            if new_exposure and ("FUTURES_HALF_MARGIN" in result.reason or "exposure_not_submitted:" in result.reason or "TC2_CANONICAL_ADMISSION:" in result.reason):
                 self._retire_unsubmitted_exposure(intent, result.reason)
                 raise ExposureNotSubmittedError(f"Futures execution blocked: {result.reason}")
             raise RuntimeError(f"Futures execution blocked: {result.reason}")
@@ -1957,6 +1970,30 @@ class FuturesWilliamsRuntime:
                 SignalJournal(self.db).decision(symbol,stage,event["blocker"] or str(result),event["observed_at_ms"],signal.signal_id,admitted)
         except Exception:
             pass  # Observation failure never turns a financial mutation into a retry.
+
+    def _revalidate_tc2_signal(self, campaign, intent):
+        """Refresh raw source evidence before every new TC2 exchange mutation."""
+        try:
+            self.db.require_unconsumed_campaign_signal(intent.signal_id)
+            pending = campaign.tags.get("pending_signal") or {}
+            payload = pending.get("signal") or {}
+            if (pending.get("state") != SignalState.VALIDATED.value or
+                    payload.get("signal_id") != intent.signal_id or
+                    campaign.tags.get("pending_order_client_id") != intent.client_order_id):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:OWNERSHIP")
+            raw = self.client.klines(intent.symbol, "1h",
+                limit=max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))))
+            now = int(time.time()*1000) + int(getattr(self.client,"time_offset_ms",0))
+            proof = verify_tc2_order(payload, symbol=intent.symbol, side=intent.side,
+                purpose=intent.purpose, raw=raw, now_ms=now, tick=self._tick(intent.symbol))
+            if Decimal(proof["trigger"]) != Decimal(str(campaign.tags["pending_order_trigger"])):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:ARMED_LEVEL_CHANGED")
+            if intent.purpose == "CAMPAIGN_ENTRY" and Decimal(proof["book_stop"]) != Decimal(str(campaign.initial_stop_price)):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:INITIAL_STOP_CHANGED")
+            self.db.save_execution_event(intent.intent_id, "TC2_FRESH_SOURCE_VERIFIED", proof)
+            return proof
+        except Exception as exc:
+            raise RuntimeError("TC2_CANONICAL_ADMISSION:" + str(exc)) from exc
 
     def _revalidate_ntd_signal(self,campaign,intent):
         """Recompute the pinned NTD dimension from fresh CLOSED H1 data.

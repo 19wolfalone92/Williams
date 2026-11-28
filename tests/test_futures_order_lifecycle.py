@@ -8,6 +8,18 @@ from futures_williams_runtime import FuturesCandidate, FuturesWilliamsRuntime
 from binance_client import BinanceAPIError
 
 
+@pytest.fixture(autouse=True)
+def isolate_source_for_legacy_transport_fixtures(monkeypatch, request):
+    # This file's original cases intentionally supply synthetic SignalSpec
+    # objects to exercise transport, margin and recovery, not market analysis.
+    # R48 source-gate tests below opt out and use genuine raw candle evidence.
+    if request.node.name.startswith("test_r48_real_source_"):
+        return
+    monkeypatch.setattr(FuturesWilliamsRuntime, "_revalidate_tc2_signal",
+        lambda self, owner, intent: {"closed_at_ms":
+            int(time.time()*1000+getattr(self.client,"time_offset_ms",0))//3_600_000*3_600_000})
+
+
 class DemoExchangeModel:
     def __init__(self, symbol="BTCUSDT"):
         self.symbol = symbol
@@ -1218,3 +1230,33 @@ def test_structurally_invalidated_pending_signal_stays_consumed_after_restart(ar
     finally:
         restarted.client.session.close()
         restarted.db.conn.close()
+
+
+@pytest.mark.parametrize("side", ["BUY","SELL"])
+def test_r48_real_source_blocks_fabricated_validated_signal_before_post(monkeypatch,tmp_path,side):
+    # No verifier stub for this test: use actual runtime, barrier, DB and raw
+    # OHLC with a synthetic (but causally confirmed) source fixture.
+    from test_r48_tc2_admission import raw_fractal, candidate as source_candidate
+    monkeypatch.setenv("WILLIAMS_DB_PATH",str(tmp_path/"r48.sqlite3"))
+    monkeypatch.setenv("DRY_RUN","false")
+    monkeypatch.setenv("FUTURES_LEVERAGE","2")
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES","")
+    bot=FuturesWilliamsRuntime("test-key","test-secret",testnet=True)
+    exchange=DemoExchangeModel()
+    monkeypatch.setattr(bot.client,"_request",exchange.request)
+    now=int(time.time()*1000)
+    raw=raw_fractal(side,now)
+    actual=source_candidate(side,raw)
+    from dataclasses import replace
+    fake=replace(actual,trigger_price=actual.trigger_price+(.1 if side=="BUY" else -.1))
+    monkeypatch.setattr(bot.client,"klines",lambda *a,**k:raw)
+    c=FuturesCandidate("BTCUSDT","LONG" if side=="BUY" else "SHORT",fake,(fake,),.01,.001,True,90)
+    try:
+        with pytest.raises(RuntimeError,match="TC2_CANONICAL_ADMISSION"):
+            bot._arm_entry(c)
+        assert not any(m=="POST" and path.endswith("algoOrder") for m,path,p in exchange.calls)
+        assert bot.db.campaign_risk_reserved_quote()==0
+        assert not bot._pending_entries()
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()
