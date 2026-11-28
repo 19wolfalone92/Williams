@@ -503,9 +503,18 @@ internal fun futuresQuoteRiskTransportBlocker(all:JSONArray,clientId:String,equi
     }
     val candidates=active.filter { it.optString("client_id")==clientId }
     if(candidates.size!=1) return "QUOTE_RISK_LEDGER_RESERVATION_IDENTITY"
-    val proposed=futuresQuoteRiskUsdt(candidates.single())/equity
-    val others=active.filter { it.optString("client_id")!=clientId }.map { futuresQuoteRiskUsdt(it)/equity }
-    return futuresPortfolioRiskBlocker(proposed,others)?.let { "QUOTE_RISK_LEDGER: "+it }
+    // Compare monetary obligations directly, not a sum of rounded ratios.
+    val cap=equity.toBigDecimal()
+    val amounts=active.map { futuresQuoteRiskUsdt(it) }
+    if(amounts.any { !it.isFinite() || it<=0.0 }) return "QUOTE_RISK_LEDGER_RESERVATION_UNKNOWN"
+    val entryCap=cap.multiply(FUTURES_MAX_ENTRY_RISK_PCT.toBigDecimal())
+    val portfolioCap=cap.multiply(FUTURES_MAX_PORTFOLIO_RISK_PCT.toBigDecimal())
+    val tolerance="0.00000001".toBigDecimal()
+    val money=amounts.map { it.toBigDecimal() }
+    if(money.any { it>entryCap+tolerance }) return "QUOTE_RISK_LEDGER_ENTRY_CAP"
+    if(money.fold(java.math.BigDecimal.ZERO) { sum,amount -> sum+amount }>portfolioCap+tolerance)
+        return "QUOTE_RISK_LEDGER_PORTFOLIO_CAP"
+    return null
 }
 
 internal fun assessActualFuturesCampaignRisk(direction:String,quantity:Double,entry:Double,stop:Double,
@@ -4952,7 +4961,9 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 // The same durable journal and signed equity basis are checked
                 // again after any rate/clock wait, before exposure mutation.
-                futuresQuoteRiskTransportBlocker(currentIntents,plan.clientId,riskEquity)?.let { error(it) }
+                val durableRiskRows=intents()
+                check(durableRiskRows.toString()==currentIntents.toString()) { "QUOTE_RISK_LEDGER_JOURNAL_CHANGED" }
+                futuresQuoteRiskTransportBlocker(durableRiskRows,plan.clientId,riskEquity)?.let { error(it) }
                 // The margin GETs (and a rate/clock wait) must not extend the
                 // lifetime of the earlier source/time admission.
                 check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_TRANSPORT" }

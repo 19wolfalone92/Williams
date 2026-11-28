@@ -5876,10 +5876,11 @@ private class NativeEngine(
     }
 
     private fun campaignEntryCandidate(candidate: BaseAnalysis): CampaignSignalN? =
-        // TC2's first still-valid presenting Wise Man. Consumed levels have
-        // already been removed by their causal trigger checks.
-        candidate.campaignSignals.filter { williamsVerifiedNewRiskSource(it.strategyProfile) &&
-            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && it.role=="ENTRY" }.minByOrNull { it.signalBarTimeMs }
+        williamsPendingStopHeads(candidate.campaignSignals.filter {
+            williamsVerifiedNewRiskSource(it.strategyProfile) &&
+            williamsProfileAllowsSource(williamsProfile,it.strategyProfile) && it.role=="ENTRY" },
+            { campaignSignalDirection(it.type).orEmpty() }, { it.triggerPrice }, { it.signalId })
+            .minByOrNull { it.signalBarTimeMs }
 
     // Legacy Spot-era campaign submission/management/recovery implementation removed.
     // Entry, trailing protection, and exits are owned by NativeFuturesCampaignCoordinator.
@@ -8675,8 +8676,14 @@ private class NativeEngine(
         }
         // Retired M15 cancel fences must not veto H1 book entries. The
         // separate TC2 H1 re-anchor fence still protects replacement orders.
+        // Only one STOP is submitted. The same-direction nearest level is
+        // the first attainable boundary; retain the complete source pool for
+        // audit and subsequent re-anchor. Opposite-direction selection still
+        // uses the legacy single-order arbitration; no atomic OCO is claimed.
+        val directionHeads=williamsPendingStopHeads(selectableSignals,
+            { campaignSignalDirection(it.type).orEmpty() }, { it.triggerPrice }, { it.signalId })
         val selection = williamsSelectChronologicalEntry(
-            selectableSignals, { it.signalBarTimeMs }, { contextRank(it) },
+            directionHeads, { it.signalBarTimeMs }, { contextRank(it) },
             { nativeRank(it.type) }, { campaignSignalDirection(it.type).orEmpty() }, { it.signalId })
         val baseline = selection.first ?: run {
             lastError = selection.second.ifBlank { "WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL" }

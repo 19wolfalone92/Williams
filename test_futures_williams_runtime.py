@@ -1607,3 +1607,22 @@ def test_r49_canonical_alligator_raw_history_limit_keeps_500_closed_bars():
     assert canonical_alligator_raw_history_limit("750") == 750
     assert canonical_alligator_raw_history_limit("1500") == 1000
     assert canonical_alligator_raw_history_limit("not-a-number") == 501
+
+
+def test_r51_same_direction_pending_stop_head_is_not_formation_order():
+    from futures_williams_runtime import _tc2_pending_direction_head
+    from williams_edition_rules import TC2
+    from itertools import permutations
+    for side in ("BUY","SELL"):
+        levels = (120,110,130) if side == "BUY" else (80,90,70)
+        rows = [SimpleNamespace(side=side, trigger_price=level, signal_id=family,
+            signal_bar_time_ms=i+1, role=SignalRole.ENTRY, strategy_profile=TC2,
+            execution_semantics="STOP_ENTRY")
+            for i,(family,level) in enumerate(zip(("WM1","WM2","WM3"),levels))]
+        for ordering in permutations(rows):
+            assert _tc2_pending_direction_head(ordering).signal_id == "WM2"
+        rows[1].role=SignalRole.ADD_ON
+        assert _tc2_pending_direction_head(rows).signal_id == "WM1"
+        rows[1].role=SignalRole.ENTRY
+        rows[1].side="SELL" if side=="BUY" else "BUY"
+        assert _tc2_pending_direction_head(rows) is None

@@ -199,6 +199,24 @@ class FuturesCandidate:
         }
 
 
+def _tc2_pending_direction_head(signals):
+    """Select the first attainable unconsumed STOP on ONE direction.
+
+    For a continuous price path starting on the pending side of every level,
+    BUY reaches the lowest trigger first; SELL reaches the highest first.
+    This is arming geometry, NOT evidence of a trigger or fill, and says
+    nothing about gaps or the ordering of opposite directions.
+    """
+    eligible = [s for s in signals if s.role == SignalRole.ENTRY
+                and s.strategy_profile == TC2 and s.execution_semantics == "STOP_ENTRY"
+                and s.side in ("BUY", "SELL")
+                and math.isfinite(s.trigger_price) and s.trigger_price > 0]
+    if not eligible or len({s.side for s in eligible}) != 1:
+        return None
+    return min(eligible, key=lambda s: (s.trigger_price if s.side == "BUY" else -s.trigger_price,
+                                       s.signal_id))
+
+
 def _select_tc2_initial_candidate(candidates):
     """Choose one source-eligible initial candidate per symbol, chronology first.
 
@@ -650,9 +668,13 @@ class FuturesWilliamsScanner:
             # TC2 three-price-bar setups are continuation add-ons and are still
             # surfaced to an existing campaign, but can never open a new one.
             initial_pool = [s for s in signal_pool if s.role == SignalRole.ENTRY]
-            # The earliest still-unconsumed presenting Wise Man initiates a
-            # campaign (TC2); each extractor already rejects consumed triggers.
-            signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+            # Preserve every source candidate in all_signals. In a single
+            # direction the closest pending STOP dominates farther levels,
+            # regardless of which Wise Man formed first. The final source and
+            # exchange gates still reject consumed/crossed/invalid levels.
+            head = _tc2_pending_direction_head(initial_pool)
+            signal = head if head is not None else min(initial_pool or signal_pool,
+                key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
             try:
                 correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
             except Exception as exc:
