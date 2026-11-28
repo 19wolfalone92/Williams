@@ -4936,7 +4936,8 @@ internal class NativeFuturesCampaignCoordinator(
             futuresQuoteRiskTransportBlocker(currentIntents,plan.clientId,riskEquity)?.let { error(it) }
             intent.put("quote_risk_equity_usdt",riskEquity)
                 .put("quote_risk_verified_at_ms",clock())
-            saveIntents(currentIntents)
+            val riskJournalSnapshot=currentIntents.toString()
+            saveIntents(currentIntents,riskJournalSnapshot)
             adapter.halfMarginTransportFence = { params ->
                 if(receiptRequired) {
                     val receipt=tc2SourceReceipt ?: error("TC2_CANONICAL_ADMISSION:RECEIPT_REQUIRED")
@@ -4961,8 +4962,11 @@ internal class NativeFuturesCampaignCoordinator(
                 }
                 // The same durable journal and signed equity basis are checked
                 // again after any rate/clock wait, before exposure mutation.
-                val durableRiskRows=intents()
-                check(durableRiskRows.toString()==currentIntents.toString()) { "QUOTE_RISK_LEDGER_JOURNAL_CHANGED" }
+                // Compare exact committed bytes, not a parsed and reserialized JSON object:
+                // JSONObject may reorder fields or normalize number representations.
+                val durableRiskRaw=executionStore.readState(intentsKey)
+                check(durableRiskRaw==riskJournalSnapshot) { "QUOTE_RISK_LEDGER_JOURNAL_CHANGED" }
+                val durableRiskRows=JSONArray(checkNotNull(durableRiskRaw))
                 futuresQuoteRiskTransportBlocker(durableRiskRows,plan.clientId,riskEquity)?.let { error(it) }
                 // The margin GETs (and a rate/clock wait) must not extend the
                 // lifetime of the earlier source/time admission.
@@ -7027,12 +7031,11 @@ internal class NativeFuturesCampaignCoordinator(
         }
     }
 
-    private fun saveIntents(array: JSONArray) {
+    private fun saveIntents(array: JSONArray, durableSnapshot: String = array.toString()) {
         // Serialize once. This hot path runs inside signed reconciliation,
         // where the journal may hold hundreds of historical campaigns.
         // Re-encoding the entire JSONArray for the observer doubled allocation
         // pressure and could delay exchange-position/STOP supervision.
-        val durableSnapshot = array.toString()
         check(executionStore.writeState(intentsKey, durableSnapshot)) {
             "SQLite commit failed while persisting Futures execution intents; order mutation is blocked"
         }

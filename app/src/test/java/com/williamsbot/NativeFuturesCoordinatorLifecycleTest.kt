@@ -544,6 +544,27 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    @Test fun quoteRiskJournalMutationAtTransportRejectsWithoutOrder() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",exchange.client,
+                    beforeExposureTransport={
+                        val key="futures_campaign_intents_v2"
+                        val rows=JSONArray(journal.readState(key))
+                        rows.getJSONObject(0).put("risk_quote_usdt",9999.0)
+                        check(journal.writeState(key,rows.toString()))
+                    })
+            }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(),result.getBoolean("accepted"))
+            assertTrue(result.toString(),result.optString("error").contains("QUOTE_RISK_LEDGER_JOURNAL_CHANGED"))
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder")+exchange.posts("/fapi/v1/order"))
+        }
+    }
+
     @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
         val journal = Journal()
         val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
