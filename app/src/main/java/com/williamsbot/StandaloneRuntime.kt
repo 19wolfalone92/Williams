@@ -1829,6 +1829,10 @@ private class NativeEngine(
             coordinator.m15EntryVerifier = null
             coordinator.requireBookH1ProofForAutomatedEntries = true
             coordinator.bookH1EntryVerifier = { plan -> verifyBookH1PlanBeforeSubmit(plan) }
+            coordinator.requireTc2SourceReceipt = true
+            coordinator.tc2SourceReceiptVerifier = { plan ->
+                verifyBookH1PlanBeforeSubmit(plan) ?: error("TC2_CANONICAL_ADMISSION:RECEIPT_REQUIRED")
+            }
             coordinator.bookNtdExitVerifier = { owner,reason -> verifyNtdExitBeforeSubmit(owner,reason) }
             coordinator.bookCourseTrimVerifier = { owner,quantity -> verifyCourseTrimBeforeSubmit(owner,quantity) }
             coordinator.bookCourseExitVerifier = { owner,reason -> verifyCourseExitBeforeSubmit(owner,reason) }
@@ -11234,7 +11238,36 @@ private class NativeEngine(
      * exchange leverage confirmation and immediately BEFORE Binance POST.
      * Historic M15 entry verifier stays available only for recovery.
      */
-    private fun verifyBookH1PlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {
+    /** Bind the exact closed OHLCV used by the final source verifier to the
+     * durable revision and the current exchange H1 boundary. No network read
+     * is needed in the adapter's last pre-POST fence. */
+    private fun captureTc2H1SourceReceipt(
+        plan:NativeFuturesCampaignCoordinator.EntryPlan, candles:List<CandleN>, observedAt:Long
+    ):Tc2H1SourceReceipt {
+        val closed=candles.filter { it.t>0L && it.exchangeClosed && it.t+WILLIAMS_H1_MS<=observedAt }
+        check(canonicalAlligatorWarmupReady(closed.size) && closed.size==candles.size &&
+            closed.all { validNativeCandle(it) } &&
+            williamsClosedH1HistoryBlocker(closed.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) },observedAt)==null) {
+            "TC2_CANONICAL_ADMISSION:HISTORY_OR_WARMUP_UNVERIFIED"
+        }
+        val snapshot=durableWorkingHistory(plan.symbol,"1h",closed.size)
+        val fingerprint=closedCandleFingerprint(closed)
+        check(snapshot.continuous && snapshot.candles.takeLast(closed.size)==closed &&
+            historyStore.indicatorCacheRevision(plan.symbol,"1h")==snapshot.revision) {
+            "TC2_CANONICAL_ADMISSION:SOURCE_CHANGED_DURING_VERIFICATION"
+        }
+        val receipt=Tc2H1SourceReceipt(plan,closed.last().t+WILLIAMS_H1_MS,
+            snapshot.revision,fingerprint,closed.size,
+            currentExchangeMs={
+                if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
+                    futuresMarketData.cachedExchangeNowMs() else null
+            },
+            currentRevision={ historyStore.indicatorCacheRevision(plan.symbol,"1h") })
+        receipt.blocker(plan)?.let { error(it) }
+        return receipt
+    }
+
+    private fun verifyBookH1PlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan):Tc2H1SourceReceipt? {
         check(!forceTestnetMode) { "OPERATOR_DIRECTION_MODE_ACTIVE_BEFORE_SUBMISSION" }
         val now=futuresMarketData.exchangeNowMs()
         val tick=symbolFilters(plan.symbol).tick
@@ -11261,7 +11294,7 @@ private class NativeEngine(
             check(validWilliamsEditionBars(bars.map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) })) {
                 "H1_OHLC_UNVERIFIED"
             }
-            return
+            return captureTc2H1SourceReceipt(plan,bars,now)
         }
         val target=plan.entryPrice.toDouble()
         val stop=plan.protectiveStop.toDouble()
@@ -11280,14 +11313,21 @@ private class NativeEngine(
         if(plan.strategyProfile==williamsTc2Profile) {
             val closedH1=candles.filter { it.t>0 && it.t+WILLIAMS_H1_MS<=now }
                 .map { WilliamsWaveBar(it.t,it.o,it.h,it.l,it.c,it.v) }
-            check(williamsClosedH1HistoryBlocker(closedH1,now)==null && validWilliamsEditionBars(closedH1)) {
+            check(canonicalAlligatorWarmupReady(closedH1.size) &&
+                williamsClosedH1HistoryBlocker(closedH1,now)==null && validWilliamsEditionBars(closedH1)) {
                 "H1_BOOK_HISTORY_OR_OHLC_UNVERIFIED"
+            }
+            check(actual.signalBarTimeMs==plan.signalBarTimeMs && actual.executionSemantics=="STOP_ENTRY" &&
+                plan.executionSemantics=="STOP_ENTRY" && plan.kind==NativeFuturesCampaignCoordinator.EntryKind.STOP &&
+                target.isFinite() && stop.isFinite() && target>0.0 && stop>0.0 &&
+                ExecutionMath.isMultiple(target,tick) && ExecutionMath.isMultiple(stop,tick)) {
+                "TC2_CANONICAL_ADMISSION:IDENTITY_OR_PRICE_GRID"
             }
         }
         if(plan.executionSemantics=="MARKET_ON_CLOSE") {
             check(plan.strategyProfile==williamsNtdProfile && actual.executionSemantics=="MARKET_ON_CLOSE" &&
                 abs(actual.triggerPrice-plan.referenceClose)<=tick*.11) { "NTD_CLOSE_EVENT_CHANGED" }
-            return // coordinator independently verifies fresh contract/mark AND executable bid/ask bound
+            return null // coordinator independently verifies fresh contract/mark AND executable bid/ask bound
         }
         val expected=if(plan.direction.name=="LONG")
             normalizeTriggerPrice(actual.triggerPrice,tick)
@@ -11296,6 +11336,15 @@ private class NativeEngine(
         val expectedStop=if(plan.direction.name=="LONG")
             normalizePrice(actual.protectivePrice,tick)
             else normalizeTriggerPrice(actual.protectivePrice,tick)
+        if(plan.strategyProfile==williamsTc2Profile) {
+            check(fmtPrice(expected,tick).toBigDecimal().compareTo(plan.entryPrice.toBigDecimal())==0) {
+                "TC2_CANONICAL_ADMISSION:ENTRY_LEVEL_CHANGED"
+            }
+            if(plan.entryClientId.isBlank()) check(
+                fmtPrice(expectedStop,tick).toBigDecimal().compareTo(plan.protectiveStop.toBigDecimal())==0) {
+                "TC2_CANONICAL_ADMISSION:INITIAL_STOP_CHANGED"
+            }
+        }
         if(plan.entryClientId.isBlank()) check(if(plan.direction.name=="LONG") stop>=expectedStop-tick*.11
               else stop<=expectedStop+tick*.11) { "H1_BOOK_PROTECTIVE_STOP_WIDENED" }
         // fetchCandles deliberately excludes the forming bar. Fetch its raw
@@ -11321,6 +11370,8 @@ private class NativeEngine(
         check(if(plan.direction.name=="LONG") contractPrice<target else contractPrice>target) {
             "H1_BOOK_PENDING_BREAKOUT_ALREADY_CROSSED"
         }
+        return if(plan.strategyProfile==williamsTc2Profile)
+            captureTc2H1SourceReceipt(plan,candles,now) else null
     }
 
     private fun verifyMtfPlanBeforeSubmit(plan:NativeFuturesCampaignCoordinator.EntryPlan) {

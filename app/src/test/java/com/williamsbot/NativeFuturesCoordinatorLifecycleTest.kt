@@ -478,6 +478,55 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    /** Real coordinator, real transport fence; source receipt itself is
+     * supplied by a test fixture. This is not a market-pattern exam. */
+    @Test fun r49CanonicalSourceReceiptFencesAllSixFamiliesAtTransport() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
+        for(family in listOf("REVERSAL","SUPER_AO","FRACTAL"))
+        for(fault in listOf("NONE","MISSING","PLAN_CHANGED","UNDERWARMED","CORRECTION","ROLLOVER","CLOCK_UNKNOWN")) {
+            val exchange=Exchange(direction)
+            val journal=Journal()
+            val now=System.currentTimeMillis()
+            val closedAt=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS
+            var sourceClock:Long?=closedAt+1_000L
+            var sourceRevision=9L
+            val coordinator=NativeFuturesCampaignCoordinator(journal,clock={closedAt+1_000L}) {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",exchange.client,
+                    beforeExposureTransport={
+                        when(fault) {
+                            "CORRECTION" -> sourceRevision++
+                            "ROLLOVER" -> sourceClock=closedAt+WILLIAMS_H1_MS
+                            "CLOCK_UNKNOWN" -> sourceClock=null
+                        }
+                    })
+            }
+            coordinator.requireTc2SourceReceipt=true
+            if(fault!="MISSING") coordinator.tc2SourceReceiptVerifier={ checked ->
+                Tc2H1SourceReceipt(
+                    if(fault=="PLAN_CHANGED") checked.copy(quantity="0.5") else checked,
+                    closedAt,sourceRevision,"a".repeat(64),
+                    if(fault=="UNDERWARMED") 499 else 500,
+                    { sourceClock }, { sourceRevision })
+            }
+            val type=if(direction.name=="LONG") family else "SHORT_"+family
+            val signalAt=closedAt-WILLIAMS_H1_MS
+            val candidate=plan(direction).copy(signalType=type,signalBarTimeMs=signalAt,
+                signalId="BTCUSDT:1h:"+type+":"+signalAt)
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(candidate)
+            assertEquals("$direction/$family/$fault: $result",fault=="NONE",result.getBoolean("accepted"))
+            val posts=exchange.posts("/fapi/v1/algoOrder")+exchange.posts("/fapi/v1/order")
+            assertEquals("$direction/$family/$fault",if(fault=="NONE") 1 else 0,posts)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            if(fault=="NONE") assertEquals(candidate.signalId,owner.getJSONObject("tc2_source_receipt").getString("signal_id"))
+            else {
+                assertTrue(result.toString(),result.optString("error").contains("TC2_CANONICAL_ADMISSION:"))
+                assertFalse(result.getBoolean("order_mutation_attempted"))
+                assertFalse(isEntryCampaignReserved(owner))
+            }
+        }
+    }
+    
     @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
         val journal = Journal()
         val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)

@@ -892,6 +892,10 @@ internal class NativeFuturesCampaignCoordinator(
     var m15EntryVerifier:((EntryPlan)->Unit)? = null
     var requireBookH1ProofForAutomatedEntries:Boolean = false
     var bookH1EntryVerifier:((EntryPlan)->Unit)? = null
+    // Production StandaloneRuntime requires a fresh, identity-bound TC2
+    // receipt. Legacy isolated tests may use the older Unit verifier.
+    var requireTc2SourceReceipt:Boolean = false
+    var tc2SourceReceiptVerifier:((EntryPlan)->Tc2H1SourceReceipt)? = null
     var bookNtdExitVerifier:((JSONObject,String)->Unit)? = null
     var bookCourseTrimVerifier:((JSONObject,String)->Unit)? = null
     var bookCourseExitVerifier:((JSONObject,String)->Unit)? = null
@@ -4773,6 +4777,9 @@ internal class NativeFuturesCampaignCoordinator(
         val adapter = adapterFactory()
         var orderSubmissionAttempted = false
         var finalContextCheckStarted = false
+        var tc2SourceReceipt: Tc2H1SourceReceipt? = null
+        val receiptRequired = requireTc2SourceReceipt && plan.strategyProfile==williamsTc2Profile &&
+            plan.signalType!="OPERATOR_FORCED_DIRECTION"
         try {
             // Signed reads refresh their own verified clock; avoid duplicate
             // /time probes before the isolated-leverage/STOP sequence.
@@ -4805,8 +4812,18 @@ internal class NativeFuturesCampaignCoordinator(
                     plan.executionSemantics,plan.referenceClose)==null) {
                     "H1_BOOK_PROOF_EXPIRED_BEFORE_SUBMISSION"
                 }
-                val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
-                verifier(plan)
+                if(!receiptRequired) {
+                    val verifier=bookH1EntryVerifier ?: error("H1_BOOK_FINAL_VERIFIER_REQUIRED")
+                    verifier(plan)
+                }
+            }
+            if(receiptRequired) {
+                val verifier=tc2SourceReceiptVerifier ?: error("TC2_CANONICAL_ADMISSION:RECEIPT_REQUIRED")
+                val receipt=verifier(plan)
+                receipt.blocker(plan)?.let { error(it) }
+                tc2SourceReceipt=receipt
+                intent.put("tc2_source_receipt",receipt.toJson())
+                saveIntents(currentIntents)
             }
             if(isReversal) checkBookReversalDoor(plan,currentIntents,adapter,true)?.let { error(it) }
             if(isAddition && plan.strategyProfile in williamsExecutionProfiles) {
@@ -4843,6 +4860,10 @@ internal class NativeFuturesCampaignCoordinator(
             saveIntents(currentIntents)
             check(marginProof.getBoolean("allowed")) { marginProof.getString("blocker") }
             adapter.halfMarginTransportFence = { params ->
+                if(receiptRequired) {
+                    val receipt=tc2SourceReceipt ?: error("TC2_CANONICAL_ADMISSION:RECEIPT_REQUIRED")
+                    receipt.blocker(plan)?.let { error(it) }
+                }
                 check(futuresHalfMarginLeaseFresh(marginStartedNs, System.nanoTime())) {
                     "FUTURES_HALF_MARGIN_UNKNOWN:STALE"
                 }
