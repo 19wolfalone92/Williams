@@ -177,7 +177,7 @@ def margin_observation(account, configuration, orders, symbols):
     # includes ordinary AND conditional residuals; never add it again to root.
     used = max(root_initial, asset_initial,
                position_margin + max(confirmed_orders, pending))
-    return {"base": min(wallet, equity), "available": available, "confirmed": confirmed,
+    return {"base": min(wallet, equity), "equity": equity, "available": available, "confirmed": confirmed,
             "used": used, "cost_notional": cost_notional, "orders": by_client, "live": live,
             "identity": (wallet, tuple(sorted(position_identity)), tuple(sorted(order_identity)),
                          tuple(sorted(foreign_identity))),

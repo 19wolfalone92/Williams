@@ -1718,7 +1718,17 @@ class FuturesWilliamsRuntime:
         self.db.save_execution_event(intent.intent_id, "HALF_MARGIN_ASSESSED", proof)
         if not proof["allowed"]:
             raise RuntimeError(proof["blocker"])
-        return started
+        equity = min(first["equity"], second["equity"])
+        self._require_quote_risk(intent, equity)
+        return started, equity
+
+    def _require_quote_risk(self, intent, equity):
+        return self.db.require_campaign_quote_risk(
+            campaign_id=intent.campaign_id, reservation_id=intent.client_order_id,
+            expected_pending_quote=intent.risk_quote, equity_quote=equity,
+            portfolio_limit_pct=self.config.max_total_risk_pct,
+            campaign_limit_pct=min(self.config.campaign_risk_limit_pct, 0.006),
+            entry_limit_pct=0.0025, intent_id=intent.intent_id)
 
     def _submit(self, intent, fn, checks=None):
         if self.dry_run:
@@ -1730,12 +1740,13 @@ class FuturesWilliamsRuntime:
 
         new_exposure = intent.purpose.upper() in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
         margin_started = None
+        risk_equity = None
         source_receipt = None
         source_revision = None
         source_digest = None
 
         def combined_checks(snapshot):
-            nonlocal margin_started, source_receipt, source_revision, source_digest
+            nonlocal margin_started, risk_equity, source_receipt, source_revision, source_digest
             self._futures_pre_submit_checks(intent)
             if checks is not None:
                 checks(snapshot)
@@ -1752,7 +1763,7 @@ class FuturesWilliamsRuntime:
                     source_revision = owner.state_revision
                     source_digest = tc2_receipt_digest(source_receipt)
                 try:
-                    margin_started = self._assess_half_margin(intent)
+                    margin_started, risk_equity = self._assess_half_margin(intent)
                 except Exception as failure:
                     # Any failed/malformed signed read here precedes the POST.
                     # Preserve that definite outcome even for unexpected parser
@@ -1804,6 +1815,9 @@ class FuturesWilliamsRuntime:
                         campaign=latest, intent=intent, expected_revision=source_revision,
                         params=params, now_ms=now)
                     self.db.require_unconsumed_campaign_signal(intent.signal_id)
+                    # Re-read durable liabilities AFTER any rate/clock wait.
+                    # The signed equity lease is bounded by the margin fence.
+                    self._require_quote_risk(intent, risk_equity)
                 except Exception as failure:
                     raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:

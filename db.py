@@ -1154,6 +1154,62 @@ class Database:
         ).fetchone()
         return float(row["risk"] or 0.0)
 
+    def require_campaign_quote_risk(self, *, campaign_id, reservation_id, expected_pending_quote,
+                                    equity_quote, portfolio_limit_pct, campaign_limit_pct,
+                                    entry_limit_pct, intent_id=None):
+        """Revalidate committed USDT liabilities against ONE signed equity basis.
+
+        The caller supplies a short-lived authenticated observation. This
+        transaction does not perform exchange I/O or release a reservation.
+        It includes the proposed reservation exactly once, even on a retry.
+        """
+        from decimal import Decimal
+        def number(value, *, positive=False):
+            try:
+                result = Decimal(str(value))
+                if not result.is_finite() or result < 0 or (positive and result == 0):
+                    raise ValueError()
+                return result
+            except Exception as exc:
+                raise RuntimeError("QUOTE_RISK_LEDGER_UNPROVEN") from exc
+        equity = number(equity_quote, positive=True)
+        portfolio_limit = number(portfolio_limit_pct, positive=True)
+        campaign_limit = number(campaign_limit_pct, positive=True)
+        entry_limit = number(entry_limit_pct, positive=True)
+        if portfolio_limit > Decimal("0.006") or campaign_limit > Decimal("0.006") or entry_limit > Decimal("0.0025"):
+            raise RuntimeError("QUOTE_RISK_LEDGER_LIMIT_UNPROVEN")
+        expected = number(expected_pending_quote, positive=True)
+        with self.transaction():
+            total = Decimal(0)
+            target = None
+            for row in self.open_campaigns():
+                opened = number(row["open_risk_quote"])
+                pending = number(row["pending_risk_quote"])
+                total += opened + pending
+                if row["campaign_id"] == campaign_id:
+                    tags = json.loads(row["tags_json"] or "{}")
+                    if not reservation_id or tags.get("pending_order_client_id") != reservation_id or pending != expected:
+                        raise RuntimeError("QUOTE_RISK_LEDGER_RESERVATION_CHANGED")
+                    target = opened + pending
+            if target is None:
+                raise RuntimeError("QUOTE_RISK_LEDGER_OWNER_MISSING")
+            # Tolerance is exclusively for the existing decimal-to-float
+            # storage boundary, never a new percentage risk allowance.
+            tolerance = Decimal("0.00000001")
+            if expected > equity * entry_limit + tolerance:
+                raise RuntimeError("QUOTE_RISK_LEDGER_ENTRY_CAP")
+            if target > equity * campaign_limit + tolerance:
+                raise RuntimeError("QUOTE_RISK_LEDGER_CAMPAIGN_CAP")
+            if total > equity * portfolio_limit + tolerance:
+                raise RuntimeError("QUOTE_RISK_LEDGER_PORTFOLIO_CAP")
+            proof = {"schema": "QUOTE_RISK_FENCE_V1", "reservation_id": reservation_id,
+                     "campaign_id": campaign_id, "equity_usdt": str(equity),
+                     "pending_usdt": str(expected), "campaign_usdt": str(target),
+                     "portfolio_usdt": str(total), "portfolio_cap_usdt": str(equity * portfolio_limit)}
+            if intent_id is not None:
+                self.save_execution_event(intent_id, "QUOTE_RISK_REVALIDATED", proof)
+            return proof
+
     @_db_locked
     def reserve_campaign_risk(self, campaign, *, equity_quote, portfolio_limit_pct):
         """Reserve new exposure without replacing an unresolved prior liability."""

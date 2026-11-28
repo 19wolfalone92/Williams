@@ -440,21 +440,73 @@ internal fun verifiedProtectedRiskCapManagement(
     return true
 }
 
-/** Sum each admitted entry exactly once while its primary campaign remains active. */
-internal fun futuresCampaignRiskComponents(owner:JSONObject,all:JSONArray):List<Double> {
+/** Each unresolved or filled tranche retains its own original liability. */
+internal fun futuresCampaignRiskRows(owner:JSONObject,all:JSONArray):List<JSONObject> {
     if(!isEntryCampaignReserved(owner)) return emptyList()
-    val components=mutableListOf(conservativeRiskReservation(owner.optDouble("risk_pct",Double.NaN),.006))
+    val components=mutableListOf(owner)
     for(i in 0 until all.length()) {
         val child=all.optJSONObject(i) ?: error("Malformed Futures risk journal")
         if(child.optString("intent_role")!="ADD_ON" || child.optString("entry_client_id")!=owner.optString("client_id")) continue
         val status=exchangeOrderStatus(child)
         val executed=child.optString("executed_qty","0").toBigDecimalOrNull() ?: error("Malformed child fill reservation")
         if(status !in ENTRY_ORDER_TERMINAL_STATUSES || executed.signum()>0 || status=="FILLED")
-            components+=conservativeRiskReservation(child.optDouble("risk_pct",Double.NaN),.006)
+            components+=child
     }
     return components
 }
+// Legacy percentage view retained for diagnostics, not new-risk admission.
+internal fun futuresCampaignRiskComponents(owner:JSONObject,all:JSONArray):List<Double> =
+    futuresCampaignRiskRows(owner,all).map { conservativeRiskReservation(it.optDouble("risk_pct",Double.NaN),.006) }
 internal fun futuresCampaignReservedRisk(owner:JSONObject,all:JSONArray):Double=futuresCampaignRiskComponents(owner,all).sum()
+
+/** The original monetary budget is authoritative. Never rebase an old
+ * percentage on today's equity. Pre-upgrade journals without an equity
+ * basis can recover the conservative full planned loss from exact persisted
+ * quantity/entry/initial stop, without releasing any residual fill liability.
+ * Missing/corrupt evidence is UNKNOWN, not zero.
+ */
+internal fun futuresQuoteRiskUsdt(row:JSONObject):Double {
+    fun positive(key:String):Double? = row.optDouble(key,Double.NaN).takeIf { it.isFinite() && it>0 }
+    if(row.has("risk_quote_usdt")) return positive("risk_quote_usdt") ?: Double.NaN
+    val budget=positive("risk_budget_usdt")
+    if(row.has("risk_budget_usdt") && budget==null) return Double.NaN
+    if(row.has("risk_reservation_adjusted_at_ms")) {
+        // Old builds did not persist the adjustment's monetary basis.
+        // Keep at least the original budget and observed actual loss.
+        val measured=positive("actual_all_in_stop_loss_usdt") ?: return Double.NaN
+        return maxOf(budget ?: 0.0,measured)
+    }
+    if(budget!=null) return budget
+    val historic=positive("risk_equity_snapshot_usdt")
+    val pct=positive("risk_pct")
+    if(historic!=null && pct!=null) return historic*pct
+    val q=positive("quantity")
+    val p=positive("entry_price")
+    val s=positive("initial_protective_stop")
+    if(q!=null && p!=null && s!=null && pct!=null && pct<=FUTURES_MAX_ENTRY_RISK_PCT)
+        return q*(kotlin.math.abs(p-s)+p*.0035)
+    // An exchange-confirmed orphan can establish its actual monetary loss,
+    // but no pending/ambiguous order is released on that basis.
+    if(campaignLifecycleStatus(row)=="OPEN_PROTECTED" && exchangeOrderStatus(row)=="FILLED" &&
+        row.optString("protection_status")=="PROTECTED")
+        return positive("actual_all_in_stop_loss_usdt") ?: Double.NaN
+    return Double.NaN
+}
+internal fun futuresCampaignQuoteRiskComponents(owner:JSONObject,all:JSONArray,equity:Double):List<Double> =
+    futuresCampaignRiskRows(owner,all).map { futuresQuoteRiskUsdt(it)/equity }
+
+internal fun futuresQuoteRiskTransportBlocker(all:JSONArray,clientId:String,equity:Double):String? {
+    if(!equity.isFinite() || equity<=0 || clientId.isBlank()) return "QUOTE_RISK_LEDGER_EQUITY_UNKNOWN"
+    val active=(0 until all.length()).flatMap { i ->
+        val row=all.optJSONObject(i) ?: return "QUOTE_RISK_LEDGER_JOURNAL_UNKNOWN"
+        if(row.optString("intent_role","ENTRY")=="ENTRY") futuresCampaignRiskRows(row,all) else emptyList()
+    }
+    val candidates=active.filter { it.optString("client_id")==clientId }
+    if(candidates.size!=1) return "QUOTE_RISK_LEDGER_RESERVATION_IDENTITY"
+    val proposed=futuresQuoteRiskUsdt(candidates.single())/equity
+    val others=active.filter { it.optString("client_id")!=clientId }.map { futuresQuoteRiskUsdt(it)/equity }
+    return futuresPortfolioRiskBlocker(proposed,others)?.let { "QUOTE_RISK_LEDGER: "+it }
+}
 
 internal fun assessActualFuturesCampaignRisk(direction:String,quantity:Double,entry:Double,stop:Double,
     equity:Double,reserved:Double):FuturesActualPositionRiskCheck {
@@ -3462,7 +3514,12 @@ internal class NativeFuturesCampaignCoordinator(
                     } else {
                         val additions=(0 until persisted.length()).mapNotNull { persisted.optJSONObject(it) }
                             .filter { it.optString("intent_role")=="ADD_ON" && it.optString("entry_client_id")==matchingIntent.optString("client_id") }
-                        val reservedPct = futuresCampaignReservedRisk(matchingIntent,persisted)
+                        val quotePct = futuresCampaignQuoteRiskComponents(matchingIntent,persisted,actualRiskAccount.equityUsdt).sum()
+                        // Existing orphan recovery may not yet have a monetary
+                        // basis; its legacy percent is diagnostic until signed
+                        // actual loss is recorded. New entries cannot use it.
+                        val reservedPct = if(quotePct.isFinite() && quotePct>0) quotePct
+                            else futuresCampaignReservedRisk(matchingIntent,persisted)
                         val riskAudit = if(additions.any { it.optString("executed_qty","0").toDoubleOrNull()?.let { q -> q>0 }==true })
                             assessActualFuturesCampaignRisk(direction,positionQty,positionEntry,
                                 matchingIntent.getString("protective_stop").toDouble(),actualRiskAccount.equityUsdt,reservedPct)
@@ -3488,7 +3545,7 @@ internal class NativeFuturesCampaignCoordinator(
                             val otherActiveRisks = (0 until persisted.length()).flatMap { riskIndex ->
                                 val other=persisted.getJSONObject(riskIndex)
                                 if(other.optString("intent_role","ENTRY")=="ENTRY" && other.optString("client_id")!=currentClientIdForRiskAudit &&
-                                    campaignLifecycleStatus(other) in ACTIVE_CAMPAIGN_STATUSES) futuresCampaignRiskComponents(other,persisted) else emptyList()
+                                    campaignLifecycleStatus(other) in ACTIVE_CAMPAIGN_STATUSES) futuresCampaignQuoteRiskComponents(other,persisted,actualRiskAccount.equityUsdt) else emptyList()
                             }
                             val adjustmentBlocker = actualRiskReservationAdjustmentBlocker(
                                 actualRiskPct = riskAudit.actualAllInRiskPct,
@@ -3501,6 +3558,7 @@ internal class NativeFuturesCampaignCoordinator(
                                 // permit risk to exceed the approved per-entry/portfolio limits.
                                 matchingIntent
                                     .put("risk_pct", riskAudit.actualAllInRiskPct)
+                                    .put("risk_quote_usdt", riskAudit.estimatedAllInLossUsdt)
                                     .put("risk_reservation_adjusted_at_ms", confirmedAt)
                                     .put("risk_reservation_adjustment_reason", "EXCHANGE_CONFIRMED_FILL_COST_RECONCILIATION")
                                     .put("actual_risk_audit_status", "PASS_RESERVATION_ADJUSTED")
@@ -4695,14 +4753,14 @@ internal class NativeFuturesCampaignCoordinator(
 
         if(isAddition) {
             val campaignBlocker=futuresPortfolioRiskBlocker(plan.riskPct,
-                futuresCampaignRiskComponents(primary!!,currentIntents),maxTotalRiskPct=.006)
+                futuresCampaignQuoteRiskComponents(primary!!,currentIntents,preflightAccount.equityUsdt),maxTotalRiskPct=.006)
             if(campaignBlocker!=null) return@synchronized safePreflightRejection("CAMPAIGN_RISK_LIMIT: "+campaignBlocker)
         }
         // Sum active intent risk conservatively. Missing/invalid reservations cannot
         // silently free aggregate portfolio capacity.
         val reservedRiskPcts=(0 until currentIntents.length()).flatMap { i ->
             val row=currentIntents.optJSONObject(i) ?: error("Malformed Futures risk intent")
-            if(row.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(row)) futuresCampaignRiskComponents(row,currentIntents) else emptyList()
+            if(row.optString("intent_role","ENTRY")=="ENTRY" && isEntryCampaignReserved(row)) futuresCampaignQuoteRiskComponents(row,currentIntents,preflightAccount.equityUsdt) else emptyList()
         }
         val riskBlocker = futuresPortfolioRiskBlocker(plan.riskPct, reservedRiskPcts)
         if (riskBlocker != null) return@synchronized safePreflightRejection(riskBlocker)
@@ -4742,6 +4800,7 @@ internal class NativeFuturesCampaignCoordinator(
             .put("trade_mode", plan.tradeMode)
             .put("wave_context_at_entry", plan.waveContext)
             .put("risk_budget_usdt", preflightAccount.equityUsdt * plan.riskPct)
+            .put("risk_quote_usdt", preflightAccount.equityUsdt * plan.riskPct)
             .put("risk_equity_snapshot_usdt", preflightAccount.equityUsdt)
             .put("risk_available_snapshot_usdt", preflightAccount.availableUsdt)
             .put("risk_gross_stop_loss_usdt", riskCheck.grossStopLossUsdt)
@@ -4864,6 +4923,11 @@ internal class NativeFuturesCampaignCoordinator(
             intent.put("half_margin_proof", marginProof)
             saveIntents(currentIntents)
             check(marginProof.getBoolean("allowed")) { marginProof.getString("blocker") }
+            val riskEquity=minOf(marginFirst.equity,marginSecond.equity).toDouble()
+            futuresQuoteRiskTransportBlocker(currentIntents,plan.clientId,riskEquity)?.let { error(it) }
+            intent.put("quote_risk_equity_usdt",riskEquity)
+                .put("quote_risk_verified_at_ms",clock())
+            saveIntents(currentIntents)
             adapter.halfMarginTransportFence = { params ->
                 if(receiptRequired) {
                     val receipt=tc2SourceReceipt ?: error("TC2_CANONICAL_ADMISSION:RECEIPT_REQUIRED")
@@ -4886,6 +4950,9 @@ internal class NativeFuturesCampaignCoordinator(
                 if (plan.kind != EntryKind.MARKET) check(transportPrice?.toBigDecimalOrNull()?.compareTo(plan.entryPrice.toBigDecimal()) == 0) {
                     "FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED"
                 }
+                // The same durable journal and signed equity basis are checked
+                // again after any rate/clock wait, before exposure mutation.
+                futuresQuoteRiskTransportBlocker(currentIntents,plan.clientId,riskEquity)?.let { error(it) }
                 // The margin GETs (and a rate/clock wait) must not extend the
                 // lifetime of the earlier source/time admission.
                 check(entryTimePolicyProvider().allows(clock())) { "ENTRY_TIME_POLICY_BLOCKED_BEFORE_TRANSPORT" }

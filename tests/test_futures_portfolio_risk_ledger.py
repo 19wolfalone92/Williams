@@ -188,3 +188,46 @@ def test_fifteen_contenders_share_ten_available_reservations(tmp_path):
     assert result.count(True) == 10
     assert result.count(False) == 5
     assert dbs[0].campaign_risk_reserved_quote() == pytest.approx(30.0)
+
+
+@pytest.mark.parametrize("side", ["LONG", "SHORT"])
+def test_r51_signed_equity_drop_rejects_reserved_risk_before_transport(tmp_path, side):
+    db = Database(str(tmp_path / "r51-equity.sqlite3"))
+    for symbol in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
+        c = _campaign(symbol, 10.0)
+        c["side"] = side
+        db.reserve_campaign_risk(c, equity_quote=5000, portfolio_limit_pct=.006)
+    def check(equity):
+        return db.require_campaign_quote_risk(campaign_id="campaign-SOLUSDT",
+            reservation_id="client-SOLUSDT", expected_pending_quote=10,
+            equity_quote=equity, portfolio_limit_pct=.006,
+            campaign_limit_pct=.006, entry_limit_pct=.0025)
+    assert check(5000)["portfolio_usdt"] == "30.0"
+    with pytest.raises(RuntimeError, match="QUOTE_RISK_LEDGER_PORTFOLIO_CAP"):
+        check(4900)
+    # A rejected proof is not an implicit cancellation/release.
+    assert db.campaign_risk_reserved_quote() == 30
+    db.conn.close()
+
+
+def test_r51_other_writer_reservation_is_included_after_restart(tmp_path):
+    path = str(tmp_path / "r51-other-writer.sqlite3")
+    a, b = Database(path), Database(path)
+    a.reserve_campaign_risk(_campaign("BTCUSDT", 10), equity_quote=5000, portfolio_limit_pct=.006)
+    def check(db):
+        return db.require_campaign_quote_risk(campaign_id="campaign-BTCUSDT",
+            reservation_id="client-BTCUSDT", expected_pending_quote=10,
+            equity_quote=4500, portfolio_limit_pct=.006,
+            campaign_limit_pct=.006, entry_limit_pct=.0025)
+    assert float(check(a)["portfolio_usdt"]) == 10
+    b.reserve_campaign_risk(_campaign("ETHUSDT", 19), equity_quote=5000, portfolio_limit_pct=.006)
+    a.conn.close()
+    a = Database(path)
+    with pytest.raises(RuntimeError, match="QUOTE_RISK_LEDGER_PORTFOLIO_CAP"):
+        check(a)
+    with pytest.raises(RuntimeError, match="QUOTE_RISK_LEDGER_RESERVATION_CHANGED"):
+        a.require_campaign_quote_risk(campaign_id="campaign-BTCUSDT",
+            reservation_id="wrong", expected_pending_quote=10, equity_quote=5000,
+            portfolio_limit_pct=.006, campaign_limit_pct=.006, entry_limit_pct=.0025)
+    a.conn.close()
+    b.conn.close()
