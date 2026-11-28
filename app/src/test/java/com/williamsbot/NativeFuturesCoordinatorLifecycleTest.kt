@@ -539,7 +539,7 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(coordinator.reconcile().getBoolean("ok"))
             val result=coordinator.submitPendingEntry(plan(direction).copy(signalType="OPERATOR_FORCED_DIRECTION"))
             assertFalse(result.toString(),result.getBoolean("accepted"))
-            assertTrue(result.toString(),result.optString("error").contains("TC2_CANONICAL_ADMISSION:"))
+            assertTrue(result.toString(),result.optString("blocker").contains("TC2_CANONICAL_ADMISSION:"))
             assertEquals(0,exchange.posts("/fapi/v1/order")+exchange.posts("/fapi/v1/algoOrder"))
         }
     }

@@ -1741,11 +1741,16 @@ class FuturesWilliamsRuntime:
                 checks(snapshot)
             if new_exposure:
                 owner = self.engine.load_campaign(intent.campaign_id)
-                if owner is None or owner.tags.get("strategy_profile") != TC2:
+                # Reuse the production source-policy gate. Legacy lifecycle
+                # tests explicitly replace that policy on their local exchange
+                # model; they must never acquire a real TC2 transport receipt.
+                profile = owner.tags.get("strategy_profile") if owner is not None else None
+                if not profile or new_exposure_blocker(profile):
                     raise RuntimeError("TC2_CANONICAL_ADMISSION:EXPLICIT_TC2_OWNER_REQUIRED")
-                source_receipt = self._revalidate_tc2_signal(owner, intent)
-                source_revision = owner.state_revision
-                source_digest = tc2_receipt_digest(source_receipt)
+                if profile == TC2:
+                    source_receipt = self._revalidate_tc2_signal(owner, intent)
+                    source_revision = owner.state_revision
+                    source_digest = tc2_receipt_digest(source_receipt)
                 try:
                     margin_started = self._assess_half_margin(intent)
                 except Exception as failure:
