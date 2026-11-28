@@ -187,14 +187,14 @@ internal data class StartupHistoryPolicy(
  */
 internal fun startupHistoryPolicy(
     frame: String,
-    h1RequestedCount: Int = 180,
+    h1RequestedCount: Int = WILLIAMS_ALLIGATOR_WARMUP_BARS,
     h1MinimumCount: Int = 150
 ): StartupHistoryPolicy = when (frame) {
     "1h" -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
-    "4h" -> StartupHistoryPolicy(120, 45)
+    "4h" -> StartupHistoryPolicy(WILLIAMS_ALLIGATOR_WARMUP_BARS, 45)
     "6h" -> StartupHistoryPolicy(240, 140)
-    "1d" -> StartupHistoryPolicy(90, 45)
-    "15m" -> StartupHistoryPolicy(160, 45) // Match the independent 160-bar M15 passport; repair older SQLite gaps.
+    "1d" -> StartupHistoryPolicy(WILLIAMS_ALLIGATOR_WARMUP_BARS, 45)
+    "15m" -> StartupHistoryPolicy(160, 45) // M15 remains diagnostic/monitoring, never an entry confirmation.
     else -> StartupHistoryPolicy(h1RequestedCount, h1MinimumCount)
 }
 
@@ -1889,7 +1889,7 @@ private class NativeEngine(
     // The H1 decision engine needs the full 150-candle working set. Higher-timeframe
     // context has explicit lower minimums in the entry contract; requiring 150 D1
     // candles during startup can deadlock scanning on a fresh Futures Demo market.
-    private val startupHistoryLimit = 180
+    private val startupHistoryLimit = WILLIAMS_ALLIGATOR_WARMUP_BARS
     private val minStartupHistoryCandles = 150
 
     private fun startupHistoryLimit(frame: String): Int =
@@ -4967,22 +4967,26 @@ private class NativeEngine(
     ): List<CandleN> {
         val normalizedSymbol = symbol.uppercase(Locale.US)
         require(normalizedSymbol in coreSymbols && frame in analysisFrames && limit in 1..1000)
+        // Alligator-consuming H1/H4/D1 calculations need a converged closed-bar seed.
+        // This only expands the data window; entry admission separately checks readiness.
+        val effectiveLimit = if (frame in setOf("1h", "4h", "1d"))
+            maxOf(limit, WILLIAMS_ALLIGATOR_WARMUP_BARS) else limit
         val liveKey = normalizedSymbol + ":" + frame
-        val cacheKey = liveKey + ":" + limit
-        var durable=durableWorkingHistory(normalizedSymbol,frame,limit)
+        val cacheKey = liveKey + ":" + effectiveLimit
+        var durable=durableWorkingHistory(normalizedSymbol,frame,effectiveLimit)
         val exchangeNowMs=futuresMarketData.exchangeNowMs()
         if(durable.candles.isNotEmpty() &&
             !candleSeriesCurrent(durable.candles,frame,exchangeNowMs)) {
             check(catchUpNativeClosedCandles(normalizedSymbol,frame,durable.candles.last().t)) {
                 "HISTORY_CATCHUP_IN_PROGRESS_OR_UNVERIFIED: $normalizedSymbol/$frame"
             }
-            durable=durableWorkingHistory(normalizedSymbol,frame,limit)
+            durable=durableWorkingHistory(normalizedSymbol,frame,effectiveLimit)
         }
-        val live=durable.candles.takeLast(limit)
+        val live=durable.candles.takeLast(effectiveLimit)
         val closed = closedNativeStrategyCandles(live) {
             futuresMarketData.isKlineOpenTimeClosed(it.t, frame, exchangeNowMs)
         }
-        if(durable.continuous && closed.size>=limit &&
+        if(durable.continuous && closed.size>=effectiveLimit &&
             candleSeriesCurrent(closed,frame,exchangeNowMs) &&
             historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision) {
             return closed
@@ -5007,10 +5011,10 @@ private class NativeEngine(
             // Binance's newest native kline may still be FORMING and is never
             // accepted as a closed bar. Request two extra so a 160-closed-bar
             // M15 audit does not remain 159 new + one stale, gapped SQLite bar.
-            (limit + 2).coerceAtMost(1000)
+            (effectiveLimit + 2).coerceAtMost(1000)
         } else {
             (
-                limit *
+                effectiveLimit *
                     (
                         frameSeconds(frame).coerceAtLeast(60L) /
                             frameSeconds(sourceFrame).coerceAtLeast(60L)
@@ -5085,12 +5089,12 @@ private class NativeEngine(
         }
 
         val result = if (frame == sourceFrame) {
-            source.takeLast(limit)
+            source.takeLast(effectiveLimit)
         } else {
             aggregateCandles(
                 source,
                 frameSeconds(frame) * 1000L,
-                limit
+                effectiveLimit
             )
         }
 
@@ -5116,9 +5120,9 @@ private class NativeEngine(
 
         // Re-read the committed rows rather than publish a REST response
         // which raced a WS correction. Legacy synthetic frames are not eligible.
-        val committed=durableWorkingHistory(normalizedSymbol,frame,limit)
+        val committed=durableWorkingHistory(normalizedSymbol,frame,effectiveLimit)
         val finalNow=futuresMarketData.exchangeNowMs()
-        val verified=committed.candles.takeLast(limit)
+        val verified=committed.candles.takeLast(effectiveLimit)
         check(committed.continuous && cachedFixedFrameKlinesValid(verified,frame) &&
             candleSeriesCurrent(verified,frame,finalNow) &&
             historyStore.indicatorCacheRevision(normalizedSymbol,frame)==committed.revision) {
@@ -7073,8 +7077,11 @@ private class NativeEngine(
                             val direction=pending.optString("direction")
                             val event=pendingTc2LevelEvent(direction,signalAt,price,stop,
                                 futuresMarketData.price(symbol),waveBars,now)
-                            val teeth=if(event.state=="WAITING") williamsBookH1ActivationTeeth(waveBars,now) else Double.NaN
-                            pendingTc2CancelReason(event,pending.optString("signal_type"),direction,price,teeth)
+                            if(event.state=="WAITING" && !canonicalAlligatorWarmupReady(closed.size)) null
+                            else {
+                                val teeth=if(event.state=="WAITING") williamsBookH1ActivationTeeth(waveBars,now) else Double.NaN
+                                pendingTc2CancelReason(event,pending.optString("signal_type"),direction,price,teeth)
+                            }
                         } else {
                         val valid=h1ContextCampaignSignals(symbol,h1,tick).any {
                             it.signalId==parentId && it.type==pending.optString("signal_type") &&
@@ -7121,6 +7128,12 @@ private class NativeEngine(
                     val tick=symbolFilters(symbol).tick
                     val bars=fetchCandles(symbol,"1h",220)
                         .filter { it.t>0L && it.t+3_600_000L<=now }
+                    if(!canonicalAlligatorWarmupReady(bars.size)) {
+                        runCatching { auditStore.recordCockpitEvent("FRACTAL_REANCHOR",symbol,
+                            state="WARMUP_INSUFFICIENT_RETAINED",
+                            detail="closed_h1_bars=${bars.size}; required=$WILLIAMS_ALLIGATOR_WARMUP_BARS") }
+                        return@runCatching null
+                    }
                     val newFractals=editionCampaignSignals(symbol,bars,"1h",tick,williamsTc2Profile)
                     val proposal=confirmedBetterFractal(pending,JSONArray().apply {
                         newFractals.forEach { signal ->
@@ -8297,6 +8310,8 @@ private class NativeEngine(
                 return@withCampaignMutation safeAddOnReadOnlyVeto("ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION")
             check(checkFuturesDailyLoss()) { "DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION: "+lastError }
             val currentH1=fetchCandles(symbol,"1h",220)
+            if(!canonicalAlligatorWarmupReady(currentH1.size))
+                return@withCampaignMutation safeAddOnReadOnlyVeto("H1_ALLIGATOR_WARMUP_INSUFFICIENT")
             val fresh=editionCampaignSignals(symbol,currentH1,"1h",rules.tick,profile)
             if (fresh.none { it.signalId==signal.signalId && it.triggerPrice==signal.triggerPrice })
                 return@withCampaignMutation safeAddOnReadOnlyVeto("ADDITION_H1_FORMATION_INVALIDATED_BEFORE_POST")
@@ -8394,7 +8409,9 @@ private class NativeEngine(
     private fun candidateHistoryCurrent(candidate:BaseAnalysis):Boolean = runCatching {
         if (!futuresMarketData.clockSnapshot().optBoolean("fresh",false)) return@runCatching false
         val now=futuresMarketData.cachedExchangeNowMs()
-        val durable=durableWorkingHistory(candidate.symbol,"1h",candidate.candles.size.coerceAtLeast(150))
+        if(!canonicalAlligatorWarmupReady(candidate.candles.size)) return@runCatching false
+        val durable=durableWorkingHistory(candidate.symbol,"1h",WILLIAMS_ALLIGATOR_WARMUP_BARS)
+        if(!canonicalAlligatorWarmupReady(durable.candles.size)) return@runCatching false
         scannerCandidateHistoryVerified(candidate.candles,durable.candles,durable.continuous,
             candleSeriesCurrent(durable.candles,"1h",now),
             historyStore.indicatorCacheRevision(candidate.symbol,"1h")==durable.revision)

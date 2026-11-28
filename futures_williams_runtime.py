@@ -34,6 +34,8 @@ from market_context import ContextCache
 from strategy import (
     calculate_indicators,
     canonical_indicator_config_from_env,
+    CANONICAL_ALLIGATOR_WARMUP_BARS,
+    CANONICAL_ALLIGATOR_RAW_BARS,
 )
 from williams_signals import (
     extract_long_signal_specs,
@@ -93,6 +95,17 @@ from williams_wave_hierarchy import (
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
 from williams_scenario_lifecycle import (ScenarioSignal, scenario_opposition, assess_scenario_opposition,
     pending_tc2_level_event, pending_tc2_cancel_reason)
+
+
+def canonical_alligator_raw_history_limit(configured=None):
+    """Raw exchange rows needed for 500 closed Alligator bars plus the forming bar."""
+    if configured is None:
+        configured = os.getenv("SCANNER_KLINE_LIMIT", str(CANONICAL_ALLIGATOR_WARMUP_BARS))
+    try:
+        requested = int(configured)
+    except (TypeError, ValueError):
+        requested = CANONICAL_ALLIGATOR_WARMUP_BARS
+    return min(1000, max(CANONICAL_ALLIGATOR_RAW_BARS, requested))
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -381,11 +394,9 @@ class FuturesWilliamsScanner:
             return True, True
 
         def closed_context(frame_name: str):
-            frame = fetch_klines(self.client, symbol, frame_name, limit=180)
-            if len(frame) < 90:
-                return None
+            frame = fetch_klines(self.client, symbol, frame_name, limit=canonical_alligator_raw_history_limit())
             closed = closed_strategy_frame(frame,frame_name,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
-            if len(closed) < 45:
+            if len(closed) < CANONICAL_ALLIGATOR_WARMUP_BARS:
                 return None
             indicators = calculate_indicators(closed, self.config)
             last = indicators.iloc[-1]
@@ -442,15 +453,16 @@ class FuturesWilliamsScanner:
         if tick <= 0:
             return []
 
-        frame = fetch_klines(
-            self.client,
-            symbol,
-            self.interval,
-            limit=max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))),
-        )
-        if len(frame) < 110:
+        requested_limit = (canonical_alligator_raw_history_limit() if self.interval == "1h"
+                           else max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))))
+        frame = fetch_klines(self.client, symbol, self.interval, limit=requested_limit)
+        if self.interval == "1h" and len(frame) < CANONICAL_ALLIGATOR_RAW_BARS:
+            return []
+        if self.interval != "1h" and len(frame) < 110:
             return []
         closed = closed_strategy_frame(frame,self.interval,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+        if self.interval == "1h" and len(closed) < CANONICAL_ALLIGATOR_WARMUP_BARS:
+            return []
         ind = calculate_indicators(closed, self.config)
         # Do not mix NTD fifth-dimension entries into TC2 exchange order gate.
         # A diagnostic error must not abort existing position protection.
@@ -1982,7 +1994,7 @@ class FuturesWilliamsRuntime:
                     campaign.tags.get("pending_order_client_id") != intent.client_order_id):
                 raise RuntimeError("TC2_CANONICAL_ADMISSION:OWNERSHIP")
             raw = self.client.klines(intent.symbol, "1h",
-                limit=max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))))
+                limit=canonical_alligator_raw_history_limit())
             now = int(time.time()*1000) + int(getattr(self.client,"time_offset_ms",0))
             proof = verify_tc2_order(payload, symbol=intent.symbol, side=intent.side,
                 purpose=intent.purpose, raw=raw, now_ms=now, tick=self._tick(intent.symbol))

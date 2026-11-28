@@ -1,4 +1,4 @@
-"""R48 fresh TC2 source admission. No local VALIDATED flag is authority.
+"""R49 fresh TC2 source admission. No local VALIDATED flag is authority.
 
 This checks the current production selector against new exchange OHLC and
 binds its decision to a particular closed H1 and order identity. It is not
@@ -12,7 +12,13 @@ from decimal import Decimal
 import pandas as pd
 
 from data import _frame
-from strategy import calculate_indicators, canonical_indicator_config_from_env
+from strategy import (
+    calculate_indicators,
+    canonical_indicator_config_from_env,
+    CANONICAL_ALLIGATOR_WARMUP_BARS,
+    CANONICAL_ALLIGATOR_RAW_BARS,
+    CANONICAL_ALLIGATOR_ABS_TOLERANCE,
+)
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 
 HOUR = 3_600_000
@@ -54,8 +60,8 @@ def verify_tc2_order(payload, *, symbol, side, purpose, raw, now_ms, tick):
             reject("IDENTITY")
         if trigger % step or stop % step or (stop >= trigger if side == "BUY" else stop <= trigger):
             reject("PRICE_GRID_OR_STOP")
-        if not isinstance(raw, list) or len(raw) < 46:
-            reject("HISTORY_INSUFFICIENT")
+        if not isinstance(raw, list) or len(raw) < CANONICAL_ALLIGATOR_RAW_BARS:
+            reject("HISTORY_INSUFFICIENT_ALLIGATOR_WARMUP")
         expected_open = now_ms // HOUR * HOUR
         opens = []
         prices = []
@@ -91,6 +97,8 @@ def verify_tc2_order(payload, *, symbol, side, purpose, raw, now_ms, tick):
         closed = _frame(raw[:-1])
         if len(closed) != len(raw)-1:
             reject("HISTORY_PARSE_LOSS")
+        if len(closed) < CANONICAL_ALLIGATOR_WARMUP_BARS:
+            reject("HISTORY_INSUFFICIENT_ALLIGATOR_WARMUP")
         ind = calculate_indicators(closed, canonical_indicator_config_from_env())
         extract = extract_long_signal_specs if side == "BUY" else extract_short_signal_specs
         candidates = extract(symbol, ind, timeframe="1h", tick_size=float(step))
@@ -109,12 +117,15 @@ def verify_tc2_order(payload, *, symbol, side, purpose, raw, now_ms, tick):
         else:
             teeth = None
         raw_digest = hashlib.sha256(json.dumps(raw[:-1], separators=(",", ":"), allow_nan=False).encode()).hexdigest()
-        return {"schema": "R48_TC2_FRESH_SOURCE_V1", "signal_id":signal_id, "symbol":symbol,
+        return {"schema": "R49_TC2_FRESH_SOURCE_V1", "signal_id":signal_id, "symbol":symbol,
                 "side":side, "family":family, "role":role, "signal_bar_time_ms":start,
                 "confirmation_close_ms":start+HOUR, "closed_at_ms":expected_open,
                 "observed_at_ms":now_ms, "trigger":str(trigger), "book_stop":str(stop),
                 "activation_teeth":str(teeth) if teeth is not None else None,
-                "closed_count":len(closed), "closed_ohlc_sha256":raw_digest,
+                "closed_count":len(closed), "alligator_warmup_bars":len(closed),
+                "alligator_warmup_required":CANONICAL_ALLIGATOR_WARMUP_BARS,
+                "alligator_warmup_tolerance":CANONICAL_ALLIGATOR_ABS_TOLERANCE,
+                "closed_ohlc_sha256":raw_digest,
                 "forming_high":str(prices[-1][0]), "forming_low":str(prices[-1][1]),
                 "rule_ids": {"REVERSAL":["TC2.WM1.DIVERGENT_BAR","TC2.WM1.ANGULATION","TC2.WM1.AO_CONTEXT"],
                              "SUPER_AO":["TC2.WM2.THREE_AO_BARS","TC2.WM2.FIRST_STOP"],

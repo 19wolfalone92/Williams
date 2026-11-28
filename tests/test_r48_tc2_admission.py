@@ -1,27 +1,26 @@
-"""R48 actual source selector, fresh data, and negative evidence fixtures."""
+"""R49 actual source selector, 500-bar warmup, and negative evidence fixtures."""
 import copy
 from decimal import Decimal
 import pytest
 from williams_tc2_admission import verify_tc2_order, HOUR, TC2
 from data import _frame
-from strategy import calculate_indicators, canonical_indicator_config_from_env
+from strategy import (calculate_indicators, canonical_indicator_config_from_env,
+    CANONICAL_ALLIGATOR_WARMUP_BARS, CANONICAL_ALLIGATOR_RAW_BARS)
 from williams_signals import extract_long_signal_specs, extract_short_signal_specs
 
 NOW = 1_800_000_000_000 // HOUR * HOUR + 1000
 
 
-def raw_fractal(side, now=NOW):
+def raw_fractal(side, now=NOW, count=CANONICAL_ALLIGATOR_RAW_BARS):
     end = now // HOUR * HOUR
     rows = []
-    for i in range(220):
-        ts = end - (219-i)*HOUR
+    for i in range(count):
+        ts = end - (count-1-i)*HOUR
         h, l = 101, 99
-        if i == 217:
-            h, l = (105,99) if side == "BUY" else (101,95)
         rows.append([ts,"100",str(h),str(l),"100","100",ts+HOUR-1,"10000",10,"50","5000","0"])
-    # pivot index 216, confirmation index 218, current index 219.
-    rows[217][2:4] = ["101","99"]
-    rows[216][2:4] = ["105","99"] if side == "BUY" else ["101","95"]
+    # Pivot is four rows from the end; two right-hand bars confirm it.
+    rows[count-3][2:4] = ["101","99"]
+    rows[count-4][2:4] = ["105","99"] if side == "BUY" else ["101","95"]
     return rows
 
 
@@ -45,7 +44,9 @@ def test_r48_real_fractal_raw_positive(side):
     raw = raw_fractal(side)
     s = candidate(side, raw)
     proof = verify(s.to_dict(), raw, side)
-    assert proof["closed_count"] == 219
+    assert proof["closed_count"] == CANONICAL_ALLIGATOR_WARMUP_BARS
+    assert proof["alligator_warmup_bars"] == CANONICAL_ALLIGATOR_WARMUP_BARS
+    assert proof["alligator_warmup_required"] == CANONICAL_ALLIGATOR_WARMUP_BARS
     assert proof["signal_id"] == s.signal_id
     assert proof["closed_at_ms"] == NOW//HOUR*HOUR
     assert len(proof["closed_ohlc_sha256"]) == 64
@@ -73,8 +74,16 @@ def test_r48_real_source_negative(side, fault):
     elif fault == "gap": raw.pop(100)
     elif fault == "stale": raw=raw[:-1]
     elif fault == "forming_trigger": raw[-1][2 if side=="BUY" else 3]=str(p["trigger_price"])
-    elif fault == "missing_pivot": raw[216][2:4]=["101","99"]
+    elif fault == "missing_pivot": raw[-4][2:4]=["101","99"]
     elif fault == "bad_ohlc": raw[100][2]="98"
     elif fault == "unclosed": raw[-2][6]+=HOUR
     with pytest.raises(RuntimeError, match="TC2_CANONICAL_ADMISSION"):
         verify(p,raw,side)
+
+
+def test_r49_admission_rejects_less_than_500_closed_h1_bars():
+    raw = raw_fractal("BUY")
+    payload = candidate("BUY", raw).to_dict()
+    # Keep the forming candle and signal bar, but remove one older closed row.
+    with pytest.raises(RuntimeError, match="HISTORY_INSUFFICIENT_ALLIGATOR_WARMUP"):
+        verify(payload, raw[1:], "BUY")

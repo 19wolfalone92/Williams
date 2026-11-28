@@ -3,6 +3,10 @@ package com.williamsbot
 import java.util.ArrayDeque
 import java.util.Collections
 
+internal const val WILLIAMS_ALLIGATOR_WARMUP_BARS = 500
+internal fun canonicalAlligatorWarmupReady(closedBars: Int): Boolean =
+    closedBars >= WILLIAMS_ALLIGATOR_WARMUP_BARS
+
 internal data class ClosedMedianBar(val openMs:Long,val median:Double)
 internal data class WilliamsMathPoint(val ao:Double,val ac:Double,
     val jaw:Double?,val teeth:Double?,val lips:Double?)

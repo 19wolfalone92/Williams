@@ -11,6 +11,7 @@ from futures_williams_runtime import (
     FuturesWilliamsScanner,
     _pending_entry_preflight_reason,
     _signal_profile_entry_block_reason,
+    canonical_alligator_raw_history_limit,
 )
 from trading_config import TradingConfig, DEFAULT_SYMBOLS, DEFAULT_FUTURES_SYMBOLS
 from williams_signals import (
@@ -1598,3 +1599,11 @@ def test_tc2_wm1_price_bar_lifecycle_uses_same_structural_invalidation(monkeypat
         assert len(candidate)==1
         bars.loc[1,"high" if short else "low"]=candidate[0].protective_reference
         assert not wm1(bars)
+
+
+def test_r49_canonical_alligator_raw_history_limit_keeps_500_closed_bars():
+    assert canonical_alligator_raw_history_limit("220") == 501
+    assert canonical_alligator_raw_history_limit("500") == 501
+    assert canonical_alligator_raw_history_limit("750") == 750
+    assert canonical_alligator_raw_history_limit("1500") == 1000
+    assert canonical_alligator_raw_history_limit("not-a-number") == 501

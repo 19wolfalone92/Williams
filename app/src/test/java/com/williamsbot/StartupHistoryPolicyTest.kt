@@ -7,14 +7,14 @@ class StartupHistoryPolicyTest {
     @Test
     fun h1_remains_the_full_decision_history_requirement() {
         val policy = startupHistoryPolicy("1h")
-        assertEquals(180, policy.requestedCount)
+        assertEquals(WILLIAMS_ALLIGATOR_WARMUP_BARS, policy.requestedCount)
         assertEquals(150, policy.minimumCount)
     }
 
     @Test
     fun context_and_monitoring_frames_do_not_require_150_bars() {
-        assertEquals(StartupHistoryPolicy(90, 45), startupHistoryPolicy("1d"))
-        assertEquals(StartupHistoryPolicy(120, 45), startupHistoryPolicy("4h"))
+        assertEquals(StartupHistoryPolicy(WILLIAMS_ALLIGATOR_WARMUP_BARS, 45), startupHistoryPolicy("1d"))
+        assertEquals(StartupHistoryPolicy(WILLIAMS_ALLIGATOR_WARMUP_BARS, 45), startupHistoryPolicy("4h"))
         assertEquals(StartupHistoryPolicy(160, 45), startupHistoryPolicy("15m"))
     }
 
@@ -30,7 +30,7 @@ class StartupHistoryPolicyTest {
         assertEquals(150, status.minimumWorkingSetCount)
         org.junit.Assert.assertEquals(true, status.workingSetReady)
         org.junit.Assert.assertEquals(true, status.decisionFrame)
-        org.junit.Assert.assertEquals(true, status.decisionReady)
+        org.junit.Assert.assertEquals(false, status.decisionReady)
         assertEquals("WORKING_SET_READY", status.scope)
     }
 
@@ -38,7 +38,7 @@ class StartupHistoryPolicyTest {
     fun h1_is_the_only_decision_frame() {
         val h1 = historyReadinessStatus("1h", 179L, false)
         org.junit.Assert.assertEquals(true, h1.decisionFrame)
-        org.junit.Assert.assertEquals(true, h1.decisionReady)
+        org.junit.Assert.assertEquals(false, h1.decisionReady)
         org.junit.Assert.assertEquals(false, h1.contextFrame)
         org.junit.Assert.assertEquals(false, h1.executionMonitoringFrame)
     }
@@ -51,7 +51,7 @@ class StartupHistoryPolicyTest {
             org.junit.Assert.assertEquals(false, status.decisionFrame)
             org.junit.Assert.assertEquals(false, status.decisionReady)
             org.junit.Assert.assertEquals(true, status.contextFrame)
-            org.junit.Assert.assertEquals(true, status.contextReady)
+            org.junit.Assert.assertEquals(false, status.contextReady)
             org.junit.Assert.assertEquals(false, status.executionMonitoringFrame)
             assertEquals("WORKING_SET_READY", status.scope)
         }
@@ -83,7 +83,19 @@ class StartupHistoryPolicyTest {
     fun full_backfill_is_reported_separately_from_working_set_readiness() {
         val status = historyReadinessStatus("1h", 180L, true)
         assertEquals(true, status.workingSetReady)
+        assertEquals(false, status.decisionReady)
         assertEquals("FULL_HISTORY", status.scope)
+    }
+
+
+    @Test
+    fun alligator_decision_and_context_readiness_require_500_closed_bars() {
+        assertEquals(false, historyReadinessStatus("1h", 499L, false).decisionReady)
+        assertEquals(true, historyReadinessStatus("1h", 500L, false).decisionReady)
+        assertEquals(false, historyReadinessStatus("4h", 499L, false).contextReady)
+        assertEquals(true, historyReadinessStatus("4h", 500L, false).contextReady)
+        assertEquals(false, canonicalAlligatorWarmupReady(499))
+        assertEquals(true, canonicalAlligatorWarmupReady(500))
     }
 
 }
