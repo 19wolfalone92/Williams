@@ -562,6 +562,8 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertFalse(result.toString(),result.getBoolean("accepted"))
             assertTrue(result.toString(),result.optString("error").contains("QUOTE_RISK_LEDGER_JOURNAL_CHANGED"))
             assertEquals(0,exchange.posts("/fapi/v1/algoOrder")+exchange.posts("/fapi/v1/order"))
+            assertEquals(9999.0,JSONArray(journal.readState("futures_campaign_intents_v2"))
+                .getJSONObject(0).getDouble("risk_quote_usdt"),0.0)
         }
     }
 

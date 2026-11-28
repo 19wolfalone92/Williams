@@ -4851,6 +4851,7 @@ internal class NativeFuturesCampaignCoordinator(
         val adapter = adapterFactory()
         var orderSubmissionAttempted = false
         var finalContextCheckStarted = false
+        var quoteRiskJournalConflict = false
         var tc2SourceReceipt: Tc2H1SourceReceipt? = null
         val receiptRequired = requireTc2SourceReceipt
         try {
@@ -4965,7 +4966,8 @@ internal class NativeFuturesCampaignCoordinator(
                 // Compare exact committed bytes, not a parsed and reserialized JSON object:
                 // JSONObject may reorder fields or normalize number representations.
                 val durableRiskRaw=executionStore.readState(intentsKey)
-                check(durableRiskRaw==riskJournalSnapshot) { "QUOTE_RISK_LEDGER_JOURNAL_CHANGED" }
+                quoteRiskJournalConflict = durableRiskRaw != riskJournalSnapshot
+                check(!quoteRiskJournalConflict) { "QUOTE_RISK_LEDGER_JOURNAL_CHANGED" }
                 val durableRiskRows=JSONArray(checkNotNull(durableRiskRaw))
                 futuresQuoteRiskTransportBlocker(durableRiskRows,plan.clientId,riskEquity)?.let { error(it) }
                 // The margin GETs (and a rate/clock wait) must not extend the
@@ -5050,6 +5052,16 @@ internal class NativeFuturesCampaignCoordinator(
                     .put("all_in_risk_pct", riskCheck.estimatedAllInRiskPct)
                     .put("initial_margin_usdt", riskCheck.initialMarginUsdt))
         } catch (failure: Exception) {
+            if (quoteRiskJournalConflict && failure is FuturesExposureNotSubmittedException) {
+                // Preserve the newer durable journal. Never overwrite another writer or
+                // release its reservations from a stale in-memory entry attempt.
+                state = State.RECONCILE_REQUIRED
+                lastBlocker = "QUOTE_RISK_LEDGER_JOURNAL_CHANGED"
+                return@synchronized JSONObject().put("accepted",false)
+                    .put("safe_rejection",true).put("mutation_attempted",true)
+                    .put("order_mutation_attempted",false).put("state",state.name)
+                    .put("blocker",lastBlocker).put("error",lastBlocker)
+            }
             if (!orderSubmissionAttempted || failure is FuturesExposureNotSubmittedException) {
                 // Account configuration can fail or time out, but no entry was
                 // sent. Do not reserve a phantom SUBMISSION_UNKNOWN order.
