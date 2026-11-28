@@ -11,6 +11,7 @@ from futures_williams_runtime import (
     FuturesWilliamsScanner,
     _pending_entry_preflight_reason,
     _signal_profile_entry_block_reason,
+    canonical_alligator_raw_history_limit,
 )
 from trading_config import TradingConfig, DEFAULT_SYMBOLS, DEFAULT_FUTURES_SYMBOLS
 from williams_signals import (
@@ -802,17 +803,18 @@ def test_dry_run_still_scans_market_data_but_never_arms_orders():
 
 
 
-def test_tc2_wm1_is_not_blocked_by_directional_htf_confirmation_policy():
-    from futures_williams_runtime import _requires_directional_htf_confirmation
+def test_tc2_wm1_wm2_wm3_do_not_require_independent_htf_confirmation():
+    import inspect
+    from futures_williams_runtime import FuturesWilliamsRuntime, FuturesWilliamsScanner
 
-    # WM1 is the early reversal signal. Requiring an already-aligned HTF trend
-    # would turn it into a late confirmation entry rather than the book's WM1.
-    assert _requires_directional_htf_confirmation(SignalType.REVERSAL) is False
-    assert _requires_directional_htf_confirmation(SignalType.SUPER_AO) is True
-    assert _requires_directional_htf_confirmation(SignalType.FRACTAL) is True
+    entry_source = inspect.getsource(FuturesWilliamsRuntime._arm_entry)
+    scanner_source = inspect.getsource(FuturesWilliamsScanner.analyse)
 
-
-
+    # D1/H4 remains available as context/ranking, but never vetoes an H1 TC2 entry.
+    assert "require_htf_confirmation" not in entry_source
+    assert "candidate.htf_confirmed" not in entry_source
+    assert "htf_confirmed=bool(htf_ok)" in scanner_source
+    assert "score_adjustment" in scanner_source
 def test_ntd_green_zone_add_on_uses_matching_ao_ac_and_price_colours_without_zero_gate():
     ind = pd.DataFrame({
         "open_time_ms": [1_699_999_700_000,1_700_000_000_000,1_700_000_300_000],
@@ -1182,6 +1184,8 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "trigger_price": 100.0,
             "protective_reference": 97.0,
             "expires_at_ms": 5000,
+            "signal_type":"REVERSAL",
+            "strategy_profile":"PROFITUNITY_COURSE",
         },
     }
     assert _pending_entry_preflight_reason(pending, intent, 99.9, now_ms=2000) == ""
@@ -1202,6 +1206,8 @@ def test_final_entry_preflight_blocks_expired_or_already_crossed_williams_trigge
             "trigger_price": 200.0,
             "protective_reference": 203.0,
             "expires_at_ms": 5000,
+            "signal_type":"SUPER_AO",
+            "strategy_profile":"PROFITUNITY_COURSE",
         },
     }
     assert _pending_entry_preflight_reason(short_pending, short_intent, 200.1, now_ms=2000) == ""
@@ -1348,3 +1354,275 @@ def test_verified_book_editions_are_available_but_unknown_profile_is_blocked():
     assert _signal_profile_entry_block_reason("UNKNOWN_PROFILE").startswith(
         "WILLIAMS_SIGNAL_PROFILE must be one of"
     )
+
+
+def test_python_protection_proof_requires_explicit_exchange_semantics():
+    class Cursor:
+        def fetchone(self):
+            return {"campaign_id": "C1", "purpose": "PROTECTION"}
+
+    class Connection:
+        def execute(self, *_args, **_kwargs):
+            return Cursor()
+
+    runtime = SimpleNamespace(db=SimpleNamespace(conn=Connection()))
+    campaign = SimpleNamespace(
+        symbol="BTCUSDT", side="BUY", campaign_id="C1",
+        current_stop_price=95.0, position_qty=1.0,
+        tags={"protective_order_client_id": "STOP-1", "pending_protection_client_id": ""},
+    )
+    valid = {
+        "symbol": "BTCUSDT", "side": "SELL", "type": "STOP_MARKET", "status": "NEW",
+        "clientOrderId": "STOP-1", "stopPrice": "95", "positionSide": "BOTH",
+        "workingType": "MARK_PRICE", "priceProtect": False,
+        "closePosition": True, "reduceOnly": False,
+    }
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, valid)
+
+    for missing in ("positionSide", "workingType", "priceProtect", "closePosition"):
+        incomplete = dict(valid)
+        incomplete.pop(missing)
+        if missing == "closePosition":
+            incomplete["reduceOnly"] = True
+            incomplete["origQty"] = "1"
+        assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, incomplete), missing
+
+    wrong_working_type = dict(valid, workingType="CONTRACT_PRICE")
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, wrong_working_type)
+    price_protected = dict(valid, priceProtect=True)
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, price_protected)
+    string_flags = dict(valid, priceProtect="FALSE", closePosition="TRUE")
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, string_flags)
+
+    quantity_stop = dict(valid, closePosition=False, reduceOnly=True, origQty="1")
+    assert FuturesWilliamsRuntime._protection_matches(runtime, campaign, quantity_stop)
+    missing_close_position = dict(quantity_stop)
+    missing_close_position.pop("closePosition")
+    assert not FuturesWilliamsRuntime._protection_matches(runtime, campaign, missing_close_position)
+
+
+def test_futures_scanner_does_not_veto_valid_tc2_candidates_on_high_atr(monkeypatch):
+    # Exercise the actual scanner admission path; only data/indicator and
+    # source-formation collaborators are stubbed. No exchange mutations.
+    import futures_williams_runtime as runtime
+    from williams_edition_rules import TC2
+
+    now = 1_800_000_000_000
+    hour = 3_600_000
+    now = now // hour * hour
+    frame = pd.DataFrame({
+        "open_time_ms": [now - (501-i)*hour for i in range(501)],
+        "open": 100.0, "high": 120.0, "low": 80.0,
+        "close": 100.0, "volume": 10.0,
+    })
+    client = SimpleNamespace(exchange_info=lambda _: {
+        "symbols": [{"filters": [{"filterType": "PRICE_FILTER", "tickSize": "0.1"}]}]
+    }, time_offset_ms=0)
+    scanner = FuturesWilliamsScanner(client, interval="1h")
+    monkeypatch.setattr(runtime.time, "time", lambda: now / 1000)
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE", TC2)
+    monkeypatch.setenv("ALLOW_LONG", "true")
+    monkeypatch.setenv("ALLOW_SHORT", "true")
+    monkeypatch.setenv("MAX_ATR_PCT", "0.08")
+    monkeypatch.setenv("ATR_PERIOD", "14")
+    monkeypatch.setattr(runtime, "fetch_klines", lambda *args, **kwargs: frame.copy())
+    monkeypatch.setattr(runtime, "calculate_indicators", lambda frame, config: frame)
+    monkeypatch.setattr(scanner.wave_engine, "build_snapshot",
+        lambda *args, **kwargs: SimpleNamespace(point_zero_confirmed=False, point_zero_score=0))
+    monkeypatch.setattr(scanner, "wave_hierarchy", lambda *args, **kwargs: SimpleNamespace(to_dict=lambda: {}))
+    monkeypatch.setattr(scanner, "_spread", lambda _: 0.001)
+    monkeypatch.setattr(scanner, "_htf", lambda _: (False, False))
+    monkeypatch.setattr(runtime, "observe_edition_signals", lambda *args, **kwargs: ([], []))
+    monkeypatch.setattr(runtime, "build_decision_trace", lambda *args, **kwargs: {"books": []})
+    monkeypatch.setattr(runtime, "evaluate_direction", lambda **kwargs:
+        SimpleNamespace(to_dict=lambda: {"score_adjustment": 0.0}))
+    monkeypatch.setattr(runtime, "correction_entry_context", lambda *args, **kwargs: {"allowed": False})
+    def spec(side, kind):
+        return SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=kind,
+            role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=now-hour,
+            trigger_price=120.1 if side=="BUY" else 79.9,
+            protective_reference=79.9 if side=="BUY" else 120.1)
+    long_signals = [spec("BUY", SignalType.REVERSAL)]
+    short_signals = [spec("SELL", SignalType.SUPER_AO)]
+    monkeypatch.setattr(runtime, "extract_long_signal_specs", lambda *args, **kwargs: long_signals)
+    monkeypatch.setattr(runtime, "extract_short_signal_specs", lambda *args, **kwargs: short_signals)
+    candidates = scanner.analyse("BTCUSDT")
+    assert {candidate.side for candidate in candidates} == {"LONG", "SHORT"}
+    assert {candidate.signal.signal_type for candidate in candidates} == {SignalType.REVERSAL, SignalType.SUPER_AO}
+    assert all(math.isclose(candidate.atr_pct, 0.40) for candidate in candidates)
+    # The legacy environment variable may be absent, tiny or invalid;
+    # it cannot affect this Futures scanner's source-valid signal pool.
+    for value in ("0.00001", "invalid"):
+        monkeypatch.setenv("MAX_ATR_PCT", value)
+        assert [c.signal.signal_id for c in scanner.analyse("BTCUSDT")] == [
+            c.signal.signal_id for c in candidates]
+    # Exercise the actual production scanner with a positive correction
+    # classification and then a failed optional observer. The source signal
+    # is still visible; no CORRECTION execution mode is assigned to TC2.
+    monkeypatch.setattr(runtime,"correction_entry_context",lambda *a,**kw:
+        {"allowed":True,"parent_scenario_id":"test-parent"})
+    qualified=scanner.analyse("BTCUSDT")
+    assert len(qualified)==2
+    assert all(c.trade_mode=="TREND" and c.correction_context["observation_only"]
+               and c.correction_context["allowed"] for c in qualified)
+    def unavailable(*a,**kw):
+        raise RuntimeError("observer unavailable")
+    monkeypatch.setattr(scanner,"wave_hierarchy",unavailable)
+    monkeypatch.setattr(scanner,"_htf",unavailable)
+    monkeypatch.setattr(scanner.wave_engine,"build_snapshot",unavailable)
+    monkeypatch.setattr(runtime,"correction_entry_context",unavailable)
+    monkeypatch.setattr(runtime,"build_decision_trace",unavailable)
+    monkeypatch.setattr(runtime,"evaluate_direction",unavailable)
+    monkeypatch.setenv("REQUIRE_POINT_ZERO_FOR_WM1","true")
+    def actual_wm1_argument(*a,**kw):
+        assert kw["require_point_zero_for_reversal"] is False
+        return long_signals
+    monkeypatch.setattr(runtime,"extract_long_signal_specs",actual_wm1_argument)
+    qualified=scanner.analyse("BTCUSDT")
+    assert len(qualified)==2 and all(c.trade_mode=="TREND" for c in qualified)
+    assert all(c.correction_context["reason"]=="ANALYSIS_FAILED" for c in qualified)
+    errors=scanner.decision_traces["BTCUSDT"]["observer_errors"]
+    assert {"wave_snapshot","wave_hierarchy","higher_timeframe","decision_trace",
+            "directional_context_LONG","directional_context_SHORT"} <= errors.keys()
+    # Optional observers may fail, but bad H1 itself never becomes tradable.
+    frame.loc[10,"high"]=float("nan")
+    assert scanner.analyse("BTCUSDT")==[]
+    assert scanner.last_signal_profile_error=="H1_OHLC_UNVERIFIED"
+
+
+def test_tc2_initial_selection_is_chronological_and_direction_symmetric():
+    from futures_williams_runtime import _select_tc2_initial_candidate
+    from williams_edition_rules import TC2, NTD
+    def candidate(side, when, score, ident, source=TC2, role=SignalRole.ENTRY):
+        return SimpleNamespace(side=side, score=score,
+            signal=SimpleNamespace(signal_bar_time_ms=when, signal_id=ident,
+                                   role=role, strategy_profile=source))
+    for side, other in [("LONG", "SHORT"), ("SHORT", "LONG")]:
+        older = candidate(side, 10, 10.0, "old")
+        newer = candidate(other, 20, 100.0, "new")
+        observer = candidate(other, 1, 100.0, "observer", NTD)
+        addon = candidate(other, 1, 100.0, "addition", role=SignalRole.ADD_ON)
+        assert _select_tc2_initial_candidate([newer, observer, addon, older]) == (older, "")
+        assert _select_tc2_initial_candidate([older, addon, observer, newer]) == (older, "")
+        exact = candidate(other, 10, 10.0, "equal")
+        assert _select_tc2_initial_candidate([older, exact])[0] is None
+        assert _select_tc2_initial_candidate([exact, older])[0] is None
+        better = candidate(other, 10, 20.0, "better")
+        assert _select_tc2_initial_candidate([older, better]) == (better, "")
+        assert _select_tc2_initial_candidate([better, older]) == (better, "")
+
+
+def test_tc2_legacy_correction_cannot_veto_final_entry_preflight(monkeypatch):
+    import pytest
+    import futures_williams_runtime as module
+    from entry_time_policy import EntryTimePolicy
+    from williams_edition_rules import TC2
+    now = 1_800_000_000_000 // 3_600_000 * 3_600_000
+    monkeypatch.setattr(module.time,"time",lambda:now/1000)
+    monkeypatch.setenv("WILLIAMS_SIGNAL_PROFILE",TC2)
+    def unexpected(*a,**kw):
+        pytest.fail("TC2 correction observer was used at the exchange mutation door")
+    runtime=object.__new__(FuturesWilliamsRuntime)
+    runtime.config=SimpleNamespace(allow_long=True,allow_short=True,entry_time_policy=EntryTimePolicy())
+    runtime.scanner=SimpleNamespace(wave_hierarchy=unexpected)
+    runtime.client=SimpleNamespace(time_offset_ms=0,ticker_price=lambda _: {"price":"100"})
+    runtime._position=lambda _: {"positionAmt":"0"}
+    runtime._signed_position_qty=lambda p: float(p["positionAmt"])
+    for side,trigger,stop in [("BUY",110.0,90.0),("SELL",90.0,110.0)]:
+        for family in (SignalType.REVERSAL,SignalType.SUPER_AO,SignalType.FRACTAL):
+            signal=SignalSpec.new(symbol="BTCUSDT",side=side,signal_type=family,role=SignalRole.ENTRY,
+                timeframe="1h",signal_bar_time_ms=now-3_600_000,trigger_price=trigger,
+                protective_reference=stop,expires_at_ms=0 if family==SignalType.FRACTAL else now+3_600_000,
+                setup_context={"h1_closed_at_ms":now})
+            campaign=SimpleNamespace(symbol="BTCUSDT",side=side,state=CampaignState.ENTRY_PENDING,
+                tags={"strategy_profile":TC2,"trade_mode":"CORRECTION","correction_context":{},
+                      "pending_signal":{"state":"VALIDATED","signal":signal.to_dict()}})
+            runtime.engine=SimpleNamespace(load_campaign=lambda _:campaign)
+            intent=SimpleNamespace(campaign_id="owner",symbol="BTCUSDT",side=side,
+                purpose="CAMPAIGN_ENTRY",order_type="STOP_MARKET",signal_id=signal.signal_id)
+            runtime._futures_pre_submit_checks(intent)
+            runtime._position=lambda _: {"positionAmt":"0.01"}
+            with pytest.raises(RuntimeError,match="already exists"):
+                runtime._futures_pre_submit_checks(intent)
+            runtime._position=lambda _: {"positionAmt":"0"}
+
+
+def test_tc2_wm2_old_trigger_cannot_be_resurrected_after_structural_invalidation():
+    # The third AO bar remains at index 3 even when later AO bars turn
+    # the other colour. A later closed bar touches the invalidation, not
+    # the entry. A subsequent recovery cannot revive the old setup.
+    frame = pd.DataFrame({
+        "open_time_ms": [1795701600000+i*3600000 for i in range(10)],
+        "open": [100.0]*10, "high": [101.0,101.0,101.0,110.0]+[105.0]*6,
+        "low": [99.0,99.0,99.0,90.0]+[95.0]*6, "close": [100.0]*10,
+        "ao": [0.,1.,2.,3.,2.,2.,2.,2.,2.,2.],
+        "ao_green_streak": [0,1,2,3,0,0,0,0,0,0],
+        "ao_red_streak": [0,0,0,0,1,0,0,0,0,0],
+    })
+    for short in (False, True):
+        bars = frame.copy()
+        if short:
+            bars["high"],bars["low"] = 220-frame["low"],220-frame["high"]
+            bars["open"],bars["close"],bars["ao"] = 220-frame["open"],220-frame["close"],-frame["ao"]
+            bars["ao_green_streak"],bars["ao_red_streak"] = frame["ao_red_streak"],frame["ao_green_streak"]
+        extractor = extract_short_signal_specs if short else extract_long_signal_specs
+        def wm2(data):
+            return [s for s in extractor("BTCUSDT",data,timeframe="1h",tick_size=.1)
+                    if s.signal_type == SignalType.SUPER_AO]
+        candidates=wm2(bars)
+        assert len(candidates)==1
+        assert candidates[0].source_candle_index==3
+        assert wm2(bars.iloc[:4])
+        invalid=bars.copy()
+        invalid.loc[5,"high" if short else "low"] = candidates[0].protective_reference
+        assert not wm2(invalid)
+        consumed=bars.copy()
+        consumed.loc[5,"low" if short else "high"] = candidates[0].trigger_price
+        assert not wm2(consumed)
+        missing=bars.copy()
+        missing.loc[5,"high" if short else "low"] = float("nan")
+        assert not wm2(missing)
+
+
+def test_tc2_wm1_price_bar_lifecycle_uses_same_structural_invalidation(monkeypatch):
+    import williams_signals as signals
+    monkeypatch.setattr(signals,"_latest_reversal",lambda *a,**kw:(0,110.,90.) if kw["side"]=="LONG" else (0,90.,110.))
+    monkeypatch.setattr(signals,"_angulation",lambda *a,**kw:(1.,True))
+    for short in (False,True):
+        bars=pd.DataFrame({"open_time_ms":[1795701600000+i*3600000 for i in range(3)],
+            "open":[100.]*3,"high":[110.,105.,105.],"low":[90.,95.,95.],"close":[100.]*3})
+        extractor=extract_short_signal_specs if short else extract_long_signal_specs
+        def wm1(data):
+            return [s for s in extractor("BTCUSDT",data,timeframe="1h",tick_size=.1)
+                    if s.signal_type==SignalType.REVERSAL]
+        candidate=wm1(bars)
+        assert len(candidate)==1
+        bars.loc[1,"high" if short else "low"]=candidate[0].protective_reference
+        assert not wm1(bars)
+
+
+def test_r49_canonical_alligator_raw_history_limit_keeps_500_closed_bars():
+    assert canonical_alligator_raw_history_limit("220") == 501
+    assert canonical_alligator_raw_history_limit("500") == 501
+    assert canonical_alligator_raw_history_limit("750") == 750
+    assert canonical_alligator_raw_history_limit("1500") == 1000
+    assert canonical_alligator_raw_history_limit("not-a-number") == 501
+
+
+def test_r51_same_direction_pending_stop_head_is_not_formation_order():
+    from futures_williams_runtime import _tc2_pending_direction_head
+    from williams_edition_rules import TC2
+    from itertools import permutations
+    for side in ("BUY","SELL"):
+        levels = (120,110,130) if side == "BUY" else (80,90,70)
+        rows = [SimpleNamespace(side=side, trigger_price=level, signal_id=family,
+            signal_bar_time_ms=i+1, role=SignalRole.ENTRY, strategy_profile=TC2,
+            execution_semantics="STOP_ENTRY")
+            for i,(family,level) in enumerate(zip(("WM1","WM2","WM3"),levels))]
+        for ordering in permutations(rows):
+            assert _tc2_pending_direction_head(ordering).signal_id == "WM2"
+        rows[1].role=SignalRole.ADD_ON
+        assert _tc2_pending_direction_head(rows).signal_id == "WM1"
+        rows[1].role=SignalRole.ENTRY
+        rows[1].side="SELL" if side=="BUY" else "BUY"
+        assert _tc2_pending_direction_head(rows) is None

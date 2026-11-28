@@ -34,15 +34,19 @@ from market_context import ContextCache
 from strategy import (
     calculate_indicators,
     canonical_indicator_config_from_env,
+    CANONICAL_ALLIGATOR_WARMUP_BARS,
+    CANONICAL_ALLIGATOR_RAW_BARS,
 )
 from williams_signals import (
     extract_long_signal_specs,
     extract_short_signal_specs,
 )
 from williams_decision_trace import build_decision_trace
+from williams_tc2_admission import (verify_tc2_order, tc2_receipt_digest,
+    verify_tc2_transport_receipt)
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
-from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker
+from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker,signal_age_ttl_disabled
 from williams_ntd_execution import FAMILIES as NTD_FAMILIES, close_entry_bound, require_close_entry
 from williams_course_campaign import course_active_context,course_next_stage,course_target
 from williams_course_quantity import (course_initial_quantity,course_stage_quantity,
@@ -56,9 +60,14 @@ from williams_tc2_pyramid import (
     POLICY as TC2_PYRAMID_POLICY, initial_unit_risk_pct, require_profitable_position,
     next_tranche as tc2_next_tranche, cap_book_tranche,
 )
-from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,unified_direction_conflict,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
+from williams_edition_rules import TC2,NTD,COURSE,UNIFIED,PROFILES,profile_allows_source,market_on_close_reason,course_airbag_stop,course_two_fractal_stop,ntd_management_plan
 from campaign_engine import CampaignEngine
 from equity_breaker import EquityCircuitBreaker
+from daily_risk_accounting import (
+    UTC_DAY_MS, account_fingerprint, calculate_daily_risk_model_b, parse_model_b_account,
+    model_b_snapshot_is_valid, reconstruct_midnight_equity,
+    reverse_position_at_midnight, summarize_income_rows,
+)
 from campaign_model import (
     CampaignState,
     SignalRole,
@@ -85,7 +94,19 @@ from williams_wave_hierarchy import (
     suggested_analytical_frames,
 )
 from williams_exit_policy import zone_trailing_activation, plan_williams_stop
-from williams_scenario_lifecycle import ScenarioSignal, scenario_opposition, assess_scenario_opposition
+from williams_scenario_lifecycle import (ScenarioSignal, scenario_opposition, assess_scenario_opposition,
+    pending_tc2_level_event, pending_tc2_cancel_reason)
+
+
+def canonical_alligator_raw_history_limit(configured=None):
+    """Raw exchange rows needed for 500 closed Alligator bars plus the forming bar."""
+    if configured is None:
+        configured = os.getenv("SCANNER_KLINE_LIMIT", str(CANONICAL_ALLIGATOR_WARMUP_BARS))
+    try:
+        requested = int(configured)
+    except (TypeError, ValueError):
+        requested = CANONICAL_ALLIGATOR_WARMUP_BARS
+    return min(1000, max(CANONICAL_ALLIGATOR_RAW_BARS, requested))
 
 
 def closed_strategy_frame(frame, interval, now_ms):
@@ -178,17 +199,48 @@ class FuturesCandidate:
         }
 
 
-def _requires_directional_htf_confirmation(signal_type: SignalType) -> bool:
-    """TC2 WM1 is an early reversal; aligned HTF trend is context, not its entry prerequisite.
+def _tc2_pending_direction_head(signals):
+    """Select the first attainable unconsumed STOP on ONE direction.
 
-    WM2/WM3 continuation-style entries retain the configured directional HTF gate.
-    Exchange/risk/trigger/protection gates still apply to every signal.
+    For a continuous price path starting on the pending side of every level,
+    BUY reaches the lowest trigger first; SELL reaches the highest first.
+    This is arming geometry, NOT evidence of a trigger or fill, and says
+    nothing about gaps or the ordering of opposite directions.
     """
-    return signal_type != SignalType.REVERSAL
+    eligible = [s for s in signals if s.role == SignalRole.ENTRY
+                and s.strategy_profile == TC2 and s.execution_semantics == "STOP_ENTRY"
+                and s.side in ("BUY", "SELL")
+                and math.isfinite(s.trigger_price) and s.trigger_price > 0]
+    if not eligible or len({s.side for s in eligible}) != 1:
+        return None
+    return min(eligible, key=lambda s: (s.trigger_price if s.side == "BUY" else -s.trigger_price,
+                                       s.signal_id))
+
+
+def _select_tc2_initial_candidate(candidates):
+    """Choose one source-eligible initial candidate per symbol, chronology first.
+
+    Scores are secondary context evidence, never authority to bypass risk,
+    exchange state or signal preflight. An exactly tied opposite pair is
+    unresolved; iteration order must not decide its direction.
+    """
+    eligible = [c for c in candidates if c.signal.role == SignalRole.ENTRY
+                and c.signal.strategy_profile == TC2]
+    if not eligible:
+        return None, "NO_TC2_INITIAL_CANDIDATE"
+    earliest = min(c.signal.signal_bar_time_ms for c in eligible)
+    first = [c for c in eligible if c.signal.signal_bar_time_ms == earliest]
+    if len({c.side for c in first}) > 1 and any(not math.isfinite(c.score) for c in first):
+        return None, "SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED"
+    best_score = max(c.score if math.isfinite(c.score) else float("-inf") for c in first)
+    tied = [c for c in first if (c.score if math.isfinite(c.score) else float("-inf")) == best_score]
+    if len({c.side for c in tied}) > 1:
+        return None, "SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED"
+    return min(tied, key=lambda c: c.signal.signal_id), ""
 
 
 def _pending_entry_preflight_reason(pending, intent, current_price: float, now_ms: int | None = None) -> str:
-    """Fail closed if a conditional Wise-Man entry is stale or its trigger already passed."""
+    """Fail closed on stale H1 evidence or a crossed/invalidated conditional entry."""
     now = int(time.time() * 1000) if now_ms is None else int(now_ms)
     if not isinstance(pending, dict):
         return "pending_signal_missing"
@@ -209,17 +261,27 @@ def _pending_entry_preflight_reason(pending, intent, current_price: float, now_m
         price = float(current_price)
     except (TypeError, ValueError):
         return "pending_signal_price_or_expiry_invalid"
-    structural=structural_fractal(signal.get("signal_type"),signal.get("strategy_profile",TC2))
-    if structural and expires_at==0:
-        closed_at=int((signal.get("setup_context") or {}).get("h1_closed_at_ms",0) or 0)
+    profile=signal.get("strategy_profile",TC2)
+    signal_type=signal.get("signal_type",signal.get("type",signal.get("family","")))
+    tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+    structural=structural_fractal(signal.get("signal_type",signal_type),profile)
+    no_age_ttl=tc2_no_age or structural
+    if tc2_no_age or (structural and expires_at==0):
+        setup=signal.get("setup_context") or {}
+        try:
+            closed_at=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+        except (TypeError, ValueError, OverflowError):
+            closed_at=0
         if closed_at<=0 or not 0<=now-closed_at<3_600_000:
-            return "pending_structural_fractal_h1_snapshot_stale_or_unverified"
-    if expires_at <= 0 and not structural:
+            return "pending_h1_snapshot_stale_or_unverified"
+    if tc2_no_age:
+        expires_at=0
+    elif expires_at<=0 and not structural:
         return "pending_signal_expiry_missing"
-    if expires_at>0 and now >= expires_at:
+    if expires_at>0 and now>=expires_at:
         return "pending_signal_expired"
-    signal_at = int(signal.get("signal_bar_time_ms",0) or 0)
-    if signal_at>0 and not structural and now-signal_at>=5*3_600_000:
+    signal_at=int(signal.get("signal_bar_time_ms",0) or 0)
+    if signal_at>0 and not no_age_ttl and now-signal_at>=5*3_600_000:
         return "pending_h1_signal_exceeded_project_freshness_limit"
     if not all(math.isfinite(v) and v>0 for v in (trigger,protective,price)):
         return "pending_signal_trigger_stop_or_market_price_invalid"
@@ -346,16 +408,14 @@ class FuturesWilliamsScanner:
         return (ask - bid) / bid
 
     def _htf(self, symbol: str) -> tuple[bool, bool]:
-        """D1 macro airbag + H4 directional context; H1 remains the decision TF."""
+        """Closed D1/H4 context flags; H1 TC2 signals remain the entry decision."""
         if not _env_bool("REQUIRE_HTF_CONFIRMATION", True):
             return True, True
 
         def closed_context(frame_name: str):
-            frame = fetch_klines(self.client, symbol, frame_name, limit=180)
-            if len(frame) < 90:
-                return None
+            frame = fetch_klines(self.client, symbol, frame_name, limit=canonical_alligator_raw_history_limit())
             closed = closed_strategy_frame(frame,frame_name,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
-            if len(closed) < 45:
+            if len(closed) < CANONICAL_ALLIGATOR_WARMUP_BARS:
                 return None
             indicators = calculate_indicators(closed, self.config)
             last = indicators.iloc[-1]
@@ -365,13 +425,15 @@ class FuturesWilliamsScanner:
 
         daily = closed_context("1d")
         four_hour = closed_context("4h")
-        # Missing context is not bullish or bearish evidence: block both directions.
+        # Missing context is UNKNOWN. Keep both H1 directions eligible; the caller records
+        # this as unconfirmed context rather than using it as an entry veto.
         if daily is None or four_hour is None:
             return False, False
         d1_bull, d1_bear = daily
         h4_bull, h4_bear = four_hour
-        # D1 is an airbag, not an entry trigger. H4 must support the direction,
-        # while a clear opposite D1 trend vetoes the trade. No M15/M5 entry path.
+        # D1/H4 provide directional context for diagnostics and ranking only.
+        # Neither timeframe is a mandatory confirmation or veto for an H1 TC2 entry.
+        # No M15/M5 entry path.
         return h4_bull and not d1_bear, h4_bear and not d1_bull
 
     def wave_hierarchy(self, symbol: str, h1_frame=None, *, refresh=False) -> WaveHierarchy:
@@ -410,15 +472,16 @@ class FuturesWilliamsScanner:
         if tick <= 0:
             return []
 
-        frame = fetch_klines(
-            self.client,
-            symbol,
-            self.interval,
-            limit=max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))),
-        )
-        if len(frame) < 110:
+        requested_limit = (canonical_alligator_raw_history_limit() if self.interval == "1h"
+                           else max(180, int(os.getenv("SCANNER_KLINE_LIMIT", "220"))))
+        frame = fetch_klines(self.client, symbol, self.interval, limit=requested_limit)
+        if self.interval == "1h" and len(frame) < CANONICAL_ALLIGATOR_RAW_BARS:
+            return []
+        if self.interval != "1h" and len(frame) < 110:
             return []
         closed = closed_strategy_frame(frame,self.interval,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+        if self.interval == "1h" and len(closed) < CANONICAL_ALLIGATOR_WARMUP_BARS:
+            return []
         ind = calculate_indicators(closed, self.config)
         # Do not mix NTD fifth-dimension entries into TC2 exchange order gate.
         # A diagnostic error must not abort existing position protection.
@@ -432,13 +495,31 @@ class FuturesWilliamsScanner:
                 "can_place_orders":False,"reason":"NTD_RESEARCH_DIAGNOSTIC_ERROR",
                 "error_type":type(exc).__name__,
             }
-        wave_snapshot = self.wave_engine.build_snapshot(
-            self.interval,
-            closed,
-            degree="EXECUTION",
-        )
-        point_zero_confirmed = bool(wave_snapshot.point_zero_confirmed)
-        point_zero_score = int(wave_snapshot.point_zero_score)
+        # A wave hypothesis must not prevent a source-valid closed-H1 setup.
+        # Fail closed on H1 itself, independently of optional wave/HTF observers.
+        if self.interval == "1h":
+            try:
+                source_bars = wave_bars_from_dataframe(closed)
+                source_error = closed_h1_history_blocker(source_bars,
+                    int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
+                if not source_error and any(
+                    not all(math.isfinite(x) for x in (bar.o,bar.h,bar.l,bar.c,bar.v))
+                    or min(bar.o,bar.l,bar.c)<=0 or bar.h<max(bar.o,bar.c,bar.l)
+                    or bar.l>min(bar.o,bar.c) or bar.v<0 for bar in source_bars):
+                    source_error = "H1_OHLC_UNVERIFIED"
+            except Exception:
+                source_error = "H1_HISTORY_UNVERIFIED"
+            if source_error:
+                self.last_signal_profile_error = source_error
+                return []
+        observer_errors = {}
+        try:
+            wave_snapshot = self.wave_engine.build_snapshot(self.interval,closed,degree="EXECUTION")
+        except Exception as exc:
+            wave_snapshot = None
+            observer_errors["wave_snapshot"] = type(exc).__name__
+        point_zero_confirmed = bool(getattr(wave_snapshot,"point_zero_confirmed",False))
+        point_zero_score = int(getattr(wave_snapshot,"point_zero_score",0) or 0)
 
         profile = os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
         profile_block_reason = _signal_profile_entry_block_reason(profile)
@@ -455,9 +536,8 @@ class FuturesWilliamsScanner:
                     tick_size=tick,
                     point_zero_confirmed=point_zero_confirmed,
                     point_zero_score=point_zero_score,
-                    require_point_zero_for_reversal=os.getenv(
-                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                    ).lower() == "true",
+                    # Point zero belongs to the research context, not TC2 admission.
+                    require_point_zero_for_reversal=False,
                 )
                 short_specs = extract_short_signal_specs(
                     symbol,
@@ -466,9 +546,8 @@ class FuturesWilliamsScanner:
                     tick_size=tick,
                     point_zero_confirmed=point_zero_confirmed,
                     point_zero_score=point_zero_score,
-                    require_point_zero_for_reversal=os.getenv(
-                        "REQUIRE_POINT_ZERO_FOR_WM1", "false"
-                    ).lower() == "true",
+                    # Point zero belongs to the research context, not TC2 admission.
+                    require_point_zero_for_reversal=False,
                 )
             else:
                 long_specs=[];short_specs=[]
@@ -490,17 +569,29 @@ class FuturesWilliamsScanner:
         self.latest_edition_observations[symbol]=observations
         raw_signals=list({s.signal_id:s for s in [*observed,*long_specs,*short_specs]}.values())
         trace_bars=wave_bars_from_dataframe(ind) if {"open","high","low","close","volume"}.issubset(ind.columns) else []
-        hierarchy=self.wave_hierarchy(symbol,frame)
+        try:
+            hierarchy = self.wave_hierarchy(symbol,frame)
+            hierarchy_payload = hierarchy.to_dict()
+        except Exception as exc:
+            hierarchy = None
+            observer_errors["wave_hierarchy"] = type(exc).__name__
+            hierarchy_payload = {"state":"ANALYSIS_FAILED","can_place_orders":False,
+                                 "error_type":type(exc).__name__}
         def last_value(name):
             col=next((n for n in (name+"_current",name+"_shifted",name) if n in ind),None)
             return float(ind[col].iloc[-1]) if col else float("nan")
-        self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
-            {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy.to_dict())
+        try:
+            self.decision_traces[symbol]=build_decision_trace(symbol,profile,trace_bars,int(time.time()*1000),
+                {name:last_value(name) for name in ("ao","ac","jaw","teeth","lips")},raw_signals,hierarchy_payload)
+            failed={o["profile"]:o for o in observations if o["state"]=="ANALYSIS_FAILED"}
+            for book in self.decision_traces[symbol]["books"]:
+                if book["profile"] in failed:
+                    book.update(state="ANALYSIS_FAILED",error_type=failed[book["profile"]]["error_type"])
+        except Exception as exc:
+            observer_errors["decision_trace"]=type(exc).__name__
+            self.decision_traces[symbol]={"state":"ANALYSIS_FAILED","books":[],"can_place_orders":False}
         self.decision_traces[symbol]["edition_observations"]=observations
-        failed={o["profile"]:o for o in observations if o["state"]=="ANALYSIS_FAILED"}
-        for book in self.decision_traces[symbol]["books"]:
-            if book["profile"] in failed:
-                book.update(state="ANALYSIS_FAILED",error_type=failed[book["profile"]]["error_type"])
+        self.decision_traces[symbol]["observer_errors"]=observer_errors
         observer=getattr(self,"signal_observer",None)
         if observer:
             try:observer(symbol,signal_facts(raw_signals,trace_bars,FRAME_MS[self.interval]))
@@ -513,8 +604,10 @@ class FuturesWilliamsScanner:
         )
         price = float(closed.iloc[-1]["close"] or 0)
         atr_pct = atr / price if price > 0 else 1.0
-        max_atr = float(os.getenv("MAX_ATR_PCT", "0.08"))
-        if atr <= 0 or atr_pct > max_atr:
+        # ATR percentage is diagnostic: no source-defined TC2 volatility cutoff.
+        # Keep malformed/nonpositive data rejected; the structural signal,
+        # protective stop, financial risk and exchange gates remain authoritative.
+        if not math.isfinite(atr) or atr <= 0 or not math.isfinite(price) or price <= 0:
             return []
 
         # STOP_MARKET is armed now but executes on a FUTURE contract-price
@@ -534,19 +627,24 @@ class FuturesWilliamsScanner:
                 self.last_signal_profile_error=history_error
                 return []
         self.last_signal_profile_error = None
-        long_htf, short_htf = self._htf(symbol)
-        # Rank only existing, valid Williams triggers. Divergence/wave count
-        # never manufacture an entry, order, stop, add-on, or exit on their own.
-        contexts = {
-            side: evaluate_direction(
-                side=side, snapshot=wave_snapshot,
-                last_indicator=ind.iloc[-1], closed_bar_count=len(ind),
-                htf_confirmed=htf_ok,
-            ).to_dict()
-            for side, htf_ok in (("LONG", long_htf), ("SHORT", short_htf))
-        }
+        try:
+            long_htf, short_htf = self._htf(symbol)
+        except Exception as exc:
+            long_htf, short_htf = False, False
+            observer_errors["higher_timeframe"] = type(exc).__name__
+        # Rank only existing, valid Williams triggers. Failure of an optional
+        # observation must not fabricate a signal or a direction preference.
+        contexts = {}
+        for side, htf_ok in (("LONG",long_htf),("SHORT",short_htf)):
+            try:
+                contexts[side]=evaluate_direction(side=side,snapshot=wave_snapshot,
+                    last_indicator=ind.iloc[-1],closed_bar_count=len(ind),
+                    htf_confirmed=htf_ok).to_dict()
+            except Exception as exc:
+                observer_errors["directional_context_"+side]=type(exc).__name__
+                contexts[side]={"side":side,"alignment":"UNKNOWN","score_adjustment":0.0,
+                    "calibration_status":"ANALYSIS_FAILED","can_place_orders":False}
         self.latest_directional_view[symbol] = contexts
-        hierarchy = self.wave_hierarchy(symbol, frame)
         out: list[FuturesCandidate] = []
 
         for side, specs, htf_ok in (
@@ -570,13 +668,21 @@ class FuturesWilliamsScanner:
             # TC2 three-price-bar setups are continuation add-ons and are still
             # surfaced to an existing campaign, but can never open a new one.
             initial_pool = [s for s in signal_pool if s.role == SignalRole.ENTRY]
-            # The earliest still-unconsumed presenting Wise Man initiates a
-            # campaign (TC2); each extractor already rejects consumed triggers.
-            signal = min(initial_pool or signal_pool, key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
-            correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
+            # Preserve every source candidate in all_signals. In a single
+            # direction the closest pending STOP dominates farther levels,
+            # regardless of which Wise Man formed first. The final source and
+            # exchange gates still reject consumed/crossed/invalid levels.
+            head = _tc2_pending_direction_head(initial_pool)
+            signal = head if head is not None else min(initial_pool or signal_pool,
+                key=lambda s: (s.signal_bar_time_ms, s.created_at_ms))
+            try:
+                correction = correction_entry_context(hierarchy, side, signal.signal_bar_time_ms, signal.signal_type.value)
+            except Exception as exc:
+                correction = {"allowed": False, "reason": "ANALYSIS_FAILED", "error_type": type(exc).__name__}
+            if signal.strategy_profile == TC2:
+                correction = dict(correction, observation_only=True)
             # Keep both-direction signals visible to the campaign
-            # manager. HTF confirmation is an initial-entry gate, not an
-            # exit/add-on visibility gate.
+            # manager. D1/H4 context is not an initial-entry, exit or add-on gate.
             age_bonus = max(
                 0.0,
                 20.0 - max(0, int((int(time.time() * 1000) - signal.signal_bar_time_ms) / 60000))
@@ -596,8 +702,8 @@ class FuturesWilliamsScanner:
             if signal.alligator_awake:
                 score += 10.0
             # Bounded, explainable, explicitly uncalibrated structure overlay.
-            # Existing signal expiry, HTF execution gates, protective stops,
-            # Futures Risk Engine and campaign state machine stay authoritative.
+            # Existing signal expiry, protective stops, Futures Risk Engine and
+            # campaign state machine stay authoritative; D1/H4 remain context only.
             score += float(contexts[side]["score_adjustment"])
             out.append(
                 FuturesCandidate(
@@ -610,9 +716,9 @@ class FuturesWilliamsScanner:
                     htf_confirmed=bool(htf_ok),
                     score=max(0.0, min(100.0, score)),
                     directional_context=contexts[side],
-                    trade_mode="CORRECTION" if correction["allowed"] else "TREND",
+                    trade_mode="CORRECTION" if signal.strategy_profile != TC2 and correction["allowed"] else "TREND",
                     correction_context=correction,
-                    wave_hierarchy=hierarchy.to_dict(),
+                    wave_hierarchy=hierarchy_payload,
                 )
             )
         return out
@@ -674,6 +780,17 @@ class FuturesWilliamsScanner:
             "wave_hierarchy": {s: r.to_dict() for s,r in self.wave_reports.items()},
         }
         return result
+
+
+def active_campaign_slot_count(open_symbols, pending_symbols):
+    """Count distinct campaign slots, including unfilled pending entries.
+
+    A pending add-on belongs to an already-counted open campaign and must not
+    consume a second slot. A pending initial entry is a campaign and does.
+    """
+    opened = {str(symbol).strip().upper() for symbol in open_symbols if str(symbol).strip()}
+    pending = {str(symbol).strip().upper() for symbol in pending_symbols if str(symbol).strip()}
+    return len(opened | pending)
 
 
 class FuturesWilliamsRuntime:
@@ -864,23 +981,114 @@ class FuturesWilliamsRuntime:
         if self.max_consecutive_losses and streak >= self.max_consecutive_losses:
             return False, f"MAX_CONSECUTIVE_LOSSES reached: {streak}"
 
-        equity = self._equity()
-        unrealized = 0.0
-        for symbol in {str(x["symbol"]).upper() for x in self.open_trades()}:
-            try:
-                unrealized += float(
-                    self.client.position(symbol).get("unRealizedProfit", 0) or 0
-                )
-            except Exception:
-                return False, f"Risk gate cannot value {symbol} unrealized PnL"
+        return self._daily_model_b_entry_guard()
 
-        return self.equity_breaker.check(
-            self.db,
-            equity,
-            None,
-            unrealized,
-            0.0,
-        )
+    def _daily_model_b_entry_guard(self):
+        """Use full UTC-midnight portfolio equity; never double-count fee/funding rows."""
+        try:
+            identity = account_fingerprint(self.client.api_key)
+            window_start = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            account = self.client.account()
+            account_window_end = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            _, _, current_equity = parse_model_b_account(account)
+
+            now_ms = account_window_end
+            day_start_ms = now_ms - (now_ms % UTC_DAY_MS)
+            today = datetime.fromtimestamp(day_start_ms / 1000, tz=timezone.utc).date().isoformat()
+            snapshot_key = f"futures_daily_risk_model_b_snapshot:{day_start_ms}"
+            stored = self.db.state_get(snapshot_key)
+            positions = None
+            if stored is None:
+                positions = self.client.position_risk()
+                window_end = int(time.time() * 1000) + int(getattr(self.client, "time_offset_ms", 0))
+            else:
+                window_end = account_window_end
+            if window_end < day_start_ms or window_start > window_end:
+                raise ValueError("FUTURES_MODEL_B_EXCHANGE_TIME_WINDOW_INVALID")
+
+            income_rows = self.client.income_history(day_start_ms, window_end)
+            income_summary = summarize_income_rows(
+                income_rows, day_start_ms=day_start_ms, end_ms=window_end,
+                snapshot_window_start_ms=window_start,
+                snapshot_window_end_ms=window_end,
+            )
+
+            if stored is None:
+                positions_by_symbol = {}
+                for row in positions:
+                    symbol = str(row.get("symbol", "")).strip().upper()
+                    if not symbol or symbol in positions_by_symbol:
+                        raise ValueError("FUTURES_MODEL_B_POSITION_IDENTITY_INVALID")
+                    positions_by_symbol[symbol] = row
+                symbols = set(DEFAULT_FUTURES_SYMBOLS)
+                symbols.update(positions_by_symbol)
+                symbols.update(income_summary["symbols"])
+                trades_by_symbol = {}
+                mark_prices = {}
+                for symbol in sorted(symbols):
+                    trades = self.client.user_trades_history(symbol, day_start_ms, window_end)
+                    trades_by_symbol[symbol] = trades
+                    position = positions_by_symbol.get(
+                        symbol, {"positionAmt": "0", "entryPrice": "0"}
+                    )
+                    midnight_qty, midnight_entry = reverse_position_at_midnight(
+                        position.get("positionAmt", "0"), position.get("entryPrice", "0"),
+                        trades, symbol=symbol, day_start_ms=day_start_ms,
+                        snapshot_window_start_ms=window_start,
+                        snapshot_window_end_ms=window_end,
+                    )
+                    if midnight_qty != 0:
+                        mark_rows = self.client.mark_price_klines(
+                            symbol, "1m", day_start_ms, day_start_ms + 59_999, 1
+                        )
+                        if len(mark_rows) != 1 or int(mark_rows[0][0]) != day_start_ms:
+                            raise ValueError(f"{symbol}: exact UTC-midnight Mark Price candle unavailable")
+                        mark_prices[symbol] = str(mark_rows[0][1])
+                snapshot = reconstruct_midnight_equity(
+                    account, positions, income_rows, trades_by_symbol, mark_prices,
+                    day_start_ms=day_start_ms,
+                    snapshot_window_start_ms=window_start,
+                    snapshot_window_end_ms=window_end,
+                    account_identity=identity, symbols=symbols,
+                )
+                snapshot_json = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+                with self.db.transaction():
+                    existing = self.db.state_get(snapshot_key)
+                    if existing is not None and existing != snapshot_json:
+                        raise ValueError("FUTURES_MODEL_B_BASELINE_WRITE_CONFLICT")
+                    self.db.state_set(snapshot_key, snapshot_json)
+            else:
+                try:
+                    snapshot = json.loads(stored)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("FUTURES_MODEL_B_BASELINE_JSON_INVALID") from exc
+                if not model_b_snapshot_is_valid(
+                    snapshot, day_start_ms=day_start_ms, account_identity=identity
+                ):
+                    raise ValueError("FUTURES_MODEL_B_BASELINE_IDENTITY_OR_SCHEMA_MISMATCH")
+
+            result = calculate_daily_risk_model_b(
+                snapshot["equity_at_midnight_usdt"],
+                current_equity,
+                income_summary["capital_flow"],
+            )
+            allowed, reason = self.equity_breaker.check_model_b(
+                self.db, current_equity, snapshot["equity_at_midnight_usdt"],
+                income_summary["capital_flow"], complete=True,
+                account_identity=identity,
+                expected_account_identity=snapshot["account_fingerprint"],
+                today=today,
+            )
+            if result["emergency_breaker_tripped"]:
+                # The native Android runtime owns exchange-side flattening. The
+                # Python shadow runtime durably latches the same 5% emergency
+                # condition and refuses all further exposure.
+                self.db.state_set("kill_switch_latched", "true")
+                self.db.state_set("entry_admission_paused", "true")
+                return False, "FUTURES_DAILY_EMERGENCY_BREAKER_5PCT_LATCHED"
+            return allowed, reason
+        except Exception as exc:
+            return False, "FUTURES_DAILY_MODEL_B_UNKNOWN: " + str(exc)
 
     def _filters(self, symbol):
         info = self.client.exchange_info(symbol)
@@ -1379,7 +1587,7 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("LONG entries are disabled by configuration")
             if intent.side == "SELL" and not self.config.allow_short:
                 raise RuntimeError("SHORT entries are disabled by configuration")
-            if campaign.tags.get("trade_mode") == "CORRECTION":
+            if campaign.tags.get("strategy_profile", TC2) != TC2 and campaign.tags.get("trade_mode") == "CORRECTION":
                 checked = correction_entry_context(self.scanner.wave_hierarchy(intent.symbol, refresh=True),
                     intent.side, int(campaign.tags.get("signal_bar_time_ms", 0)), campaign.current_signal_type)
                 prior = campaign.tags.get("correction_context", {})
@@ -1532,7 +1740,17 @@ class FuturesWilliamsRuntime:
         self.db.save_execution_event(intent.intent_id, "HALF_MARGIN_ASSESSED", proof)
         if not proof["allowed"]:
             raise RuntimeError(proof["blocker"])
-        return started
+        equity = min(first["equity"], second["equity"])
+        self._require_quote_risk(intent, equity)
+        return started, equity
+
+    def _require_quote_risk(self, intent, equity):
+        return self.db.require_campaign_quote_risk(
+            campaign_id=intent.campaign_id, reservation_id=intent.client_order_id,
+            expected_pending_quote=intent.risk_quote, equity_quote=equity,
+            portfolio_limit_pct=self.config.max_total_risk_pct,
+            campaign_limit_pct=min(self.config.campaign_risk_limit_pct, 0.006),
+            entry_limit_pct=0.0025, intent_id=intent.intent_id)
 
     def _submit(self, intent, fn, checks=None):
         if self.dry_run:
@@ -1544,15 +1762,30 @@ class FuturesWilliamsRuntime:
 
         new_exposure = intent.purpose.upper() in {"CAMPAIGN_ENTRY", "CAMPAIGN_ADD_ON"}
         margin_started = None
+        risk_equity = None
+        source_receipt = None
+        source_revision = None
+        source_digest = None
 
         def combined_checks(snapshot):
-            nonlocal margin_started
+            nonlocal margin_started, risk_equity, source_receipt, source_revision, source_digest
             self._futures_pre_submit_checks(intent)
             if checks is not None:
                 checks(snapshot)
             if new_exposure:
+                owner = self.engine.load_campaign(intent.campaign_id)
+                # Reuse the production source-policy gate. Legacy lifecycle
+                # tests explicitly replace that policy on their local exchange
+                # model; they must never acquire a real TC2 transport receipt.
+                profile = owner.tags.get("strategy_profile") if owner is not None else None
+                if not profile or new_exposure_blocker(profile):
+                    raise RuntimeError("TC2_CANONICAL_ADMISSION:EXPLICIT_TC2_OWNER_REQUIRED")
+                if profile == TC2:
+                    source_receipt = self._revalidate_tc2_signal(owner, intent)
+                    source_revision = owner.state_revision
+                    source_digest = tc2_receipt_digest(source_receipt)
                 try:
-                    margin_started = self._assess_half_margin(intent)
+                    margin_started, risk_equity = self._assess_half_margin(intent)
                 except Exception as failure:
                     # Any failed/malformed signed read here precedes the POST.
                     # Preserve that definite outcome even for unexpected parser
@@ -1578,20 +1811,35 @@ class FuturesWilliamsRuntime:
                 try:
                     self._require_entry_time()
                     latest = self.engine.load_campaign(intent.campaign_id)
-                    pending = (latest.tags.get("pending_signal") or {}).get("signal") if latest else None
+                    pending_record = (latest.tags.get("pending_signal") or {}) if latest else {}
+                    pending = pending_record.get("signal") if pending_record else None
                     if not pending or pending.get("signal_id") != intent.signal_id:
                         raise ValueError("SIGNAL_CHANGED_BEFORE_TRANSPORT")
                     transport_trigger = params.get("triggerPrice", params.get("stopPrice"))
                     if intent.order_type != "MARKET" and Decimal(str(transport_trigger)) != Decimal(str(latest.tags.get("pending_order_trigger"))):
                         raise ValueError("FUTURES_HALF_MARGIN_UNKNOWN:TRANSPORT_PLAN_CHANGED")
                     now = int(time.time()*1000) + int(getattr(self.client, "time_offset_ms", 0))
-                    expires = int(pending.get("expires_at_ms", 0))
-                    if expires > 0 and now >= expires:
+                    profile=pending.get("strategy_profile",TC2)
+                    signal_type=pending.get("signal_type",pending.get("type",pending.get("family","")))
+                    tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+                    structural=structural_fractal(pending.get("signal_type",signal_type),profile)
+                    expires=0 if tc2_no_age else int(pending.get("expires_at_ms",0))
+                    if expires>0 and now>=expires:
                         raise ValueError("SIGNAL_EXPIRED_BEFORE_TRANSPORT")
-                    if expires == 0 and structural_fractal(pending.get("signal_type"), pending.get("strategy_profile", TC2)):
-                        closed = int((pending.get("setup_context") or {}).get("h1_closed_at_ms", 0))
-                        if closed <= 0 or not 0 <= now-closed < 3_600_000:
-                            raise ValueError("H1_SNAPSHOT_EXPIRED_BEFORE_TRANSPORT")
+                    if tc2_no_age or (structural and expires==0):
+                        setup=pending.get("setup_context") or {}
+                        closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
+                        if closed<=0 or not 0<=now-closed<3_600_000:
+                            raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
+                    # All new-risk paths require an explicit TC2 receipt, even
+                    # if a damaged/legacy pending signal claims another edition.
+                    verify_tc2_transport_receipt(source_receipt, issued_digest=source_digest,
+                        campaign=latest, intent=intent, expected_revision=source_revision,
+                        params=params, now_ms=now)
+                    self.db.require_unconsumed_campaign_signal(intent.signal_id)
+                    # Re-read durable liabilities AFTER any rate/clock wait.
+                    # The signed equity lease is bounded by the margin fence.
+                    self._require_quote_risk(intent, risk_equity)
                 except Exception as failure:
                     raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:
@@ -1608,7 +1856,7 @@ class FuturesWilliamsRuntime:
             pre_submit_checks=combined_checks,
         )
         if not result.accepted:
-            if new_exposure and ("FUTURES_HALF_MARGIN" in result.reason or "exposure_not_submitted:" in result.reason):
+            if new_exposure and ("FUTURES_HALF_MARGIN" in result.reason or "exposure_not_submitted:" in result.reason or "TC2_CANONICAL_ADMISSION:" in result.reason):
                 self._retire_unsubmitted_exposure(intent, result.reason)
                 raise ExposureNotSubmittedError(f"Futures execution blocked: {result.reason}")
             raise RuntimeError(f"Futures execution blocked: {result.reason}")
@@ -1666,7 +1914,7 @@ class FuturesWilliamsRuntime:
         return initial_unit_risk_pct(cap,min(float(self.config.campaign_risk_limit_pct),
             float(self.config.max_total_risk_pct),0.006),min(float(self.config.risk_per_trade_pct),0.0025))
 
-    def _next_add_risk_pct(self, campaign):
+    def _next_add_risk_pct(self, campaign, equity=None):
         # Add-ons consume the same persisted campaign/portfolio risk budget;
         # this is a ceiling; pinned TC2 book quantities must fit it unchanged.
         cap = max(0.0, min(
@@ -1674,15 +1922,15 @@ class FuturesWilliamsRuntime:
             float(self.config.max_total_risk_pct),
             0.006,
         ))
-        equity = max(self._equity(), 1e-12)
+        equity = max(float(self._equity() if equity is None else equity), 1e-12)
         used = float(campaign.open_risk_quote or 0.0) + float(campaign.pending_risk_quote or 0.0)
         remaining = max(0.0, cap * equity - used)
         # Even when the legacy campaign engine asks for an add, keep its risk
         # bounded by one per-entry limit and the remaining campaign allocation.
         return min(remaining / equity, float(self.config.risk_per_trade_pct), 0.0025)
 
-    def _size_from_risk(self, symbol, trigger, stop, risk_pct):
-        equity = self._equity()
+    def _size_from_risk(self, symbol, trigger, stop, risk_pct, *, equity=None, available_margin=None):
+        equity = float(self._equity() if equity is None else equity)
         if not all(math.isfinite(value) for value in (equity, trigger, stop, risk_pct)):
             raise RuntimeError("non-finite equity/risk/price inputs")
         if risk_pct > self.config.risk_per_trade_pct + 1e-12:
@@ -1709,7 +1957,7 @@ class FuturesWilliamsRuntime:
         if not math.isfinite(configured_margin_fraction):
             raise RuntimeError("FUTURES_MARGIN_FRACTION_INVALID")
         max_margin_fraction = max(0.01, min(0.90, configured_margin_fraction))
-        available_margin = self._available_margin()
+        available_margin = float(self._available_margin() if available_margin is None else available_margin)
         if not math.isfinite(available_margin) or available_margin <= 0:
             raise RuntimeError("Fresh available Futures margin is invalid or exhausted")
         max_notional = min(equity * max_margin_fraction, available_margin * 0.95) * leverage
@@ -1779,6 +2027,30 @@ class FuturesWilliamsRuntime:
                 SignalJournal(self.db).decision(symbol,stage,event["blocker"] or str(result),event["observed_at_ms"],signal.signal_id,admitted)
         except Exception:
             pass  # Observation failure never turns a financial mutation into a retry.
+
+    def _revalidate_tc2_signal(self, campaign, intent):
+        """Refresh raw source evidence before every new TC2 exchange mutation."""
+        try:
+            self.db.require_unconsumed_campaign_signal(intent.signal_id)
+            pending = campaign.tags.get("pending_signal") or {}
+            payload = pending.get("signal") or {}
+            if (pending.get("state") != SignalState.VALIDATED.value or
+                    payload.get("signal_id") != intent.signal_id or
+                    campaign.tags.get("pending_order_client_id") != intent.client_order_id):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:OWNERSHIP")
+            raw = self.client.klines(intent.symbol, "1h",
+                limit=canonical_alligator_raw_history_limit())
+            now = int(time.time()*1000) + int(getattr(self.client,"time_offset_ms",0))
+            proof = verify_tc2_order(payload, symbol=intent.symbol, side=intent.side,
+                purpose=intent.purpose, raw=raw, now_ms=now, tick=self._tick(intent.symbol))
+            if Decimal(proof["trigger"]) != Decimal(str(campaign.tags["pending_order_trigger"])):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:ARMED_LEVEL_CHANGED")
+            if intent.purpose == "CAMPAIGN_ENTRY" and Decimal(proof["book_stop"]) != Decimal(str(campaign.initial_stop_price)):
+                raise RuntimeError("TC2_CANONICAL_ADMISSION:INITIAL_STOP_CHANGED")
+            self.db.save_execution_event(intent.intent_id, "TC2_FRESH_SOURCE_VERIFIED", proof)
+            return proof
+        except Exception as exc:
+            raise RuntimeError("TC2_CANONICAL_ADMISSION:" + str(exc)) from exc
 
     def _revalidate_ntd_signal(self,campaign,intent):
         """Recompute the pinned NTD dimension from fresh CLOSED H1 data.
@@ -1872,6 +2144,7 @@ class FuturesWilliamsRuntime:
             self.db.log_event("INFO", "futures_dry_run_entry_blocked", "DRY_RUN=true; conditional entry not submitted", {"symbol": candidate.symbol})
             return {"state": "DRY_RUN_BLOCKED", "symbol": candidate.symbol}
         signal = candidate.signal
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         if new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError(new_exposure_blocker(signal.strategy_profile))
         selected_profile=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()
@@ -1893,7 +2166,7 @@ class FuturesWilliamsRuntime:
         if signal.strategy_profile==COURSE and signal.signal_type not in {SignalType.COURSE_HUMP,SignalType.COURSE_THUMB,SignalType.COURSE_SQUAT}:
             raise RuntimeError("Course requires a Course initiating formation")
         symbol = signal.symbol
-        if candidate.trade_mode == "CORRECTION":
+        if signal.strategy_profile != TC2 and candidate.trade_mode == "CORRECTION":
             verified = correction_entry_context(self.scanner.wave_hierarchy(symbol, refresh=True),
                 candidate.side, signal.signal_bar_time_ms, signal.signal_type.value)
             if not verified["allowed"]:
@@ -1925,12 +2198,9 @@ class FuturesWilliamsRuntime:
             if stop <= trigger:
                 raise RuntimeError("SHORT protective stop is not above entry trigger")
 
-        if (
-            self.config.require_htf_confirmation and signal.strategy_profile!=NTD
-            and _requires_directional_htf_confirmation(signal.signal_type)
-            and not candidate.htf_confirmed
-        ):
-            raise RuntimeError("HTF confirmation gate blocked initial campaign")
+        # D1/H4 are market context and candidate-ranking inputs only.
+        # TC2 WM1, WM2 and WM3 are independent H1 entries; no independent
+        # higher-timeframe directional confirmation is a prerequisite.
 
         current = float(self.client.ticker_price(symbol).get("price", 0) or 0)
         if current <= 0:
@@ -1951,6 +2221,7 @@ class FuturesWilliamsRuntime:
             raise RuntimeError(entry_reason)
 
         equity = self._equity()
+        available_margin = self._available_margin()
         initial_risk_pct = min(
             self._initial_risk_pct(signal.strategy_profile),
             self._portfolio_available_risk_pct(equity),
@@ -1958,7 +2229,8 @@ class FuturesWilliamsRuntime:
         if initial_risk_pct <= 0:
             raise RuntimeError("portfolio risk budget exhausted")
         qty, risk_quote, notional = self._size_from_risk(
-            symbol, trigger, stop, initial_risk_pct
+            symbol, trigger, stop, initial_risk_pct,
+            equity=equity, available_margin=available_margin,
         )
         course_quantity=None
         course_context=None
@@ -1975,67 +2247,58 @@ class FuturesWilliamsRuntime:
                 raise RuntimeError("COURSE_FULL_INITIAL_QUANTITY_FILTER_CHANGED")
             ratio=admitted/qty;qty=admitted;risk_quote*=ratio;notional*=ratio
         self._validate_entry_leverage(symbol, qty, trigger, stop, signal.side)
-        campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
-        if reentry:
-            if not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
+        # Reservation, ownership claims and signal arming commit as one unit.
+        # No exchange POST can occur before this durable transaction succeeds.
+        cid = self._client_id("ENTRY")
+        with self.db.transaction():
+            if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
+                raise RuntimeError(f"{symbol}: pending entry already exists")
+            campaign = self.engine.create_campaign(signal, initial_risk_pct=initial_risk_pct)
+            if reentry:
+                campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
+            campaign.initial_stop_price = stop
+            campaign.current_stop_price = stop
+            campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+            campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
+            campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
+            campaign.tags["scanner_score_at_entry"] = float(candidate.score)
+            campaign.tags["trade_mode"] = "TREND" if signal.strategy_profile == TC2 else candidate.trade_mode
+            campaign.tags["strategy_profile"] = signal.strategy_profile
+            if signal.strategy_profile==NTD:
+                campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
+            campaign.tags["setup_context"] = dict(signal.setup_context)
+            if signal.strategy_profile==TC2:
+                campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
+                    "unit_quantity":None,"completed_quantities":[]}
+            if signal.strategy_profile==COURSE:
+                campaign.tags["course_initial_quantity"]=course_quantity
+                campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
+                    "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
+            campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
+            campaign.tags["correction_context"] = dict(candidate.correction_context)
+            campaign.pending_risk_quote = risk_quote
+            campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
+            campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
+            campaign.tags["pending_order_quantity"] = qty
+            campaign.tags["pending_risk_equity"]=equity
+            campaign.tags["pending_order_trigger"] = trigger
+            campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
+            campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
+            campaign.tags["pending_order_stop"] = stop
+            campaign.tags["pending_order_client_id"] = cid
+            if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
+            pending_signal = PendingSignal(signal=signal)
+            pending_signal.transition(SignalState.VALIDATED)
+            campaign.tags["pending_signal"] = pending_signal.to_dict()
+            if reentry and not self.db.try_claim_state("ntd_reentry_consumed:"+reentry.campaign_id,campaign.campaign_id):
                 raise RuntimeError("NTD profit cycle was already consumed")
-            campaign.tags["ntd_reentry_owner_id"]=reentry.campaign_id
-        campaign.initial_stop_price = stop
-        campaign.current_stop_price = stop
-        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        campaign.tags["directional_context_at_entry"] = dict(candidate.directional_context)
-        campaign.tags["scanner_score_at_entry"] = float(candidate.score)
-        campaign.tags["trade_mode"] = candidate.trade_mode
-        campaign.tags["strategy_profile"] = signal.strategy_profile
-        if signal.strategy_profile==NTD:
-            campaign.tags["ntd_cycle_basis"]="AUTHENTICATED_PROFITABLE_REENTRY" if reentry else "FIRST_EXTERNAL_FRACTAL"
-        campaign.tags["setup_context"] = dict(signal.setup_context)
-        if signal.strategy_profile==TC2:
-            campaign.tags["tc2_reverse_pyramid"]={"policy":TC2_PYRAMID_POLICY,
-                "unit_quantity":None,"completed_quantities":[]}
-        if signal.strategy_profile==COURSE:
-            campaign.tags["course_initial_quantity"]=course_quantity
-            campaign.tags["course_plan"]={"stage":"W1","origin_at":course_context["origin_at"],
-                "unit_is_actual":False,"policy":"COURSE_EXACT_CONTRACT_UNITS_V1"}
-        campaign.tags["pending_order_type"] = "MARKET" if market_close else "STOP_MARKET"
-        campaign.tags["correction_context"] = dict(candidate.correction_context)
-        campaign.pending_risk_quote = risk_quote
-        campaign.capital_reserved_quote = notional / self.config.leverage_for(symbol)
-        campaign.tags["futures_leverage"] = self.config.leverage_for(symbol)
-        campaign.tags["pending_order_quantity"] = qty
-        campaign.tags["pending_risk_equity"]=equity
-        campaign.tags["pending_order_trigger"] = trigger
-        campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        campaign.tags["signal_bar_time_ms"] = int(signal.signal_bar_time_ms)
-        campaign.tags["pending_order_stop"] = stop
-        campaign.tags["pending_order_client_id"] = self._client_id("ENTRY")
-        if signal.strategy_profile==COURSE:campaign.tags["course_initial_client_id"]=campaign.tags["pending_order_client_id"]
-        self.db.save_campaign(campaign)
-
-        cid = campaign.tags["pending_order_client_id"]
-        if not self.db.try_claim_state(f"entry_client_order_id:{symbol}", cid):
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.state = CampaignState.CLOSED
-            self.db.save_campaign(campaign)
-            raise RuntimeError(f"{symbol}: pending entry already exists")
-
-        pending_signal = PendingSignal(signal=signal)
-        pending_signal.transition(SignalState.VALIDATED)
-        campaign.tags["pending_signal"] = pending_signal.to_dict()
-        self.db.set_campaign_signal_state(signal.signal_id, SignalState.VALIDATED.value)
-        self.db.save_campaign(campaign)
-        try:
+            self.db.reserve_campaign_risk(
+                campaign, equity_quote=equity,
+                portfolio_limit_pct=self.config.max_total_risk_pct,
+            )
+            self.db.set_campaign_signal_state(signal.signal_id, SignalState.VALIDATED.value)
             self.engine.arm_entry(campaign, signal)
-        except Exception:
-            self.db.state_delete(f"entry_client_order_id:{symbol}")
-            campaign.pending_risk_quote = 0.0
-            campaign.capital_reserved_quote = 0.0
-            campaign.state = CampaignState.CLOSED
-            self.db.save_campaign(campaign)
-            raise
-        self._set_state(symbol, "ENTRY_PENDING")
+            self._set_state(symbol, "ENTRY_PENDING")
 
         intent = OrderIntent.new(
             symbol,
@@ -2117,6 +2380,7 @@ class FuturesWilliamsRuntime:
         admitted_key=f"campaign_signal_admitted:{campaign.campaign_id}:{signal.signal_id}"
         if self.db.state_get(admitted_key,""):
             raise RuntimeError("This campaign signal was already admitted; reconcile instead of resubmitting")
+        self.db.require_unconsumed_campaign_signal(signal.signal_id)
         profile=campaign.tags.get("strategy_profile",TC2)
         if new_exposure_blocker(profile) or new_exposure_blocker(signal.strategy_profile):
             raise RuntimeError("WILLIAMS_SOURCE_OBSERVATION_ONLY")
@@ -2165,8 +2429,9 @@ class FuturesWilliamsRuntime:
             upward=signal.side == "SELL",
         )
         equity = self._equity()
+        available_margin = self._available_margin()
         add_risk_pct = min(
-            self._next_add_risk_pct(campaign),
+            self._next_add_risk_pct(campaign, equity=equity),
             self._portfolio_available_risk_pct(equity),
         )
         if add_risk_pct <= 0:
@@ -2176,6 +2441,7 @@ class FuturesWilliamsRuntime:
             trigger,
             stop,
             add_risk_pct,
+            equity=equity, available_margin=available_margin,
         )
         if profile==TC2 and campaign.tags.get("tc2_reverse_pyramid") is not None:
             required=tc2_next_tranche(campaign.tags["tc2_reverse_pyramid"],
@@ -2205,8 +2471,6 @@ class FuturesWilliamsRuntime:
             campaign.tags["course_pending_add_target"]=target
             campaign.tags["course_pending_add_quantity"]=exact
         self._validate_entry_leverage(signal.symbol, qty, trigger, stop, signal.side)
-        if not self.db.try_claim_state(admitted_key,"true"):
-            raise RuntimeError("This campaign signal is already owned by another admission")
         campaign.tags["pending_order_quantity"] = qty
         campaign.tags["pending_order_stop"]=stop
         campaign.tags["pending_risk_equity"]=equity
@@ -2217,23 +2481,30 @@ class FuturesWilliamsRuntime:
         campaign.tags["pending_order_client_id"] = self._client_id("ADD")
         if profile==COURSE:campaign.tags["course_pending_add_client_id"]=campaign.tags["pending_order_client_id"]
         campaign.tags["last_signal_time_ms"] = max(int(campaign.tags.get("last_signal_time_ms",0)),int(signal.signal_bar_time_ms))
-        self.db.save_campaign(campaign)
         cid = campaign.tags["pending_order_client_id"]
-        if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
-            raise RuntimeError(f"{signal.symbol}: another pending order exists")
-
         add_signal = __import__("dataclasses").replace(signal, role=SignalRole.ADD_ON)
         pending_signal = PendingSignal(signal=add_signal)
         pending_signal.transition(SignalState.VALIDATED)
         campaign.tags["pending_signal"] = pending_signal.to_dict()
-        self.db.set_campaign_signal_state(add_signal.signal_id, SignalState.VALIDATED.value)
-        self.db.save_campaign(campaign)
-        self.engine.arm_add_on(
-            campaign,
-            add_signal,
-            risk_quote=risk_quote,
-            capital_reserved_quote=campaign.capital_reserved_quote,
-        )
+
+        # Cross-symbol risk reservation and both ownership claims are serialized
+        # by SQLite BEGIN IMMEDIATE before the add-on can reach Binance.
+        with self.db.transaction():
+            if not self.db.try_claim_state(admitted_key,"true"):
+                raise RuntimeError("This campaign signal is already owned by another admission")
+            if not self.db.try_claim_state(f"entry_client_order_id:{signal.symbol}", cid):
+                raise RuntimeError(f"{signal.symbol}: another pending order exists")
+            self.db.reserve_campaign_risk(
+                campaign, equity_quote=equity,
+                portfolio_limit_pct=self.config.max_total_risk_pct,
+            )
+            self.db.set_campaign_signal_state(add_signal.signal_id, SignalState.VALIDATED.value)
+            self.engine.arm_add_on(
+                campaign,
+                add_signal,
+                risk_quote=risk_quote,
+                capital_reserved_quote=campaign.capital_reserved_quote,
+            )
         intent = OrderIntent.new(
             signal.symbol,
             signal.side,
@@ -2419,13 +2690,15 @@ class FuturesWilliamsRuntime:
         cid = self._client_id("STOP")
         campaign.tags["pending_protection_client_id"] = cid
         campaign.tags["pending_protection_price"] = proposed
-        self.db.save_campaign_order(PendingOrderRecord(
-            order_id="", client_order_id=cid, symbol=symbol, side=side,
-            order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
-            stop_price=proposed, quantity=qty, campaign_id=campaign.campaign_id,
-            signal_id=campaign.current_signal_id,
-        ))
-        self.db.save_campaign(campaign)
+        # A stale snapshot must not leave a phantom pending protective order.
+        with self.db.transaction():
+            self.db.save_campaign(campaign)
+            self.db.save_campaign_order(PendingOrderRecord(
+                order_id="", client_order_id=cid, symbol=symbol, side=side,
+                order_type="STOP_MARKET", purpose="PROTECTION", status="PENDING",
+                stop_price=proposed, quantity=qty, campaign_id=campaign.campaign_id,
+                signal_id=campaign.current_signal_id,
+            ))
         intent = OrderIntent.new(
             symbol,
             side,
@@ -3273,30 +3546,94 @@ class FuturesWilliamsRuntime:
 
                 pending = campaign.tags.get("pending_signal") or {}
                 signal_payload = pending.get("signal") if isinstance(pending, dict) else {}
-                expires_at_ms = int(
-                    (signal_payload or {}).get("expires_at_ms", 0) or 0
-                )
+                profile=campaign.tags.get("strategy_profile",TC2)
+                signal_type=(signal_payload or {}).get("signal_type",(signal_payload or {}).get("type",(signal_payload or {}).get("family","")))
+                tc2_no_age=signal_age_ttl_disabled(signal_type,profile)
+                structural=structural_fractal((signal_payload or {}).get("signal_type",signal_type),profile)
+                no_age_ttl=tc2_no_age or structural
+                expires_at_ms=0 if tc2_no_age else int((signal_payload or {}).get("expires_at_ms",0) or 0)
                 try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000))
                 except Exception:pass
                 signal_at_ms=int((signal_payload or {}).get("signal_bar_time_ms",0) or 0)
-                if signal_at_ms>0 and not structural_fractal((signal_payload or {}).get("signal_type"),campaign.tags.get("strategy_profile",TC2)):
+                if signal_at_ms>0 and not no_age_ttl:
                     cap=signal_at_ms+5*3_600_000
                     expires_at_ms=min(expires_at_ms,cap) if expires_at_ms>0 else cap
                 outside_entry_time=not self.config.entry_time_policy.allows(int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                 invalid_correction=False
                 invalid_edition=new_exposure_blocker(getattr(campaign,"tags",{}).get("strategy_profile",TC2)) is not None
                 profile=campaign.tags.get("strategy_profile",TC2)
+                pending_invalidation_reason = None
+                family = (signal_payload or {}).get("signal_type")
+                signal_id = (signal_payload or {}).get("signal_id",campaign.current_signal_id)
+                prior_invalidation = campaign.tags.get("tc2_structural_invalidation") or {}
+                structurally_invalidated = (
+                    profile == TC2 and prior_invalidation.get("client_order_id") == cid
+                    and prior_invalidation.get("signal_id") == signal_id
+                    and prior_invalidation.get("state") == "INVALIDATED"
+                )
+                structural_event = None
+                if structurally_invalidated:
+                    invalid_edition = True
+                    pending_invalidation_reason = "H1_PARENT_STRUCTURAL_INVALIDATION"
                 if (status in {"NEW","PENDING_NEW"} and executed<=0 and not invalid_edition and conditional
-                        and structural_fractal((signal_payload or {}).get("signal_type"),profile)):
+                        and profile==TC2 and family in {"REVERSAL","SUPER_AO","FRACTAL","THREE_GREEN_BARS"}):
+                    try:
+                        observed_now=int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0))
+                        closed=closed_strategy_frame(fetch_klines(self.client,symbol,"1h",limit=220),"1h",observed_now)
+                        bars=wave_bars_from_dataframe(closed)
+                        contract=float(self.client.ticker_price(symbol).get("price",0) or 0)
+                        direction="LONG" if campaign.side=="BUY" else "SHORT"
+                        trigger=float((signal_payload or {}).get("trigger_price",0) or 0)
+                        stop=float((signal_payload or {}).get("protective_reference",0) or 0)
+                        event=pending_tc2_level_event(direction,signal_at_ms,trigger,stop,contract,bars,observed_now)
+                        teeth=float("nan")
+                        if family=="FRACTAL" and event.state=="WAITING":
+                            indicators=calculate_indicators(closed,canonical_indicator_config_from_env())
+                            # The forming H1 activation line uses the value
+                            # known five bars back; no forming OHLC is read.
+                            if len(indicators)>=5 and "teeth" in indicators:
+                                teeth=float(indicators["teeth"].iloc[-5])
+                        pending_invalidation_reason=pending_tc2_cancel_reason(event,family,direction,trigger,teeth)
+                        invalid_edition=pending_invalidation_reason is not None
+                        if event.state == "INVALIDATED":
+                            structural_event = event
+                        if event.state in {"UNVERIFIED","AMBIGUOUS","TRIGGERED"}:
+                            SignalJournal(self.db).decision(symbol,"PENDING_REVALIDATION",
+                                "ORDER_"+event.state+":"+event.basis,observed_now,
+                                (signal_payload or {}).get("signal_id",campaign.current_signal_id))
+                    except Exception:
+                        # Data/transport/observation failure is not proof of
+                        # invalidity. The signed order reconciliation continues.
+                        invalid_edition=False
+                        try:
+                            SignalJournal(self.db).decision(symbol,"PENDING_REVALIDATION",
+                                "PENDING_H1_EVIDENCE_UNAVAILABLE",int(time.time()*1000),
+                                (signal_payload or {}).get("signal_id",campaign.current_signal_id))
+                        except Exception:
+                            pass
+                elif (status in {"NEW","PENDING_NEW"} and executed<=0 and not invalid_edition and conditional
+                        and profile!=TC2 and structural_fractal((signal_payload or {}).get("signal_type"),profile)):
                     closed=closed_strategy_frame(fetch_klines(self.client,symbol,campaign.execution_timeframe,limit=220),
                         campaign.execution_timeframe,int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                     indicators=calculate_indicators(closed,canonical_indicator_config_from_env())
                     history_error=closed_h1_history_blocker(wave_bars_from_dataframe(closed),int(time.time()*1000)+int(getattr(self.client,"time_offset_ms",0)))
                     setups=extract_profile_signals(symbol,indicators,profile=profile,
                         side="LONG" if campaign.side=="BUY" else "SHORT",timeframe=campaign.execution_timeframe,tick_size=self._tick(symbol))
-                    invalid_edition=bool(history_error) or not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
+                    invalid_edition=not bool(history_error) and not any(s.signal_type.value==(signal_payload or {}).get("signal_type") and
                         math.isclose(s.trigger_price,float((signal_payload or {}).get("trigger_price",0)),rel_tol=1e-12) for s in setups)
-                if status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
+                if structural_event is not None and invalid_edition:
+                    campaign.tags["tc2_structural_invalidation"] = {
+                        "client_order_id": cid, "signal_id": signal_id,
+                        "state": "INVALIDATED", "known_at_ms": structural_event.known_at,
+                        "basis": structural_event.basis,
+                    }
+                    # Persist the formation fact before the irreversible exchange mutation.
+                    # The reservation remains held until signed order reconciliation.
+                    with self.db.transaction():
+                        self.db.set_campaign_signal_state(signal_id, SignalState.INVALIDATED.value)
+                        self.db.save_campaign(campaign)
+                    structurally_invalidated = True
+                if profile != TC2 and status in {"NEW","PENDING_NEW"} and executed<=0 and campaign.tags.get("trade_mode")=="CORRECTION":
                     proof=correction_entry_context(self.scanner.wave_hierarchy(symbol),campaign.side,
                         signal_at_ms,campaign.current_signal_type)
                     prior=campaign.tags.get("correction_context",{})
@@ -3308,7 +3645,7 @@ class FuturesWilliamsRuntime:
                     and executed <= 0
                     and (outside_entry_time or invalid_correction or invalid_edition or expires_at_ms>0 and int(time.time()*1000)>=expires_at_ms)
                 ):
-                    cancel_reason="WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else "FORMATION_INVALIDATED" if invalid_edition else "SIGNAL_EXPIRED"
+                    cancel_reason="H1_PARENT_STRUCTURAL_INVALIDATION" if structurally_invalidated else "WILLIAMS_SOURCE_OBSERVATION_ONLY" if new_exposure_blocker(profile) else "ENTRY_TIME_POLICY_BLOCKED" if outside_entry_time else "CORRECTION_CONTEXT_INVALIDATED" if invalid_correction else (pending_invalidation_reason or "FORMATION_INVALIDATED") if invalid_edition else "SIGNAL_EXPIRED"
                     order_id = order.get("orderId")
                     if order_id is None:
                         self._set_pending_signal_state(campaign, SignalState.RECONCILE_REQUIRED)
@@ -3320,7 +3657,9 @@ class FuturesWilliamsRuntime:
                         self._submit(cancel_intent,lambda:self.client.cancel_order(symbol,order_id=order_id))
                         order = self.client.get_order(symbol, orig_client_order_id=cid, conditional=conditional)
                         status = str(order.get("status", "")).upper()
-                        executed = float(order.get("executedQty", 0) or 0)
+                        executed = float(order.get("executedQty", order.get("cumQty", 0)) or 0)
+                        if status == "FILLED" and executed <= 0:
+                            raise RuntimeError("FILLED_WITHOUT_VERIFIED_EXECUTION_QUANTITY")
                         if status not in {"CANCELED", "EXPIRED", "EXPIRED_IN_MATCH", "FILLED"}:
                             raise RuntimeError("expired entry cancellation has no terminal exchange confirmation")
                         try:SignalJournal(self.db).order(symbol,(signal_payload or {}).get("signal_id",campaign.current_signal_id),order,int(time.time()*1000),cancel_reason)
@@ -3332,10 +3671,10 @@ class FuturesWilliamsRuntime:
                             f"{symbol}: expired conditional order cancellation ambiguous: {exc}"
                         ) from exc
                     if executed <= 0:
-                        self._set_pending_signal_state(campaign, SignalState.EXPIRED)
-                        self.db.set_campaign_signal_state(
-                            campaign.current_signal_id, SignalState.EXPIRED.value
-                        )
+                        final_signal_state = (SignalState.INVALIDATED if structurally_invalidated else
+                            SignalState.CANCELLED if profile == TC2 else SignalState.EXPIRED)
+                        self._set_pending_signal_state(campaign, final_signal_state)
+                        self.db.set_campaign_signal_state(signal_id, final_signal_state.value)
                         campaign.pending_risk_quote = 0.0
                         campaign.capital_reserved_quote = 0.0
                         campaign.tags.pop("pending_order_id", None)
@@ -3558,8 +3897,9 @@ class FuturesWilliamsRuntime:
                     continue
 
                 if status in {"CANCELED", "CANCELLED", "EXPIRED", "EXPIRED_IN_MATCH", "REJECTED"}:
-                    self._set_pending_signal_state(campaign, SignalState.CANCELLED)
-                    self.db.set_campaign_signal_state(campaign.current_signal_id, SignalState.CANCELLED.value)
+                    final_signal_state = SignalState.INVALIDATED if structurally_invalidated else SignalState.CANCELLED
+                    self._set_pending_signal_state(campaign, final_signal_state)
+                    self.db.set_campaign_signal_state(signal_id, final_signal_state.value)
                     campaign.pending_risk_quote = 0.0
                     campaign.capital_reserved_quote = 0.0
                     campaign.state = (
@@ -3714,11 +4054,21 @@ class FuturesWilliamsRuntime:
 
     def _protection_matches(self, campaign, order):
         """Require exact durable ownership, trigger, direction and full coverage."""
+        def explicit_bool(field, expected):
+            value = order.get(field)
+            if isinstance(value, bool):
+                return value is expected
+            if isinstance(value, str):
+                return value.strip().lower() == ("true" if expected else "false")
+            return False
+
         if (str(order.get("symbol", "")).upper() != campaign.symbol
-                or order.get("positionSide", "BOTH") != "BOTH"
+                or str(order.get("positionSide") or "").upper() != "BOTH"
+                or str(order.get("workingType") or "").upper() != "MARK_PRICE"
                 or str(order.get("side", "")).upper() != ("SELL" if campaign.side == "BUY" else "BUY")
                 or str(order.get("type", "")).upper() != "STOP_MARKET"
-                or str(order.get("status", "")).upper() != "NEW"):
+                or str(order.get("status", "")).upper() != "NEW"
+                or not explicit_bool("priceProtect", False)):
             return False
         cid = str(order.get("clientOrderId", ""))
         expected = {
@@ -3738,12 +4088,12 @@ class FuturesWilliamsRuntime:
             expected_stop = Decimal(str(expected[cid]))
             if not actual_stop.is_finite() or actual_stop <= 0 or actual_stop != expected_stop:
                 return False
-            if str(order.get("priceProtect", False)).lower() == "true":
-                return False
-            if str(order.get("closePosition", False)).lower() == "true":
+            if explicit_bool("closePosition", True):
                 return True
+            if not explicit_bool("closePosition", False):
+                return False
             quantity = Decimal(str(order.get("origQty", "0")))
-            return (str(order.get("reduceOnly", False)).lower() == "true"
+            return (explicit_bool("reduceOnly", True)
                     and quantity.is_finite() and quantity >= Decimal(str(campaign.position_qty)))
         except (ValueError, ArithmeticError):
             return False
@@ -3860,9 +4210,10 @@ class FuturesWilliamsRuntime:
             tags = getattr(campaign,"tags",{})
             if tags.get("trade_mode") == "CORRECTION":
                 proof = tags.get("correction_context",{})
-                if not correction_bounds_valid(proof):
+                bounds_valid = correction_bounds_valid(proof)
+                if not bounds_valid and profile != TC2:
                     raise RuntimeError("CORRECTION_PROOF_MISSING; retain exchange protection")
-                if not correction_price_allowed(proof,current_price):
+                if bounds_valid and not correction_price_allowed(proof,current_price):
                     tags["course_boundary_advisory" if profile==COURSE else "tc2_correction_boundary_advisory"] = {
                         "policy": "TC2_OPPOSITE_BOOK_TRIGGER_REQUIRED", "mark_price": current_price,
                         "observed_at_ms": int(time.time()*1000), "market_close_authorized": False}
@@ -3932,11 +4283,13 @@ class FuturesWilliamsRuntime:
                     if active and profit_blocker is None:
                         reason="OPPOSITE_WILLIAMS_LEVEL_TRIGGERED"
                         if hasattr(self,"scanner"):
-                            report=self.scanner.wave_hierarchy(symbol)
-                            ctx=correction_entry_context(report,opposing.side,
-                                opposing.signal_bar_time_ms,opposing.signal_type.value)
-                            if ctx["allowed"]:
-                                reason="OPPOSITE_WILLIAMS_TRIGGER_IN_HIGHER_CORRECTION"
+                            try:
+                                report=self.scanner.wave_hierarchy(symbol)
+                                ctx=correction_entry_context(report,opposing.side,
+                                    opposing.signal_bar_time_ms,opposing.signal_type.value)
+                                tags["tc2_opposing_correction_observation"] = dict(ctx, observation_only=True)
+                            except Exception as exc:
+                                tags["tc2_opposing_correction_observation"] = {"reason": "ANALYSIS_FAILED", "error_type": type(exc).__name__}
                         tags["tc2_book_exit_proof"]={
                             "reason":reason,"symbol":symbol,"observed_at_ms":now,
                             "opened_at_ms":int(tags.get("position_open_observed_at_ms",0) or 0),
@@ -4163,23 +4516,22 @@ class FuturesWilliamsRuntime:
                     self.db.log_event("WARNING", "futures_add_on_blocked", str(exc), {"symbol": symbol})
 
         active_symbols = {str(r["symbol"]).upper() for r in self.db.open_trades()}
-        unified=os.getenv("WILLIAMS_SIGNAL_PROFILE",UNIFIED).strip().upper()==UNIFIED
-        conflicts={symbol for symbol,rows in by_symbol.items()
-                   if unified and unified_direction_conflict(
-                       c.side for c in rows if c.signal.role==SignalRole.ENTRY)}
-        for symbol in sorted(conflicts):
-            self.db.log_event("WARNING","williams_unified_direction_conflict",
-                "Both LONG and SHORT entries present; no exposure admitted",{"symbol":symbol})
+        active_campaign_count = active_campaign_slot_count(active_symbols, pending_symbols)
+        initial_selection = {symbol: _select_tc2_initial_candidate(rows)
+                             for symbol, rows in by_symbol.items()}
         for candidate in candidates:
-            skip_reason=("OPPOSING_ENTRIES_BEFORE_CONTEXT" if candidate.symbol in conflicts else
+            selected, selection_reason = initial_selection[candidate.symbol]
+            selection_block = (selection_reason or "EARLIER_OR_HIGHER_RANKED_TC2_ENTRY_SELECTED"
+                               if candidate.signal.strategy_profile == TC2 and candidate is not selected else "")
+            skip_reason=(selection_block if selection_block else
                 "SYMBOL_RESERVED_BY_POSITION" if candidate.symbol in active_symbols else
-                "POSITION_LIMIT" if len(self.open_positions())>=self.max_open_positions else
+                "POSITION_LIMIT" if active_campaign_count>=self.max_open_positions else
                 "SYMBOL_RESERVED_BY_PENDING_ORDER" if candidate.symbol in pending_symbols or candidate.symbol in self._locks else
                 "EXCHANGE_RECONCILIATION_REQUIRED" if self.unresolved_symbols() else "")
             if skip_reason:
                 try:SignalJournal(self.db).decision(candidate.symbol,"PAIR_GATE",skip_reason,int(time.time()*1000),candidate.signal.signal_id)
                 except Exception:pass
-            if candidate.symbol in conflicts:
+            if selection_block:
                 continue
             if candidate.symbol in active_symbols:
                 continue
@@ -4190,7 +4542,7 @@ class FuturesWilliamsRuntime:
                 if valid:candidate=__import__("dataclasses").replace(candidate,signal=min(valid,key=lambda s:s.signal_bar_time_ms))
             if candidate.signal.role != SignalRole.ENTRY and not (candidate.signal.strategy_profile==NTD and self._ntd_reentry_source(candidate.signal)):
                 continue
-            if len(self.open_positions()) >= self.max_open_positions:
+            if active_campaign_count >= self.max_open_positions:
                 break
             if candidate.symbol in pending_symbols or candidate.symbol in self._locks:
                 continue
@@ -4209,6 +4561,7 @@ class FuturesWilliamsRuntime:
                     active_symbols.add(candidate.symbol)
                 if any(s == candidate.symbol for s, _ in self._pending_entries()):
                     pending_symbols.add(candidate.symbol)
+                active_campaign_count = active_campaign_slot_count(active_symbols, pending_symbols)
 
         self.recover()
 

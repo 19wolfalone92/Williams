@@ -213,7 +213,7 @@ class WilliamsUnifiedEvidenceTest {
         val reverse=signal("wm1",williamsTc2Profile,"REVERSAL")
             .put("signal_bar_time_ms",old)
         val stale=buildWilliamsUnifiedEvidence(scanner(signals=JSONArray().put(reverse)),status(),now)
-        assertFalse(stale.getJSONArray("by_symbol").getJSONObject(0)
+        assertTrue(stale.getJSONArray("by_symbol").getJSONObject(0)
             .getJSONArray("signals").getJSONObject(0).getBoolean("signal_time_eligible"))
     }
 

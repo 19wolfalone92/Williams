@@ -362,3 +362,26 @@ internal fun williamsTc2PendingCongestionRecheckEligible(
     (clientId.startsWith("W2H_") || clientId.startsWith("W2A_")) &&
     exchangeStatus.uppercase(java.util.Locale.US) in
         setOf("NEW","PENDING","WORKING","ACCEPTED")
+
+
+/** Production projection: preserve the historical classifier and its counterfactual
+ * decision for audit, but never confuse a hypothesis with a trade veto.
+ * Actual H1 data validity is checked by the independent source/execution gates.
+ */
+internal const val WILLIAMS_TC2_CONGESTION_OBSERVATION_POLICY="TC2_COMPLEX_CORRECTION_OBSERVATION_V1"
+internal fun williamsTc2CongestionObservation(
+    bars:List<WilliamsWaveBar>,now:Long,type:String,direction:String,trigger:Double
+):JSONObject {
+    val report=runCatching { williamsTc2CongestionEvidence(bars,now,type,direction,trigger) }
+        .getOrElse { JSONObject().put("state","OBSERVER_FAILED").put("reason_code","ANALYSIS_FAILED") }
+    val historical=williamsTc2CongestionAdmissionBlocker(report)
+    return report.put("legacy_policy",report.optString("policy",WILLIAMS_TC2_CONGESTION_POLICY))
+        .put("policy",WILLIAMS_TC2_CONGESTION_OBSERVATION_POLICY)
+        .put("legacy_would_block",historical!=null)
+        .put("legacy_blocker",historical ?: JSONObject.NULL)
+        .put("legacy_explanation_ru",report.optString("explanation_ru"))
+        .put("explanation_ru","Наблюдение: возможная сложная коррекция; классификация не является запретом входа. Условия сигнала, риск и биржевые проверки обязательны.")
+        .put("blocked",false).put("observation_only",true)
+        .put("can_place_orders",false).put("can_close",false).put("can_change_stops",false)
+        .put("completed_complex_flat_can_block",false).put("complex_structure_blocks_only_when_inside",false)
+}

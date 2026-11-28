@@ -69,3 +69,59 @@ class EquityCircuitBreaker:
             )
 
         return True, "ok"
+
+    def check_model_b(
+        self,
+        db,
+        current_equity_quote,
+        start_equity_quote,
+        net_external_flows_quote,
+        *,
+        complete=True,
+        account_identity=None,
+        expected_account_identity=None,
+        today=None,
+    ):
+        """Apply the shared Model B contract; wallet equity already includes fees/funding."""
+        from daily_risk_accounting import calculate_daily_risk_model_b, DailyRiskDataError
+
+        if not complete:
+            return False, "FUTURES_DAILY_BASELINE_INCOMPLETE"
+        if (not account_identity or not expected_account_identity
+                or str(account_identity) != str(expected_account_identity)):
+            return False, "FUTURES_DAILY_BASELINE_ACCOUNT_IDENTITY_MISMATCH"
+        try:
+            result = calculate_daily_risk_model_b(
+                start_equity_quote, current_equity_quote, net_external_flows_quote
+            )
+        except (DailyRiskDataError, TypeError, ValueError, OverflowError):
+            return False, "FUTURES_DAILY_MODEL_B_INPUTS_INVALID"
+
+        today = today or datetime.now(timezone.utc).date().isoformat()
+        try:
+            with db.transaction():
+                latched_day = db.state_get("daily_equity_loss_latched_day")
+                latched_model = db.state_get("daily_equity_loss_latched_model")
+                # A current equity recovery is not proof that the earlier
+                # intraday breach never occurred. Never clear a same-day or
+                # future-dated latch during migration.
+                if latched_day and latched_day >= today:
+                    return False, "daily Model B loss circuit breaker remains latched for this UTC day"
+                db.state_set("daily_risk_model_version", "2")
+                db.state_set("daily_risk_model_b_day", today)
+                db.state_set("daily_risk_model_b_start_equity", str(result["start_equity"]))
+                db.state_set("daily_risk_model_b_current_equity", str(result["current_equity"]))
+                db.state_set("daily_risk_model_b_external_flows", str(result["net_external_flows"]))
+                db.state_set("daily_risk_model_b_pnl", str(result["daily_pnl"]))
+                db.state_set("daily_risk_model_b_loss_pct", str(result["loss_pct"]))
+                if result["entry_blocked"]:
+                    db.state_set("daily_equity_loss_latched_day", today)
+                    db.state_set("daily_equity_loss_latched_model", "MODEL_B")
+                    return False, (
+                        "daily Model B equity loss circuit breaker tripped: "
+                        f"pnl={result['daily_pnl']}, loss_pct={result['loss_pct']}"
+                    )
+        except Exception:
+            return False, "FUTURES_DAILY_MODEL_B_PERSIST_FAILED"
+        return True, "ok"
+

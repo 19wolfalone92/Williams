@@ -21,12 +21,36 @@ internal fun williamsBookH1ClientId(symbol:String,signalId:String,retryGeneratio
     return "W2H_"+symbol.take(8)+"_"+digest
 }
 
+/** Terminal facts are held in durable execution intents, not a bounded chart journal. */
+internal fun williamsTc2TerminalSignalBlocker(intents:JSONArray,signalId:String):String? {
+    if(signalId.isBlank()) return null
+    val previous=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.filter {
+        it.optString("signal_id")==signalId &&
+        it.optString("strategy_profile",williamsTc2Profile)==williamsTc2Profile &&
+        it.optString("intent_role","ENTRY") in setOf("ENTRY","ADD_ON")
+    }
+    if(previous.any { row ->
+        row.optString("cancel_reason")=="H1_PARENT_STRUCTURAL_INVALIDATION" &&
+            row.optLong("cancel_attempt_at_ms")>0L
+    }) return "TC2_SIGNAL_STRUCTURALLY_INVALIDATED"
+    if(previous.any { row ->
+        row.optLong("fill_observed_at_ms")>0L ||
+        listOf("executed_qty","actual_entry_executed_qty").any {
+            (row.optString(it).toBigDecimalOrNull()?.signum() ?: 0)>0
+        } || row.optString("intent_role","ENTRY")=="ENTRY" &&
+            (row.optLong("position_open_observed_at_ms")>0L ||
+             (row.optString("confirmed_position_qty").toBigDecimalOrNull()?.signum() ?: 0)>0)
+    }) return "TC2_SIGNAL_ALREADY_EXECUTED_OR_FILL_UNRESOLVED"
+    return null
+}
+
 /** A new id is permitted only after exact terminal cancellation plus a fresh
  * exchange-flat observation. Unknown replies and any possible fill never retry.
  * The original signal identity remains pinned across all attempts. */
 internal fun williamsBookH1RetryGeneration(intents:JSONArray,parentId:String):Int? {
     val previous=(0 until intents.length()).mapNotNull { intents.optJSONObject(it) }.filter {
         it.optString("intent_role","ENTRY")=="ENTRY" && it.optString("signal_id")==parentId }
+    if(williamsTc2TerminalSignalBlocker(intents,parentId)!=null) return null
     if(previous.isEmpty()) return 0
     if(williamsH1ParentAlreadyFilled(intents,parentId)) return null
     val terminal=setOf("CANCELED","CANCELLED","EXPIRED","EXPIRED_IN_MATCH","REJECTED")
@@ -59,7 +83,7 @@ internal fun williamsBookH1Proof(
     .put("signal_bar_time_ms",signalAtMs)
     .put("known_at_ms",signalAtMs+WILLIAMS_H1_MS)
     .put("expires_at_ms",williamsH1SignalExpiry(signalAtMs,signalType,source))
-    .put("validity_policy",if(williamsStructuralFractal(signalType,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW")
+    .put("validity_policy",williamsBookH1ValidityPolicy(signalType,source))
     .put("book_trigger",bookTrigger).put("book_stop",bookStop)
     .put("intent_role",if(entryClientId.isBlank()) "ENTRY" else "ADD_ON")
     .put("entry_client_id",entryClientId).put("campaign_stop",campaignStop)
@@ -67,13 +91,18 @@ internal fun williamsBookH1Proof(
     .put("reentry_owner_id",reentryOwnerId)
     .put("tick",tick)
 
+private fun williamsBookH1ValidityPolicy(type:String,source:String):String =
+    if(source==williamsTc2Profile) "CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT"
+    else if(williamsStructuralFractal(type,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW"
+
 /** Structural, identity and price schema checks; NOT a replacement for
  * fresh H1 evidence from the native Runtime at the exchange mutation door.
  */
 internal fun williamsBookH1ProofBlocker(
     setup:String,direction:String,signalId:String,signalType:String,source:String,
     entry:Double,stop:Double,now:Long,entryClientId:String="",reentryOwnerId:String="",
-    executionSemantics:String="STOP_ENTRY",referenceClose:Double=0.0
+    executionSemantics:String="STOP_ENTRY",referenceClose:Double=0.0,
+    allowLegacyTc2PendingAgeProof:Boolean=false
 ):String? {
     val proof=runCatching { JSONObject(setup).getJSONObject("book_h1_entry") }.getOrNull()
         ?:return "H1_BOOK_PROOF_REQUIRED"
@@ -82,7 +111,16 @@ internal fun williamsBookH1ProofBlocker(
     val proofSource=proof.optString("source")
     val start=proof.optLong("signal_bar_time_ms")
     val known=proof.optLong("known_at_ms")
-    val expires=proof.optLong("expires_at_ms")
+    val expires=proof.optLong("expires_at_ms",-1L)
+    val policy=proof.optString("validity_policy")
+    val currentValidity=expires==williamsH1SignalExpiry(start,type,source) &&
+        policy==williamsBookH1ValidityPolicy(type,source)
+    // Only reconcile an already durable pending order with a legacy proof.
+    // New exchange admissions still require the current proof and fresh H1 evidence.
+    val legacyPendingValidity=allowLegacyTc2PendingAgeProof && source==williamsTc2Profile &&
+        (if(williamsStructuralFractal(type,source))
+            expires==0L && policy=="UNBROKEN_UNSUPERSEDED_FRACTAL"
+        else policy=="PROJECT_AGE_WINDOW" && (expires==0L || expires==start+5*WILLIAMS_H1_MS))
     val tick=proof.optDouble("tick",Double.NaN)
     val bookTrigger=proof.optDouble("book_trigger",Double.NaN)
     val bookStop=proof.optDouble("book_stop",Double.NaN)
@@ -114,8 +152,7 @@ internal fun williamsBookH1ProofBlocker(
         type!=signalType || type.isBlank() || campaignSignalDirection(type)!=direction ||
         proofSource!=source || source !in williamsSourceProfiles ||
         start<=0 || start%WILLIAMS_H1_MS!=0L ||
-        known!=start+WILLIAMS_H1_MS || expires!=williamsH1SignalExpiry(start,type,source) ||
-        proof.optString("validity_policy")!=(if(williamsStructuralFractal(type,source)) "UNBROKEN_UNSUPERSEDED_FRACTAL" else "PROJECT_AGE_WINDOW") ||
+        known!=start+WILLIAMS_H1_MS || !(currentValidity || legacyPendingValidity) ||
         !williamsH1SignalTimeEligible(start,type,source,now) ||
         !tick.isFinite() || tick<=0 ||
         listOf(bookTrigger,bookStop,entry,stop).any { !it.isFinite() || it<=0 } ||

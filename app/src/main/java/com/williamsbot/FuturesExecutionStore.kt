@@ -220,6 +220,15 @@ internal class FuturesExecutionStore(context: Context) :
             )
         )
 
+    /** One transaction for the displayed Model B financial measurements. */
+    @Synchronized
+    fun writeDailyRiskMetrics(lossFraction: String, pnl: String, externalFlows: String): Boolean =
+        writeStates(mapOf(
+            "futures_daily_loss_pct" to lossFraction,
+            "futures_daily_pnl_usdt" to pnl,
+            "futures_daily_capital_flow_usdt" to externalFlows
+        ))
+
     private fun writeStates(values: Map<String, String>): Boolean {
         return try {
             val db = writableDatabase

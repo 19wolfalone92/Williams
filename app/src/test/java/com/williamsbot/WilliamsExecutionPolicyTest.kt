@@ -41,6 +41,16 @@ class WilliamsExecutionPolicyTest {
             williamsOppositeExitBidAskBlocker("UNKNOWN",100.0,101.0,101.1))
     }
 
+    @Test fun activeTc2PolicyUChecksExecutableBidAskAndKeepsPolicyTOutOfProduction() {
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+            williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.25,100.20,100.30))
+        assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+            williamsTc2UserPolicyOppositeExitBlocker("SHORT",100.0,99.75,99.70,99.80))
+        assertNull(williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.65,100.60,100.70))
+        assertEquals("TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED",
+            williamsTc2UserPolicyOppositeExitBlocker("LONG",100.0,100.0,101.0,100.0))
+    }
+
     @Test fun oldFractalNeedsCurrentStructuralProofInsteadOfAnAgeCutoff() {
         val at=480000L*h;val now=at+105*h
         for((direction,type,entry,stop) in listOf(
@@ -50,8 +60,14 @@ class WilliamsExecutionPolicyTest {
             assertNull(williamsBookH1ProofBlocker(JSONObject().put("book_h1_entry",proof).toString(),
                 direction,"f",type,williamsTc2Profile,entry.toDouble(),stop.toDouble(),now))
         }
-        assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsTc2Profile,now))
+        for(type in listOf("REVERSAL","SUPER_AO","FRACTAL","THREE_GREEN_BARS")) {
+            assertEquals(0L,williamsH1SignalExpiry(at,type,williamsTc2Profile))
+            assertTrue(williamsH1SignalTimeEligible(at,type,williamsTc2Profile,now))
+        }
+        assertEquals(0L,williamsH1SignalExpiry(at,"FRACTAL",williamsNtdProfile))
+        assertFalse(williamsSignalAgeTtlDisabled("FRACTAL",williamsNtdProfile))
         assertTrue(williamsH1SignalTimeEligible(at,"FRACTAL",williamsNtdProfile,now))
+        assertFalse(williamsH1SignalTimeEligible(at,"REVERSAL",williamsNtdProfile,now))
         val bars=(0..44).map { i -> WilliamsWaveBar(at+i*h,100.0,101.0,99.0,100.0,1.0) }
         assertNull(williamsClosedH1HistoryBlocker(bars,at+45*h+1000))
         assertEquals("H1_SNAPSHOT_STALE",williamsClosedH1HistoryBlocker(bars,at+46*h+1000))
@@ -159,4 +175,23 @@ class WilliamsExecutionPolicyTest {
         assertTrue(williamsInitialHigherFrameHistoryRequired(williamsUnifiedProfile))
     }
 
+
+    @Test fun chronologicalEntrySelectionDoesNotPreferLongOrShortOnAnExactTie() {
+        data class Candidate(val id:String,val side:String,val at:Long,val context:Int,val rank:Double)
+        fun select(vararg rows:Candidate)=williamsSelectChronologicalEntry(rows.toList(),
+            {it.at},{it.context},{it.rank},{it.side},{it.id})
+        for((side,other) in listOf("LONG" to "SHORT","SHORT" to "LONG")) {
+            val old=Candidate("a",side,10L,1,1.0)
+            val later=Candidate("b",other,20L,2,100.0)
+            assertEquals(old,select(later,old).first)
+            assertEquals(old,select(old,later).first)
+            val exact=Candidate("c",other,10L,1,1.0)
+            assertNull(select(old,exact).first)
+            assertNull(select(exact,old).first)
+            assertEquals("SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED",select(exact,old).second)
+            val ranked=exact.copy(context=2)
+            assertEquals(ranked,select(old,ranked).first)
+            assertEquals(ranked,select(ranked,old).first)
+        }
+    }
 }

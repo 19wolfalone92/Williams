@@ -1,6 +1,9 @@
 package com.williamsbot
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.json.JSONArray
 import org.json.JSONObject
@@ -106,4 +109,48 @@ class DailyRiskBaselineTest {
             JSONArray().put(JSONObject.NULL), now
         ))
     }
+    @Test
+    fun walletBaselineReconstructionExcludesCurrentUnrealizedWithCompleteIncomeLedger() {
+        val incomeRows = JSONArray().put(JSONObject()
+            .put("asset", "USDT")
+            .put("symbol", "BTCUSDT")
+            .put("incomeType", "REALIZED_PNL")
+            .put("income", "-1.25")
+            .put("time", 1_792_501_000_000L))
+        val decision = selectFuturesDailyBaseline(
+            currentEquityUsdt = 5_098.75,
+            unrealizedPnlUsdt = 100.0,
+            incomeRows = incomeRows,
+            hasOpenOrUnknownPositionOrPendingExecution = true
+        )
+        assertNotNull(decision)
+        assertEquals(5_000.0, decision!!.baselineEquityUsdt, 1e-8)
+        assertEquals("RECONSTRUCTED_FROM_FUTURES_INCOME", decision.source)
+        assertNull(selectFuturesDailyBaseline(
+            currentEquityUsdt = 5_098.75,
+            unrealizedPnlUsdt = null,
+            incomeRows = incomeRows,
+            hasOpenOrUnknownPositionOrPendingExecution = true
+        ))
+    }
+
+    @Test
+    fun flatAccountCanStillReconstructUtcBaselineFromIncomeRows() {
+        val incomeRows = JSONArray().put(JSONObject()
+            .put("asset", "USDT")
+            .put("symbol", "BTCUSDT")
+            .put("incomeType", "REALIZED_PNL")
+            .put("income", "-1.25")
+            .put("time", 1_792_501_000_000L))
+        val decision = selectFuturesDailyBaseline(
+            currentEquityUsdt = 4_998.75,
+            unrealizedPnlUsdt = 0.0,
+            incomeRows = incomeRows,
+            hasOpenOrUnknownPositionOrPendingExecution = false
+        )
+        assertNotNull(decision)
+        assertEquals(5_000.0, decision!!.baselineEquityUsdt, 1e-8)
+        assertEquals("RECONSTRUCTED_FROM_FUTURES_INCOME", decision.source)
+    }
+
 }

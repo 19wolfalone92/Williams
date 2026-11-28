@@ -8,6 +8,7 @@ import okhttp3.RequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.math.BigDecimal
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.crypto.Mac
@@ -347,6 +348,35 @@ internal class BinanceUsdMFuturesTestnetAdapter(
         return value
     }
 
+    /** Official historical Mark Price at the exact open of the UTC-midnight 1m candle. */
+    fun markPriceAtUtcDayStart(symbol: String, utcDayStartMs: Long): BigDecimal {
+        requireSymbol(symbol)
+        require(utcDayStartMs >= 0L && utcDayStartMs % 86_400_000L == 0L) {
+            "Mark Price baseline must be an exact UTC-day boundary"
+        }
+        val rows = JSONArray(requestRaw("GET", "/fapi/v1/markPriceKlines", mapOf(
+            "symbol" to symbol, "interval" to "1m",
+            "startTime" to utcDayStartMs.toString(),
+            "endTime" to (utcDayStartMs + 59_999L).toString(),
+            "limit" to "1"
+        ), signed = false))
+        check(rows.length() == 1) { "$symbol: UTC-midnight Mark Price candle is missing or ambiguous" }
+        val candle = rows.optJSONArray(0)
+            ?: throw IOException("$symbol: malformed UTC-midnight Mark Price candle")
+        val openTime = candle.optLong(0, Long.MIN_VALUE)
+        val open = candle.optString(1).toBigDecimalOrNull()
+        val high = candle.optString(2).toBigDecimalOrNull()
+        val low = candle.optString(3).toBigDecimalOrNull()
+        val close = candle.optString(4).toBigDecimalOrNull()
+        val closeTime = candle.optLong(6, Long.MIN_VALUE)
+        check(openTime == utcDayStartMs && closeTime in utcDayStartMs..(utcDayStartMs + 59_999L) &&
+            open != null && high != null && low != null && close != null &&
+            open > BigDecimal.ZERO && high >= maxOf(open, close) &&
+            low <= minOf(open, close) && low > BigDecimal.ZERO
+        ) { "$symbol: UTC-midnight Mark Price candle failed identity/OHLC validation" }
+        return open
+    }
+
     /** Last traded price is the basis of ordinary Futures OHLC and book entry
      * breakouts. Never substitute the independent liquidation MARK index. */
     fun contractPrice(symbol: String): Double {
@@ -529,6 +559,59 @@ internal class BinanceUsdMFuturesTestnetAdapter(
             ),
             signed = true
         ))
+    }
+
+
+    /** Complete fill history for one symbol/day; a saturated 1000-row page is recursively split. */
+    fun completeUserTrades(symbol: String, startTime: Long, endTime: Long): JSONArray {
+        requireSymbol(symbol)
+        require(startTime >= 0L && endTime >= startTime &&
+            endTime - startTime <= 7L * 24L * 60L * 60L * 1000L)
+        val budget = UserTradesReadBudget()
+        val rows = readUserTradesRange(symbol, startTime, endTime, 0, budget)
+        val seen = hashSetOf<Long>()
+        return JSONArray().apply {
+            rows.sortedWith(compareBy<JSONObject> { it.optLong("time", Long.MIN_VALUE) }
+                .thenBy { it.optLong("id", Long.MIN_VALUE) }).forEach { row ->
+                val id = row.optLong("id", -1L)
+                check(id > 0L && seen.add(id) && row.optString("symbol") == symbol) {
+                    "$symbol: duplicate or mismatched Futures userTrades receipt"
+                }
+                put(row)
+            }
+        }
+    }
+
+    private data class UserTradesReadBudget(var requests: Int = 0, var rows: Int = 0)
+
+    private fun readUserTradesRange(
+        symbol: String, startTime: Long, endTime: Long, depth: Int,
+        budget: UserTradesReadBudget
+    ): List<JSONObject> {
+        require(depth <= 40) { "$symbol: userTrades pagination depth exceeded" }
+        budget.requests++
+        if (budget.requests > 64) throw IOException("$symbol: userTrades exceeded 64-request completeness budget")
+        val response = userTrades(symbol, startTime, endTime, 1000)
+        if (response.length() < 1000) {
+            budget.rows += response.length()
+            if (budget.rows > 32_000) throw IOException("$symbol: userTrades exceeded 32000-row completeness budget")
+            return (0 until response.length()).map { index ->
+                val row = response.optJSONObject(index)
+                    ?: throw IOException("$symbol: malformed userTrades row $index")
+                val stamp = row.optLong("time", Long.MIN_VALUE)
+                val id = row.optLong("id", -1L)
+                if (row.optString("symbol") != symbol || stamp !in startTime..endTime || id <= 0L)
+                    throw IOException("$symbol: userTrades row identity/time is invalid")
+                row
+            }
+        }
+        if (startTime >= endTime)
+            throw IOException("$symbol: userTrades saturated at millisecond resolution; completeness unknown")
+        val mid = startTime + (endTime - startTime) / 2L
+        if (mid < startTime || mid >= endTime)
+            throw IOException("$symbol: cannot safely subdivide saturated userTrades interval")
+        return readUserTradesRange(symbol, startTime, mid, depth + 1, budget) +
+            readUserTradesRange(symbol, mid + 1L, endTime, depth + 1, budget)
     }
 
     /**

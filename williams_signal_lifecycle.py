@@ -4,7 +4,8 @@ import json
 import re
 from math import isfinite
 from threading import RLock
-from williams_execution_policy import h1_signal_expiry
+from williams_execution_policy import h1_signal_expiry, signal_age_ttl_disabled, structural_fractal
+from williams_edition_rules import TC2
 
 
 def safe_reason(reason):
@@ -40,9 +41,15 @@ def signal_lifecycle(signal,owner,now,snapshot_at,current):
         if 'UNKNOWN' in status or status in {'TRIGGERED','PENDING'}:return 'PENDING_UNVERIFIED'
     known=signal.get('known_at_ms',0)
     if known<=0 or known>now:return 'DETECTED'
-    expiry=signal.get('expires_at_ms',signal.get('signal_bar_time_ms',0)+18_000_000)
+    signal_type=signal.get('type',signal.get('family',signal.get('signal_type','')))
+    profile=signal.get('strategy_profile',TC2)
+    no_age_ttl=signal_age_ttl_disabled(signal_type,profile)
+    expiry=0 if no_age_ttl else signal.get('expires_at_ms',signal.get('signal_bar_time_ms',0)+18_000_000)
     if expiry and expiry<=now:return 'EXPIRED'
-    if not current:return 'INVALIDATED'
+    # A missing row in the next scan is not structural invalidation proof.
+    # The causal H1 parent lifecycle records INVALIDATED only with a price-level
+    # trigger/invalidation or a confirmed replacement event.
+    if not current:return 'NOT_REEMITTED'
     if snapshot_at<=0 or now<snapshot_at or now-snapshot_at>120_000:return 'DETECTED'
     return 'VALID'
 
@@ -54,6 +61,11 @@ def signal_facts(signals,bars,frame_ms):
         formation=bars[i].t if 0<=i<len(bars) else s.signal_bar_time_ms
         def candle(bar):return [bar.t,bar.o,bar.h,bar.l,bar.c,bar.v] if bar is not None else None
         confirmation=next((b for b in bars if b.t==s.signal_bar_time_ms),None)
+        setup_context=dict(s.setup_context or {})
+        if bars:
+            setup_context["h1_closed_at_ms"]=int(bars[-1].t)+int(frame_ms)
+        no_age_ttl=(signal_age_ttl_disabled(s.signal_type.value,s.strategy_profile)
+            or structural_fractal(s.signal_type.value,s.strategy_profile))
         facts.append(dict(formation_candle=candle(bars[i] if 0<=i<len(bars) else confirmation),
             confirmation_candle=candle(confirmation),teeth_at_detection=s.teeth_at_detection if isfinite(s.teeth_at_detection) else None,
             signal_id=s.signal_id,family=s.signal_type.value,type=s.signal_type.value,
@@ -61,9 +73,10 @@ def signal_facts(signals,bars,frame_ms):
             signal_bar_time_ms=s.signal_bar_time_ms,known_at_ms=s.signal_bar_time_ms+frame_ms,
             formation_at_ms=formation,formation_time_basis='SOURCE_PIVOT_OR_BASE' if formation!=s.signal_bar_time_ms else 'SIGNAL_BAR',
             expires_at_ms=h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,s.strategy_profile),
-            validity_policy='UNBROKEN_UNSUPERSEDED_FRACTAL' if h1_signal_expiry(s.signal_bar_time_ms,s.signal_type,s.strategy_profile)==0 else 'PROJECT_AGE_WINDOW',
+            validity_policy=('CAUSAL_TC2_UNTIL_TRIGGER_INVALIDATION_OR_REPLACEMENT' if s.strategy_profile==TC2
+                else 'UNBROKEN_UNSUPERSEDED_FRACTAL' if no_age_ttl else 'PROJECT_AGE_WINDOW'),
             trigger=s.trigger_price,protective_stop=s.protective_reference,strategy_profile=s.strategy_profile,
-            execution_semantics=s.execution_semantics,setup_context=dict(s.setup_context)))
+            execution_semantics=s.execution_semantics,setup_context=setup_context))
     return facts
 
 
@@ -84,11 +97,20 @@ class SignalJournal:
             data=self._load(symbol);known={s['signal_id']:s for s in data['signals']};ids={s['signal_id'] for s in signals}
             for s in known.values():
                 if s.get('last_seen_at_ms')==data.get('snapshot_at_ms') and s['signal_id'] not in ids:
-                    self._event(data,s,'EXPIRED' if s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'INVALIDATED','FORMATION','FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN',now)
+                    no_age_ttl=signal_age_ttl_disabled(s.get('type',s.get('family',s.get('signal_type',''))),s.get('strategy_profile',TC2))
+                    state='EXPIRED' if not no_age_ttl and s['expires_at_ms']>0 and s['expires_at_ms']<=now else 'NOT_REEMITTED'
+                    self._event(data,s,state,'FORMATION','NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF',now)
             for source in signals:
-                s=dict(deepcopy(source),first_seen_at_ms=known.get(source['signal_id'],{}).get('first_seen_at_ms',now),last_seen_at_ms=now)
+                prior=known.get(source['signal_id'],{})
+                s=dict(deepcopy(source),first_seen_at_ms=prior.get('first_seen_at_ms',now),last_seen_at_ms=now)
+                # Re-emission is market evidence, not an exchange observation.
+                # Preserve the last order-specific signed observation across
+                # every scan and SQLite restart; otherwise FILLED/CANCELLED
+                # silently regresses to VALID and pending proof disappears.
+                if 'exchange_observation' in prior:
+                    s['exchange_observation']=deepcopy(prior['exchange_observation'])
                 self._event(data,s,'DETECTED','FORMATION','FORMATION_OBSERVED',now)
-                state=signal_lifecycle(s,None,now,now,True)
+                state=signal_lifecycle(s,s.get('exchange_observation'),now,now,True)
                 self._event(data,s,state,'CONFIRMATION','CLOSED_BAR_FORMATION_CONFIRMED' if state=='VALID' else state,now)
                 if not policy.allows(now):self._event(data,s,'BLOCKED','ENTRY_TIME','ENTRY_TIME_POLICY_BLOCKED: '+json.dumps(policy.to_dict(),sort_keys=True),now,'PAIR_GATE')
                 known[s['signal_id']]=s

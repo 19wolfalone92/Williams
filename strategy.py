@@ -1,6 +1,40 @@
+import math
 import os
 import numpy as np
 import pandas as pd
+
+
+# R49: 500 CLOSED bars are the conservative Alligator warmup. The 500-bar
+# threshold was independently reproduced on the 15-symbol H1 sample; the
+# geometric bound below applies to the same 13/8/5 SMMA and 8/5/3 shifts on
+# any timeframe. It does not widen tolerances or add a market filter.
+CANONICAL_ALLIGATOR_WARMUP_BARS = 500
+CANONICAL_ALLIGATOR_RAW_BARS = CANONICAL_ALLIGATOR_WARMUP_BARS + 1  # final forming candle
+CANONICAL_ALLIGATOR_ABS_TOLERANCE = 1e-8
+
+
+def smma_initialization_error_bound(price_range, period, history_bars, displacement=0):
+    """Upper bound for a different valid SMMA seed after the shifted window.
+
+    Both valid initial SMMA states lie within the historical input price range.
+    Each recursive update multiplies their difference by (period-1)/period.
+    The visible Alligator value is displaced, so only updates before that
+    displayed index count toward convergence.
+    """
+    span = float(price_range)
+    period = int(period)
+    history_bars = int(history_bars)
+    displacement = int(displacement)
+    if not math.isfinite(span) or span < 0 or period <= 0 or history_bars < 0 or displacement < 0:
+        raise ValueError("invalid SMMA convergence-bound input")
+    updates = history_bars - period - displacement
+    if updates < 0:
+        return float("inf")
+    if updates == 0:
+        return span
+    if period == 1:
+        return 0.0
+    return span * ((period - 1) / period) ** updates
 
 
 def smma(series, period):

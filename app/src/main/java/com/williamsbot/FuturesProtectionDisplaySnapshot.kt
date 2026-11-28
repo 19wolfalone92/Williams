@@ -13,7 +13,9 @@ internal data class FuturesPositionDisplayEnvelope(
 internal data class FuturesProtectionDisplaySnapshot(
     val positions: JSONArray,
     val observations: JSONArray,
-    val observedAtMs: Long
+    val observedAtMs: Long,
+    val protectionSnapshotComplete: Boolean = true,
+    val failedSymbols: Set<String> = emptySet()
 )
 
 /** Signed GETs only, independent of the slow campaign/history reconciliation.
@@ -37,39 +39,47 @@ internal fun readFuturesProtectionDisplaySnapshot(
     val startedAt = clock()
     check(startedAt > 0 && ttlMs > 0) { "Invalid signed display snapshot clock" }
     fun liveRows(rows: JSONArray): Map<String, JSONObject> {
-        validateFuturesPositionSnapshot(rows)
         val live = linkedMapOf<String, JSONObject>()
+        val identities = mutableSetOf<Pair<String,String>>()
         for (i in 0 until rows.length()) {
-            val row = rows.getJSONObject(i)
-            val quantity = row.getString("positionAmt").toBigDecimal()
+            val row = rows.optJSONObject(i)
+                ?: throw IllegalStateException("Malformed signed Futures position row")
+            val quantity = row.optString("positionAmt").toBigDecimalOrNull()
+                ?: throw IllegalStateException("Malformed signed Futures position amount")
             if (quantity.signum() == 0) continue
-            val symbol = row.getString("symbol")
+            val symbol = row.optString("symbol").uppercase()
             val entry = row.optString("entryPrice").toBigDecimalOrNull()
-            check(symbol in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS &&
-                row.optString("positionSide", "BOTH") == "BOTH" &&
-                entry != null && entry.signum() > 0 && live.put(symbol, row) == null) {
+            val side = row.optString("positionSide")
+            check(symbol.isNotBlank() && side == "BOTH" &&
+                identities.add(symbol to side) && entry != null && entry.signum() > 0) {
                 "Unverified Futures display position identity/entry"
             }
+            live[symbol] = row
         }
         return live
     }
     val before = liveRows(readPositions())
-    // The global no-symbol endpoint carries Binance request weight 40 and can
-    // return a different view from the symbol-scoped protection audit.
-    // Query EXACTLY the live symbols from the first signed position read:
-    // no order identity, symbol or malformed payload is silently discarded.
+    // Read each live symbol independently. One failed symbol-scoped GET must
+    // not hide signed protection evidence for the other open positions.
     val algos = JSONArray()
+    val algoReadFailures = linkedMapOf<String,String>()
     for (symbol in before.keys) {
-        val signed = readOpenAlgosForSymbol(symbol)
-        check(CockpitDiagnostics.rows(signed).size == signed.length()) {
-            "Malformed signed open algo-order snapshot for $symbol"
-        }
-        for (index in 0 until signed.length()) {
-            val item = signed.getJSONObject(index)
-            check(item.optString("symbol") == symbol) {
-                "Signed $symbol algo-order snapshot contains foreign/missing symbol"
+        try {
+            val signed = readOpenAlgosForSymbol(symbol)
+            check(CockpitDiagnostics.rows(signed).size == signed.length()) {
+                "Malformed signed open algo-order snapshot for $symbol"
             }
-            algos.put(item)
+            for (index in 0 until signed.length()) {
+                val item = signed.getJSONObject(index)
+                check(item.optString("symbol") == symbol) {
+                    "Signed $symbol algo-order snapshot contains foreign/missing symbol"
+                }
+            }
+            // Publish a symbol's rows only after the complete response is validated.
+            for (index in 0 until signed.length()) algos.put(signed.getJSONObject(index))
+        } catch (failure: Exception) {
+            algoReadFailures[symbol] = safeDiagnosticText(
+                failure.message ?: failure.javaClass.simpleName).take(500)
         }
     }
     val activeSupervisions = CockpitDiagnostics.rows(supervisions).filter { it.optString("state") == "ACTIVE" }
@@ -80,10 +90,23 @@ internal fun readFuturesProtectionDisplaySnapshot(
             it.optString("orderType")=="STOP_MARKET" &&
             it.optString("reduceOnly").equals("true",ignoreCase=true)
     }
-    val standardOrders = if (activeSupervisions.isNotEmpty() ||
-        hasForeignContractStopCandidate) readOpenOrders?.invoke() else null
-    if (standardOrders != null) check(CockpitDiagnostics.rows(standardOrders).size == standardOrders.length()) {
-        "Malformed signed open standard-order snapshot"
+    val needsStandardOrders = activeSupervisions.isNotEmpty() ||
+        hasForeignContractStopCandidate ||
+        before.keys.any { it !in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS }
+    var standardOrders: JSONArray? = null
+    var standardOrderReadFailure: String? = null
+    if (needsStandardOrders) {
+        try {
+            val signedStandardOrders = readOpenOrders?.invoke()
+                ?: throw IllegalStateException("Signed standard-order reader unavailable")
+            check(CockpitDiagnostics.rows(signedStandardOrders).size == signedStandardOrders.length()) {
+                "Malformed signed open standard-order snapshot"
+            }
+            standardOrders = signedStandardOrders
+        } catch (failure: Exception) {
+            standardOrderReadFailure = safeDiagnosticText(
+                failure.message ?: failure.javaClass.simpleName).take(500)
+        }
     }
     val afterRows = readPositions()
     val after = liveRows(afterRows)
@@ -100,6 +123,71 @@ internal fun readFuturesProtectionDisplaySnapshot(
         val mark = position.optString("markPrice").toDoubleOrNull() ?: Double.NaN
         var contract: Double? = null
         val signedAlgoRows = CockpitDiagnostics.rows(algos).filter { it.optString("symbol") == symbol }
+        val symbolStandardRows = standardOrders?.let { rows ->
+            CockpitDiagnostics.rows(rows).filter { it.optString("symbol") == symbol }
+        }.orEmpty()
+        if (symbol !in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS) {
+            val observedStop = signedAlgoRows.singleOrNull { row ->
+                val reference = if (row.optString("workingType") == "CONTRACT_PRICE") {
+                    runCatching { contractPrice(symbol) }.getOrNull()
+                } else mark
+                reference?.let { isFullPositionFuturesStop(row,symbol,direction,amount.abs(),it) } == true
+            }
+            val orderSummary = JSONArray()
+            for (row in signedAlgoRows) orderSummary.put(JSONObject()
+                .put("scope","CONDITIONAL").put("algo_id",row.optString("algoId"))
+                .put("client_id",row.optString("clientAlgoId"))
+                .put("order_type",row.optString("orderType"))
+                .put("status",row.optString("algoStatus")).put("side",row.optString("side"))
+                .put("position_side",row.optString("positionSide"))
+                .put("working_type",row.optString("workingType"))
+                .put("trigger_price",row.optString("triggerPrice"))
+                .put("quantity",row.optString("quantity"))
+                .put("close_position",row.opt("closePosition") ?: JSONObject.NULL)
+                .put("reduce_only",row.opt("reduceOnly") ?: JSONObject.NULL)
+                .put("price_protect",row.opt("priceProtect") ?: JSONObject.NULL))
+            for (row in symbolStandardRows) orderSummary.put(JSONObject()
+                .put("scope","STANDARD").put("order_id",row.optString("orderId"))
+                .put("client_id",row.optString("clientOrderId"))
+                .put("order_type",row.optString("type")).put("status",row.optString("status"))
+                .put("side",row.optString("side")).put("quantity",row.optString("origQty")))
+            observations.put(JSONObject().put("symbol",symbol).put("direction",direction)
+                .put("quantity",amount.toPlainString()).put("observed_at_ms",startedAt)
+                .put("stop_proof","UNMANAGED_POSITION")
+                .put("supervisor_state",FuturesProtectionSupervisorState.RECOVERY_REQUIRED.name)
+                .put("stop",observedStop?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
+                    ?: observedStop?.optString("stopPrice")?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                .put("observed_stop",observedStop?.optString("triggerPrice")?.takeIf { it.isNotBlank() }
+                    ?: observedStop?.optString("stopPrice")?.takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                .put("protection_client_id",observedStop?.optString("clientAlgoId") ?: JSONObject.NULL)
+                .put("origin","UNVERIFIED_EXTERNAL_OR_LEGACY")
+                .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                .put("management_mode","OBSERVE_ONLY")
+                .put("signed_algo_orders_seen",signedAlgoRows.size)
+                .put("signed_algo_read_state",if(algoReadFailures.containsKey(symbol)) "FAILED" else "SIGNED")
+                .put("symbol_algo_read_error",algoReadFailures[symbol] ?: JSONObject.NULL)
+                .put("signed_standard_orders_seen",if(standardOrderReadFailure==null) symbolStandardRows.size else JSONObject.NULL)
+                .put("signed_order_summaries",orderSummary)
+                .put("standard_order_snapshot_error",standardOrderReadFailure ?: JSONObject.NULL)
+                .put("scope","SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"))
+            continue
+        }
+        val readFailure = algoReadFailures[symbol]
+        if (readFailure != null) {
+            observations.put(JSONObject().put("symbol",symbol).put("direction",direction)
+                .put("quantity",amount.toPlainString()).put("observed_at_ms",startedAt)
+                .put("stop_proof","PROTECTION_UNKNOWN")
+                .put("supervisor_state",FuturesProtectionSupervisorState.PROTECTION_UNKNOWN.name)
+                .put("stop",JSONObject.NULL).put("protection_client_id",JSONObject.NULL)
+                .put("strategy_ownership_verified",false).put("automatic_trailing_authorized",false)
+                .put("management_mode","OBSERVE_ONLY")
+                .put("stop_proof_rejection","SIGNED_SYMBOL_ALGO_READ_FAILED")
+                .put("read_error",readFailure)
+                .put("signed_standard_orders_seen",if(standardOrderReadFailure==null) symbolStandardRows.size else JSONObject.NULL)
+                .put("standard_order_snapshot_error",standardOrderReadFailure ?: JSONObject.NULL)
+                .put("scope","SIGNED_GET_ONLY_DISPLAY_NOT_EXECUTION_AUTHORITY"))
+            continue
+        }
         val stops = signedAlgoRows.filter { order ->
             if (order.optString("symbol") != symbol) return@filter false
             if (!order.optString("closePosition").equals("true", true) &&
@@ -191,6 +279,13 @@ internal fun readFuturesProtectionDisplaySnapshot(
                 certifiedExternalContractStop != null -> "EXTERNAL_PROTECTED"
                 owned -> "OWNED_STOP_SEEN"
                 else -> "EXTERNAL_PROTECTED"
+            }).put("supervisor_state",futuresProtectionSupervisorState(
+                signedSnapshotComplete=mark.isFinite() && mark > 0.0,
+                positionOpen=true,matchingFullStops=stops.size).name)
+            .put("standard_order_snapshot_state",when {
+                standardOrderReadFailure!=null -> "UNKNOWN"
+                standardOrders!=null -> "SIGNED"
+                else -> "NOT_REQUIRED"
             }).put("stop", price ?: JSONObject.NULL)
             .put("protection_client_id", id.ifBlank { null } ?: JSONObject.NULL)
             .put("strategy_ownership_verified", owned)
@@ -227,5 +322,23 @@ internal fun readFuturesProtectionDisplaySnapshot(
     check(CockpitDiagnostics.fresh(startedAt, clock(), ttlMs)) {
         "Signed position/STOP read exceeded its freshness window; old evidence retained as unverified"
     }
-    return FuturesProtectionDisplaySnapshot(afterRows, observations, startedAt)
+    val failedSymbols = linkedSetOf<String>().apply {
+        addAll(algoReadFailures.keys)
+        if (standardOrderReadFailure != null) {
+            addAll(activeSupervisions.map { it.optString("symbol") }.filter { it.isNotBlank() })
+            if (hasForeignContractStopCandidate) {
+                addAll(CockpitDiagnostics.rows(algos).filter {
+                    it.optString("workingType")=="CONTRACT_PRICE" &&
+                        it.optString("orderType")=="STOP_MARKET" &&
+                        it.optString("reduceOnly").equals("true",ignoreCase=true)
+                }.map { it.optString("symbol") })
+            }
+            addAll(before.keys.filter { it !in BinanceUsdMFuturesTestnetAdapter.APPROVED_SYMBOLS })
+        }
+    }
+    return FuturesProtectionDisplaySnapshot(
+        afterRows,observations,startedAt,
+        protectionSnapshotComplete=algoReadFailures.isEmpty() && standardOrderReadFailure==null,
+        failedSymbols=failedSymbols
+    )
 }

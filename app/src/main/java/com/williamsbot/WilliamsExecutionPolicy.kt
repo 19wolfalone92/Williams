@@ -32,10 +32,16 @@ internal fun williamsExecutionPolicySnapshot():JSONObject = JSONObject()
 internal fun williamsStructuralFractal(type:String,source:String):Boolean =
     source in setOf(williamsTc2Profile,williamsNtdProfile) && type.removePrefix("SHORT_").removePrefix("LONG_")=="FRACTAL"
 
-/** TC2 PDF149 / NTD PDF43: until trigger or replacement; zero is structural validity.
+/** TC2 STOP formations use causal trigger/invalidation/replacement evidence;
+ * NTD fractals retain their source-backed trigger/replacement lifecycle.
  * Fresh closed-bar proof is still required at the Binance submission door. */
+internal fun williamsSignalAgeTtlDisabled(type:String,source:String):Boolean =
+    source==williamsTc2Profile
+
+/** Age never invalidates a TC2 STOP formation; trigger, structural invalidation
+ * and confirmed replacement are evaluated by the causal H1 lifecycle. */
 internal fun williamsH1SignalExpiry(at:Long,type:String,source:String):Long =
-    if(williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS
+    if(williamsSignalAgeTtlDisabled(type,source) || williamsStructuralFractal(type,source)) 0L else at+5*WILLIAMS_H1_MS
 internal fun williamsH1SignalTimeEligible(at:Long,type:String,source:String,now:Long):Boolean {
     if(at<=0L || at%WILLIAMS_H1_MS!=0L || at+WILLIAMS_H1_MS>now) return false
     val expiry=williamsH1SignalExpiry(at,type,source)
@@ -129,20 +135,15 @@ internal fun williamsMarketExitBlocker(owner: String, reason: String): String? {
     }
 }
 
-/** NON-BOOK optional profit overlay retained ONLY for the separate
- * NTD/Course research exit implementations. This is not a TC2 rule:
- * TC2 ch.12 PDF 153-165 explicitly exits/reverses on the triggered
- * opposing signal without requiring an old campaign to be profitable.
- *
- * NTD/Course legacy discretionary exits are admitted only
- * while there is a conservative, exchange-confirmed positive mark-to-entry
- * buffer after estimated round-trip fees and slippage. The project uses 0.35%
- * (2 * 0.10% per-side fee reserve + 0.15% execution slippage); it is NOT a
- * statement that Binance can guarantee this fill or book-prescribed fee rate.
- *
- * This gate only affects strategy-initiated OPPOSITE exits. It NEVER disables
- * protective STOP_MARKET, operator risk reduction, or proven emergency exits.
- * There is deliberately no cap on how long a valid campaign may stay protected.
+/** POLICY U engineering guard for the active production user contract.
+ * It implements the user's restriction against realizing a loss solely
+ * because of an opposite Wise-Man signal using a conservative 0.35% cost
+ * reserve: 2 * 0.10% per-side fee reserve + 0.15% execution slippage.
+ * This reserve is an engineering approximation, not a TC2 source rule,
+ * a verified account fee tier, or a fill-price guarantee. It applies only
+ * to discretionary opposite-signal exits; it never gates initial/trailing
+ * STOPs, structural exits, manual exits, or emergency risk reductions.
+ * POLICY T is research-only and is not wired into this production guard.
  */
 internal const val WILLIAMS_TC2_OPPOSITE_EXIT_COST_BUFFER = 0.0035
 
@@ -198,6 +199,18 @@ internal fun williamsTc2OppositeExitQuoteBlocker(
         listOf(freshMark,bid,ask).any { !it.isFinite() || it<=0.0 } ||
         bid>ask) return "TC2_OPPOSITE_EXIT_QUOTE_UNVERIFIED"
     return null
+}
+
+/** Active production POLICY U: combine source/quote integrity with the
+ * existing conservative executable-price cost reserve. POLICY T is never
+ * selected by the Android production coordinator.
+ */
+internal fun williamsTc2UserPolicyOppositeExitBlocker(
+    direction:String, entry:Double, mark:Double, bid:Double, ask:Double, tick:Double=0.0
+):String? {
+    val quote=williamsTc2OppositeExitQuoteBlocker(direction,mark,bid,ask)
+    if(quote!=null) return quote
+    return williamsOppositeExitBidAskBlocker(direction,entry,bid,ask,tick)
 }
 
 /** Durable exchange-mutation fence for the TC2 ch11-12 opposite Wise-Man exit.
@@ -278,4 +291,28 @@ internal fun williamsStopMoveLabel(reason: String): String = when(reason) {
     "COST_BUFFERED_BREAKEVEN_1R" -> "Безубыток после 1R с учётом издержек · дополнительное правило проекта"
     "UNSPECIFIED_STRUCTURAL_TRAIL","" -> "Основание переноса не записано"
     else -> reason
+}
+
+
+/** Chronology is primary; only exact-time candidates compete on context.
+ * An opposite tie on all ranking evidence cannot be decided by collection
+ * order. No signal proof, financial check or owner gate is bypassed here.
+ */
+internal fun <T> williamsSelectChronologicalEntry(
+    candidates:List<T>, knownTime:(T)->Long, contextRank:(T)->Int,
+    nativeRank:(T)->Double, direction:(T)->String, identity:(T)->String
+):Pair<T?,String> {
+    if(candidates.isEmpty()) return Pair(null,"WILLIAMS_NO_BOOK_ELIGIBLE_H1_SIGNAL")
+    val firstTime=candidates.minOf(knownTime)
+    val first=candidates.filter { knownTime(it)==firstTime }
+    val topContext=first.maxOf(contextRank)
+    val contextTied=first.filter { contextRank(it)==topContext }
+    if(contextTied.map(direction).distinct().size>1 && contextTied.any { !nativeRank(it).isFinite() })
+        return Pair(null,"SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED")
+    fun finiteRank(item:T)=nativeRank(item).takeIf { it.isFinite() } ?: Double.NEGATIVE_INFINITY
+    val topRank=contextTied.maxOf { finiteRank(it) }
+    val tied=contextTied.filter { finiteRank(it)==topRank }
+    if(tied.map(direction).distinct().size>1)
+        return Pair(null,"SIMULTANEOUS_OPPOSITE_ENTRY_RANK_UNVERIFIED")
+    return Pair(tied.minByOrNull(identity),"")
 }

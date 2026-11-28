@@ -71,3 +71,32 @@ def test_exchange_open_times_keep_the_last_closed_bar_and_drop_only_a_forming_ba
     frame=pd.DataFrame({"open_time_ms":[19*H,20*H,21*H],"close":[100,101,102]})
     assert list(closed_strategy_frame(frame,"1h",21*H).open_time_ms)==[19*H,20*H]
     assert len(closed_strategy_frame(frame,"1h",22*H))==3
+
+@pytest.mark.parametrize("side",["LONG","SHORT"])
+@pytest.mark.parametrize("age",[1,5,20,25])
+@pytest.mark.parametrize("case",["WAITING","INVALIDATED","TRIGGERED","AMBIGUOUS","GAP"])
+def test_objective_resting_tc2_lifecycle_is_not_an_age_or_scan_omission_veto(side,age,case):
+    from williams_scenario_lifecycle import pending_tc2_level_event,pending_tc2_cancel_reason
+    now=1000*H+1000
+    signal_at=1000*H-(age+1)*H
+    long=side=="LONG"
+    trigger,stop=(105.,95.) if long else (95.,105.)
+    history=[WaveBar((940+i)*H,100.,101.,99.,100.,1.) for i in range(60)]
+    idx=next(i for i,b in enumerate(history) if b.t==signal_at+H)
+    if case=="INVALIDATED":
+        history[idx]=WaveBar(history[idx].t,100.,101. if long else 106.,94. if long else 99.,100.,1.)
+    elif case=="TRIGGERED":
+        history[idx]=WaveBar(history[idx].t,100.,106. if long else 101.,99. if long else 94.,100.,1.)
+    elif case=="AMBIGUOUS":
+        history[idx]=WaveBar(history[idx].t,100.,106.,94.,100.,1.)
+    elif case=="GAP":
+        history.pop(idx)
+    event=pending_tc2_level_event(side,signal_at,trigger,stop,100.,history,now)
+    assert event.state==("UNVERIFIED" if case=="GAP" else case)
+    expected="H1_PARENT_STRUCTURAL_INVALIDATION" if case=="INVALIDATED" else None
+    for family in ("REVERSAL","SUPER_AO","FRACTAL"):
+        assert pending_tc2_cancel_reason(event,family,side,trigger,100.)==expected
+    if case=="WAITING":
+        assert pending_tc2_cancel_reason(event,"FRACTAL",side,trigger,106. if long else 94.)==(
+            "H1_FRACTAL_NOT_ABOVE_TEETH" if long else "H1_FRACTAL_NOT_BELOW_TEETH")
+        assert pending_tc2_cancel_reason(event,"FRACTAL",side,trigger,float("nan")) is None

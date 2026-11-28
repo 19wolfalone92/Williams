@@ -371,8 +371,8 @@ class BinanceFuturesClient:
             "status": "TRADING" if raw["canTrade"] else "NOT_TRADING",
             "accountType": "FUTURES",
             "balances": balances,
-            "totalWalletBalance": raw.get("totalWalletBalance", "0"),
-            "totalUnrealizedProfit": raw.get("totalUnrealizedProfit", "0"),
+            "totalWalletBalance": raw.get("totalWalletBalance"),
+            "totalUnrealizedProfit": raw.get("totalUnrealizedProfit"),
             "availableBalance": raw.get("availableBalance", "0"),
         }
 
@@ -559,6 +559,98 @@ class BinanceFuturesClient:
                 }
             )
         return normalized
+
+    def income_history(self, start_time, end_time, limit=1000, max_requests=64, max_rows=32000):
+        """Return a complete USD-M income ledger; recursively split saturated ranges."""
+        start_time, end_time = int(start_time), int(end_time)
+        if start_time < 0 or end_time < start_time or int(limit) != 1000:
+            raise ValueError("Invalid Futures income-history range/limit")
+        budget = {"requests": 0, "rows": 0}
+
+        def read_range(start, end, depth=0):
+            if depth > 40:
+                raise BinanceAPIError("Futures income-history pagination depth exceeded")
+            budget["requests"] += 1
+            if budget["requests"] > max_requests:
+                raise BinanceAPIError("Futures income history exceeded completeness request budget")
+            rows = self._require_array(self._request("GET", "/fapi/v1/income", {
+                "startTime": start, "endTime": end, "limit": 1000
+            }, signed=True))
+            if len(rows) < 1000:
+                budget["rows"] += len(rows)
+                if budget["rows"] > max_rows:
+                    raise BinanceAPIError("Futures income history exceeded completeness row budget")
+                return rows
+            if start >= end:
+                raise BinanceAPIError("Futures income history saturated at millisecond resolution")
+            mid = start + (end - start) // 2
+            if mid < start or mid >= end:
+                raise BinanceAPIError("Cannot subdivide saturated Futures income interval")
+            return read_range(start, mid, depth + 1) + read_range(mid + 1, end, depth + 1)
+
+        rows = read_range(start_time, end_time)
+        rows.sort(key=lambda row: (int(row.get("time", -1)), str(row.get("incomeType", "")),
+                                   str(row.get("tranId", "")), str(row.get("tradeId", ""))))
+        return rows
+
+    def user_trades_history(self, symbol, start_time, end_time, limit=1000,
+                            max_requests=64, max_rows=32000):
+        """Return complete per-symbol fills for one UTC day (Binance max range: 7 days)."""
+        symbol = str(symbol).upper()
+        if not re.fullmatch(r"[A-Z0-9]+USDT", symbol):
+            raise ValueError("Invalid USD-M Futures userTrades symbol")
+        start_time, end_time = int(start_time), int(end_time)
+        if (start_time < 0 or end_time < start_time
+                or end_time - start_time > 7 * 24 * 60 * 60 * 1000
+                or int(limit) != 1000):
+            raise ValueError("Invalid Futures userTrades range/limit")
+        budget = {"requests": 0, "rows": 0}
+
+        def read_range(start, end, depth=0):
+            if depth > 40:
+                raise BinanceAPIError("Futures userTrades pagination depth exceeded")
+            budget["requests"] += 1
+            if budget["requests"] > max_requests:
+                raise BinanceAPIError(f"{symbol}: userTrades exceeded completeness request budget")
+            rows = self._require_array(self._request("GET", "/fapi/v1/userTrades", {
+                "symbol": symbol, "startTime": start, "endTime": end, "limit": 1000
+            }, signed=True))
+            if len(rows) < 1000:
+                budget["rows"] += len(rows)
+                if budget["rows"] > max_rows:
+                    raise BinanceAPIError(f"{symbol}: userTrades exceeded completeness row budget")
+                return rows
+            if start >= end:
+                raise BinanceAPIError(f"{symbol}: userTrades saturated at millisecond resolution")
+            mid = start + (end - start) // 2
+            if mid < start or mid >= end:
+                raise BinanceAPIError(f"{symbol}: cannot subdivide saturated userTrades interval")
+            return read_range(start, mid, depth + 1) + read_range(mid + 1, end, depth + 1)
+
+        rows = read_range(start_time, end_time)
+        for row in rows:
+            row["symbol"] = str(row.get("symbol", symbol)).upper()
+            row["qty"] = row.get("qty", row.get("executedQty", "0"))
+            row["price"] = row.get("price", "0")
+            row["commission"] = row.get("commission", "0")
+            row["commissionAsset"] = row.get("commissionAsset", "USDT")
+        rows.sort(key=lambda row: (int(row.get("time", -1)), int(row.get("id", -1))))
+        return rows
+
+    def mark_price_klines(self, symbol, interval, start_time, end_time, limit=1):
+        """Read official USD-M historical MARK-price candles, not contract-price klines."""
+        symbol = str(symbol).upper()
+        if not re.fullmatch(r"[A-Z0-9]+USDT", symbol):
+            raise ValueError("Invalid USD-M Futures mark-price symbol")
+        if interval != "1m" or int(limit) != 1:
+            raise ValueError("Daily Model B requires one official 1m Mark Price candle")
+        start_time, end_time = int(start_time), int(end_time)
+        if start_time < 0 or end_time < start_time:
+            raise ValueError("Invalid Mark Price kline range")
+        return self._require_array(self._request("GET", "/fapi/v1/markPriceKlines", {
+            "symbol": symbol, "interval": interval, "startTime": start_time,
+            "endTime": end_time, "limit": 1
+        }, signed=False))
 
     @staticmethod
     def _normalize_order_response(payload):

@@ -8,6 +8,18 @@ from futures_williams_runtime import FuturesCandidate, FuturesWilliamsRuntime
 from binance_client import BinanceAPIError
 
 
+@pytest.fixture(autouse=True)
+def isolate_source_for_legacy_transport_fixtures(monkeypatch, request):
+    # This file's original cases intentionally supply synthetic SignalSpec
+    # objects to exercise transport, margin and recovery, not market analysis.
+    # R48 source-gate tests below opt out and use genuine raw candle evidence.
+    if request.node.name.startswith("test_r48_real_source_"):
+        return
+    monkeypatch.setattr(FuturesWilliamsRuntime, "_revalidate_tc2_signal",
+        lambda self, owner, intent: {"closed_at_ms":
+            int(time.time()*1000+getattr(self.client,"time_offset_ms",0))//3_600_000*3_600_000})
+
+
 class DemoExchangeModel:
     def __init__(self, symbol="BTCUSDT"):
         self.symbol = symbol
@@ -63,7 +75,8 @@ class DemoExchangeModel:
             positions = [] if not self.amount else [{"symbol":self.symbol, "positionSide":"BOTH",
                 "positionAmt":str(self.amount), "initialMargin":margin, "isolatedWallet":margin,
                 "isolatedMargin":margin, "updateTime":100}]
-            return self.account_transform({"canTrade": True, "totalWalletBalance": "10000", "totalMarginBalance":"10000",
+            return self.account_transform({"canTrade": True, "multiAssetsMargin": False, "dualSidePosition": False,
+                "totalWalletBalance": "10000", "totalMarginBalance":"10000",
                 "totalUnrealizedProfit": "0", "availableBalance": "10000", "totalInitialMargin":margin,
                 "totalPositionInitialMargin":margin, "totalOpenOrderInitialMargin":"0", "positions":positions,
                 "assets":[{"asset":"USDT", "walletBalance":"10000", "initialMargin":margin,
@@ -79,14 +92,19 @@ class DemoExchangeModel:
                 for row in self.orders.values() if row["status"] in {"NEW","PARTIALLY_FILLED"}]
         if path.endswith("openAlgoOrders") or path.endswith("allAlgoOrders"):
             return [dict(row,positionSide=row.get("positionSide","BOTH"),reduceOnly=row.get("reduceOnly",False),
-                         closePosition=row.get("closePosition",False)) for row in self.algos.values()
+                         closePosition=row.get("closePosition",False),workingType=row.get("workingType","MARK_PRICE"),
+                         priceProtect=row.get("priceProtect",False)) for row in self.algos.values()
                     if path.endswith("allAlgoOrders") or row["algoStatus"] == "NEW"]
         if path.endswith("algoOrder"):
             if method == "POST":
                 if p.get("closePosition") and self.protection_failure:
                     raise BinanceAPIError("simulated protection rejection", payload={"code": -2015})
                 aid = len(self.algos) + 1
-                row = {**p, "algoId": aid, "orderType": p["type"], "algoStatus": "NEW", "actualOrderId": ""}
+                row = {**p, "algoId": aid, "orderType": p["type"], "algoStatus": "NEW", "actualOrderId": "",
+                       "positionSide": p.get("positionSide", "BOTH"),
+                       "workingType": p.get("workingType", "MARK_PRICE"),
+                       "priceProtect": p.get("priceProtect", False),
+                       "closePosition": p.get("closePosition", False)}
                 self.algos[aid] = row
                 return dict(row)
             row = (self.algos[int(p["algoId"])] if "algoId" in p else
@@ -96,7 +114,11 @@ class DemoExchangeModel:
                     self.fill_entry()
                 else:
                     row["algoStatus"] = "CANCELED"
-            return dict(row)
+            return dict(row,positionSide=row.get("positionSide","BOTH"),
+                        workingType=row.get("workingType","MARK_PRICE"),
+                        priceProtect=row.get("priceProtect",False),
+                        closePosition=row.get("closePosition",False),
+                        reduceOnly=row.get("reduceOnly",False))
         if path.endswith("/order"):
             if method == "POST":
                 oid = len(self.orders) + 100
@@ -129,7 +151,15 @@ class DemoExchangeModel:
                 row["executedQty"] = row["origQty"]
                 self.amount = float(row["origQty"]) * (1 if row["side"] == "BUY" else -1)
             return dict(row)
+        if path.endswith("/income"):
+            # Transport fixture models no fees, funding or external flows.
+            return []
         if path.endswith("userTrades"):
+            if "orderId" not in p:
+                # Midnight reconstruction in this fixture begins before its first fill.
+                if self.orders and p.get("symbol") == self.symbol:
+                    raise AssertionError("Transport fixture has no complete historical fill ledger")
+                return []
             row = self.orders[int(p["orderId"])]
             qty=float(row["executedQty"]);price=float(row["avgPrice"])
             pnl=qty*(price-self.entry_price)*(1 if row["side"]=="SELL" else -1) if row.get("reduceOnly")=="true" else 0
@@ -181,7 +211,7 @@ def armed_runtime(monkeypatch, tmp_path, request):
     signal = SignalSpec.new(symbol=symbol, side=side, signal_type=SignalType.FRACTAL if profile=="NTD_FIVE_DIMENSIONS" else SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - (7_200_000 if profile=="NTD_FIVE_DIMENSIONS" else 1000), trigger_price=101 if side == "BUY" else 99,
         protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000,strategy_profile=profile,
-        setup_context={"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})
+        setup_context={"h1_closed_at_ms":now-1000, **({"ntd_initial":{"eligible":True,"sleep_at_ms":now-10*3600000,"reason":"FIXTURE_OBSERVED_SLEEP"}} if profile=="NTD_FIVE_DIMENSIONS" else {})})
     candidate = FuturesCandidate(symbol, "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     # This old NTD transport suite models a LEGACY already-owned NTD
     # campaign. Production now permits NEW risk only for TC2. Narrowly
@@ -411,24 +441,19 @@ def test_scanner_failure_does_not_skip_position_ownership_reconciliation(armed_r
     assert bot.state("BTCUSDT") == "RECONCILE_REQUIRED"
 
 
-@pytest.mark.parametrize("racing_fill",[False,True])
-def test_project_h1_expiry_cancels_a_durably_owned_old_pending_signal_and_protects_a_racing_fill(armed_runtime,monkeypatch,racing_fill):
+def test_tc2_pending_entry_is_not_cancelled_by_six_hour_age_alone(armed_runtime,monkeypatch):
     bot,exchange,_=armed_runtime
     campaign=bot._active_campaign("BTCUSDT")
     observed=time.time()
-    campaign.tags["pending_signal"]["signal"]["expires_at_ms"]=int((observed+80*3600)*1000)
+    pending=campaign.tags["pending_signal"]["signal"]
+    pending["expires_at_ms"]=0
+    pending.setdefault("setup_context",{})["h1_closed_at_ms"]=int((observed+6*3600)*1000)-1_000
     bot.db.save_campaign(campaign)
-    exchange.cancel_fill=racing_fill
     monkeypatch.setattr(time,"time",lambda:observed+6*3600)
     bot._reconcile_pending()
-    assert not bot._pending_entries()
-    assert any(method=="DELETE" and path.endswith("algoOrder") for method,path,_ in exchange.calls)
-    if racing_fill:
-        assert exchange.amount>0
-        assert any(o.get("closePosition")=="true" and o["algoStatus"]=="NEW" for o in exchange.algos.values())
-    else:
-        assert exchange.amount==0
-        assert bot.db.campaign_risk_reserved_quote()==0
+    assert bot._pending_entries()
+    assert not any(method=="DELETE" and path.endswith("algoOrder") for method,path,_ in exchange.calls)
+    assert bot.db.campaign_risk_reserved_quote()>0
 
 
 def test_five_bar_protection_still_moves_when_scanner_is_unavailable(armed_runtime,monkeypatch):
@@ -517,7 +542,7 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side="BUY", signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON, timeframe="1h", signal_bar_time_ms=now, trigger_price=103,
-        protective_reference=95, expires_at_ms=now + 3600000)
+        protective_reference=95, expires_at_ms=now + 3600000, setup_context={"h1_closed_at_ms":now-1000})
     bot._arm_add_on(campaign, signal)
     campaign = bot.engine.load_campaign(campaign.campaign_id)
     assert bot._pending_entries()
@@ -529,7 +554,7 @@ def test_a_campaign_exit_cancels_a_still_armed_add_on_before_closing(armed_runti
 
 @pytest.mark.parametrize("side", ["BUY", "SELL"])
 @pytest.mark.parametrize("leverage", [1, 2, 5, 10])
-@pytest.mark.parametrize("mode", ["fill", "expire_race", "partial_cancel", "protection_failure"])
+@pytest.mark.parametrize("mode", ["fill", "invalidate_race", "partial_cancel", "protection_failure"])
 def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch, tmp_path, side, leverage, mode):
     monkeypatch.setenv("WILLIAMS_DB_PATH", str(tmp_path / "lifecycle.sqlite3"))
     monkeypatch.setenv("DRY_RUN", "false")
@@ -545,7 +570,7 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
                             timeframe="1h", signal_bar_time_ms=now - 1000,
                             trigger_price=101 if side == "BUY" else 99,
                             protective_reference=95 if side == "BUY" else 105,
-                            expires_at_ms=now + 3_600_000)
+                            expires_at_ms=now + 3_600_000, setup_context={"h1_closed_at_ms":now-1000})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     try:
         armed = bot._arm_entry(candidate)
@@ -555,10 +580,21 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
         assert campaign.capital_reserved_quote == pytest.approx(armed["quantity"] * armed["trigger_price"] / leverage)
         assert armed["order_id"].startswith("algo:")
         assert len(exchange.algos) == 1 and exchange.amount == 0
-        if mode == "expire_race":
-            campaign = bot.engine.load_campaign(armed["campaign_id"])
-            campaign.tags["pending_signal"]["signal"]["expires_at_ms"] = now - 1
-            bot.db.save_campaign(campaign)
+        if mode == "invalidate_race":
+            from williams_scenario_lifecycle import LevelEvent
+            monkeypatch.setattr(
+                "futures_williams_runtime.fetch_klines", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
+                "futures_williams_runtime.closed_strategy_frame", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
+                "futures_williams_runtime.wave_bars_from_dataframe", lambda *args, **kwargs: []
+            )
+            monkeypatch.setattr(
+                "futures_williams_runtime.pending_tc2_level_event",
+                lambda *args, **kwargs: LevelEvent("INVALIDATED", now, "TEST_STRUCTURAL_INVALIDATION"),
+            )
             exchange.cancel_fill = True
         else:
             exchange.fill_entry(fraction=0.5 if mode == "partial_cancel" else 1.0)
@@ -577,6 +613,15 @@ def test_pending_entry_fill_protection_trail_and_exact_manual_close(monkeypatch,
         assert "quantity" not in stop and "reduceOnly" not in stop
         assert bot.recover()["ok"]
         exchange.price = 103 if side == "BUY" else 97
+        # Recovery advanced durable state. An old caller must not overwrite
+        # its confirmed protection, nor leave an unsent pending order record.
+        before_algos = dict(exchange.algos)
+        before_orders = bot.db.conn.execute("SELECT COUNT(*) FROM campaign_orders").fetchone()[0]
+        with pytest.raises(RuntimeError, match="CAMPAIGN_STATE_REVISION_CONFLICT"):
+            bot._replace_protection(campaign, 96 if side == "BUY" else 104)
+        assert exchange.algos == before_algos
+        assert bot.db.conn.execute("SELECT COUNT(*) FROM campaign_orders").fetchone()[0] == before_orders
+        campaign = bot.engine.load_campaign(armed["campaign_id"])
         assert bot._replace_protection(campaign, 96 if side == "BUY" else 104)
         assert exchange.algos[2]["algoStatus"] == "CANCELED"
         assert exchange.algos[3]["algoStatus"] == "NEW"
@@ -605,7 +650,7 @@ def test_leverage_failure_never_sends_an_entry(monkeypatch, tmp_path, failure, s
     now = int(time.time() * 1000)
     signal = SignalSpec.new(symbol="BTCUSDT", side=side, signal_type=SignalType.REVERSAL, role=SignalRole.ENTRY,
         timeframe="1h", signal_bar_time_ms=now - 1000, trigger_price=101 if side == "BUY" else 99,
-        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000)
+        protective_reference=95 if side == "BUY" else 105, expires_at_ms=now + 3600000, setup_context={"h1_closed_at_ms":now-1000})
     candidate = FuturesCandidate("BTCUSDT", "LONG" if side == "BUY" else "SHORT", signal, (signal,), 0.01, 0.001, True, 90)
     try:
         with pytest.raises((ValueError, RuntimeError)):
@@ -971,7 +1016,7 @@ def test_tc2_book_quantities_survive_fills_and_restart_without_unlimited_additio
         bot._replace_protection(campaign,exchange.price-2*sign)
         signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
             role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500+i,
-            trigger_price=exchange.price+sign,protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+            trigger_price=exchange.price+sign,protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
         pending=bot._arm_add_on(campaign,signal)
         assert Decimal(str(pending["quantity"]))==unit*weight
         exchange.fill_addition(pending["client_order_id"])
@@ -993,7 +1038,7 @@ def test_tc2_loss_or_partial_add_never_authorizes_the_next_book_tranche(armed_ru
     now=int(time.time()*1000)
     def signal():return SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
-        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
     exchange.price=exchange.entry_price
     posts=len(exchange.calls)
     with pytest.raises(RuntimeError,match="PROFITABLE_POSITION"):bot._arm_add_on(campaign,signal())
@@ -1021,7 +1066,7 @@ def test_tc2_addition_revalidates_after_sizing_before_exchange_post(armed_runtim
     now=int(time.time()*1000)
     signal=SignalSpec.new(symbol=campaign.symbol,side=campaign.side,signal_type=SignalType.SUPER_AO,
         role=SignalRole.ADD_ON,timeframe="1h",signal_bar_time_ms=now-500,trigger_price=exchange.price+sign,
-        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000)
+        protective_reference=campaign.current_stop_price,expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
     real_check=bot._futures_pre_submit_checks
     def raced(intent):
         if intent.purpose=="CAMPAIGN_ADD_ON":
@@ -1049,7 +1094,7 @@ def half_margin_entry(monkeypatch, tmp_path):
         signal = SignalSpec.new(symbol='BTCUSDT', side=side, signal_type=SignalType.REVERSAL,
             role=SignalRole.ENTRY, timeframe='1h', signal_bar_time_ms=now-1000,
             trigger_price=101 if side=='BUY' else 99, protective_reference=95 if side=='BUY' else 105,
-            expires_at_ms=now+3600000)
+            expires_at_ms=now+3600000, setup_context={"h1_closed_at_ms":now-1000})
         return FuturesCandidate('BTCUSDT', 'LONG' if side=='BUY' else 'SHORT', signal, (signal,), .01, .001, True, 90)
     try:
         yield bot, exchange, candidate
@@ -1060,7 +1105,7 @@ def half_margin_entry(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('side', ['BUY','SELL'])
 @pytest.mark.parametrize('fault', ['OVER_HALF','MISSING_MARGIN','MODE_UNKNOWN','POSITION_CHANGED'])
-def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, side, fault):
+def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half_margin_entry, monkeypatch, side, fault):
     bot, exchange, candidate = half_margin_entry
     def corrupt(account):
         if fault=='OVER_HALF': account['totalInitialMargin']='5500'
@@ -1069,7 +1114,12 @@ def test_final_half_margin_rejection_never_posts_or_leaves_a_phantom_intent(half
             'positionAmt':'1','initialMargin':'50','isolatedWallet':'50','isolatedMargin':'50','updateTime':100}]
         else: account['multiAssetsMargin']='false'
         return account
-    exchange.account_transform=corrupt
+    # Inject the fault at the final margin assessment, not at the earlier Model B gate.
+    assess = bot._assess_half_margin
+    def corrupt_at_assessment(intent):
+        exchange.account_transform = corrupt
+        return assess(intent)
+    monkeypatch.setattr(bot, '_assess_half_margin', corrupt_at_assessment)
     with pytest.raises(RuntimeError, match='FUTURES_HALF_MARGIN'):
         bot._arm_entry(candidate(side))
     assert not any(method=='POST' and path in {'/fapi/v1/order','/fapi/v1/algoOrder'}
@@ -1115,7 +1165,7 @@ def test_lost_initial_post_keeps_exact_id_and_reserve_and_reconciles_without_rep
 
 
 @pytest.mark.parametrize('side', ['BUY','SELL'])
-@pytest.mark.parametrize('fault', ['EXPIRY','CLIENT_ID','TRIGGER'])
+@pytest.mark.parametrize('fault', ['STALE_H1','CLIENT_ID','TRIGGER'])
 def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(half_margin_entry, monkeypatch, side, fault):
     from binance_futures_client import BinanceFuturesClient
     bot, exchange, candidate=half_margin_entry
@@ -1123,7 +1173,8 @@ def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(hal
     def expire_after_margin(intent):
         started=assess(intent)
         owner=bot.engine.load_campaign(intent.campaign_id)
-        if fault=='EXPIRY':owner.tags['pending_signal']['signal']['expires_at_ms']=int(time.time()*1000)-1
+        if fault=='STALE_H1':
+            owner.tags['pending_signal']['signal'].setdefault('setup_context',{})['h1_closed_at_ms']=int(time.time()*1000)-3_600_001
         bot.db.save_campaign(owner)
         return started
     monkeypatch.setattr(bot,'_assess_half_margin',expire_after_margin)
@@ -1136,6 +1187,76 @@ def test_margin_reads_cannot_extend_or_change_bound_intent_at_real_transport(hal
         return exchange.request(method,path,params,signed)
     monkeypatch.setattr(bot.client,'_request',request)
     monkeypatch.setattr(bot.client.session,'request',lambda *a,**k:pytest.fail('Expired signal reached HTTP POST'))
-    with pytest.raises(RuntimeError,match='SIGNAL_EXPIRED_BEFORE_TRANSPORT' if fault=='EXPIRY' else 'TRANSPORT_PLAN_CHANGED'):
+    with pytest.raises(RuntimeError,match='H1_SNAPSHOT_STALE_BEFORE_TRANSPORT' if fault=='STALE_H1' else 'TRANSPORT_PLAN_CHANGED'):
         bot._arm_entry(candidate(side))
     assert bot._pending_entries()==[] and bot.db.open_campaigns()==[]
+
+
+@pytest.mark.parametrize("armed_runtime", ["BUY","SELL"], indirect=True)
+def test_structurally_invalidated_pending_signal_stays_consumed_after_restart(armed_runtime, monkeypatch):
+    from williams_scenario_lifecycle import LevelEvent
+    bot, exchange, armed = armed_runtime
+    campaign = bot.engine.load_campaign(armed["campaign_id"])
+    payload = campaign.tags["pending_signal"]["signal"]
+    signal_id = payload["signal_id"]
+    now = int(time.time()*1000)
+    monkeypatch.setattr("futures_williams_runtime.fetch_klines", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.closed_strategy_frame", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.wave_bars_from_dataframe", lambda *a, **k: [])
+    monkeypatch.setattr("futures_williams_runtime.pending_tc2_level_event",
+                        lambda *a, **k: LevelEvent("INVALIDATED", now, "TEST_STRUCTURAL_INVALIDATION"))
+    results = bot._reconcile_pending()
+    assert results[0]["reason"] == "H1_PARENT_STRUCTURAL_INVALIDATION", results
+    assert not bot._pending_entries()
+    assert bot.db.campaign_risk_reserved_quote() == 0
+    assert bot.db.terminal_campaign_signal_state(signal_id) == "INVALIDATED"
+    restarted = FuturesWilliamsRuntime("test-key","test-secret",testnet=True)
+    monkeypatch.setattr(restarted.client, "_request", exchange.request)
+    try:
+        assert restarted.db.terminal_campaign_signal_state(signal_id) == "INVALIDATED"
+        owner = restarted.engine.load_campaign(armed["campaign_id"])
+        assert owner.tags["tc2_structural_invalidation"]["signal_id"] == signal_id
+        signal = SignalSpec.new(symbol=campaign.symbol, side=campaign.side, signal_type=SignalType.REVERSAL,
+            role=SignalRole.ENTRY, timeframe="1h", signal_bar_time_ms=int(payload["signal_bar_time_ms"]),
+            trigger_price=float(payload["trigger_price"]), protective_reference=float(payload["protective_reference"]),
+            setup_context={"h1_closed_at_ms":now-1000})
+        assert signal.signal_id == signal_id
+        candidate = FuturesCandidate(campaign.symbol,"LONG" if campaign.side=="BUY" else "SHORT",
+                                     signal,(signal,),.01,.001,True,90)
+        before = len(exchange.calls)
+        with pytest.raises(RuntimeError, match="CAMPAIGN_SIGNAL_TERMINAL"):
+            restarted._arm_entry(candidate)
+        assert not any(m=="POST" for m,_,_ in exchange.calls[before:])
+    finally:
+        restarted.client.session.close()
+        restarted.db.conn.close()
+
+
+@pytest.mark.parametrize("side", ["BUY","SELL"])
+def test_r48_real_source_blocks_fabricated_validated_signal_before_post(monkeypatch,tmp_path,side):
+    # No verifier stub for this test: use actual runtime, barrier, DB and raw
+    # OHLC with a synthetic (but causally confirmed) source fixture.
+    from test_r48_tc2_admission import raw_fractal, candidate as source_candidate
+    monkeypatch.setenv("WILLIAMS_DB_PATH",str(tmp_path/"r48.sqlite3"))
+    monkeypatch.setenv("DRY_RUN","false")
+    monkeypatch.setenv("FUTURES_LEVERAGE","2")
+    monkeypatch.setenv("FUTURES_SYMBOL_LEVERAGES","")
+    bot=FuturesWilliamsRuntime("test-key","test-secret",testnet=True)
+    exchange=DemoExchangeModel()
+    monkeypatch.setattr(bot.client,"_request",exchange.request)
+    now=int(time.time()*1000)
+    raw=raw_fractal(side,now)
+    actual=source_candidate(side,raw)
+    from dataclasses import replace
+    fake=replace(actual,trigger_price=actual.trigger_price+(.1 if side=="BUY" else -.1))
+    monkeypatch.setattr(bot.client,"klines",lambda *a,**k:raw)
+    c=FuturesCandidate("BTCUSDT","LONG" if side=="BUY" else "SHORT",fake,(fake,),.01,.001,True,90)
+    try:
+        with pytest.raises(RuntimeError,match="TC2_CANONICAL_ADMISSION"):
+            bot._arm_entry(c)
+        assert not any(m=="POST" and path.endswith("algoOrder") for m,path,p in exchange.calls)
+        assert bot.db.campaign_risk_reserved_quote()==0
+        assert not bot._pending_entries()
+    finally:
+        bot.client.session.close()
+        bot.db.conn.close()

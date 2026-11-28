@@ -98,8 +98,8 @@ internal fun historyReadinessStatus(
     val decisionFrame = interval == "1h"
     val contextFrame = interval in listOf("4h","6h","1d")
     val executionMonitoringFrame = interval == "15m"
-    val decisionReady = decisionFrame && count >= 150
-    val contextReady = contextFrame && count >= (if (interval=="6h") 140 else 45)
+    val decisionReady = decisionFrame && count >= WILLIAMS_ALLIGATOR_WARMUP_BARS
+    val contextReady = contextFrame && count >= (if (interval=="6h") 140 else WILLIAMS_ALLIGATOR_WARMUP_BARS)
     val executionReady = executionMonitoringFrame && count >= 45
     val scope = when {
         fullHistoryComplete && workingReady -> "FULL_HISTORY"

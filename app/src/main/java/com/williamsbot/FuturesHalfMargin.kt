@@ -69,7 +69,8 @@ internal data class HalfMarginObservation(
     val base: BigDecimal, val available: BigDecimal, val confirmed: BigDecimal,
     val used: BigDecimal, val costNotional: BigDecimal, val identity: String,
     val orders: Map<String, HalfMarginOrder>, val symbols: Map<String, JSONObject>,
-    val positions: Map<String, BigDecimal>
+    val positions: Map<String, BigDecimal>,
+    val equity: BigDecimal = base
 )
 
 internal fun futuresMarginObservation(account: JSONObject, configuration: JSONObject,
@@ -196,7 +197,7 @@ internal fun futuresMarginObservation(account: JSONObject, configuration: JSONOb
     val identity = JSONArray().put(canonicalMargin(wallet)).put(JSONArray(positionIdentity.sorted()))
         .put(JSONArray(orderIdentity.sorted())).put(JSONArray(foreignIdentity.sorted())).toString()
     return HalfMarginObservation(minOf(wallet, equity), available, confirmed, used, costNotional, identity,
-        byClient, symbols, positionAmounts)
+        byClient, symbols, positionAmounts, equity)
 }
 
 internal fun assessFuturesHalfMargin(first: HalfMarginObservation, second: HalfMarginObservation,

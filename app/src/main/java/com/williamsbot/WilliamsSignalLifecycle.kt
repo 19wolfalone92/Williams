@@ -32,10 +32,16 @@ internal fun williamsSignalLifecycle(s:JSONObject,owner:JSONObject?,now:Long,sna
         }
         if(order.contains("UNKNOWN") || order in setOf("TRIGGERED","PENDING")) return "PENDING_UNVERIFIED"
     }
-    val known=s.optLong("known_at_ms");val expiry=s.optLong("expires_at_ms",s.optLong("signal_bar_time_ms")+18_000_000L)
+    val known=s.optLong("known_at_ms")
+    val profile=s.optString("strategy_profile",williamsTc2Profile)
+    val type=s.optString("type",s.optString("signal_type"))
+    val noAgeTtl=williamsSignalAgeTtlDisabled(type,profile)
+    val expiry=if(noAgeTtl) 0L else s.optLong("expires_at_ms",s.optLong("signal_bar_time_ms")+18_000_000L)
     if(known<=0 || known>now) return "DETECTED"
     if(expiry>0L && expiry<=now) return "EXPIRED"
-    if(!current) return "INVALIDATED"
+    // A scan omission is not proof of structural invalidation. The H1
+    // parent/level lifecycle must provide that evidence separately.
+    if(!current) return "NOT_REEMITTED"
     if(snapshotAt<=0 || now<snapshotAt || now-snapshotAt>120_000L) return "DETECTED"
     return "VALID"
 }
@@ -61,8 +67,9 @@ internal class WilliamsSignalJournal(private val store:FuturesCampaignStateStore
         val data=load(symbol);val known=rows(data.getJSONArray("signals")).associateBy { it.optString("signal_id") }.toMutableMap()
         val currentIds=rows(signals).map { it.optString("signal_id") }.toSet()
         known.values.filter { it.optLong("last_seen_at_ms")==data.optLong("snapshot_at_ms") && it.optString("signal_id") !in currentIds }.forEach {
-            val state=if(it.optLong("expires_at_ms")>0L && it.optLong("expires_at_ms")<=now) "EXPIRED" else "INVALIDATED"
-            event(data,it,state,"FORMATION","FORMATION_NO_LONGER_PRESENT_IN_CLOSED_BAR_SCAN",now)
+            val noAgeTtl=williamsSignalAgeTtlDisabled(it.optString("type"),it.optString("strategy_profile",williamsTc2Profile))
+            val state=if(!noAgeTtl && it.optLong("expires_at_ms")>0L && it.optLong("expires_at_ms")<=now) "EXPIRED" else "NOT_REEMITTED"
+            event(data,it,state,"FORMATION","NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF",now)
         }
         rows(signals).forEach { source ->
             val raw=JSONObject(source.toString()).put("last_seen_at_ms",now)
@@ -133,7 +140,8 @@ internal fun williamsChartTrigger(raw:String,symbol:String,now:Long,livePrice:Do
     val pending=(0 until signals.length()).map { signals.getJSONObject(it) }.filter { it.optString("state")=="BINANCE_PENDING" }
     if(pending.size!=1) return WilliamsChartTrigger(if(pending.size>1) "AMBIGUOUS_PENDING_ORDERS" else "NO_VERIFIED_PENDING_ORDER")
     val p=pending.single();val trigger=p.optDouble("trigger");val direction=p.optString("direction")
-    val expiry=p.optLong("expires_at_ms",Long.MAX_VALUE)
+    val noAgeTtl=williamsSignalAgeTtlDisabled(p.optString("type"),p.optString("strategy_profile",williamsTc2Profile))
+    val expiry=if(noAgeTtl) Long.MAX_VALUE else p.optLong("expires_at_ms",Long.MAX_VALUE)
     if(!trigger.isFinite() || trigger<=0 || expiry>0L && expiry<=now) return WilliamsChartTrigger("PENDING_REQUIRES_RECONCILIATION")
     if(livePrice!=null && livePrice.isFinite() && (if(direction=="LONG") livePrice>=trigger else livePrice<=trigger))
         return WilliamsChartTrigger("TRIGGER_CROSSED_AWAITING_EXCHANGE")

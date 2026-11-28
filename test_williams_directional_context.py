@@ -129,10 +129,10 @@ def test_scanner_ranks_only_real_long_and_short_williams_signals(monkeypatch):
 
     scanner = FuturesWilliamsScanner(Client(), interval="1h")
     series = pd.DataFrame({
-        "high": [100 + (i % 5) for i in range(221)],
-        "low": [98 + (i % 5) for i in range(221)],
-        "close": [99 + (i % 5) for i in range(221)],
-        "volume": [1000] * 221,
+        "high": [100 + (i % 5) for i in range(501)],
+        "low": [98 + (i % 5) for i in range(501)],
+        "close": [99 + (i % 5) for i in range(501)],
+        "volume": [1000] * 501,
     })
     closed_at=int(fwr.time.time()*1000)//3_600_000*3_600_000
     series["open_time_ms"]=[closed_at-(len(series)-i)*3_600_000 for i in range(len(series))]
@@ -175,8 +175,8 @@ def test_scanner_williams_signals_absent_never_creates_orders(monkeypatch):
             return {"symbols": [{"filters": [
                 {"filterType": "PRICE_FILTER", "tickSize": "0.01"}]}]}
     scanner = FuturesWilliamsScanner(Client(), interval="1h")
-    frame = pd.DataFrame({"high": [102.0]*221, "low": [98.0]*221,
-                          "close": [100.0]*221, "volume": [1000]*221})
+    frame = pd.DataFrame({"high": [102.0]*501, "low": [98.0]*501,
+                          "close": [100.0]*501, "volume": [1000]*501})
     closed_at=int(fwr.time.time()*1000)//3_600_000*3_600_000
     frame["open_time_ms"]=[closed_at-(len(frame)-i)*3_600_000 for i in range(len(frame))]
     frame["open"]=frame["close"]
@@ -196,3 +196,14 @@ def test_unknown_side_rejected():
     with pytest.raises(ValueError, match="LONG or SHORT"):
         evaluate_direction(side="BUY", snapshot=snapshot(), last_indicator={},
                            closed_bar_count=200, htf_confirmed=True)
+
+
+def test_integer_ohlcv_dataframe_preserves_exchange_milliseconds():
+    from williams_wave_hierarchy import wave_bars_from_dataframe
+    timestamp = 1795701600000
+    frame = pd.DataFrame({"open_time_ms":[timestamp, timestamp+3600000],
+                          "open":[100,101],"high":[102,103],"low":[99,100],
+                          "close":[101,102],"volume":[200,300]})
+    assert [b.t for b in wave_bars_from_dataframe(frame)] == [timestamp,timestamp+3600000]
+    frame=frame.astype(float)
+    assert [b.t for b in wave_bars_from_dataframe(frame)] == [timestamp,timestamp+3600000]

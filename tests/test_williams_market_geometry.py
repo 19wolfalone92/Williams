@@ -255,8 +255,8 @@ def test_tc2_first_wise_man_reversal_extractor_rejects_nonopposite_ao(monkeypatc
 
 
 
-def test_short_wm1_signal_uses_same_configured_horizon_as_long_wm1(monkeypatch):
-    """A custom closed-H1 reversal lifetime may not silently become 20 bars for SELL."""
+def test_short_wm1_signal_does_not_inherit_a_custom_age_ttl(monkeypatch):
+    """A caller-supplied compatibility horizon cannot age-expire a TC2 WM1 setup."""
     import pandas as pd
     import williams_signals as signals
     from campaign_model import SignalType
@@ -273,8 +273,7 @@ def test_short_wm1_signal_uses_same_configured_horizon_as_long_wm1(monkeypatch):
         "BTCUSDT",frame,timeframe="1h",tick_size=0.1,max_reversal_age_bars=6)
     first=[spec for spec in specs if spec.signal_type==SignalType.REVERSAL]
     assert len(first)==1
-    assert first[0].expires_at_ms==signals._expiry(at,"1h",6)
-    assert first[0].expires_at_ms!=signals._expiry(at,"1h",20)
+    assert first[0].expires_at_ms==0
 
 
 @pytest.mark.parametrize("side",["LONG","SHORT"])

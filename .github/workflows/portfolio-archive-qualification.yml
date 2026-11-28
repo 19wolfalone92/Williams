@@ -1,0 +1,48 @@
+name: Williams 24-month public futures archive qualification (read only)
+on:
+  push:
+    branches:
+      - architecture/reconstruction-safety-performance-20261124
+    paths:
+      - 'research/fetch_portfolio_archives.py'
+      - '.github/workflows/portfolio-archive-qualification.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  acquire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        symbol: [BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, LTCUSDT, SUIUSDT, NEARUSDT, DOTUSDT, TRXUSDT, BCHUSDT]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check archive validation offline
+        run: python -m research.fetch_portfolio_archives --self-test
+      - name: Acquire checked public OHLCV, MARK_PRICE and funding archives
+        run: python -m research.fetch_portfolio_archives --symbol ${{ matrix.symbol }} --output build/archive/${{ matrix.symbol }}
+      - name: Upload verified archives and explicit partial manifest
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: portfolio-archives-${{ matrix.symbol }}
+          path: build/archive/${{ matrix.symbol }}/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Upload manifest separately for lightweight coverage audit
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: portfolio-manifest-${{ matrix.symbol }}
+          path: build/archive/${{ matrix.symbol }}/manifest.json
+          if-no-files-found: error
+          retention-days: 30

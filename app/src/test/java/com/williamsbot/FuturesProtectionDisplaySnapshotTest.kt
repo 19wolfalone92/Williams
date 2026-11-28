@@ -90,11 +90,14 @@ class FuturesProtectionDisplaySnapshotTest {
 
     @Test fun malformedOrForeignSymbolSignedAlgoMustNeverVerifyStop() {
         val f=Fixture()
-        f.orders=JSONArray().put(JSONObject(f.order.toString()).put("symbol","BTCUSDT"))
-        try { f.read(); fail("Foreign symbol accepted") }
-        catch (expected:IllegalStateException) {
-            assertTrue(expected.message.orEmpty().contains("foreign/missing symbol"))
-        }
+        f.orders=JSONArray().put(JSONObject(f.order.toString()))
+            .put(JSONObject(f.order.toString()).put("symbol","BTCUSDT"))
+        val result=f.read()
+        val proof=result.observations.getJSONObject(0)
+        assertFalse(result.protectionSnapshotComplete)
+        assertEquals("PROTECTION_UNKNOWN",proof.getString("supervisor_state"))
+        assertEquals("SIGNED_SYMBOL_ALGO_READ_FAILED",proof.getString("stop_proof_rejection"))
+        assertFalse(proof.getBoolean("automatic_trailing_authorized"))
     }
 
     @Test fun twoLiveSymbolsMustEachHaveAnIndependentSignedStopQuery() {
@@ -130,15 +133,23 @@ class FuturesProtectionDisplaySnapshotTest {
             assertEquals(1,proof.getInt("signed_full_stops_seen"))
             assertFalse(proof.getBoolean("automatic_trailing_authorized"))
         }
-        try {
-            snapshot { symbol ->
-                if(symbol=="ETHUSDT") throw java.io.IOException("signed GET ETH failed")
-                JSONArray().put(bnbStop)
-            }
-            fail("Accepted one protected symbol after a second symbol failed signed GET")
-        } catch(expected:java.io.IOException) {
-            assertTrue(expected.message.orEmpty().contains("ETH failed"))
+        val partial=snapshot { symbol ->
+            if(symbol=="ETHUSDT") throw java.io.IOException("signed GET ETH failed")
+            JSONArray().put(bnbStop)
         }
+        assertFalse(partial.protectionSnapshotComplete)
+        assertTrue(partial.failedSymbols.contains("ETHUSDT"))
+        val btcProof=(0 until partial.observations.length()).map {
+            partial.observations.getJSONObject(it)
+        }.single { it.optString("symbol")=="BNBUSDT" }
+        val ethProof=(0 until partial.observations.length()).map {
+            partial.observations.getJSONObject(it)
+        }.single { it.optString("symbol")=="ETHUSDT" }
+        assertEquals("EXTERNAL_PROTECTED",btcProof.getString("stop_proof"))
+        assertEquals("PROTECTED",btcProof.getString("supervisor_state"))
+        assertEquals("PROTECTION_UNKNOWN",ethProof.getString("stop_proof"))
+        assertEquals("PROTECTION_UNKNOWN",ethProof.getString("supervisor_state"))
+        assertEquals("SIGNED_SYMBOL_ALGO_READ_FAILED",ethProof.getString("stop_proof_rejection"))
     }
 
     @Test fun freshStopWithoutDurableOwnershipStaysExternal() {
@@ -247,8 +258,13 @@ class FuturesProtectionDisplaySnapshotTest {
         assertEquals("755", result.positions.getJSONObject(0).getString("markPrice"))
     }
 
-    @Test(expected = IllegalStateException::class) fun malformedAlgoRowsCannotLookLikeNoStops() {
-        val f = Fixture(); f.orders = JSONArray().put("invalid"); f.read()
+    @Test fun malformedAlgoRowsCannotLookLikeNoStops() {
+        val f = Fixture(); f.orders = JSONArray().put("invalid")
+        val result=f.read()
+        val proof=result.observations.getJSONObject(0)
+        assertFalse(result.protectionSnapshotComplete)
+        assertEquals("PROTECTION_UNKNOWN",proof.getString("supervisor_state"))
+        assertFalse(proof.getBoolean("automatic_trailing_authorized"))
     }
 
     @Test(expected = IllegalStateException::class) fun hedgePositionCannotBeDisplayedAsOneWay() {
@@ -258,7 +274,9 @@ class FuturesProtectionDisplaySnapshotTest {
     @Test fun signedReadFailureDoesNotChangeOriginalOwnershipProof() {
         val f = Fixture(); val before = f.proof.toString()
         f.afterOrders = { throw java.io.IOException("read failed") }
-        try { f.read(); fail("Failed GET accepted") } catch (_: java.io.IOException) { }
+        val result=f.read()
+        assertEquals("PROTECTION_UNKNOWN",result.observations.getJSONObject(0).getString("supervisor_state"))
+        assertFalse(result.protectionSnapshotComplete)
         assertEquals(before, f.proof.toString())
     }
     @Test fun diag10ExactForeignContractStopMustBeObservedButNeverOwnedOrTrailed() {
@@ -361,6 +379,42 @@ class FuturesProtectionDisplaySnapshotTest {
             assertTrue("$fault $proof",proof.isNull("observed_conditional_stop"))
             assertFalse(proof.getBoolean("automatic_trailing_authorized"))
         }
+    }
+    @Test fun unapprovedLiveSymbolIsReportedButNeverGivenManagementAuthority() {
+        val f=Fixture()
+        val unknown=JSONObject().put("symbol","FOOUSDT").put("positionSide","BOTH")
+            .put("positionAmt","2").put("entryPrice","10").put("markPrice","10.5")
+            .put("leverage","3").put("marginType","ISOLATED")
+        val unknownStop=JSONObject().put("symbol","FOOUSDT").put("positionSide","BOTH")
+            .put("algoId","901").put("clientAlgoId","MANUAL_FOO_STOP")
+            .put("orderType","STOP_MARKET").put("algoStatus","NEW").put("side","SELL")
+            .put("workingType","MARK_PRICE").put("priceProtect",false)
+            .put("closePosition",true).put("triggerPrice","9.5")
+        var standardReads=0
+        val result=readFuturesProtectionDisplaySnapshot(
+            readPositions={JSONArray().put(JSONObject(f.position.toString())).put(JSONObject(unknown.toString()))},
+            readOpenAlgosForSymbol={ symbol ->
+                if(symbol=="BNBUSDT") JSONArray().put(JSONObject(f.order.toString()))
+                else JSONArray().put(JSONObject(unknownStop.toString()))
+            },
+            contractPrice={ error("MARK_PRICE-only fixture must not request contract price") },
+            trustedObservations=JSONArray().put(f.proof),intents=JSONArray().put(f.owner),
+            clock={f.now},readOpenOrders={standardReads++;JSONArray()}
+        )
+        val proof=(0 until result.observations.length()).map {
+            result.observations.getJSONObject(it)
+        }.single { it.optString("symbol")=="FOOUSDT" }
+        assertEquals("UNMANAGED_POSITION",proof.getString("stop_proof"))
+        assertEquals("RECOVERY_REQUIRED",proof.getString("supervisor_state"))
+        assertEquals("UNVERIFIED_EXTERNAL_OR_LEGACY",proof.getString("origin"))
+        assertEquals("9.5",proof.getString("observed_stop"))
+        assertEquals("MANUAL_FOO_STOP",proof.getString("protection_client_id"))
+        assertFalse(proof.getBoolean("strategy_ownership_verified"))
+        assertFalse(proof.getBoolean("automatic_trailing_authorized"))
+        assertEquals(1,proof.getInt("signed_algo_orders_seen"))
+        assertEquals(1,standardReads)
+        assertTrue(result.protectionSnapshotComplete)
+        assertTrue(result.failedSymbols.isEmpty())
     }
 
 }

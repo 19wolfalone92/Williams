@@ -85,6 +85,18 @@ class IncrementalWilliamsMathTest {
         assertEquals(slid.first().openMs,state.seedOpenMs)
     }
 
+    @Test fun r49FiveHundredBarsConvergeAlligatorSeedButTwoHundredTwentyDoNotForJaw() {
+        val history = (1..1000).map { ClosedMedianBar(it * 3_600_000L, 100_000.0) } +
+            (1001..1220).map { ClosedMedianBar(it * 3_600_000L, 0.0) }
+        val reference = full(history).last()
+        val warm500 = full(history.takeLast(WILLIAMS_ALLIGATOR_WARMUP_BARS)).last()
+        val warm220 = full(history.takeLast(220)).last()
+        assertTrue(kotlin.math.abs(reference.jaw!! - warm500.jaw!!) <= 1e-8)
+        assertTrue(kotlin.math.abs(reference.teeth!! - warm500.teeth!!) <= 1e-8)
+        assertTrue(kotlin.math.abs(reference.lips!! - warm500.lips!!) <= 1e-8)
+        assertTrue(kotlin.math.abs(reference.jaw!! - warm220.jaw!!) > 1e-8)
+    }
+
     @Test fun flatPricesDoNotInventAoColourOrCrossing() {
         val flat=(1..100).map { ClosedMedianBar(it*3600000L,0.1) }
         assertEquals(full(flat),IncrementalWilliamsMath().update("FLAT:1h",flat))

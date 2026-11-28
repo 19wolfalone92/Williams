@@ -478,6 +478,95 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
+    /** Real coordinator, real transport fence; source receipt itself is
+     * supplied by a test fixture. This is not a market-pattern exam. */
+    @Test fun r49CanonicalSourceReceiptFencesAllSixFamiliesAtTransport() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
+        for(family in listOf("REVERSAL","SUPER_AO","FRACTAL"))
+        for(fault in listOf("NONE","MISSING","PLAN_CHANGED","UNDERWARMED","CORRECTION","ROLLOVER","CLOCK_UNKNOWN",
+            "ISSUED_HASH_CHANGED","LIVE_HASH_CHANGED","LIVE_HASH_UNKNOWN")) {
+            val exchange=Exchange(direction)
+            val journal=Journal()
+            val now=System.currentTimeMillis()
+            val closedAt=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS
+            var sourceClock:Long?=closedAt+1_000L
+            var sourceRevision=9L
+            var sourceDigest:String?="a".repeat(64)
+            val coordinator=NativeFuturesCampaignCoordinator(journal,clock={closedAt+1_000L}) {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",exchange.client,
+                    beforeExposureTransport={
+                        when(fault) {
+                            "CORRECTION" -> sourceRevision++
+                            "ROLLOVER" -> sourceClock=closedAt+WILLIAMS_H1_MS
+                            "CLOCK_UNKNOWN" -> sourceClock=null
+                            "LIVE_HASH_CHANGED" -> sourceDigest="b".repeat(64)
+                            "LIVE_HASH_UNKNOWN" -> sourceDigest=null
+                        }
+                    })
+            }
+            coordinator.requireTc2SourceReceipt=true
+            if(fault!="MISSING") coordinator.tc2SourceReceiptVerifier={ checked ->
+                Tc2H1SourceReceipt(
+                    if(fault=="PLAN_CHANGED") checked.copy(quantity="0.5") else checked,
+                    closedAt,sourceRevision,if(fault=="ISSUED_HASH_CHANGED") "b".repeat(64) else "a".repeat(64),
+                    if(fault=="UNDERWARMED") 499 else 500,
+                    { sourceClock }, { sourceRevision }, { sourceDigest })
+            }
+            val type=if(direction.name=="LONG") family else "SHORT_"+family
+            val signalAt=closedAt-WILLIAMS_H1_MS
+            val candidate=plan(direction).copy(signalType=type,signalBarTimeMs=signalAt,
+                signalId="BTCUSDT:1h:"+type+":"+signalAt)
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(candidate)
+            assertEquals("$direction/$family/$fault: $result",fault=="NONE",result.getBoolean("accepted"))
+            val posts=exchange.posts("/fapi/v1/algoOrder")+exchange.posts("/fapi/v1/order")
+            assertEquals("$direction/$family/$fault",if(fault=="NONE") 1 else 0,posts)
+            val owner=coordinator.intentsSnapshot().getJSONObject(0)
+            if(fault=="NONE") assertEquals(candidate.signalId,owner.getJSONObject("tc2_source_receipt").getString("signal_id"))
+            else {
+                assertTrue(result.toString(),result.optString("error").contains("TC2_CANONICAL_ADMISSION:"))
+                assertFalse(result.getBoolean("order_mutation_attempted"))
+                assertFalse(isEntryCampaignReserved(owner))
+            }
+        }
+    }
+    
+    @Test fun r50StrictProductionRejectsOperatorForcedDirectionBeforeAnyPost() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            coordinator.requireTc2SourceReceipt=true
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(plan(direction).copy(signalType="OPERATOR_FORCED_DIRECTION"))
+            assertFalse(result.toString(),result.getBoolean("accepted"))
+            assertTrue(result.toString(),result.optString("blocker").contains("TC2_CANONICAL_ADMISSION:"))
+            assertEquals(0,exchange.posts("/fapi/v1/order")+exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun quoteRiskJournalMutationAtTransportRejectsWithoutOrder() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val journal=Journal()
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(journal) {
+                BinanceUsdMFuturesTestnetAdapter("key","secret",exchange.client,
+                    beforeExposureTransport={
+                        val key="futures_campaign_intents_v2"
+                        val rows=JSONArray(journal.readState(key))
+                        rows.getJSONObject(0).put("risk_quote_usdt",9999.0)
+                        check(journal.writeState(key,rows.toString()))
+                    })
+            }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(plan(direction))
+            assertFalse(result.toString(),result.getBoolean("accepted"))
+            assertTrue(result.toString(),result.optString("error").contains("QUOTE_RISK_LEDGER_JOURNAL_CHANGED"))
+            assertEquals(0,exchange.posts("/fapi/v1/algoOrder")+exchange.posts("/fapi/v1/order"))
+            assertEquals(9999.0,JSONArray(journal.readState("futures_campaign_intents_v2"))
+                .getJSONObject(0).getDouble("risk_quote_usdt"),0.0)
+        }
+    }
+
     @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
         val journal = Journal()
         val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)
@@ -772,6 +861,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         var beforeMarkRead:(()->Unit)?=null
         var loseProtectionReply=false
         var rejectProtectionCode:Int?=null
+        var tickOverride: String? = null
         var rejectSecondCloseAll=false
         var failPendingQueries=false
         var beforeRequest: ((Request, Map<String, String>) -> Unit)? = null
@@ -818,7 +908,7 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "/fapi/v1/exchangeInfo" -> JSONObject("""{"symbols":[{"symbol":"$symbol","status":"TRADING","filters":[
                     {"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
                     {"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},
-                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"${if(symbol=="ETHUSDT") "0.01" else "0.1"}"},
+                    {"filterType":"PRICE_FILTER","minPrice":"0.1","maxPrice":"1000000","tickSize":"${tickOverride ?: if(symbol=="ETHUSDT") "0.01" else "0.1"}"},
                     {"filterType":"MIN_NOTIONAL","notional":"5"}]}]}""")
                 "/fapi/v1/leverageBracket" -> JSONObject("""{"symbol":"$symbol","brackets":[
                     {"notionalFloor":0,"notionalCap":1000000,"initialLeverage":125,"maintMarginRatio":0.005}]}""")
@@ -2353,7 +2443,7 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
 
-    @Test fun confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill() {
+    @Test fun confirmedBookOppositeExitDoesNotRealizeLossUnderPolicyUAndKeepsStopProtected() {
         val h=3_600_000L
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
             var time=System.currentTimeMillis()-4*h
@@ -2364,16 +2454,15 @@ class NativeFuturesCoordinatorLifecycleTest {
             val clientId=owner.getString("client_id")
             val protectionId=owner.getString("protection_client_id")
             // The mock exchange retains its authenticated open stop until
-            // the reduce-only close is confirmed FLAT.
+            // an independently permitted reduce-only close is confirmed FLAT.
             time+=4*h
             val signalAt=time-2*h
             val observed=time-1_000L
             val opposite=if(direction.name=="LONG") "SHORT" else "LONG"
-            // TC2 p.154/158: no positive-PnL prerequisite. The CLOSED
-            // H1 Wise-Man trigger, not a loss amount, controls the exit.
+            // TC2 permits a valid Stop-and-Reverse in POLICY T; production
+            // remains under POLICY U and must not realize a losing exit.
             val trigger=if(direction.name=="LONG") 110.0 else 90.0
             exchange.mark=if(direction.name=="LONG") 99.0 else 101.0
-            // A price that has NOT crossed the opposite stop is insufficient.
             exchange.contract=if(direction.name=="LONG") 111.0 else 89.0
             val signalId="BOOK:OPPOSITE:"+direction.name
             val event=JSONObject().put("state","TRIGGERED").put("known_at_ms",time-60_000L)
@@ -2398,8 +2487,6 @@ class NativeFuturesCoordinatorLifecycleTest {
                 .put("observed_at_ms",observed).put("opposition_check",decision))
             coordinator.saveManagementState("BTCUSDT",clientId,management)
             val postsBefore=exchange.posts("/fapi/v1/order")
-            // No MARKET exit before the *actual CONTRACT* crosses the
-            // opposing H1 stop; preserve the original exchange STOP.
             val notTriggered=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_NOT_TRIGGERED_"+direction.name,reason)
             assertFalse(notTriggered.toString(),notTriggered.optBoolean("ok",false))
@@ -2410,22 +2497,25 @@ class NativeFuturesCoordinatorLifecycleTest {
             assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
-            // At this price the original LONG / SHORT is actually LOSING.
-            // Triggered opposite exit must be allowed, but only after all
-            // signed owner, exact quantity and signal checks have succeeded.
+            // The opposite trigger is now current, but the original campaign
+            // is losing. POLICY U must block the market close without touching
+            // the existing exchange STOP or creating an EXIT intent.
             exchange.contract=if(direction.name=="LONG") 99.0 else 101.0
             val result=coordinator.closePosition("BTCUSDT",direction,"1",
                 "W2X_BOOK_AT_LOSS_"+direction.name,reason)
-            assertTrue(result.toString(),result.optBoolean("ok",false))
-            assertEquals(postsBefore+1,exchange.posts("/fapi/v1/order"))
-            assertEquals(0.0,exchange.quantity,0.0)
-            assertFalse(exchange.algos.values.any {
+            assertFalse(result.toString(),result.optBoolean("ok",false))
+            assertEquals("WILLIAMS_OPPOSITE_EXIT_NET_PROFIT_NOT_CONFIRMED_AT_BID_ASK",
+                result.optString("blocker"))
+            assertEquals(postsBefore,exchange.posts("/fapi/v1/order"))
+            val expectedSignedQuantity=if(direction==NativeFuturesCampaignCoordinator.Direction.LONG) 1.0 else -1.0
+            assertEquals(expectedSignedQuantity,exchange.quantity,0.0)
+            assertEquals("OPEN_PROTECTED",coordinator.state.name)
+            assertTrue(exchange.algos.values.any {
                 it.optString("clientAlgoId")==protectionId && it.optString("algoStatus")=="NEW"
             })
             assertTrue(coordinator.intentsSnapshot().let { rows->
-                (0 until rows.length()).map { rows.getJSONObject(it) }.any {
-                    it.optString("intent_role")=="EXIT" &&
-                    it.optString("reason")==reason && it.optString("exit_authority")=="PINNED_EDITION_RULE"
+                (0 until rows.length()).map { rows.getJSONObject(it) }.none {
+                    it.optString("intent_role")=="EXIT" && it.optString("reason")==reason
                 }
             })
         }
@@ -4509,6 +4599,302 @@ class NativeFuturesCoordinatorLifecycleTest {
                 "exchange_protection_observations").getJSONObject(0).getString("stop_proof"))
             assertEquals(beforePosts,exchange.posts("/fapi/v1/algoOrder"))
             assertFalse(restart.status().getBoolean("ready_for_new_entry"))
+        }
+    }
+    @Test fun symbolScopedProtectionFailureDoesNotHideOtherOpenPosition() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform = { rows ->
+            JSONArray(rows.toString()).put(JSONObject().put("symbol","ETHUSDT")
+                .put("positionSide","BOTH").put("positionAmt","-0.010")
+                .put("entryPrice","2249.73").put("markPrice","2235.78")
+                .put("leverage","2").put("marginType","ISOLATED"))
+        }
+        exchange.beforeRequest = { request, params ->
+            if(request.url.encodedPath=="/fapi/v1/openAlgoOrders" && params["symbol"]=="ETHUSDT")
+                throw java.io.IOException("ETH signed conditional-order read unavailable")
+        }
+        val algoPostsBefore=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        val observations=result.getJSONArray("exchange_protection_observations")
+        val btc=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="BTCUSDT" }
+        val eth=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="ETHUSDT" }
+        assertEquals("OWNED_STOP_SEEN",btc.getString("stop_proof"))
+        assertEquals("PROTECTED",btc.getString("supervisor_state"))
+        assertEquals("PROTECTION_UNKNOWN",eth.getString("stop_proof"))
+        assertEquals("PROTECTION_UNKNOWN",eth.getString("supervisor_state"))
+        assertFalse(result.getBoolean("exchange_snapshot_complete"))
+        assertEquals("DEGRADED_FAIL_CLOSED",result.getJSONObject("protection_supervisor").getString("state"))
+        assertTrue(result.getJSONObject("symbol_reconciliation_failures").has("ETHUSDT"))
+        assertTrue(eth.getString("protection_supervisor_error").contains("ETH signed"))
+        assertEquals(algoPostsBefore,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
+    @Test fun unknownPositionOutsideApprovedUniverseDoesNotAbortApprovedPositionProtection() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        exchange.positionSnapshotTransform = { rows ->
+            JSONArray(rows.toString()).put(JSONObject().put("symbol","FOOUSDT")
+                .put("positionSide","BOTH").put("positionAmt","2")
+                .put("entryPrice","10").put("markPrice","10.5")
+                .put("leverage","3").put("marginType","ISOLATED")
+                .put("unRealizedProfit","1.0"))
+        }
+        val algoPostsBefore=exchange.posts("/fapi/v1/algoOrder")
+        val result=coordinator.reconcile()
+        assertFalse(result.toString(),result.getBoolean("ok"))
+        assertEquals("POSITION_UNPROTECTED",result.getString("state"))
+        assertEquals(2,result.getInt("open_positions"))
+        assertEquals(1,result.getInt("managed_open_positions"))
+        assertEquals(1,result.getInt("unmanaged_open_positions_count"))
+        val unmanaged=result.getJSONArray("unmanaged_open_positions").getJSONObject(0)
+        assertEquals("FOOUSDT",unmanaged.getString("symbol"))
+        assertEquals("UNVERIFIED_EXTERNAL_OR_LEGACY",unmanaged.getString("origin"))
+        assertEquals("RECOVERY_REQUIRED",unmanaged.getString("supervision_state"))
+        val observations=result.getJSONArray("exchange_protection_observations")
+        val btc=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="BTCUSDT" }
+        val foo=(0 until observations.length()).map { observations.getJSONObject(it) }
+            .single { it.optString("symbol")=="FOOUSDT" }
+        assertEquals("OWNED_STOP_SEEN",btc.getString("stop_proof"))
+        assertEquals("PROTECTED",btc.getString("supervisor_state"))
+        assertEquals("UNMANAGED_POSITION",foo.getString("stop_proof"))
+        assertEquals("RECOVERY_REQUIRED",foo.getString("supervisor_state"))
+        assertFalse(foo.getBoolean("strategy_ownership_verified"))
+        assertFalse(foo.getBoolean("automatic_trailing_authorized"))
+        assertEquals(algoPostsBefore,exchange.posts("/fapi/v1/algoOrder"))
+        assertEquals(0,exchange.posts("/fapi/v1/order"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+    }
+
+    @Test fun generalCoordinatorMonitorIsNotHeldDuringSignedNetworkReconciliation() {
+        val (coordinator,exchange)=open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val networkEntered=CountDownLatch(1)
+        val releaseNetwork=CountDownLatch(1)
+        val reconciliationResult=AtomicReference<JSONObject?>()
+        exchange.beforeRequest = { request, _ ->
+            if(request.url.encodedPath=="/fapi/v3/positionRisk") {
+                networkEntered.countDown()
+                if(!releaseNetwork.await(5,TimeUnit.SECONDS))
+                    throw java.io.IOException("test network latch timed out")
+            }
+        }
+        val reconciliation=Thread { reconciliationResult.set(coordinator.reconcile()) }
+        reconciliation.start()
+        assertTrue("signed REST call did not reach the network wait",
+            networkEntered.await(2,TimeUnit.SECONDS))
+        val probeDone=CountDownLatch(1)
+        val probe=Thread {
+            coordinator.recordReconciliationBlocker("general_monitor_nonblocking_probe")
+            probeDone.countDown()
+        }
+        probe.start()
+        val generalMonitorAvailable=probeDone.await(750,TimeUnit.MILLISECONDS)
+        releaseNetwork.countDown()
+        reconciliation.join(5_000)
+        probe.join(5_000)
+        assertTrue("general coordinator monitor remained held during signed REST I/O",
+            generalMonitorAvailable)
+        assertFalse("reconciliation thread did not finish",reconciliation.isAlive)
+        assertFalse("general monitor probe did not finish",probe.isAlive)
+        assertNotNull(reconciliationResult.get())
+        val result = reconciliationResult.get()!!
+        assertFalse(result.toString(), result.getBoolean("ok"))
+        assertFalse(result.getBoolean("exchange_snapshot_complete"))
+        assertTrue(result.getBoolean("reconciliation_fence_changed"))
+        assertFalse(coordinator.status().getBoolean("ready_for_new_entry"))
+        assertTrue(coordinator.reconcile().getBoolean("ok"))
+    }
+
+    @Test fun journalWriterCannotLoseUpdateBehindDelayedReconciliation() {
+        val (coordinator, exchange) = open(NativeFuturesCampaignCoordinator.Direction.LONG)
+        val owner = coordinator.intentsSnapshot().getJSONObject(0).getString("client_id")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writerStarted = CountDownLatch(1)
+        val writerDone = CountDownLatch(1)
+        val result = AtomicReference<JSONObject?>()
+        val written = AtomicReference<Boolean?>()
+        exchange.beforeRequest = { request, _ ->
+            if (request.url.encodedPath == "/fapi/v3/positionRisk") {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+            }
+        }
+        val sync = Thread { result.set(coordinator.reconcile()) }
+        val writer = Thread {
+            writerStarted.countDown()
+            try {
+                written.set(coordinator.markTradeJournalStatus(owner, "TEST_JOURNAL_UPDATE", "concurrent history"))
+            } finally { writerDone.countDown() }
+        }
+        sync.start()
+        try {
+            assertTrue(entered.await(2, TimeUnit.SECONDS))
+            writer.start()
+            assertTrue(writerStarted.await(2, TimeUnit.SECONDS))
+            assertFalse("Ledger writer bypassed reconciliation mutation serialization",
+                writerDone.await(300, TimeUnit.MILLISECONDS))
+            assertEquals(owner, coordinator.intentsSnapshot().getJSONObject(0).getString("client_id"))
+        } finally {
+            release.countDown()
+            sync.join(5000)
+            writer.join(5000)
+        }
+        assertFalse(sync.isAlive)
+        assertFalse(writer.isAlive)
+        assertTrue(result.get()!!.getBoolean("ok"))
+        assertEquals(true, written.get())
+        assertEquals("TEST_JOURNAL_UPDATE", coordinator.intentsSnapshot().getJSONObject(0)
+            .getString("trade_journal_status"))
+    }
+
+
+    @Test fun initialStopPrecisionRejectionRetriesOnceAfterRestartAndConfirmsProtection() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            val rejected = coordinator.reconcile()
+            assertFalse(rejected.toString(), rejected.getBoolean("ok"))
+            assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("NOT_SUBMITTED", owner.getString("protection_status"))
+            assertEquals(-1111, owner.getInt("initial_stop_definitive_rejection_code"))
+            assertEquals(1, owner.getInt("initial_stop_definitive_rejection_count"))
+            assertTrue(owner.optString("initial_stop_rejection_id").isNotBlank())
+            assertTrue(owner.optString("protection_client_id").isBlank())
+            exchange.rejectProtectionCode = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            val protectedOwner = restarted.intentsSnapshot().getJSONObject(0)
+            assertEquals("PROTECTED", protectedOwner.getString("protection_status"))
+            assertFalse(protectedOwner.has("initial_stop_definitive_rejection_count"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(1, exchange.algos.values.count { it.optString("closePosition") == "true" })
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun precisionRetryRefreshesDemoGridAndTightensOnlyBeforePosting() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            exchange.tickOverride = "0.3"
+            exchange.rejectProtectionCode = null
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val result = restarted.reconcile()
+            assertTrue(result.toString(), result.getBoolean("ok"))
+            val owner = restarted.intentsSnapshot().getJSONObject(0)
+            val expected = if (direction.name == "LONG") "95.2" else "104.8"
+            assertEquals(expected, owner.getString("protective_stop"))
+            assertEquals(if (direction.name == "LONG") "95" else "105", owner.getString("initial_protective_stop"))
+            assertEquals("0.3", owner.getJSONObject("initial_stop_precision_recovery").getString("tick_size"))
+            assertEquals(expected, exchange.algos.values.single { it.optString("closePosition") == "true" }.getString("triggerPrice"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+        }
+    }
+
+    @Test fun impossiblePrecisionGridDoesNotPostOrCloseAfterGridRecovers() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            // 0.1 + multiples of 40 gives no grid point between 95 and
+            // 105 with mark=100: no protective non-widening trigger.
+            exchange.tickOverride = "40"
+            val failed = coordinator.reconcile()
+            val exits = failed.getJSONArray("required_safety_exits")
+            assertEquals(failed.toString(), 1, exits.length())
+            assertEquals(2, exchange.posts("/fapi/v1/algoOrder"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertTrue(owner.getBoolean("initial_stop_grid_unplaceable"))
+            assertEquals(1, owner.getInt("initial_stop_definitive_rejection_count"))
+            exchange.tickOverride = "0.1"
+            exchange.rejectProtectionCode = null
+            assertFalse(coordinator.executeRequiredUnprotectedSafetyExit(exits.getJSONObject(0)).getBoolean("ok"))
+            assertEquals(0, exchange.posts("/fapi/v1/order"))
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            assertTrue(recovered.toString(), recovered.getBoolean("ok"))
+            assertEquals("PROTECTED", restarted.intentsSnapshot().getJSONObject(0).getString("protection_status"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
+    @Test fun repeatedInitialStopPrecisionRejectionRequiresVerifiedReduceOnlyEmergencyClose() {
+        for (direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange = Exchange(direction)
+            val journal = Journal()
+            val coordinator = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            assertTrue(coordinator.submitPendingEntry(plan(direction)).getBoolean("accepted"))
+            exchange.fill()
+            exchange.rejectProtectionCode = -1111
+            assertFalse(coordinator.reconcile().getBoolean("ok"))
+            val second = coordinator.reconcile()
+            assertFalse(second.toString(), second.getBoolean("ok"))
+            val owner = coordinator.intentsSnapshot().getJSONObject(0)
+            assertEquals("INITIAL_STOP_TRIGGER_REJECTED", owner.getString("protection_status"))
+            assertEquals(2, owner.getInt("initial_stop_definitive_rejection_count"))
+            assertTrue(owner.optLong("unprotected_safety_exit_required_at_ms") > 0L)
+            assertTrue(owner.optString("protection_client_id").isBlank())
+            val exits = second.getJSONArray("required_safety_exits")
+            assertEquals(1, exits.length())
+            val request = exits.getJSONObject(0)
+            assertEquals("INITIAL_STOP_TRIGGER_REJECTED", request.getString("guard_origin"))
+            // A process restart must not lose the emergency request when mark
+            // remains on the original protective side of the rejected trigger.
+            val restarted = NativeFuturesCampaignCoordinator(journal) { exchange.adapter() }
+            val recovered = restarted.reconcile()
+            val recoveredExits = recovered.getJSONArray("required_safety_exits")
+            assertEquals(recovered.toString(), 1, recoveredExits.length())
+            assertEquals(request.getString("entry_client_id"), recoveredExits.getJSONObject(0).getString("entry_client_id"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
+            exchange.rejectProtectionCode = null
+            val closed = restarted.executeRequiredUnprotectedSafetyExit(recoveredExits.getJSONObject(0))
+            assertTrue(closed.toString(), closed.getBoolean("ok"))
+            assertEquals(0.0, exchange.quantity, 1e-9)
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+            // The order history contains the filled entry child AND the emergency
+            // exit. Identify the exit by the actual POST client ID, not map size.
+            val closePost = exchange.requests.single { it.method == "POST" &&
+                it.url.encodedPath == "/fapi/v1/order" }
+            val closeParams = Exchange.params(closePost)
+            assertEquals("true", closeParams["reduceOnly"])
+            assertEquals(if (direction.name == "LONG") "SELL" else "BUY", closeParams["side"])
+            val exit = exchange.orders.values.single {
+                it.optString("clientOrderId") == closeParams["newClientOrderId"]
+            }
+            assertEquals("true", exit.optString("reduceOnly"))
+            assertEquals("FILLED", exit.getString("status"))
+            assertEquals(1.0, exit.getString("executedQty").toDouble(), 1e-9)
+            assertEquals("false", exchange.orders.getValue("42").optString("reduceOnly"))
+            assertEquals(2, exchange.orders.size)
+            assertFalse(restarted.executeRequiredUnprotectedSafetyExit(request).getBoolean("ok"))
+            assertEquals(1, exchange.posts("/fapi/v1/order"))
+            assertEquals(3, exchange.posts("/fapi/v1/algoOrder"))
         }
     }
 

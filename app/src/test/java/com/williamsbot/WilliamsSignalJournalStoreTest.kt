@@ -99,6 +99,38 @@ class WilliamsSignalJournalStoreTest {
         assertEquals(1,store.writes)
     }
 
+    @Test fun absenceFromNextClosedScanIsNotStructuralInvalidationProof() {
+        val store=FakeStore()
+        val journal=WilliamsSignalJournal(store)
+        val policy=WilliamsEntryTimePolicy()
+        val symbol="BTCUSDT"
+        val id="signal_not_reemitted"
+        assertTrue(journal.observe(symbol,JSONArray().put(sourceSignal(symbol,id)),now,policy))
+        assertTrue(journal.observe(symbol,JSONArray(),now+1_000L,policy))
+        val data=JSONObject(store.values.getValue("signal_timeline_"+symbol))
+        val events=data.getJSONArray("events")
+        assertEquals("NOT_REEMITTED",events.getJSONObject(events.length()-1).getString("state"))
+        assertEquals("NOT_REEMITTED_IN_CURRENT_CLOSED_BAR_SCAN_NO_STRUCTURAL_INVALIDATION_PROOF",
+            events.getJSONObject(events.length()-1).getString("reason"))
+        val fact=journal.view(symbol,JSONArray(),now+1_000L).getJSONArray("signals").getJSONObject(0)
+        assertEquals("NOT_REEMITTED",fact.getString("state"))
+        assertEquals("NOT_REEMITTED",williamsSignalLifecycle(fact,null,now+1_000L,now+1_000L,false))
+    }
+
+    @Test fun explicitSignalExpiryStillProducesExpiredTerminalState() {
+        val store=FakeStore()
+        val journal=WilliamsSignalJournal(store)
+        val policy=WilliamsEntryTimePolicy()
+        val symbol="BTCUSDT"
+        val signal=sourceSignal(symbol,"signal_expired").put("type","COURSE_THUMB")
+            .put("strategy_profile",williamsCourseProfile).put("expires_at_ms",now+1_000L)
+        journal.observe(symbol,JSONArray().put(signal),now,policy)
+        journal.observe(symbol,JSONArray(),now+1_001L,policy)
+        val events=JSONObject(store.values.getValue("signal_timeline_"+symbol)).getJSONArray("events")
+        assertEquals("EXPIRED",events.getJSONObject(events.length()-1).getString("state"))
+        assertEquals("EXPIRED",williamsSignalLifecycle(signal,null,now+1_001L,now+1_001L,false))
+    }
+
     @Test fun emptyHistoricalOwnersDoNotCreatePhantomSignalHistory() {
         val store=FakeStore()
         val journal=WilliamsSignalJournal(store)
@@ -139,6 +171,13 @@ class WilliamsSignalJournalStoreTest {
             .getJSONArray("signals").getJSONObject(0)
         assertEquals("BINANCE_PENDING",fact.getString("state"))
         assertEquals(now-1_000L,fact.getLong("exchange_observed_at_ms"))
+    }
+
+    @Test fun tc2WiseManLifecycleIgnoresLegacyAgeExpiryAfterTwentyFiveBars() {
+        val signal=sourceSignal("BTCUSDT","old_wm1").put("type","REVERSAL")
+            .put("expires_at_ms",now+5*3_600_000L)
+        val later=now+25*3_600_000L
+        assertEquals("VALID",williamsSignalLifecycle(signal,null,later,later,true))
     }
 
 }

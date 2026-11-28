@@ -178,8 +178,10 @@ def test_android_campaign_and_intents_are_sqlite_backed():
     assert "private val executionStore = FuturesExecutionStore(context)" in runtime
     assert "NativeFuturesCampaignCoordinator(executionStore)" in runtime
     assert "executionStore.writeRuntimeState" in runtime
-    assert 'executionStore.writeState("futures_daily_loss_pct", lossPct.toString())' in runtime
-    assert 'executionStore.writeState("futures_daily_pnl_usdt", dailyPnlQuote.toString())' in runtime
+    assert "executionStore.writeDailyRiskMetrics(" in runtime
+    assert '"futures_daily_loss_pct" to lossFraction' in store
+    assert '"futures_daily_pnl_usdt" to pnl' in store
+    assert "db.transaction {" in store
     assert 'executionStore.readState("futures_daily_pnl_usdt")' in runtime
     assert "executionStore.readState" in runtime
     assert "private val executionStore: FuturesCampaignStateStore" in coordinator
@@ -207,24 +209,27 @@ def test_android_daily_loss_is_rechecked_at_order_admission():
     assert "val dailyLossAllowsEntry = runCatching { checkFuturesDailyLoss() }" in runtime
     assert "if (!dailyLossAllowsEntry) return" in runtime
     assert "FUTURES_DAILY_LOSS_CHECK_FAILED" in runtime
-    assert 'if (lossPct >= futuresDailyLossLimitPct)' in runtime
+    assert "calculateFuturesDailyRiskModelB(" in runtime
+    assert "val dailyHaltSaved = !calculation.entryBlocked" in runtime
+    assert "futures_daily_risk_model_b_snapshot_" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked" in runtime
 
 
-def test_android_reversal_htf_gate_matches_python_campaign_contract():
+def test_android_and_python_tc2_h1_entries_do_not_require_independent_htf_confirmation():
     android = _read(ANDROID / "java/com/williamsbot/StandaloneRuntime.kt")
     python = _read(ROOT / "futures_williams_runtime.py")
 
-    # Directional context is ranked only after both H1 hypotheses are preserved.
-    # TC2 chapter 12 requires its H1 book signal, not H4/D1 alignment; D1/H4 remain traced as context.
+    # D1/H4 are context only. WM1, WM2 and WM3 are independent H1 TC2 entries.
     assert "internal fun directionalSignalContextRank(" in android
     assert "val freshSignals = candidate.campaignSignals.filter" in android
     assert "fun contextRank(signal: CampaignSignalN): Int = williamsBookInitialContextRank(" in android
     assert 'williamsInitialHigherFrameHistoryRequired(it.strategyProfile)' in android
     assert "internal fun campaignSignalDirection(signalType: String): String?" in android
     assert "WILLIAMS_SIGNAL_DIRECTION_UNKNOWN: refusing to default an unknown signal to LONG" in android
-    assert "return signal_type != SignalType.REVERSAL" in python
-
-
+    assert "def _requires_directional_htf_confirmation" not in python
+    assert "HTF confirmation gate blocked initial campaign" not in python
+    assert "TC2 WM1, WM2 and WM3 are independent H1 entries" in python
+    assert "htf_confirmed=bool(htf_ok)" in python
 def test_android_manual_direction_override_is_removed_fail_closed_and_legacy_orders_recover():
     """Product requirement: no forced trading UI or exchange admission on old API routes.
 
@@ -384,8 +389,8 @@ def test_android_defaults_match_the_approved_multi_symbol_campaign_risk_profile(
     assert '"max_daily_loss_pct",\n                0.03' in main
     assert '"max_total_risk_pct",\n                0.006' in main
     assert '.put("max_daily_loss_pct", futuresDailyLossLimitPct)' in runtime
-    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
-    assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached; new entries blocked" in runtime
+    assert "val dailyHaltSaved = !calculation.entryBlocked" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached; new entries blocked" in runtime
 
 
 def test_android_diagnostics_do_not_fake_self_heal_readiness():
@@ -776,7 +781,7 @@ def test_android_websocket_closed_candles_are_persisted_before_history_readiness
     # The former mutable WS cache seeded SQLite, then returned its own list.
     # The stronger replacement admits only the revision-bound durable window.
     assert "liveCandleCache" not in fetch
-    assert "durableWorkingHistory(normalizedSymbol,frame,limit)" in fetch
+    assert "durableWorkingHistory(normalizedSymbol,frame,effectiveLimit)" in fetch
     assert "durable.continuous" in fetch
     assert "historyStore.indicatorCacheRevision(normalizedSymbol,frame)==durable.revision" in fetch
     assert fetch.index("durable.continuous") < fetch.index("return closed")
@@ -1085,9 +1090,11 @@ def test_h1_parent_invalidation_and_fractal_reanchor_use_the_candle_price_basis(
     assert 'sourceEvidence.filter { it.profile==signal.strategyProfile },waveBars,contractPrice,now)' in context
     assert '},contractPrice,now)==null' in context
     assert 'futuresMarketData.markPrice' not in context
-    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('proposal?.let', 1)[0]
+    reanchor = runtime.split('val proposal=confirmedBetterFractal(', 1)[1].split('if(next!=null)', 1)[0]
     assert 'futuresMarketData.price(symbol)' in reanchor
     assert 'futuresMarketData.markPrice' not in reanchor
+    assert 'tc2ReanchorMarketBlocker(pending,proposal,contract,closed,recent,tick,preflightNow)' in reanchor
+    assert 'PRE_CANCEL_REJECTED_OLD_RETAINED' in reanchor
 
 
 def test_tc2_opposing_h1_signal_only_closes_with_causal_book_proof_and_live_contract():

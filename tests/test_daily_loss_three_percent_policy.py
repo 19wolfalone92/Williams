@@ -24,9 +24,9 @@ def test_android_entry_halt_and_three_loss_guard_match_canonical_policy():
     runtime = (base / "StandaloneRuntime.kt").read_text()
     journal = (base / "TradeJournal.kt").read_text()
     assert "private val futuresDailyLossLimitPct = 0.03" in runtime
-    assert "if (lossPct >= futuresDailyLossLimitPct)" in runtime
+    assert "val dailyHaltSaved = !calculation.entryBlocked" in runtime
     assert runtime.count('.put("max_daily_loss_pct", futuresDailyLossLimitPct)') == 3
-    assert "FUTURES_DAILY_LOSS_LIMIT: 3% reached" in runtime
+    assert "FUTURES_DAILY_LOSS_LIMIT: 3% Model B limit reached" in runtime
     assert '.put("max_consecutive_losses", 3)' in runtime
     assert "FUTURES_DAILY_LOSS_TRADE_LIMIT" not in journal
     assert "maximumConsecutiveLosses: Int = 3" in journal

@@ -1051,10 +1051,17 @@
       "id": "TC2.EXIT.STOP_AND_REVERSE",
       "book": "TC2",
       "pdf_pages": [
+        136,
+        137,
+        148,
         155,
-        165
+        163,
+        164,
+        165,
+        171,
+        172
       ],
-      "rule": "TC2 opposite confirmed Wise-Man breakout closes the owned campaign; a distinct opposite campaign follows only after a signed full exit, flat position and old STOP cleanup, with fresh H1 evidence, new risk and a new protective STOP.",
+      "rule": "TC2 chapters 9, 10 and 12: a valid opposite Wise-Man/fractal signal with a confirmed level event can trigger Stop-and-Reverse; mere appearance of an opposite Wise Man is insufficient. The new opposite campaign is permitted only after signed full exit, confirmed flat position and old STOP cleanup, with fresh H1 evidence, new risk admission and a new protective STOP. Canonical POLICY T is research-only; active production POLICY U preserves the user's restriction against realizing a loss solely because of an opposite signal.",
       "status": "IMPLEMENTED_PARTIAL",
       "modules": [
         "williams_execution_policy.py",
@@ -1068,7 +1075,9 @@
       ],
       "tests": [
         "tests/test_tc2_final_exit_door.py::test_tc2_exit_rereads_exact_futures_contract_before_exit_intent",
-        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitFlattensOnlyOwnedPositionWithStopHeldUntilFill",
+        "app/src/test/java/com/williamsbot/WilliamsScenarioLifecycleTest.kt::sameTriggeredOppositionRevokesParentAndExitsOlderPositionInBothDirections",
+        "tests/test_williams_scenario_lifecycle.py::test_same_confirmed_opposition_revokes_unfilled_parent_and_exits_older_position",
+        "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::confirmedBookOppositeExitDoesNotRealizeLossUnderPolicyUAndKeepsStopProtected",
         "tests/test_williams_tc2_reversal.py::test_shared_two_leg_contract_rejects_unconfirmed_flat_replay_and_price_chasing",
         "app/src/test/java/com/williamsbot/WilliamsTc2ReversalTest.kt::sharedTwoLegContractRejectsUnconfirmedFlatReplayAndPriceChasing",
         "app/src/test/java/com/williamsbot/NativeFuturesCoordinatorLifecycleTest.kt::bookReversalUsesTwoDistinctFilledCampaignsAndNewProtectionWithoutDuplicateEntry",
@@ -1081,9 +1090,20 @@
         "cases/already-admitted",
         "cases/trigger-recovered"
       ],
-      "remaining_evidence": "Native execution now implements the second leg with deterministic client id and source-pinned H1 revalidation, fresh position/order/quote checks, independent sizing and new STOP. Shared Python/Kotlin semantic fixtures and real coordinator transport/SQLite model cover both directions, partial exits, lost close/entry replies and restart. The existing user positive-after-cost exit restriction is retained. Physical Android Demo acceptance and backend Python automatic reversal execution remain pending; canonical Python evaluator is read-only. Historical exit comparison now displays 3/4/5 raw closed H1 extremes at real recorded exit without projecting alternative fills or revising signed exchange STOP. Original book figure coverage, actual intrabar paths and Demo STOP receipts remain unknown.",
+      "remaining_evidence": "TC2 source pages 121-122, 133, 148-150 and 156-157 were re-read from the SHA-verified primary PDF. They establish the valid-signal/confirmed-level Stop-and-Reverse, initial protection, 3-5-bar exits and reverse pyramid. Production Android/Python retain POLICY U; the 0.35% reserve is an engineering cost approximation, not a TC2 rule. POLICY T remains a separate research policy pending full portfolio comparison. The signal-level trigger/reversal and two-leg close/flat/new-STOP tests are linked; full independent human chart annotation, complete four-source page coverage, backend Python automatic reversal execution, physical Demo receipts and actual intrabar paths remain pending.",
       "can_place_orders_from_registry": false,
-      "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json"
+      "fixture_file": "app/src/test/resources/williams_tc2_reversal_contract.json",
+      "printed_pages": [
+        121,
+        122,
+        133,
+        140,
+        148,
+        149,
+        150,
+        156,
+        157
+      ]
     },
     {
       "id": "ENGINEERING.RISK_AND_LOT_LIMITS",

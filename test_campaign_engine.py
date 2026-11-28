@@ -131,3 +131,40 @@ def test_campaign_entry_arm_rejects_expired_signal_even_if_called_directly():
         campaign = engine.create_campaign(expired, initial_risk_pct=0.001)
         with pytest.raises(ValueError, match="expired Williams entry signal"):
             engine.arm_entry(campaign, expired)
+
+
+@pytest.mark.parametrize("terminal", ["FILLED","INVALIDATED","SUPERSEDED","REPLACED"])
+def test_consumed_formation_cannot_be_replaced_or_revived_after_sqlite_restart(tmp_path, terminal):
+    path = str(tmp_path / "terminal.sqlite3")
+    signal = make_signal(bar=3_600_000)
+    db = Database(path)
+    owner = CampaignEngine(db).create_campaign(signal, initial_risk_pct=0.002)
+    db.set_campaign_signal_state(signal.signal_id, terminal)
+    db.conn.close()
+    db = Database(path)
+    assert db.terminal_campaign_signal_state(signal.signal_id) == terminal
+    with pytest.raises(RuntimeError, match="CAMPAIGN_SIGNAL_TERMINAL"):
+        CampaignEngine(db).create_campaign(signal, initial_risk_pct=0.002)
+    with pytest.raises(RuntimeError, match="CAMPAIGN_SIGNAL_TERMINAL"):
+        db.save_campaign_signal(signal, "other-owner", state="DETECTED")
+    db.set_campaign_signal_state(signal.signal_id, "VALIDATED")
+    db.set_campaign_signal_state(signal.signal_id, "CANCELLED")
+    row = db.conn.execute("SELECT campaign_id,state FROM campaign_signals WHERE signal_id=?",
+                          (signal.signal_id,)).fetchone()
+    assert tuple(row) == (owner.campaign_id, terminal)
+    db.set_campaign_signal_state(signal.signal_id, "FILLED")
+    assert db.terminal_campaign_signal_state(signal.signal_id) == "FILLED"
+    next_signal = make_signal(bar=7_200_000)
+    assert CampaignEngine(db).create_campaign(next_signal, initial_risk_pct=0.002)
+    db.conn.close()
+
+
+def test_zero_fill_cancel_is_not_an_irreversible_formation_state(tmp_path):
+    db = Database(str(tmp_path / "retry.sqlite3"))
+    signal = make_signal(bar=3_600_000)
+    CampaignEngine(db).create_campaign(signal, initial_risk_pct=0.002)
+    db.set_campaign_signal_state(signal.signal_id, "CANCELLED")
+    assert db.terminal_campaign_signal_state(signal.signal_id) is None
+    db.save_campaign_signal(signal, "reconciled-retry", state="DETECTED")
+    assert db.terminal_campaign_signal_state(signal.signal_id) is None
+    db.conn.close()

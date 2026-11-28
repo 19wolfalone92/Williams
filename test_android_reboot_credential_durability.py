@@ -43,7 +43,7 @@ def test_recoverable_missing_daily_risk_data_keeps_supervision_but_blocks_entrie
     assert 'prefs.getBoolean("risk_daily_baseline_auto_paused", false)' in runtime
     assert 'putBoolean("risk_daily_baseline_auto_paused", true)' in runtime
     for reason in ("FUTURES_DAILY_BASELINE_UNKNOWN", "FUTURES_DAILY_INCOME_UNKNOWN",
-                   "FUTURES_DAILY_UNREALIZED_PNL_UNKNOWN", "FUTURES_DAILY_PNL_INVALID"):
+                   "FUTURES_DAILY_MODEL_B_ACCOUNT_EQUITY_INVALID", "FUTURES_DAILY_PNL_INVALID"):
         assert reason in runtime
     assert "persistSafetyFlag(\"reconcile_required\", true)" in runtime
 

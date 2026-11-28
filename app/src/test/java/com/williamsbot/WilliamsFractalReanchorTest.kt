@@ -112,4 +112,86 @@ class WilliamsFractalReanchorTest {
         assertNull(find(pending("LONG",105.0).put("campaign_status","OPEN_PROTECTED"),signal("LONG",101.0,96.0),98.0))
         assertNull(find(pending("LONG",105.0).put("intent_role","ADD_ON"),signal("LONG",101.0,96.0),98.0))
     }
+
+    private fun reanchorHistory(nowMs:Long,signalAt:Long, invalidation:Boolean=false,triggered:Boolean=false):List<WilliamsWaveBar> {
+        val last=nowMs/WILLIAMS_H1_MS*WILLIAMS_H1_MS-WILLIAMS_H1_MS
+        return (0 until 60).map { index ->
+            val t=last-(59-index)*WILLIAMS_H1_MS
+            val afterSignal=t>=signalAt+WILLIAMS_H1_MS
+            WilliamsWaveBar(
+                t,100.0,
+                if(triggered && afterSignal && index==55) 106.0 else 100.1,
+                if(invalidation && afterSignal && index==55) 94.0 else 99.9,
+                100.0,1.0
+            )
+        }
+    }
+
+    @Test fun validTc2ReanchorTargetDoesNotExpireAfterFiveHours() {
+        val last=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS-WILLIAMS_H1_MS
+        val signalAt=last-8*WILLIAMS_H1_MS
+        val history=reanchorHistory(now,signalAt)
+        assertNull(tc2ReanchorTargetRetirementReason(
+            "LONG","locked-wm3",signalAt,105.0,95.0,history,now
+        ))
+    }
+
+    @Test fun structurallyInvalidatedReanchorTargetIsRetiredWithoutWaitingForTtl() {
+        val last=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS-WILLIAMS_H1_MS
+        val signalAt=last-8*WILLIAMS_H1_MS
+        val history=reanchorHistory(now,signalAt,invalidation=true)
+        assertEquals("REANCHOR_TARGET_STRUCTURALLY_INVALIDATED",
+            tc2ReanchorTargetRetirementReason(
+                "LONG","locked-wm3",signalAt,105.0,95.0,history,now
+            ))
+    }
+
+    @Test fun consumedReanchorTriggerIsRetiredAndCannotBeReused() {
+        val last=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS-WILLIAMS_H1_MS
+        val signalAt=last-8*WILLIAMS_H1_MS
+        val history=reanchorHistory(now,signalAt,triggered=true)
+        assertEquals("REANCHOR_TARGET_TRIGGER_ALREADY_CONSUMED",
+            tc2ReanchorTargetRetirementReason(
+                "LONG","locked-wm3",signalAt,105.0,95.0,history,now
+            ))
+    }
+
+    @Test fun newerConfirmedWm3SupersedesOldReanchorTarget() {
+        assertEquals("REANCHOR_TARGET_SUPERSEDED_BY_NEWER_CONFIRMED_WM3",
+            tc2ReanchorTargetRetirementReason(
+                "LONG","old-wm3",now-8*WILLIAMS_H1_MS,105.0,95.0,
+                emptyList(),now,"new-wm3"
+            ))
+    }
+
+    @Test fun unverifiedHistoryNeverRetiresReanchorTarget() {
+        assertNull(tc2ReanchorTargetRetirementReason(
+            "LONG","locked-wm3",now-8*WILLIAMS_H1_MS,105.0,95.0,
+            emptyList(),now
+        ))
+    }
+
+    @Test fun replacementRequiresActionableNewLevelAndUncrossedOldLevelBeforeCancel() {
+        val gateNow=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS+1000L
+        val last=gateNow/WILLIAMS_H1_MS*WILLIAMS_H1_MS-WILLIAMS_H1_MS
+        val bars=(0 until 60).map { i ->
+            WilliamsWaveBar(last-(59-i)*WILLIAMS_H1_MS,100.0,100.1,99.9,100.0,1.0)
+        }
+        val current=WilliamsWaveBar(last+WILLIAMS_H1_MS,100.0,100.1,99.9,100.0,1.0)
+        val recent=listOf(bars.last(),current)
+        for(side in listOf("LONG","SHORT")) {
+            val long=side=="LONG"
+            val old=pending(side,if(long) 110.0 else 90.0)
+                .put("signal_bar_time_ms",last-5*WILLIAMS_H1_MS)
+            val candidate=signal(side,if(long) 105.0 else 95.0,if(long) 90.0 else 110.0)
+                .put("signal_bar_time_ms",last-2*WILLIAMS_H1_MS)
+            assertNull(tc2ReanchorMarketBlocker(old,candidate,100.0,bars,recent,0.1,gateNow))
+            assertEquals("REANCHOR_NEW_LEVEL_NOT_ACTIONABLE",
+                tc2ReanchorMarketBlocker(old,candidate,if(long) 106.0 else 94.0,bars,recent,0.1,gateNow))
+            assertEquals("REANCHOR_OLD_ORDER_TRIGGER_CROSSED_RECONCILE",
+                tc2ReanchorMarketBlocker(old,candidate,if(long) 111.0 else 89.0,bars,recent,0.1,gateNow))
+            assertNotNull(tc2ReanchorMarketBlocker(old,candidate,100.0,bars,emptyList(),0.1,gateNow))
+            assertNotNull(tc2ReanchorMarketBlocker(old,candidate,100.0,bars.drop(1).filterIndexed { i,_ -> i!=10 },recent,0.1,gateNow))
+        }
+    }
 }

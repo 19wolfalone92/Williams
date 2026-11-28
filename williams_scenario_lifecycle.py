@@ -18,7 +18,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
     if (side not in {"LONG", "SHORT"} or not isfinite(trigger) or trigger <= 0
             or not isfinite(mark) or mark <= 0 or scope_started_at <= 0
             or not scope_started_at < signal_closed_at <= now
-            or frame_ms <= 0 or expires_at <= signal_closed_at):
+            or frame_ms <= 0 or (expires_at > 0 and expires_at <= signal_closed_at)):
         return LevelEvent("UNVERIFIED", basis="INVALID_EVENT_INPUT")
     long = side == "LONG"
     if invalidation is not None and (not isfinite(invalidation) or invalidation <= 0
@@ -28,7 +28,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
         return price >= trigger if long else price <= trigger
     def hit_invalid(price):
         return invalidation is not None and (price <= invalidation if long else price >= invalidation)
-    horizon = min(now, expires_at)
+    horizon = min(now, expires_at) if expires_at > 0 else now
     closed = [b for b in history if signal_closed_at <= b.t <= horizon-frame_ms]
     expected = signal_closed_at
     for b in closed:
@@ -50,7 +50,7 @@ def evaluate_level_event(side, trigger, signal_closed_at, scope_started_at, mark
         expected = known
     if expected <= horizon-frame_ms:
         return LevelEvent("UNVERIFIED", basis="CLOSED_HISTORY_NOT_PROVEN")
-    if now >= expires_at:
+    if expires_at > 0 and now >= expires_at:
         return LevelEvent("EXPIRED")
     if hit_invalid(mark):
         return LevelEvent("INVALIDATED", now, "LIVE_MARK")
@@ -103,3 +103,38 @@ def assess_scenario_opposition(direction, started_at, signals, bars, mark, now, 
         if any(item[1].state=="AMBIGUOUS" for item in uncertain)
         else "H1_OPPOSITION_HISTORY_UNVERIFIED" if uncertain else None)
     return {"opposition":opposition,"uncertain":uncertain,"blocker":blocker}
+
+def pending_tc2_level_event(side, signal_at, trigger, invalidation, contract, history, now):
+    """Objective lifecycle of an already resting TC2 STOP, not an admission.
+
+    A scanner omission, a missing prefix or a stale history is not cancellation
+    evidence. The separately configured order expiry remains a distinct gate.
+    """
+    frame = 3_600_000
+    if (signal_at <= 0 or signal_at % frame or len(history) < 45
+            or any(b.t <= 0 or b.t % frame or b.t + frame > now
+                   or not all(isfinite(x) and x > 0 for x in (b.o, b.h, b.l, b.c))
+                   or b.h < max(b.o, b.l, b.c) or b.l > min(b.o, b.h, b.c)
+                   for b in history)
+            or any(b.t-a.t != frame for a,b in zip(history, history[1:]))
+            or not 0 <= now-(history[-1].t+frame) < frame):
+        return LevelEvent("UNVERIFIED", basis="PENDING_CLOSED_H1_HISTORY_UNVERIFIED")
+    return evaluate_level_event(side, trigger, signal_at+frame, signal_at,
+                                contract, history, now, 2**63-1, frame, invalidation)
+
+
+def pending_tc2_cancel_reason(event, family, side, trigger, activation_teeth):
+    """Only proven invalidation can authorize a strategy cancellation.
+    TRIGGERED/AMBIGUOUS need exchange reconciliation, never inferred flatness.
+    """
+    if event.state == "INVALIDATED":
+        return "H1_PARENT_STRUCTURAL_INVALIDATION"
+    if event.state != "WAITING" or family != "FRACTAL":
+        return None
+    if not isfinite(activation_teeth) or activation_teeth <= 0:
+        return None
+    if side == "LONG" and trigger <= activation_teeth:
+        return "H1_FRACTAL_NOT_ABOVE_TEETH"
+    if side == "SHORT" and trigger >= activation_teeth:
+        return "H1_FRACTAL_NOT_BELOW_TEETH"
+    return None

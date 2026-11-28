@@ -20,7 +20,7 @@ internal fun evaluateWilliamsLevelEvent(
     fun event(state:String,at:Long=0L,basis:String="NONE")=WilliamsLevelEvent(state,at,basis)
     if(side !in listOf("LONG","SHORT") || !trigger.isFinite() || trigger<=0 ||
         !mark.isFinite() || mark<=0 || scopeStartedAt<=0 || signalClosedAt<=scopeStartedAt ||
-        signalClosedAt>now || frameMs<=0 || expiresAt<=signalClosedAt)
+        signalClosedAt>now || frameMs<=0 || (expiresAt>0L && expiresAt<=signalClosedAt))
         return event("UNVERIFIED",basis="INVALID_EVENT_INPUT")
     val long=side=="LONG"
     if(invalidation!=null && (!invalidation.isFinite() || invalidation<=0 ||
@@ -28,7 +28,7 @@ internal fun evaluateWilliamsLevelEvent(
         return event("UNVERIFIED",basis="INVALID_BOUNDARY")
     fun hitTrigger(price:Double)=if(long) price>=trigger else price<=trigger
     fun hitInvalid(price:Double)=invalidation!=null && if(long) price<=invalidation else price>=invalidation
-    val horizon=minOf(now,expiresAt)
+    val horizon=if(expiresAt>0L) minOf(now,expiresAt) else now
     // Ignore forming/future candles, including their extrema. Validate the
     // complete prefix only up to the first terminal event; later gaps cannot
     // erase a crossing that was already proven before them.
@@ -49,7 +49,7 @@ internal fun evaluateWilliamsLevelEvent(
         expected=known
     }
     if(expected<=horizon-frameMs) return event("UNVERIFIED",basis="CLOSED_HISTORY_NOT_PROVEN")
-    if(now>=expiresAt) return event("EXPIRED")
+    if(expiresAt>0L && now>=expiresAt) return event("EXPIRED")
     if(hitInvalid(mark)) return event("INVALIDATED",now,"LIVE_MARK")
     if(hitTrigger(mark)) return event("TRIGGERED",now,"LIVE_MARK")
     return event("WAITING")
@@ -109,4 +109,32 @@ internal fun assessWilliamsScenarioOpposition(
     return WilliamsScenarioAssessment(events.filter { it.event.state=="TRIGGERED" }
         .minWithOrNull(compareBy<WilliamsScenarioOpposition> { it.event.knownAt }.thenBy { it.signal.id }),
         events.filter { it.event.state in listOf("AMBIGUOUS","UNVERIFIED") })
+}
+
+/** Same objective resting TC2 STOP lifecycle as Python. Age/technical
+ * freshness and exchange status remain independent of strategy cancellation. */
+internal fun pendingTc2LevelEvent(direction:String,signalAt:Long,trigger:Double,
+    invalidation:Double,contract:Double,history:List<WilliamsWaveBar>,now:Long):WilliamsLevelEvent {
+    val frame=WILLIAMS_H1_MS
+    if(signalAt<=0 || signalAt%frame!=0L || history.size<45 ||
+        history.any { b -> b.t<=0 || b.t%frame!=0L || b.t+frame>now ||
+            listOf(b.o,b.h,b.l,b.c).any { !it.isFinite() || it<=0 } ||
+            b.h<maxOf(b.o,b.l,b.c) || b.l>minOf(b.o,b.h,b.c) } ||
+        history.zipWithNext().any { (x,y) -> y.t-x.t!=frame } ||
+        now-(history.last().t+frame) !in 0 until frame)
+        return WilliamsLevelEvent("UNVERIFIED",basis="PENDING_CLOSED_H1_HISTORY_UNVERIFIED")
+    return evaluateWilliamsLevelEvent(direction,trigger,signalAt+frame,signalAt,contract,
+        history,now,Long.MAX_VALUE,frame,invalidation)
+}
+
+internal fun pendingTc2CancelReason(event:WilliamsLevelEvent,family:String,direction:String,
+    trigger:Double,activationTeeth:Double):String? {
+    if(event.state=="INVALIDATED") return "H1_PARENT_STRUCTURAL_INVALIDATION"
+    if(event.state!="WAITING" || family.removePrefix("SHORT_").removePrefix("LONG_")!="FRACTAL") return null
+    if(!activationTeeth.isFinite() || activationTeeth<=0) return null
+    return when(direction) {
+        "LONG" -> if(trigger<=activationTeeth) "H1_FRACTAL_NOT_ABOVE_TEETH" else null
+        "SHORT" -> if(trigger>=activationTeeth) "H1_FRACTAL_NOT_BELOW_TEETH" else null
+        else -> null
+    }
 }

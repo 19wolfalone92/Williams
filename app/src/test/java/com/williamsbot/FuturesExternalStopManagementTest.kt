@@ -121,4 +121,21 @@ class FuturesExternalStopManagementTest {
         owners.put(org.json.JSONObject().put("symbol","BTCUSDT").put("intent_role","ADD_ON").put("order_status","NEW"))
         assertTrue(scope().isEmpty())
     }
+    @Test fun oneSymbolResolutionFailureQuarantinesOnlyThatPairForStopManagement() {
+        val now=1_000_000L
+        val btcOwner=owner("BTCUSDT").put("actual_risk_audit_status","PASS")
+            .put("actual_risk_audited_at_ms",now).put("liquidation_guard_status","PASS")
+        val ethOwner=owner("ETHUSDT").put("actual_risk_audit_status","PASS")
+            .put("actual_risk_audited_at_ms",now).put("liquidation_guard_status","PASS")
+        val proofs=JSONArray().put(observed("BTCUSDT").put("observed_at_ms",now))
+            .put(observed("ETHUSDT").put("observed_at_ms",now))
+        val owners=JSONArray().put(btcOwner).put(ethOwner)
+
+        val scope=verifiedQuarantineStopManagementScope(
+            proofs,JSONArray(),owners,emptySet(),now,
+            mapOf("ETHUSDT" to "SIGNED_SYMBOL_ALGO_READ_FAILED")
+        )
+        assertEquals(setOf("BTCUSDT"),scope)
+    }
+
 }

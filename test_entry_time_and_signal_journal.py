@@ -101,3 +101,46 @@ def test_ambiguous_gate_messages_do_not_invent_an_entry_time_block():
     assert reason_category('RUNTIME_OR_CAMPAIGN_NOT_READY: H1_STRUCTURE_NOT_READY')=='RUNTIME_GATE'
     assert reason_category('ENTRY_TIME_POLICY_BLOCKED_BEFORE_ADDITION')=='ENTRY_TIME'
     assert reason_category('DAILY_LOSS_OR_EQUITY_BASELINE_BLOCKED_BEFORE_ADDITION')=='RISK'
+
+
+@pytest.mark.parametrize("legacy_mode", ["UTC_WINDOW", "INVALID_LEGACY_VALUE"])
+def test_futures_config_retires_legacy_utc_windows(legacy_mode):
+    from trading_config import TradingConfig
+    config = TradingConfig.from_env({"BINANCE_MARKET": "futures_usdt",
+        "ENTRY_TIME_MODE": legacy_mode, "ENTRY_TIME_START_UTC": "08:00",
+        "ENTRY_TIME_END_UTC": "20:00"})
+    assert config.entry_time_policy.mode == "ALWAYS"
+    for hour in range(24):
+        ts = int(datetime(2026, 11, 26, hour, tzinfo=timezone.utc).timestamp()*1000)
+        assert config.entry_time_policy.allows(ts)
+    assert config.max_daily_loss_pct == 0.03
+    assert config.max_consecutive_losses == 3
+    assert config.max_total_risk_pct == 0.006
+
+
+def test_legacy_spot_utc_window_remains_unchanged():
+    from trading_config import TradingConfig
+    config = TradingConfig.from_env({"BINANCE_MARKET": "spot",
+        "ENTRY_TIME_MODE": "UTC_WINDOW", "ENTRY_TIME_START_UTC": "08:00",
+        "ENTRY_TIME_END_UTC": "20:00"})
+    assert config.entry_time_policy.mode == "UTC_WINDOW"
+    ts = int(datetime(2026, 11, 26, 21, tzinfo=timezone.utc).timestamp()*1000)
+    assert not config.entry_time_policy.allows(ts)
+
+@pytest.mark.parametrize("status,expected", [
+    ("NEW","BINANCE_PENDING"), ("PARTIALLY_FILLED","PARTIAL_FILL"),
+    ("FILLED","FILLED"), ("CANCELED","CANCELLED"),
+])
+def test_sqlite_rescan_does_not_erase_order_specific_observation(tmp_path,status,expected):
+    path=str(tmp_path/'signal-rescan.sqlite3')
+    case=CONTRACT['lifecycle_cases'][1]; now=case['now']; signal=case['signal']
+    journal=SignalJournal(Database(path))
+    journal.observe('BTCUSDT',[signal],now,EntryTimePolicy())
+    journal.order('BTCUSDT',signal['signal_id'],dict(status=status,clientOrderId='signed-order'),now+1)
+    journal.observe('BTCUSDT',[],now+2,EntryTimePolicy())
+    journal.observe('BTCUSDT',[signal],now+3,EntryTimePolicy())
+    fact=SignalJournal(Database(path)).view('BTCUSDT',now+4)['signals'][0]
+    assert fact['state']==expected
+    assert fact['first_seen_at_ms']==now
+    assert fact['exchange_observation']['client_id']=='signed-order'
+    assert fact['exchange_observation']['entry_order_observed_at_ms']==now+1

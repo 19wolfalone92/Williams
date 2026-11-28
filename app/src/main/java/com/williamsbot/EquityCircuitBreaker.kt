@@ -23,7 +23,7 @@ class EquityCircuitBreaker(
 
     @Synchronized
     fun observe(equity: Double, nowMs: Long = System.currentTimeMillis()): Snapshot {
-        if (!equity.isFinite() || equity <= 0.0) {
+        if (!equity.isFinite() || equity < 0.0) {
             return Snapshot(equity, startEquity, 0.0, tripped)
         }
 
@@ -51,6 +51,26 @@ class EquityCircuitBreaker(
             drawdownPct = lossPct,
             tripped = tripped
         )
+    }
+
+    /**
+     * Model B supplies the exact decimal threshold decision; Double is for
+     * diagnostics only. Never round a value across the emergency boundary.
+     */
+    @Synchronized
+    fun observeVerifiedModelB(
+        baseline: Double, equity: Double, emergencyReached: Boolean, nowMs: Long
+    ): Snapshot {
+        require(baseline.isFinite() && baseline > 0.0 && equity.isFinite() && equity >= 0.0)
+        val day = java.time.Instant.ofEpochMilli(nowMs)
+            .atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
+        if (day > dayKey || startEquity <= 0.0) {
+            dayKey = day
+            tripped = false
+        }
+        startEquity = baseline
+        tripped = tripped || emergencyReached
+        return Snapshot(equity, baseline, ((baseline - equity) / baseline).coerceAtLeast(0.0), tripped)
     }
 
     @Synchronized

@@ -37,13 +37,23 @@ def structural_fractal(signal_type, source=TC2):
     return source in {TC2, NTD} and str(family).removeprefix("SHORT_").removeprefix("LONG_") == "FRACTAL"
 
 
-def h1_signal_expiry(signal_at, signal_type, source=TC2):
-    """TC2 PDF149 / NTD PDF43: fractal until trigger or replacement, no age TTL.
+def signal_age_ttl_disabled(signal_type, source=TC2):
+    """True only for TC2's removed project age veto.
 
-Zero means structural validity, NOT permission to use stale market data.
-Other families retain the explicit project age policy pending source proof.
-"""
-    return 0 if structural_fractal(signal_type, source) else int(signal_at) + 5 * 3_600_000
+    NTD fractals have their separate source-backed structural lifecycle;
+    preserve an explicitly stored legacy expiry when one is present.
+    """
+    return source == TC2
+
+
+def h1_signal_expiry(signal_at, signal_type, source=TC2):
+    """Return zero when causal level evidence, not age, owns signal validity.
+
+    TC2 STOP signals remain eligible until trigger, structural invalidation or
+    confirmed replacement. This is the project lifecycle contract, not a claim
+    that every family has an author-prescribed numerical expiry.
+    """
+    return 0 if (signal_age_ttl_disabled(signal_type, source) or structural_fractal(signal_type, source)) else int(signal_at) + 5 * 3_600_000
 
 
 def closed_h1_history_blocker(bars, now):
