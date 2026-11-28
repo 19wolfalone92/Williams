@@ -14,7 +14,8 @@ internal data class Tc2H1SourceReceipt(
     val historySha256:String,
     val closedCount:Int,
     val currentExchangeMs:()->Long?,
-    val currentRevision:()->Long
+    val currentRevision:()->Long,
+    val currentHistorySha256:()->String?
 ) {
     fun blocker(plan:NativeFuturesCampaignCoordinator.EntryPlan):String? {
         val prefix="TC2_CANONICAL_ADMISSION:"
@@ -26,6 +27,12 @@ internal data class Tc2H1SourceReceipt(
         val now=runCatching { currentExchangeMs() }.getOrNull()
             ?: return prefix+"CLOCK_UNVERIFIED"
         if(now<closedAtMs || now-closedAtMs>=WILLIAMS_H1_MS) return prefix+"NEW_H1_BEFORE_TRANSPORT"
+        if(runCatching { currentRevision() }.getOrNull()!=historyRevision)
+            return prefix+"SOURCE_REVISION_CHANGED"
+        // A syntactically valid but unrelated checksum cannot authorize risk.
+        // Re-read the same local immutable history window, without network I/O.
+        if(runCatching { currentHistorySha256() }.getOrNull()!=historySha256)
+            return prefix+"SOURCE_DIGEST_CHANGED_OR_UNAVAILABLE"
         if(runCatching { currentRevision() }.getOrNull()!=historyRevision)
             return prefix+"SOURCE_REVISION_CHANGED"
         return null

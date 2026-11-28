@@ -483,13 +483,15 @@ class NativeFuturesCoordinatorLifecycleTest {
     @Test fun r49CanonicalSourceReceiptFencesAllSixFamiliesAtTransport() {
         for(direction in NativeFuturesCampaignCoordinator.Direction.entries)
         for(family in listOf("REVERSAL","SUPER_AO","FRACTAL"))
-        for(fault in listOf("NONE","MISSING","PLAN_CHANGED","UNDERWARMED","CORRECTION","ROLLOVER","CLOCK_UNKNOWN")) {
+        for(fault in listOf("NONE","MISSING","PLAN_CHANGED","UNDERWARMED","CORRECTION","ROLLOVER","CLOCK_UNKNOWN",
+            "ISSUED_HASH_CHANGED","LIVE_HASH_CHANGED","LIVE_HASH_UNKNOWN")) {
             val exchange=Exchange(direction)
             val journal=Journal()
             val now=System.currentTimeMillis()
             val closedAt=now/WILLIAMS_H1_MS*WILLIAMS_H1_MS
             var sourceClock:Long?=closedAt+1_000L
             var sourceRevision=9L
+            var sourceDigest:String?="a".repeat(64)
             val coordinator=NativeFuturesCampaignCoordinator(journal,clock={closedAt+1_000L}) {
                 BinanceUsdMFuturesTestnetAdapter("key","secret",exchange.client,
                     beforeExposureTransport={
@@ -497,6 +499,8 @@ class NativeFuturesCoordinatorLifecycleTest {
                             "CORRECTION" -> sourceRevision++
                             "ROLLOVER" -> sourceClock=closedAt+WILLIAMS_H1_MS
                             "CLOCK_UNKNOWN" -> sourceClock=null
+                            "LIVE_HASH_CHANGED" -> sourceDigest="b".repeat(64)
+                            "LIVE_HASH_UNKNOWN" -> sourceDigest=null
                         }
                     })
             }
@@ -504,9 +508,9 @@ class NativeFuturesCoordinatorLifecycleTest {
             if(fault!="MISSING") coordinator.tc2SourceReceiptVerifier={ checked ->
                 Tc2H1SourceReceipt(
                     if(fault=="PLAN_CHANGED") checked.copy(quantity="0.5") else checked,
-                    closedAt,sourceRevision,"a".repeat(64),
+                    closedAt,sourceRevision,if(fault=="ISSUED_HASH_CHANGED") "b".repeat(64) else "a".repeat(64),
                     if(fault=="UNDERWARMED") 499 else 500,
-                    { sourceClock }, { sourceRevision })
+                    { sourceClock }, { sourceRevision }, { sourceDigest })
             }
             val type=if(direction.name=="LONG") family else "SHORT_"+family
             val signalAt=closedAt-WILLIAMS_H1_MS
@@ -527,6 +531,19 @@ class NativeFuturesCoordinatorLifecycleTest {
         }
     }
     
+    @Test fun r50StrictProductionRejectsOperatorForcedDirectionBeforeAnyPost() {
+        for(direction in NativeFuturesCampaignCoordinator.Direction.entries) {
+            val exchange=Exchange(direction)
+            val coordinator=NativeFuturesCampaignCoordinator(Journal()) { exchange.adapter() }
+            coordinator.requireTc2SourceReceipt=true
+            assertTrue(coordinator.reconcile().getBoolean("ok"))
+            val result=coordinator.submitPendingEntry(plan(direction).copy(signalType="OPERATOR_FORCED_DIRECTION"))
+            assertFalse(result.toString(),result.getBoolean("accepted"))
+            assertTrue(result.toString(),result.optString("error").contains("TC2_CANONICAL_ADMISSION:"))
+            assertEquals(0,exchange.posts("/fapi/v1/order")+exchange.posts("/fapi/v1/algoOrder"))
+        }
+    }
+
     @Test fun acceptedEntryPersistsAccountWideProofBeforeTransport() {
         val journal = Journal()
         val exchange = Exchange(NativeFuturesCampaignCoordinator.Direction.LONG)

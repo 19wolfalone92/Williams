@@ -137,3 +137,90 @@ def verify_tc2_order(payload, *, symbol, side, purpose, raw, now_ms, tick):
         reject("RECOMPUTE_FAILED")
     except Exception:
         reject("MALFORMED_OR_UNAVAILABLE_EVIDENCE")
+
+
+def tc2_receipt_digest(receipt):
+    """Fingerprint the exact issued receipt, independent of dictionary ordering."""
+    return hashlib.sha256(json.dumps(receipt, sort_keys=True, separators=(",", ":"),
+        allow_nan=False).encode()).hexdigest()
+
+
+def verify_tc2_transport_receipt(receipt, *, issued_digest, campaign, intent,
+                                 expected_revision, params, now_ms):
+    """Last local NEW-risk fence; no network I/O and no authority for exits.
+
+    Bind the fresh source receipt to the durable reservation and the actual
+    conditional POST. A missing source or changed plan is not a legacy default.
+    This does not claim that a closed exchange candle can never be corrected.
+    """
+    import re
+    try:
+        if campaign is None or not isinstance(receipt, dict):
+            reject("RECEIPT_OR_OWNER_MISSING")
+        tags = campaign.tags
+        pending = tags.get("pending_signal") or {}
+        signal = pending.get("signal") or {}
+        role = {"CAMPAIGN_ENTRY": "ENTRY", "CAMPAIGN_ADD_ON": "ADD_ON"}.get(intent.purpose)
+        if (role is None or not intent.campaign_id or campaign.campaign_id != intent.campaign_id
+                or campaign.symbol != intent.symbol or campaign.side != intent.side
+                or tags.get("strategy_profile") != TC2 or signal.get("strategy_profile") != TC2
+                or pending.get("state") != "VALIDATED"
+                or tags.get("pending_order_client_id") != intent.client_order_id
+                or not intent.client_order_id or not intent.signal_id
+                or signal.get("signal_id") != intent.signal_id
+                or campaign.current_signal_id != intent.signal_id
+                or signal.get("symbol") != intent.symbol or signal.get("side") != intent.side
+                or signal.get("role") != role or signal.get("timeframe") != "1h"
+                or signal.get("execution_semantics") != "STOP_ENTRY"
+                or signal.get("signal_type") not in (INITIAL if role == "ENTRY" else ADDITIONAL)
+                or intent.order_type != "STOP_MARKET" or tags.get("pending_order_type") != "STOP_MARKET"):
+            reject("TRANSPORT_OWNER_OR_SIGNAL_CHANGED")
+        if type(expected_revision) is not int or expected_revision <= 0 or campaign.state_revision != expected_revision:
+            reject("STATE_CHANGED_BEFORE_TRANSPORT")
+        if (receipt.get("schema") != "R49_TC2_FRESH_SOURCE_V1"
+                or not isinstance(issued_digest, str) or tc2_receipt_digest(receipt) != issued_digest
+                or not re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("closed_ohlc_sha256", "")))
+                or receipt.get("signal_id") != intent.signal_id
+                or receipt.get("symbol") != intent.symbol or receipt.get("side") != intent.side
+                or receipt.get("family") != signal.get("signal_type") or receipt.get("role") != role
+                or receipt.get("signal_bar_time_ms") != signal.get("signal_bar_time_ms")
+                or type(receipt.get("closed_count")) is not int
+                or receipt["closed_count"] < CANONICAL_ALLIGATOR_WARMUP_BARS):
+            reject("TRANSPORT_SOURCE_RECEIPT_CHANGED")
+        closed = receipt["closed_at_ms"]
+        observed = receipt["observed_at_ms"]
+        confirmed = receipt["confirmation_close_ms"]
+        if (type(closed) is not int or type(observed) is not int or type(confirmed) is not int
+                or type(now_ms) is not int or closed <= 0 or closed % HOUR
+                or confirmed != signal["signal_bar_time_ms"] + HOUR
+                or not 0 < confirmed <= closed <= observed <= now_ms < closed + HOUR):
+            reject("TRANSPORT_SOURCE_CLOCK_OR_CAUSALITY")
+        trigger = positive(receipt["trigger"])
+        book_stop = positive(receipt["book_stop"])
+        planned_stop = positive(tags["pending_order_stop"])
+        quantity = positive(intent.quantity)
+        if (trigger != positive(signal["trigger_price"]) or trigger != positive(tags["pending_order_trigger"])
+                or book_stop != positive(signal["protective_reference"])
+                or planned_stop != positive(intent.invalidation_level)
+                or quantity != positive(tags["pending_order_quantity"])
+                or (planned_stop >= trigger if intent.side == "BUY" else planned_stop <= trigger)
+                or (role == "ENTRY" and (planned_stop != book_stop or planned_stop != positive(campaign.initial_stop_price)))
+                or (role == "ADD_ON" and planned_stop != positive(campaign.current_stop_price))
+                or positive(campaign.pending_risk_quote) != positive(intent.risk_quote)
+                or positive(campaign.capital_reserved_quote) != positive(intent.capital_reserved_quote)):
+            reject("TRANSPORT_PLAN_OR_RESERVATION_CHANGED")
+        if (params.get("symbol") != intent.symbol or params.get("side") != intent.side
+                or params.get("type") != "STOP_MARKET" or params.get("algoType") != "CONDITIONAL"
+                or params.get("positionSide") != "BOTH" or params.get("workingType") != "CONTRACT_PRICE"
+                or str(params.get("priceProtect", "false")).lower() != "false"
+                or str(params.get("reduceOnly", "false")).lower() != "false"
+                or str(params.get("closePosition", "false")).lower() != "false"
+                or params.get("clientAlgoId") != intent.client_order_id
+                or positive(params["quantity"]) != quantity or positive(params["triggerPrice"]) != trigger):
+            reject("TRANSPORT_CONDITIONAL_POST_CHANGED")
+    except RuntimeError as exc:
+        if str(exc).startswith("TC2_CANONICAL_ADMISSION:"):
+            raise
+        reject("TRANSPORT_EVIDENCE_UNAVAILABLE")
+    except Exception:
+        reject("TRANSPORT_EVIDENCE_UNAVAILABLE")

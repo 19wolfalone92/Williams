@@ -4441,6 +4441,12 @@ internal class NativeFuturesCampaignCoordinator(
         // leverage, never raise it. Other callers keep their configured value.
         // The persisted intent and every exchange write use this effective plan.
         var plan = submittedPlan
+        // Strict production mode never exempts a synthetic operator direction
+        // from the canonical source receipt. Separate engineering fixtures can
+        // use their explicitly non-production coordinator configuration.
+        if(requireTc2SourceReceipt && (plan.strategyProfile!=williamsTc2Profile ||
+            plan.signalType=="OPERATOR_FORCED_DIRECTION"))
+            return@synchronized safePreflightRejection("TC2_CANONICAL_ADMISSION:EXPLICIT_SOURCE_REQUIRED")
         williamsNewRiskSymbolBlocker(plan.symbol)?.let {
             return@synchronized safePreflightRejection(it)
         }
@@ -4778,8 +4784,7 @@ internal class NativeFuturesCampaignCoordinator(
         var orderSubmissionAttempted = false
         var finalContextCheckStarted = false
         var tc2SourceReceipt: Tc2H1SourceReceipt? = null
-        val receiptRequired = requireTc2SourceReceipt && plan.strategyProfile==williamsTc2Profile &&
-            plan.signalType!="OPERATOR_FORCED_DIRECTION"
+        val receiptRequired = requireTc2SourceReceipt
         try {
             // Signed reads refresh their own verified clock; avoid duplicate
             // /time probes before the isolated-leverage/STOP sequence.

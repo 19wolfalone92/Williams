@@ -11262,7 +11262,13 @@ private class NativeEngine(
                 if(futuresMarketData.clockSnapshot().optBoolean("fresh",false))
                     futuresMarketData.cachedExchangeNowMs() else null
             },
-            currentRevision={ historyStore.indicatorCacheRevision(plan.symbol,"1h") })
+            currentRevision={ historyStore.indicatorCacheRevision(plan.symbol,"1h") },
+            currentHistorySha256={
+                val current=durableWorkingHistory(plan.symbol,"1h",closed.size)
+                if(current.revision!=snapshot.revision || !current.continuous ||
+                    current.candles.size<closed.size) null
+                else closedCandleFingerprint(current.candles.takeLast(closed.size))
+            })
         receipt.blocker(plan)?.let { error(it) }
         return receipt
     }

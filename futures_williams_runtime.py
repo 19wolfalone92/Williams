@@ -42,7 +42,8 @@ from williams_signals import (
     extract_short_signal_specs,
 )
 from williams_decision_trace import build_decision_trace
-from williams_tc2_admission import verify_tc2_order
+from williams_tc2_admission import (verify_tc2_order, tc2_receipt_digest,
+    verify_tc2_transport_receipt)
 from williams_signal_lifecycle import SignalJournal,signal_facts
 from williams_profiles import extract_profile_signals,addition_signal_time_allowed,observe_edition_signals
 from williams_execution_policy import EXECUTION_PROFILES,OWNED_LIFECYCLE_PROFILES,new_exposure_blocker,execution_policy_snapshot,structural_fractal,h1_signal_expiry,closed_h1_history_blocker,strategy_market_close_allowed,market_exit_blocker,tc2_opposite_exit_evidence_blocker,tc2_opposite_exit_profit_blocker,signal_age_ttl_disabled
@@ -1731,17 +1732,20 @@ class FuturesWilliamsRuntime:
         margin_started = None
         source_receipt = None
         source_revision = None
+        source_digest = None
 
         def combined_checks(snapshot):
-            nonlocal margin_started, source_receipt, source_revision
+            nonlocal margin_started, source_receipt, source_revision, source_digest
             self._futures_pre_submit_checks(intent)
             if checks is not None:
                 checks(snapshot)
             if new_exposure:
                 owner = self.engine.load_campaign(intent.campaign_id)
-                if owner is not None and owner.tags.get("strategy_profile", TC2) == TC2:
-                    source_receipt = self._revalidate_tc2_signal(owner, intent)
-                    source_revision = owner.state_revision
+                if owner is None or owner.tags.get("strategy_profile") != TC2:
+                    raise RuntimeError("TC2_CANONICAL_ADMISSION:EXPLICIT_TC2_OWNER_REQUIRED")
+                source_receipt = self._revalidate_tc2_signal(owner, intent)
+                source_revision = owner.state_revision
+                source_digest = tc2_receipt_digest(source_receipt)
                 try:
                     margin_started = self._assess_half_margin(intent)
                 except Exception as failure:
@@ -1789,12 +1793,12 @@ class FuturesWilliamsRuntime:
                         closed=int(setup.get("h1_closed_at_ms",0) or 0) if isinstance(setup,dict) else 0
                         if closed<=0 or not 0<=now-closed<3_600_000:
                             raise ValueError("H1_SNAPSHOT_STALE_BEFORE_TRANSPORT")
-                    if profile == TC2:
-                        if source_receipt is None or source_revision != latest.state_revision:
-                            raise ValueError("TC2_CANONICAL_ADMISSION:STATE_CHANGED_BEFORE_TRANSPORT")
-                        if now // 3_600_000 * 3_600_000 != source_receipt["closed_at_ms"]:
-                            raise ValueError("TC2_CANONICAL_ADMISSION:NEW_H1_BEFORE_TRANSPORT")
-                        self.db.require_unconsumed_campaign_signal(intent.signal_id)
+                    # All new-risk paths require an explicit TC2 receipt, even
+                    # if a damaged/legacy pending signal claims another edition.
+                    verify_tc2_transport_receipt(source_receipt, issued_digest=source_digest,
+                        campaign=latest, intent=intent, expected_revision=source_revision,
+                        params=params, now_ms=now)
+                    self.db.require_unconsumed_campaign_signal(intent.signal_id)
                 except Exception as failure:
                     raise ExposureNotSubmittedError(str(failure)) from failure
                 if previous is not None:
